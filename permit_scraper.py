@@ -21,7 +21,7 @@ driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () =>
 wait = WebDriverWait(driver, 10)
 
 def get_table_data(driver):
-    """Parses the permit table and returns formatted data rows."""
+    """Parses the permit table and returns formatted data rows, skipping headers."""
     soup = BeautifulSoup(driver.page_source, 'html.parser')
     tbody = soup.select_one("body > center > table:nth-of-type(3) > tbody")
     if not tbody:
@@ -32,9 +32,15 @@ def get_table_data(driver):
     for row in rows:
         cols = row.find_all("td")
         text = [col.get_text(strip=True).replace('\xa0', ' ') for col in cols]
-        if len(text) == 7:  # Skip header
+
+        # Skip the repeated header row
+        if len(text) == 7 and text[0].upper().startswith("APPLICANT"):
+            continue
+
+        if len(text) == 7:
             table_data.append(text)
     return table_data
+
 
 def go_to_next_page(driver):
     """Attempts to click the 'Next' button using its XPath. Returns False if not found or not clickable."""
