@@ -37,14 +37,17 @@ def get_table_data(driver):
     return table_data
 
 def go_to_next_page(driver):
-    """Attempts to go to the next page. Returns False if no link is found."""
+    """Attempts to click the 'Next' button using its XPath. Returns False if not found or not clickable."""
     try:
-        next_link = driver.find_element(By.LINK_TEXT, 'Next')
-        next_link.click()
-        time.sleep(1.5)
+        next_button = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, '/html/body/center/table[4]/tbody/tr/td[3]/form/input[1]'))
+        )
+        next_button.click()
+        time.sleep(2)
         return True
     except:
         return False
+
 
 def format_and_print(data):
     print(f"{'APPLICANT':<25} {'PERMIT NO.':<25} {'JOB TYPE':<10} {'ISSUE DATE':<12} {'EXP. DATE':<12} {'BIN':<10} {'ADDRESS'}")
