@@ -7,6 +7,13 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 
+
+#Set up residential proxy
+USERNAME = "spckyt8xpj"
+PASSWORD = "f10=g9twgNRJ7vPdgn"
+
+PROXY = f"http://{USERNAME}:{PASSWORD}@gate.decodo.com:7000"
+
 # Set up Chrome options
 options = Options()
 options.add_argument("--start-maximized")
@@ -14,6 +21,7 @@ options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option('useAutomationExtension', False)
 options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+options.add_argument(f"--proxy-server={PROXY}") #proxy
 
 # Create driver
 driver = webdriver.Chrome(options=options)
@@ -59,7 +67,7 @@ def go_to_next_page(driver):
             EC.element_to_be_clickable((By.XPATH, '/html/body/center/table[4]/tbody/tr/td[3]/form/input[1]'))
         )
         next_button.click()
-        time.sleep(2)
+        time.sleep(1.25)
         return True
     except:
         return False
@@ -72,6 +80,7 @@ def format_and_print(data):
         print(f"{row[0]:<25} {row[1]:<25} {row[2]:<10} {row[3]:<12} {row[4]:<12} {row[5]:<10} {row[6]:<30} {row[7]}")
 
 try:
+    driver.get("https://ipinfo.io")
     driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
 
     # Fill out the form
