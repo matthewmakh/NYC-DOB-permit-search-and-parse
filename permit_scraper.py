@@ -21,7 +21,7 @@ driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () =>
 wait = WebDriverWait(driver, 10)
 
 def get_table_data(driver):
-    """Parses the permit table and returns formatted data rows, skipping headers."""
+    """Parses the permit table and returns formatted data rows, including link to permit detail."""
     soup = BeautifulSoup(driver.page_source, 'html.parser')
     tbody = soup.select_one("body > center > table:nth-of-type(3) > tbody")
     if not tbody:
@@ -31,15 +31,25 @@ def get_table_data(driver):
     table_data = []
     for row in rows:
         cols = row.find_all("td")
-        text = [col.get_text(strip=True).replace('\xa0', ' ') for col in cols]
 
-        # Skip the repeated header row
-        if len(text) == 7 and text[0].upper().startswith("APPLICANT"):
+        if len(cols) != 7:
             continue
 
-        if len(text) == 7:
-            table_data.append(text)
+        # Skip header rows
+        if cols[0].get_text(strip=True).upper().startswith("APPLICANT"):
+            continue
+
+        # Extract permit link if available
+        permit_link_tag = cols[1].find("a")
+        permit_link = "https://a810-bisweb.nyc.gov/bisweb/" + permit_link_tag["href"] if permit_link_tag else ""
+
+        # Extract text for each column
+        text = [col.get_text(strip=True).replace('\xa0', ' ') for col in cols]
+        text.append(permit_link)  # Add the link as a new column
+        table_data.append(text)
+
     return table_data
+
 
 
 def go_to_next_page(driver):
@@ -56,10 +66,10 @@ def go_to_next_page(driver):
 
 
 def format_and_print(data):
-    print(f"{'APPLICANT':<25} {'PERMIT NO.':<25} {'JOB TYPE':<10} {'ISSUE DATE':<12} {'EXP. DATE':<12} {'BIN':<10} {'ADDRESS'}")
-    print("=" * 120)
+    print(f"{'APPLICANT':<25} {'PERMIT NO.':<25} {'JOB TYPE':<10} {'ISSUE DATE':<12} {'EXP. DATE':<12} {'BIN':<10} {'ADDRESS':<30} {'LINK'}")
+    print("=" * 160)
     for row in data:
-        print(f"{row[0]:<25} {row[1]:<25} {row[2]:<10} {row[3]:<12} {row[4]:<12} {row[5]:<10} {row[6]}")
+        print(f"{row[0]:<25} {row[1]:<25} {row[2]:<10} {row[3]:<12} {row[4]:<12} {row[5]:<10} {row[6]:<30} {row[7]}")
 
 try:
     driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
