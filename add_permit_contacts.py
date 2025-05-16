@@ -6,6 +6,8 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
+from datetime import datetime
+from fake_useragent import UserAgent
 
 # DB Connection
 conn = mysql.connector.connect(
@@ -16,17 +18,26 @@ conn = mysql.connector.connect(
 )
 cursor = conn.cursor()
 
+rate_limit_count = 0  # Track how many times the scraper was rate-limited
+
 # Human-like Behavior
 def human_delay(min_sec=2.0, max_sec=4.0):
     time.sleep(random.uniform(min_sec, max_sec))
 
-# Stealth Chrome Driver Setup
-def create_stealth_driver():
+def fix_date_format(date_str):
+    try:
+        return datetime.strptime(date_str, "%m/%d/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+# Create Stealth Driver with rotating identity
+def create_driver():
+    ua = UserAgent()
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    # options.add_argument("--proxy-server=http://gate.decodo.com:10005")
+    options.add_argument(f"--user-agent={ua.random}")
+    options.add_argument(f"--user-data-dir=/tmp/profile-{random.randint(1,99999)}")
 
     driver = uc.Chrome(options=options)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -38,6 +49,15 @@ def create_stealth_driver():
         """
     })
     return driver
+
+# Detect Access Denied block
+
+def is_access_denied(driver):
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        return "Access Denied" in body_text or "You don't have permission" in body_text
+    except:
+        return False
 
 # Scrape contact names & phones
 def extract_names_and_phones(driver):
@@ -75,6 +95,8 @@ def extract_names_and_phones(driver):
 
 # Scrape permit links and details from a single page
 def process_permit_page(driver):
+    global rate_limit_count
+
     permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
     print(f"✅ Found {len(permit_links)} permit links.")
 
@@ -93,24 +115,59 @@ def process_permit_page(driver):
             continue
 
         permit_id = result[0]
-
         cursor.execute("SELECT 1 FROM contacts WHERE permit_id = %s LIMIT 1", (permit_id,))
         if cursor.fetchone():
             print(f"✅ Contacts already exist for permit {permit_no}")
             continue
 
-        print(f"➡️ Clicking into permit {permit_no}...")
-        link_element.click()
-        human_delay()
+        try:
+            print(f"➡️ Clicking into permit {permit_no}...")
+            link_element.click()
+            human_delay()
 
-        contacts = extract_names_and_phones(driver)
-        for name, phone in contacts:
-            cursor.execute("""
-                INSERT INTO contacts (permit_id, name, phone)
-                VALUES (%s, %s, %s)
-            """, (permit_id, name, phone))
-        conn.commit()
-        print(f"📅 Saved {len(contacts)} contact(s) for permit {permit_no}")
+            # Access Denied check
+            if is_access_denied(driver):
+                print(f"🚫 Access Denied for permit {permit_no}. Restarting driver...")
+                rate_limit_count += 1
+                driver.quit()
+                driver = create_driver()
+                wait = WebDriverWait(driver, 10)
+                driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+                human_delay()
+                Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value("03")
+                driver.find_element(By.ID, 'allstartdate_day').send_keys('1')
+                driver.find_element(By.ID, 'allstartdate_year').send_keys('2025')
+                Select(driver.find_element(By.ID, 'allpermittype')).select_by_value('NB')
+                driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
+                human_delay()
+                return  # retry the page from top
+
+            contacts = extract_names_and_phones(driver)
+            for name, phone in contacts:
+                cursor.execute("""
+                    INSERT INTO contacts (permit_id, name, phone)
+                    VALUES (%s, %s, %s)
+                """, (permit_id, name, phone))
+            conn.commit()
+            print(f"📅 Saved {len(contacts)} contact(s) for permit {permit_no}")
+
+        except Exception as e:
+            print(f"⚠️ Rate limit or error on permit {permit_no}: {e}")
+            rate_limit_count += 1
+            print(f"Limit Counter: {rate_limit_count}")
+            driver.quit()
+            print("🔄 Restarting driver...")
+            driver = create_driver()
+            wait = WebDriverWait(driver, 10)
+            driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+            human_delay()
+            Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value("03")
+            driver.find_element(By.ID, 'allstartdate_day').send_keys('1')
+            driver.find_element(By.ID, 'allstartdate_year').send_keys('2025')
+            Select(driver.find_element(By.ID, 'allpermittype')).select_by_value('NB')
+            driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
+            human_delay()
+            return
 
         print("🔙 Going back to results page...")
         driver.back()
@@ -130,7 +187,7 @@ def go_to_next_page(driver):
 
 # Main Scraping Logic
 try:
-    driver = create_stealth_driver()
+    driver = create_driver()
     wait = WebDriverWait(driver, 10)
 
     print("🟡 Opening search form...")
@@ -156,7 +213,7 @@ except Exception as e:
     print(f"❌ Script failed: {e}")
 
 finally:
-    print("🔝 Done. Closing browser and DB connection.")
+    print(f"🔝 Done. Total rate limit evasions: {rate_limit_count}")
     driver.quit()
     cursor.close()
     conn.close()

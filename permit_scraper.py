@@ -17,6 +17,22 @@ conn = mysql.connector.connect(
 )
 cursor = conn.cursor()
 
+#get permit search info from database
+cursor.execute("""
+SELECT * FROM permit_search_config
+ORDER BY created_at DESC
+LIMIT 1;
+""")
+
+config = cursor.fetchone()
+
+start_month = config[1]
+start_day = config[2]
+start_year = config[3]
+permit_type = config[4]
+
+print(f'latest config: {config}')
+
 def human_delay(min_sec=2.0, max_sec=4.0):
     time.sleep(random.uniform(min_sec, max_sec))
 
