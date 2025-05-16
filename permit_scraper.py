@@ -6,31 +6,31 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-
+from datetime import datetime
 
 # DB Connection
 conn = mysql.connector.connect(
     host='localhost',
     user='scraper_user',
-    password='put your password here',
+    password='Tyemakharadze9',
     database='permit_scraper'
 )
 cursor = conn.cursor()
 
-#Human-like Behavior
 def human_delay(min_sec=2.0, max_sec=4.0):
     time.sleep(random.uniform(min_sec, max_sec))
 
+def fix_date_format(date_str):
+    try:
+        return datetime.strptime(date_str, "%m/%d/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
 
-# Stealth Chrome Driver Setup (IP whitelisted proxy only)
-
-def create_stealth_driver():
+def create_driver():
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    # options.add_argument("--proxy-server=http://gate.decodo.com:10003")  # Only if IP whitelisted
-
     driver = uc.Chrome(options=options)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
@@ -42,52 +42,72 @@ def create_stealth_driver():
     })
     return driver
 
+def extract_permits(driver):
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    rows = soup.select("body > center > table:nth-of-type(3) > tbody > tr")
+    data = []
 
-# Scrape contact names & phones
-def extract_names_and_phones(driver):
+    for row in rows:
+        cols = row.find_all("td")
+        if len(cols) != 7:
+            continue
+
+        if "APPLICANT" in cols[0].get_text().upper():
+            continue
+
+        permit_link = cols[1].find("a")
+        link = "https://a810-bisweb.nyc.gov/bisweb/" + permit_link['href'] if permit_link else ""
+
+        values = [col.get_text(strip=True).replace('\xa0', ' ') for col in cols]
+        values.append(link)
+        data.append(values)
+
+    return data
+
+def insert_permits(data):
+    for row in data:
+        try:
+            applicant, permit_no, job_type, issue_date, exp_date, bin_no, address, link = row
+
+            cursor.execute("SELECT 1 FROM permits WHERE permit_no = %s", (permit_no,))
+            if cursor.fetchone():
+                continue
+
+            cursor.execute("""
+                INSERT INTO permits (
+                    applicant, permit_no, job_type, issue_date, exp_date, bin, address, link
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                applicant, permit_no, job_type,
+                fix_date_format(issue_date),
+                fix_date_format(exp_date),
+                bin_no, address, link
+            ))
+        except Exception as e:
+            print("❌ Error inserting permit:", e)
+
+    conn.commit()
+    print(f"✅ Inserted {len(data)} permits.")
+
+def go_to_next(driver):
     try:
-        table = driver.find_element(By.XPATH, "/html/body/center/table[7]")
-        html = table.get_attribute("outerHTML")
-        soup = BeautifulSoup(html, "html.parser")
-        rows = soup.find_all("tr")
+        next_btn = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, '/html/body/center/table[4]/tbody/tr/td[3]/form/input[1]'))
+        )
+        next_btn.click()
+        human_delay()
+        return True
+    except:
+        return False
 
-        people = []
-        current_name = None
-
-        for row in rows:
-            text = row.get_text(separator=" ", strip=True)
-
-            if "Issued to:" in text:
-                current_name = text.replace("Issued to:", "").strip()
-            elif "Superintendent of Construction:" in text:
-                current_name = text.replace("Superintendent of Construction:", "").strip()
-            elif "Site Safety Manager:" in text:
-                current_name = text.replace("Site Safety Manager:", "").strip()
-            elif "Business:" in text and text.replace("Business:", "").strip():
-                current_name = text.replace("Business:", "").strip()
-
-            if "Phone:" in text:
-                phone = text.split("Phone:")[-1].strip()
-                if current_name:
-                    people.append((current_name, phone))
-                    current_name = None  # Allow next name/phone to pair
-
-        return people
-    except Exception as e:
-        print(f"⚠️ Failed to extract name and phone info: {e}")
-        return []
-
-
-# ⟳ Main Scraping Logic
+# Main
 try:
-    driver = create_stealth_driver()
+    driver = create_driver()
     wait = WebDriverWait(driver, 10)
 
-    print("🟡 Opening search form...")
-    driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+    driver.get("https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp")
     human_delay()
 
-    # Fill and submit search form
     wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
     Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value("03")
     driver.find_element(By.ID, 'allstartdate_day').send_keys('1')
@@ -97,55 +117,17 @@ try:
     driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
     human_delay()
 
-    # Get all clickable permit links
-    permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
-    print(f"✅ Found {len(permit_links)} permit links.")
-
-    for i in range(len(permit_links)):
-        permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
-        if i >= len(permit_links):
+    while True:
+        permits = extract_permits(driver)
+        insert_permits(permits)
+        if not go_to_next(driver):
             break
 
-        link_element = permit_links[i]
-        permit_no = link_element.text.strip()
-
-        # Lookup permit_id from DB
-        cursor.execute("SELECT id FROM permits WHERE permit_no = %s", (permit_no,))
-        result = cursor.fetchone()
-        if not result:
-            print(f"❌ Skipping untracked permit: {permit_no}")
-            continue
-
-        permit_id = result[0]
-
-        # Skip if already has contacts
-        cursor.execute("SELECT 1 FROM contacts WHERE permit_id = %s LIMIT 1", (permit_id,))
-        if cursor.fetchone():
-            print(f"✅ Contacts already exist for permit {permit_no}")
-            continue
-
-        print(f"➡️ Clicking into permit {permit_no}...")
-        link_element.click()
-        human_delay()
-
-        contacts = extract_names_and_phones(driver)
-        for name, phone in contacts:
-            cursor.execute("""
-                INSERT INTO contacts (permit_id, name, phone)
-                VALUES (%s, %s, %s)
-            """, (permit_id, name, phone))
-        conn.commit()
-        print(f"📅 Saved {len(contacts)} contact(s) for permit {permit_no}")
-
-        print("🔙 Going back to results page...")
-        driver.back()
-        human_delay()
-
 except Exception as e:
-    print(f"❌ Script failed: {e}")
+    print("❌ Script crashed:", e)
 
 finally:
-    print("🔝 Done. Closing browser and DB connection.")
+    print("🔚 Done.")
     driver.quit()
     cursor.close()
     conn.close()
