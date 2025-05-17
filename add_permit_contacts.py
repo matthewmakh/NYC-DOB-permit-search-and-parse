@@ -18,6 +18,22 @@ conn = mysql.connector.connect(
 )
 cursor = conn.cursor()
 
+#get permit search info from database
+cursor.execute("""
+SELECT * FROM permit_search_config
+ORDER BY created_at DESC
+LIMIT 1;
+""")
+
+config = cursor.fetchone()
+
+start_month = config[1]
+start_day = config[2]
+start_year = config[3]
+permit_type = config[4]
+
+print(f'latest config: {config}')
+
 rate_limit_count = 0  # Track how many times the scraper was rate-limited
 
 # Human-like Behavior
@@ -195,10 +211,10 @@ try:
     human_delay()
 
     wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
-    Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value("03")
-    driver.find_element(By.ID, 'allstartdate_day').send_keys('1')
-    driver.find_element(By.ID, 'allstartdate_year').send_keys('2025')
-    Select(driver.find_element(By.ID, 'allpermittype')).select_by_value('NB')
+    Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value(f"{int(start_month):02}")
+    driver.find_element(By.ID, 'allstartdate_day').send_keys(f"{int(start_day):02}")
+    driver.find_element(By.ID, 'allstartdate_year').send_keys(start_year)
+    Select(driver.find_element(By.ID, 'allpermittype')).select_by_value(permit_type)
     human_delay()
     driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
     human_delay()

@@ -116,34 +116,36 @@ def go_to_next(driver):
     except:
         return False
 
-# Main
-try:
-    driver = create_driver()
-    wait = WebDriverWait(driver, 10)
 
-    driver.get("https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp")
-    human_delay()
+def start_permit_scraper():
+    # Main
+    try:
+        driver = create_driver()
+        wait = WebDriverWait(driver, 10)
 
-    wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
-    Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value("03")
-    driver.find_element(By.ID, 'allstartdate_day').send_keys('1')
-    driver.find_element(By.ID, 'allstartdate_year').send_keys('2025')
-    Select(driver.find_element(By.ID, 'allpermittype')).select_by_value('NB')
-    human_delay()
-    driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
-    human_delay()
+        driver.get("https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp")
+        human_delay()
 
-    while True:
-        permits = extract_permits(driver)
-        insert_permits(permits)
-        if not go_to_next(driver):
-            break
+        wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
+        Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value(f"{int(start_month):02}")
+        driver.find_element(By.ID, 'allstartdate_day').send_keys(f"{int(start_day):02}")
+        driver.find_element(By.ID, 'allstartdate_year').send_keys(f'{start_year}')
+        Select(driver.find_element(By.ID, 'allpermittype')).select_by_value(f'{permit_type}')
+        human_delay()
+        driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
+        human_delay()
 
-except Exception as e:
-    print("❌ Script crashed:", e)
+        while True:
+            permits = extract_permits(driver)
+            insert_permits(permits)
+            if not go_to_next(driver):
+                break
 
-finally:
-    print("🔚 Done.")
-    driver.quit()
-    cursor.close()
-    conn.close()
+    except Exception as e:
+        print("❌ Script crashed:", e)
+
+    finally:
+        print("🔚 Done.")
+        driver.quit()
+        cursor.close()
+        conn.close()
