@@ -37,6 +37,8 @@ permit_type = config[4]
 print(f'latest config: {config}')
 
 rate_limit_count = 0  # Track how many times the scraper was rate-limited
+MAX_SUCCESSFUL_LINKS = 5  # Change this to your desired limit
+successful_links_opened = 0
 
 # Human-like Behavior
 def human_delay(min_sec=2.0, max_sec=4.0):
@@ -50,7 +52,6 @@ def fix_date_format(date_str):
 
 # Create Stealth Driver with rotating identity
 def create_driver():
-    # Bright Data Residential credentials
     proxy_host = "brd.superproxy.io"
     proxy_port = 33335
     proxy_user = "brd-customer-hl_4339d789-zone-residential_proxy1"
@@ -79,12 +80,7 @@ def create_driver():
 
     return driver
 
-
-
-
-
 # Detect Access Denied block
-
 def is_access_denied(driver):
     try:
         body_text = driver.find_element(By.TAG_NAME, "body").text
@@ -129,11 +125,19 @@ def extract_names_and_phones(driver):
 # Scrape permit links and details from a single page
 def process_permit_page(driver):
     global rate_limit_count
+    global successful_links_opened
 
     permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
     print(f"✅ Found {len(permit_links)} permit links.")
 
     for i in range(len(permit_links)):
+        if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
+            print(f"✅ Reached limit of {MAX_SUCCESSFUL_LINKS} successful links. Exiting.")
+            driver.quit()
+            cursor.close()
+            conn.close()
+            exit()
+
         permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
         if i >= len(permit_links):
             break
@@ -158,7 +162,6 @@ def process_permit_page(driver):
             link_element.click()
             human_delay()
 
-            # Access Denied check
             if is_access_denied(driver):
                 print(f"🚫 Access Denied for permit {permit_no}. Restarting driver...")
                 rate_limit_count += 1
@@ -173,7 +176,7 @@ def process_permit_page(driver):
                 Select(driver.find_element(By.ID, 'allpermittype')).select_by_value('NB')
                 driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
                 human_delay()
-                return  # retry the page from top
+                return
 
             contacts = extract_names_and_phones(driver)
 
@@ -184,6 +187,13 @@ def process_permit_page(driver):
                 """, (permit_id, True))
                 conn.commit()
                 print(f"📂 No contacts found, but marked as checked for permit {permit_no}")
+                successful_links_opened += 1
+                if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
+                    print(f"✅ Reached limit of {MAX_SUCCESSFUL_LINKS} successful links. Exiting.")
+                    driver.quit()
+                    cursor.close()
+                    conn.close()
+                    exit()
                 driver.back()
                 human_delay()
                 continue
@@ -195,13 +205,18 @@ def process_permit_page(driver):
                 """, (permit_id, name, phone, True))
             conn.commit()
             print(f"📅 Saved {len(contacts)} contact(s) for permit {permit_no}")
+            successful_links_opened += 1
+            if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
+                print(f"✅ Reached limit of {MAX_SUCCESSFUL_LINKS} successful links. Exiting.")
+                driver.quit()
+                cursor.close()
+                conn.close()
+                exit()
 
         except Exception as e:
             print(f"⚠️ Rate limit or error on permit {permit_no}: {e}")
             rate_limit_count += 1
-            print(f"Limit Counter: {rate_limit_count}")
             driver.quit()
-            print("🔄 Restarting driver...")
             driver = create_driver()
             wait = WebDriverWait(driver, 10)
             driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
@@ -217,7 +232,6 @@ def process_permit_page(driver):
         print("🔙 Going back to results page...")
         driver.back()
         human_delay()
-
 
 # Attempt to go to the next page
 def go_to_next_page(driver):
