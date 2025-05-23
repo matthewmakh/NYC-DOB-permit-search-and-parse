@@ -8,6 +8,8 @@ from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from datetime import datetime
 from fake_useragent import UserAgent
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 # DB Connection
 conn = mysql.connector.connect(
@@ -48,23 +50,38 @@ def fix_date_format(date_str):
 
 # Create Stealth Driver with rotating identity
 def create_driver():
-    ua = UserAgent()
+    # Bright Data Residential credentials
+    proxy_host = "brd.superproxy.io"
+    proxy_port = 33335
+    proxy_user = "brd-customer-hl_4339d789-zone-residential_proxy1"
+    proxy_pass = "poz01me1nve3"
+
+    proxy = f"{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
+    proxy_argument = f"--proxy-server=http://{proxy}"
+
     options = uc.ChromeOptions()
+    #options.add_argument(proxy_argument)
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(f"--user-agent={ua.random}")
-    options.add_argument(f"--user-data-dir=/tmp/profile-{random.randint(1,99999)}")
+    options.add_argument(f"--user-agent={UserAgent().random}")
+    options.add_argument(f"--user-data-dir=/tmp/profile-{random.randint(1000, 99999)}")
 
-    driver = uc.Chrome(options=options)
+    driver = uc.Chrome(options=options, service=Service(ChromeDriverManager().install()))
+
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            window.chrome = {runtime: {}};
+            window.chrome = { runtime: {} };
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
         """
     })
+
     return driver
+
+
+
+
 
 # Detect Access Denied block
 
@@ -131,9 +148,9 @@ def process_permit_page(driver):
             continue
 
         permit_id = result[0]
-        cursor.execute("SELECT 1 FROM contacts WHERE permit_id = %s LIMIT 1", (permit_id,))
+        cursor.execute("SELECT 1 FROM contacts WHERE permit_id = %s AND is_checked = TRUE LIMIT 1", (permit_id,))
         if cursor.fetchone():
-            print(f"✅ Contacts already exist for permit {permit_no}")
+            print(f"✅ Already checked: {permit_no}")
             continue
 
         try:
@@ -159,11 +176,23 @@ def process_permit_page(driver):
                 return  # retry the page from top
 
             contacts = extract_names_and_phones(driver)
+
+            if not contacts:
+                cursor.execute("""
+                    INSERT INTO contacts (permit_id, is_checked)
+                    VALUES (%s, %s)
+                """, (permit_id, True))
+                conn.commit()
+                print(f"📂 No contacts found, but marked as checked for permit {permit_no}")
+                driver.back()
+                human_delay()
+                continue
+
             for name, phone in contacts:
                 cursor.execute("""
-                    INSERT INTO contacts (permit_id, name, phone)
-                    VALUES (%s, %s, %s)
-                """, (permit_id, name, phone))
+                    INSERT INTO contacts (permit_id, name, phone, is_checked)
+                    VALUES (%s, %s, %s, %s)
+                """, (permit_id, name, phone, True))
             conn.commit()
             print(f"📅 Saved {len(contacts)} contact(s) for permit {permit_no}")
 
@@ -188,6 +217,7 @@ def process_permit_page(driver):
         print("🔙 Going back to results page...")
         driver.back()
         human_delay()
+
 
 # Attempt to go to the next page
 def go_to_next_page(driver):
