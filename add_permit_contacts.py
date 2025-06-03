@@ -18,12 +18,14 @@ from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrap
 # -------------------- CONFIG --------------------
 
 USE_PROXY = True
-DECODE_PROXY_PORTS = [10003, 10004, 10005, 10001, 10002]
+DECODE_PROXY_PORTS = [10009, 10001, 10002, 10003, 10004, 10005]
 proxy_index = 0
 
 PROXY_HOST = "gate.decodo.com"
 PROXY_USER = "spckyt8xpj"
 PROXY_PASS = "r~P6RwgDe6hjh6jb6W"
+
+USER_AGENT = UserAgent().chrome
 
 # -------------------- PRINT CURRENT IP --------------------
 
@@ -49,13 +51,13 @@ start_month, start_day, start_year, permit_type, contact_search_limit = config[1
 print(f'latest config: {config}')
 
 rate_limit_count = 0
-MAX_SUCCESSFUL_LINKS = random.randint(5, 15)
+MAX_SUCCESSFUL_LINKS = random.randint(5, 12)
 successful_links_opened = 0
 print(f"Searching For {MAX_SUCCESSFUL_LINKS} Contacts")
 
 # -------------------- UTILS --------------------
 
-def human_delay(min_sec=2.0, max_sec=240.0):
+def human_delay(min_sec=2.0, max_sec=20.0):
     x = random.uniform(min_sec, max_sec)
     print(f'Sleeping for {x} Seconds to Simulate Human Behavior')
     time.sleep(x)
@@ -66,6 +68,37 @@ def fix_date_format(date_str):
     except ValueError:
         return None
 
+# -------------------- PROXY HEALTH TEST --------------------
+
+def test_proxy_health():
+    global proxy_index
+    proxy_port = DECODE_PROXY_PORTS[proxy_index % len(DECODE_PROXY_PORTS)]
+    proxies = {
+        "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}",
+        "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
+    }
+
+    print("🧪 Testing proxy health...")
+    try:
+        response = requests.get("https://ipinfo.io/json", proxies=proxies, timeout=10)
+        data = response.json()
+        actual_ip = data.get("ip")
+        city = data.get("city", "Unknown City")
+        region = data.get("region", "Unknown Region")
+        country = data.get("country", "Unknown Country")
+        timezone = data.get("timezone", "Unknown Timezone")
+
+        print(f"✅ Public IP (Proxy): {actual_ip}")
+        print(f"🌍 Location: {city}, {region}, {country}")
+        print(f"🕒 Timezone: {timezone}")
+
+        if not actual_ip:
+            print("❌ No IP detected. Proxy might be blocked or down.")
+    except Exception as e:
+        print(f"❌ Proxy test failed: {e}")
+
+
+
 # -------------------- SELENIUM DRIVER --------------------
 
 def create_driver():
@@ -75,14 +108,19 @@ def create_driver():
 
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(f"--user-agent={UserAgent().random}")
-    options.add_argument(f"--user-data-dir=/tmp/profile-{random.randint(1000, 99999)}")
     options.add_argument("--ignore-certificate-errors")
     options.add_argument("--allow-insecure-localhost")
-    options.add_argument("--allow-running-insecure-content")
-    options.add_argument("--disable-web-security")
 
+    # Use a real Chrome user profile
+    chrome_profile_path = "/Users/matthewmakh/StealthChromeProfile"
+    options.add_argument(f"--user-data-dir={chrome_profile_path}")
+    options.add_argument("--profile-directory=Profile1")
+
+    # Set a realistic user-agent
+    options.add_argument(f"--user-agent={UserAgent().chrome}")
+    options.add_argument("--lang=en-US,en;q=0.9")
+
+    # Configure proxy
     seleniumwire_options = {}
     if USE_PROXY:
         seleniumwire_options = {
@@ -97,22 +135,76 @@ def create_driver():
 
     driver = uc.Chrome(options=options, seleniumwire_options=seleniumwire_options)
 
+    # Request interceptor
+    def interceptor(request):
+        if "WorkPermitDataServlet" in request.url:
+            request.headers["Referer"] = "https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp"
+            request.headers["Origin"] = "https://a810-bisweb.nyc.gov"
+            request.headers["Accept-Language"] = "en-US,en;q=0.9"
+
+    driver.request_interceptor = interceptor
+
+    # JavaScript patches to simulate human activity
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        (function simulateUserBehavior(){
+            function randomInt(min, max) {
+                return Math.floor(Math.random() * (max - min + 1)) + min;
+            }
+            function moveMouse() {
+                const evt = new MouseEvent('mousemove', {
+                    clientX: randomInt(0, window.innerWidth),
+                    clientY: randomInt(0, window.innerHeight),
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                });
+                document.dispatchEvent(evt);
+            }
+            function scrollRandomly() {
+                window.scrollBy({
+                    top: randomInt(-100, 200),
+                    left: 0,
+                    behavior: 'smooth'
+                });
+            }
+
+            // 🐢 Slow down simulation intervals
+            setInterval(moveMouse, randomInt(15000, 30000)); // 15–30 sec
+            setInterval(scrollRandomly, randomInt(20000, 40000)); // 20–40 sec
+        })();
         """
     })
 
+    # Proxy-aware timezone spoofing
     try:
-        current_ip = requests.get("https://ipinfo.io/json", timeout=10).json().get("ip")
-        print(f"🌐 Public IP Detected: {current_ip}")
+        proxies = {
+            "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}",
+            "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
+        }
+        ip_info = requests.get("https://ipinfo.io/json", proxies=proxies, timeout=10).json()
+        detected_ip = ip_info.get("ip")
+        detected_timezone = ip_info.get("timezone")
+        city = ip_info.get("city", "Unknown City")
+        region = ip_info.get("region", "Unknown Region")
+        country = ip_info.get("country", "Unknown Country")
+
+        print(f"✅ Public IP (Proxy): {detected_ip}")
+        print(f"🌍 Location: {city}, {region}, {country}")
+        print(f"🕒 Timezone: {detected_timezone}")
+
+        if detected_timezone:
+            driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {
+                "timezoneId": detected_timezone
+            })
+            print(f"🕒 Spoofed timezone to match proxy IP ({detected_ip}): {detected_timezone}")
+        else:
+            print("⚠️ Could not detect timezone from proxy IP.")
     except Exception as e:
-        print(f"⚠️ Failed to retrieve public IP: {e}")
+        print(f"⚠️ Timezone spoofing or IP lookup failed: {e}")
 
     return driver
+
 
 # -------------------- SCRAPING FUNCTIONS --------------------
 
@@ -275,8 +367,9 @@ def go_to_next_page(driver):
         return False
 
 # -------------------- MAIN --------------------
-
 try:
+    test_proxy_health()
+
     driver = create_driver()
     wait = WebDriverWait(driver, 10)
 
@@ -289,13 +382,23 @@ try:
     driver.execute_script("arguments[0].scrollIntoView({ behavior: 'smooth', block: 'center' });", form_inputs)
 
     Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value(f"{int(start_month):02}")
-    time.sleep(random.uniform(0.35, 4.65))
-    driver.find_element(By.ID, 'allstartdate_day').send_keys(f"{int(start_day):02}")
-    time.sleep(random.uniform(0.35, 4.65))
-    driver.find_element(By.ID, 'allstartdate_year').send_keys(start_year)
-    time.sleep(random.uniform(0.35, 4.65))
+    time.sleep(random.uniform(0.35, 2.65))
+
+    #input_field = driver.find_element(By.ID, 'allstartdate_day').send_keys(f"{int(start_day):02}")
+    day_str = f"{int(start_day):02}"
+    input_field = driver.find_element(By.ID, 'allstartdate_day')
+    for char in day_str:
+        input_field.send_keys(char)
+        time.sleep(random.uniform(0.08, 0.25))
+
+    input_field = driver.find_element(By.ID, 'allstartdate_year').send_keys(start_year)
+    '''for char in start_year:
+        input_field.send_keys(char)
+        time.sleep(random.uniform(0.08, 0.25))'''
+
+    time.sleep(random.uniform(0.35, 3.14))
     Select(driver.find_element(By.ID, 'allpermittype')).select_by_value(permit_type)
-    human_delay()
+    time.sleep(random.uniform(0.35, 3.14))
     driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
     human_delay()
 
