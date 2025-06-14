@@ -149,3 +149,6 @@ def start_permit_scraper():
         driver.quit()
         cursor.close()
         conn.close()
+
+
+start_permit_scraper()
