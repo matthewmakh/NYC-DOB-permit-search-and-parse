@@ -1,6 +1,7 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 os.environ['UC_CHROMEDRIVER_VERSION'] = '136'
-
 import time
 import random
 from bs4 import BeautifulSoup
@@ -18,12 +19,12 @@ from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrap
 # -------------------- CONFIG --------------------
 
 USE_PROXY = True
-DECODE_PROXY_PORTS = [10009, 10001, 10002, 10003, 10004, 10005]
+DECODE_PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10009]
 proxy_index = 0
 
-PROXY_HOST = "gate.decodo.com"
-PROXY_USER = "spckyt8xpj"
-PROXY_PASS = "r~P6RwgDe6hjh6jb6W"
+PROXY_HOST = os.getenv('PROXY_HOST')
+PROXY_USER = os.getenv('PROXY_USER')
+PROXY_PASS = os.getenv('PROXY_PASS')
 
 USER_AGENT = UserAgent().chrome
 
@@ -38,10 +39,10 @@ except Exception as e:
 # -------------------- DATABASE --------------------
 
 conn = mysql.connector.connect(
-    host='localhost',
-    user='scraper_user',
-    password='Tyemakharadze9',
-    database='permit_scraper'
+    host=os.getenv('DB_HOST'),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME')
 )
 cursor = conn.cursor()
 
@@ -53,6 +54,8 @@ print(f'latest config: {config}')
 rate_limit_count = 0
 MAX_SUCCESSFUL_LINKS = random.randint(5, 12)
 successful_links_opened = 0
+proxy_rotation_count = 0
+MAX_PROXY_ROTATIONS = 5
 print(f"Searching For {MAX_SUCCESSFUL_LINKS} Contacts")
 
 # -------------------- UTILS --------------------
@@ -262,7 +265,7 @@ def extract_names_and_phones(driver):
         return [], {"use": None, "stories": None, "total_units": None, "occupied_units": None}
 
 def process_permit_page(driver):
-    global rate_limit_count, successful_links_opened
+    global rate_limit_count, successful_links_opened, proxy_rotation_count
     permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
     print(f"✅ Found {len(permit_links)} permit links.")
 
@@ -290,20 +293,35 @@ def process_permit_page(driver):
             continue
 
         try:
-            print(f"➡️ Clicking permit {permit_no}...")
-            link_element.click()
-            human_delay()
-
-            if is_access_denied(driver):
-                print(f"🚫 Access Denied. Restarting...")
-                rate_limit_count += 1
-                driver.quit()
-                time.sleep(10)
-                driver = create_driver()
-                wait = WebDriverWait(driver, 10)
-                driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+            for attempt in range(2):  # Try once, retry once
+                print(f"➡️ Clicking permit {permit_no} (Attempt {attempt + 1})...")
+                driver.execute_script("arguments[0].setAttribute('target','_self')", link_element)
+                link_element.click()
                 human_delay()
-                return
+
+                if not is_access_denied(driver):
+                    break  # Success
+                else:
+                    print("🚫 Access Denied.")
+                    rate_limit_count += 1
+                    if attempt == 0:
+                        print("🔁 Retrying current permit one more time...")
+                        driver.back()
+                        human_delay()
+                    else:
+                        print("🔄 Switching to new proxy and restarting driver...")
+                        proxy_rotation_count += 1
+
+                        if proxy_rotation_count >= MAX_PROXY_ROTATIONS:
+                            print("🛑 Too many proxy rotations. Exiting program.")
+                            exit()  # clean shutdown
+
+                        driver.quit()
+                        driver = create_driver()
+                        wait = WebDriverWait(driver, 10)
+                        driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+                        human_delay()
+                        return
 
             contacts, permit_info = extract_names_and_phones(driver)
             print(f"🔍 Permit Details: {permit_info}")
@@ -403,6 +421,10 @@ try:
     human_delay()
 
     while True:
+        if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
+            print(f"✅ Limit of {MAX_SUCCESSFUL_LINKS} reached. Stopping main loop.")
+            break
+
         process_permit_page(driver)
         human_delay()
         if not go_to_next_page(driver):
