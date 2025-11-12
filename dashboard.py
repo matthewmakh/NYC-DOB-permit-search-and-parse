@@ -108,13 +108,88 @@ def get_db_connection():
 
 conn = get_db_connection()
 
-# Fetch data function with caching
-@st.cache_data(ttl=60)
+# Count total results for pagination
+@st.cache_data(ttl=300)
+def count_permits(permit_type=None, date_from=None, date_to=None, has_contacts=True, 
+                  max_units=None, min_units=None, has_units_info=False, 
+                  single_family=False, multi_family=False, min_contacts=None, 
+                  only_mobile=False, min_stories=None, max_stories=None,
+                  permit_status=None):
+    """Count total permits matching filters for pagination"""
+    if DB_TYPE == 'postgresql':
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    else:
+        cursor = conn.cursor(dictionary=True)
+    
+    # Build count query (same filters as main query)
+    query = "SELECT COUNT(DISTINCT p.id) as total FROM permits p LEFT JOIN contacts c ON p.id = c.permit_id"
+    
+    if only_mobile:
+        if DB_TYPE == 'postgresql':
+            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = true")
+        else:
+            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = 1")
+    
+    query += " WHERE 1=1"
+    params = []
+    
+    if has_contacts:
+        query += " AND c.id IS NOT NULL"
+    
+    if permit_type and permit_type != "All":
+        query += " AND p.job_type = %s"
+        params.append(permit_type)
+    
+    if date_from:
+        query += " AND p.issue_date >= %s"
+        params.append(date_from)
+    
+    if date_to:
+        query += " AND p.issue_date <= %s"
+        params.append(date_to)
+    
+    if min_stories is not None:
+        query += " AND p.stories >= %s"
+        params.append(min_stories)
+    
+    if max_stories is not None:
+        query += " AND p.stories <= %s"
+        params.append(max_stories)
+    
+    if permit_status:
+        if DB_TYPE == 'postgresql':
+            if 'Active' in permit_status:
+                query += " AND p.exp_date >= CURRENT_DATE"
+            if 'Expired' in permit_status:
+                if 'Active' not in permit_status:
+                    query += " AND p.exp_date < CURRENT_DATE"
+            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
+        else:
+            if 'Active' in permit_status:
+                query += " AND p.exp_date >= CURDATE()"
+            if 'Expired' in permit_status:
+                if 'Active' not in permit_status:
+                    query += " AND p.exp_date < CURDATE()"
+            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+    
+    cursor.execute(query, params)
+    result = cursor.fetchone()
+    cursor.close()
+    
+    if DB_TYPE == 'postgresql':
+        return result['total'] if result else 0
+    else:
+        return result['total'] if result else 0
+
+# Fetch data function with caching (increased TTL to 5 minutes)
+@st.cache_data(ttl=300)
 def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contacts=True, 
                       max_units=None, min_units=None, has_units_info=False, 
                       single_family=False, multi_family=False, min_contacts=None, 
                       only_mobile=False, min_stories=None, max_stories=None,
-                      permit_status=None):
+                      permit_status=None, limit=None, offset=0):
     if DB_TYPE == 'postgresql':
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     else:
@@ -252,6 +327,10 @@ def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contac
         query += " HAVING " + " AND ".join(having_clauses)
     
     query += " ORDER BY p.issue_date DESC, p.id DESC"
+    
+    # Add pagination
+    if limit is not None:
+        query += f" LIMIT {limit} OFFSET {offset}"
     
     cursor.execute(query, params)
     results = cursor.fetchall()
@@ -699,8 +778,22 @@ elif st.session_state.quick_filter_type == "recent":
 final_min_units = smart_filter_min_units if smart_filter_min_units is not None else filter_min_units
 final_max_units = smart_filter_max_units if smart_filter_max_units is not None else filter_max_units
 
-# Fetch data
-df = fetch_permit_data(
+# Pagination controls
+st.sidebar.markdown("---")
+st.sidebar.subheader("📄 Results Per Page")
+results_per_page = st.sidebar.select_slider(
+    "Show results",
+    options=[20, 50, 100, 200, 500, 1000],
+    value=100,
+    help="Adjust how many permits to display per page"
+)
+
+# Initialize page number in session state
+if 'page_number' not in st.session_state:
+    st.session_state.page_number = 0
+
+# Count total results first
+total_permits = count_permits(
     permit_type=filter_permit_type,
     date_from=date_from,
     date_to=date_to,
@@ -715,6 +808,31 @@ df = fetch_permit_data(
     min_stories=min_stories,
     max_stories=max_stories,
     permit_status=filter_permit_status_override if filter_permit_status_override else (permit_status if permit_status else None)
+)
+
+# Calculate pagination
+total_pages = max(1, (total_permits + results_per_page - 1) // results_per_page)
+if st.session_state.page_number >= total_pages:
+    st.session_state.page_number = 0
+
+# Fetch data with pagination
+df = fetch_permit_data(
+    permit_type=filter_permit_type,
+    date_from=date_from,
+    date_to=date_to,
+    has_contacts=show_only_with_contacts,
+    max_units=final_max_units,
+    min_units=final_min_units,
+    has_units_info=filter_has_units_info,
+    single_family=filter_single_family,
+    multi_family=filter_multi_family,
+    min_contacts=min_contacts if min_contacts > 0 else None,
+    only_mobile=only_mobile,
+    min_stories=min_stories,
+    max_stories=max_stories,
+    permit_status=filter_permit_status_override if filter_permit_status_override else (permit_status if permit_status else None),
+    limit=results_per_page,
+    offset=st.session_state.page_number * results_per_page
 )
 
 # Calculate lead scores
@@ -893,6 +1011,33 @@ with tab1:
                     
                     st.markdown("---")
                     st.markdown(f"[🔗 View Permit Details]({row['link']})")
+        
+        # Pagination controls at the bottom
+        st.markdown("---")
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+        
+        with col1:
+            if st.button("⏮️ First", disabled=st.session_state.page_number == 0):
+                st.session_state.page_number = 0
+                st.rerun()
+        
+        with col2:
+            if st.button("◀️ Previous", disabled=st.session_state.page_number == 0):
+                st.session_state.page_number -= 1
+                st.rerun()
+        
+        with col3:
+            st.markdown(f"<div style='text-align: center; padding: 8px;'><strong>Page {st.session_state.page_number + 1} of {total_pages}</strong><br><small>Showing {len(df)} of {total_permits} permits</small></div>", unsafe_allow_html=True)
+        
+        with col4:
+            if st.button("Next ▶️", disabled=st.session_state.page_number >= total_pages - 1):
+                st.session_state.page_number += 1
+                st.rerun()
+        
+        with col5:
+            if st.button("Last ⏭️", disabled=st.session_state.page_number >= total_pages - 1):
+                st.session_state.page_number = total_pages - 1
+                st.rerun()
 
 # ----------------- TAB 2: VISUALIZATIONS -----------------
 with tab2:
@@ -1013,63 +1158,78 @@ with tab2:
 with tab3:
     st.header("🗺️ Interactive Permit Map")
     
-    # Check if we have lat/lon data
-    if df.empty:
-        st.warning("No data to display. Adjust your filters in the Leads Dashboard tab.")
-    else:
-        df_map = df.dropna(subset=["latitude", "longitude"]).copy()
-        
-        if df_map.empty:
-            st.info("No geocoded permits available in the current filter. Try adjusting your filters to see more permits on the map.")
+    # Lazy loading - only render map when tab is active
+    # Using st.session_state to track if map has been loaded
+    if 'map_loaded' not in st.session_state:
+        st.session_state.map_loaded = False
+    
+    # Show a button to load the map (lazy loading)
+    if not st.session_state.map_loaded:
+        st.info("📍 Click below to load the interactive map")
+        if st.button("🗺️ Load Map", key="load_map_button"):
+            st.session_state.map_loaded = True
+            st.rerun()
+    
+    # Only render map if user has clicked to load it
+    if st.session_state.map_loaded:
+        # Check if we have lat/lon data
+        if df.empty:
+            st.warning("No data to display. Adjust your filters in the Leads Dashboard tab.")
         else:
-            # Convert to numeric
-            df_map["latitude"] = pd.to_numeric(df_map["latitude"], errors="coerce")
-            df_map["longitude"] = pd.to_numeric(df_map["longitude"], errors="coerce")
-            df_map = df_map.dropna(subset=["latitude", "longitude"])
+            df_map = df.dropna(subset=["latitude", "longitude"]).copy()
             
-            if not df_map.empty:
-                # Calculate map center
-                center_lat = df_map["latitude"].mean()
-                center_lon = df_map["longitude"].mean()
-                
-                fig = px.scatter_mapbox(
-                    df_map,
-                    lat="latitude",
-                    lon="longitude",
-                    color="job_type",
-                    hover_name="applicant",
-                    hover_data={
-                        "address": True,
-                        "job_type": True,
-                        "total_units": True,
-                        "stories": True,
-                        "permit_no": True,
-                        "latitude": False,
-                        "longitude": False
-                    },
-                    zoom=10,
-                    center={"lat": center_lat, "lon": center_lon},
-                    height=800,
-                    title="Permit Locations by Type"
-                )
-                
-                fig.update_layout(
-                    mapbox_style="carto-darkmatter",
-                    margin={"r": 0, "t": 40, "l": 0, "b": 0},
-                    font_color='white'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show map statistics
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Geocoded Permits", len(df_map))
-                with col2:
-                    st.metric("Unique Locations", df_map[["latitude", "longitude"]].drop_duplicates().shape[0])
-                with col3:
-                    st.metric("Job Types", df_map["job_type"].nunique())
+            if df_map.empty:
+                st.info("No geocoded permits available in the current filter. Try adjusting your filters to see more permits on the map.")
             else:
-                st.warning("Geocoded data is invalid or out of range.")
+                # Convert to numeric
+                df_map["latitude"] = pd.to_numeric(df_map["latitude"], errors="coerce")
+                df_map["longitude"] = pd.to_numeric(df_map["longitude"], errors="coerce")
+                df_map = df_map.dropna(subset=["latitude", "longitude"])
+                
+                if not df_map.empty:
+                    with st.spinner("🗺️ Loading map..."):
+                        # Calculate map center
+                        center_lat = df_map["latitude"].mean()
+                        center_lon = df_map["longitude"].mean()
+                        
+                        fig = px.scatter_mapbox(
+                            df_map,
+                            lat="latitude",
+                            lon="longitude",
+                            color="job_type",
+                            hover_name="applicant",
+                            hover_data={
+                                "address": True,
+                                "job_type": True,
+                                "total_units": True,
+                                "stories": True,
+                                "permit_no": True,
+                                "latitude": False,
+                                "longitude": False
+                            },
+                            zoom=10,
+                            center={"lat": center_lat, "lon": center_lon},
+                            height=800,
+                            title="Permit Locations by Type"
+                        )
+                        
+                        fig.update_layout(
+                            mapbox_style="carto-darkmatter",
+                            margin={"r": 0, "t": 40, "l": 0, "b": 0},
+                            font_color='white'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show map statistics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Geocoded Permits", len(df_map))
+                        with col2:
+                            st.metric("Unique Locations", df_map[["latitude", "longitude"]].drop_duplicates().shape[0])
+                        with col3:
+                            st.metric("Job Types", df_map["job_type"].nunique())
+                else:
+                    st.warning("Geocoded data is invalid or out of range.")
 
 # Footer
 st.markdown("---")
