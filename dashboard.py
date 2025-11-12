@@ -781,10 +781,10 @@ final_max_units = smart_filter_max_units if smart_filter_max_units is not None e
 # Pagination controls
 st.sidebar.markdown("---")
 st.sidebar.subheader("📄 Results Per Page")
-results_per_page = st.sidebar.select_slider(
+results_per_page = st.sidebar.selectbox(
     "Show results",
-    options=[20, 50, 100, 200, 500, 1000],
-    value=100,
+    options=[20, 50, 100, 250, 500, 1000],
+    index=2,  # Default to 100 (3rd option)
     help="Adjust how many permits to display per page"
 )
 
