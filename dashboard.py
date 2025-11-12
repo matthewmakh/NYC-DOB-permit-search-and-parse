@@ -449,15 +449,26 @@ def get_permit_types():
 def get_stories_range():
     cursor = conn.cursor()
     # Convert varchar to numeric, filter out NULL and 0
-    cursor.execute("""
-        SELECT 
-            CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as min_stories,
-            CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as max_stories
-        FROM permits 
-        WHERE stories IS NOT NULL 
-        AND stories != '' 
-        AND CAST(stories AS DECIMAL(10,2)) > 0
-    """)
+    if DB_TYPE == 'postgresql':
+        cursor.execute("""
+            SELECT 
+                CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as min_stories,
+                CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as max_stories
+            FROM permits 
+            WHERE stories IS NOT NULL 
+            AND stories != '' 
+            AND CAST(stories AS DECIMAL(10,2)) > 0
+        """)
+    else:
+        cursor.execute("""
+            SELECT 
+                CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as min_stories,
+                CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as max_stories
+            FROM permits 
+            WHERE stories IS NOT NULL 
+            AND stories != '' 
+            AND CAST(stories AS DECIMAL(10,2)) > 0
+        """)
     result = cursor.fetchone()
     cursor.close()
     if result and result[0] is not None:
@@ -469,15 +480,26 @@ def get_stories_range():
 def get_units_range():
     cursor = conn.cursor()
     # Convert varchar to numeric, filter out NULL and 0
-    cursor.execute("""
-        SELECT 
-            CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as min_units,
-            CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as max_units
-        FROM permits 
-        WHERE total_units IS NOT NULL 
-        AND total_units != '' 
-        AND CAST(total_units AS DECIMAL(10,2)) > 0
-    """)
+    if DB_TYPE == 'postgresql':
+        cursor.execute("""
+            SELECT 
+                CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as min_units,
+                CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as max_units
+            FROM permits 
+            WHERE total_units IS NOT NULL 
+            AND total_units != '' 
+            AND CAST(total_units AS DECIMAL(10,2)) > 0
+        """)
+    else:
+        cursor.execute("""
+            SELECT 
+                CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as min_units,
+                CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as max_units
+            FROM permits 
+            WHERE total_units IS NOT NULL 
+            AND total_units != '' 
+            AND CAST(total_units AS DECIMAL(10,2)) > 0
+        """)
     result = cursor.fetchone()
     cursor.close()
     if result and result[0] is not None:
