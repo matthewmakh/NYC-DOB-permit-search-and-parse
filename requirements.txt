@@ -1,0 +1,12 @@
+beautifulsoup4==4.13.4
+mysql-connector-python==9.3.0
+psycopg2-binary==2.9.9
+undetected-chromedriver
+selenium
+selenium-wire
+fake-useragent==2.2.0
+python-dotenv
+requests
+streamlit
+python-dateutil
+plotly

@@ -1,7 +1,11 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
-os.environ['UC_CHROMEDRIVER_VERSION'] = '136'
+import subprocess
+import shutil
+
+'''import os
+os.environ['UC_CHROMEDRIVER_VERSION'] = '136' '''
 import time
 import random
 from bs4 import BeautifulSoup
@@ -14,12 +18,108 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 
-from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrapper
+#from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrapper
+import undetected_chromedriver as uc  # ✅ Correct import
+
+from remote_add_permit_contacts import remote_scraper
+
+# -------------------- DYNAMIC PATH DETECTION --------------------
+
+def find_chromedriver():
+    """Dynamically find ChromeDriver across different systems"""
+    possible_paths = [
+        '/opt/homebrew/bin/chromedriver',  # macOS Apple Silicon (M1/M2)
+        '/usr/local/bin/chromedriver',     # macOS Intel / Linux brew
+        '/usr/bin/chromedriver',           # Linux system install
+        shutil.which('chromedriver'),      # Search in PATH
+    ]
+    
+    for path in possible_paths:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            print(f"✅ Found ChromeDriver at: {path}")
+            return path
+    
+    # Don't raise error - let undetected-chromedriver handle it
+    print("⚠️ ChromeDriver not found in standard locations. Letting undetected-chromedriver auto-download.")
+    return None
+
+def find_chrome_binary():
+    """Dynamically find Chrome/Chromium binary across different systems"""
+    possible_paths = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',  # macOS Chrome
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',            # macOS Chromium
+        '/usr/bin/google-chrome',          # Linux Chrome
+        '/usr/bin/chromium-browser',       # Linux Chromium
+        '/usr/bin/chromium',               # Alternative Linux Chromium
+        shutil.which('google-chrome'),     # Search in PATH
+        shutil.which('chromium'),
+        shutil.which('chromium-browser'),
+    ]
+    
+    for path in possible_paths:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            print(f"✅ Found Chrome/Chromium at: {path}")
+            return path
+    
+    # Fallback: let undetected-chromedriver use its default
+    print("⚠️ Chrome binary not found in standard locations. Using undetected-chromedriver default.")
+    return None
+
+def get_chrome_version(chrome_path):
+    """Get the installed Chrome version"""
+    if not chrome_path:
+        return None
+    
+    try:
+        # Try to get version from Chrome binary
+        result = subprocess.run(
+            [chrome_path, '--version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        version_str = result.stdout.strip()
+        # Extract major version number (e.g., "Google Chrome 142.0.7444.135" -> 142)
+        import re
+        match = re.search(r'(\d+)\.\d+\.\d+\.\d+', version_str)
+        if match:
+            version = int(match.group(1))
+            print(f"🔍 Detected Chrome version: {version}")
+            return version
+    except Exception as e:
+        print(f"⚠️ Could not detect Chrome version: {e}")
+    
+    return None
+
+# Detect paths at startup
+CHROMEDRIVER_PATH = find_chromedriver()
+CHROME_BINARY_PATH = find_chrome_binary()
+CHROME_VERSION = get_chrome_version(CHROME_BINARY_PATH)
+
+# Configure environment for undetected-chromedriver only if we found chromedriver
+if CHROMEDRIVER_PATH:
+    os.environ['UC_SKIP_DOWNLOAD'] = 'true'
+    os.environ['UC_CHROMEDRIVER_BINARY'] = CHROMEDRIVER_PATH
+    os.environ['UC_DISABLE_AUTO_PATCHER'] = '1'
+else:
+    # Let undetected-chromedriver download and manage ChromeDriver
+    print("🔧 Allowing undetected-chromedriver to auto-manage ChromeDriver")
+
+# Set Chrome version dynamically
+if CHROME_VERSION:
+    os.environ['UC_CHROMEDRIVER_VERSION'] = str(CHROME_VERSION)
+    print(f"🎯 Using Chrome version: {CHROME_VERSION}")
+else:
+    # Fallback to a recent version
+    os.environ['UC_CHROMEDRIVER_VERSION'] = '142'
+    print("⚠️ Chrome version not detected, using default: 142")
+
+os.environ['UC_KEEP_USER_DATA_DIR'] = '1'
 
 # -------------------- CONFIG --------------------
 
-USE_PROXY = True
-DECODE_PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10009]
+USE_PROXY = False
+DECODE_PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009]
 proxy_index = 0
 
 PROXY_HOST = os.getenv('PROXY_HOST')
@@ -52,11 +152,14 @@ start_month, start_day, start_year, permit_type, contact_search_limit = config[1
 print(f'latest config: {config}')
 
 rate_limit_count = 0
-MAX_SUCCESSFUL_LINKS = random.randint(5, 12)
+MAX_RATE_LIMITS = 1  # You can adjust this
+
+# Use the contact_search_limit from the database config
+MAX_SUCCESSFUL_LINKS = contact_search_limit
 successful_links_opened = 0
 proxy_rotation_count = 0
-MAX_PROXY_ROTATIONS = 5
-print(f"Searching For {MAX_SUCCESSFUL_LINKS} Contacts")
+MAX_PROXY_ROTATIONS = 1
+print(f"Searching For {MAX_SUCCESSFUL_LINKS} Contacts (from database config)")
 
 # -------------------- UTILS --------------------
 
@@ -106,39 +209,66 @@ def test_proxy_health():
 
 def create_driver():
     global proxy_index
-    proxy_port = DECODE_PROXY_PORTS[proxy_index % len(DECODE_PROXY_PORTS)]
+    proxy_port = random.choice(DECODE_PROXY_PORTS)
     proxy_index += 1
 
+    # --- Setup Chrome Options ---
     options = uc.ChromeOptions()
-    options.add_argument("--start-maximized")
+    
+    # Set Chrome binary if found
+    if CHROME_BINARY_PATH:
+        options.binary_location = CHROME_BINARY_PATH
+
+    # ❌ Commented out headless mode - running in visible mode for debugging
+    # options.add_argument("--headless=new")  # 🧠 Use "new" for latest Chromium headless mode
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    # options.add_argument("--disable-gpu")  # Not needed in non-headless
+    # options.add_argument("--disable-software-rasterizer")  # Not needed in non-headless
+
+    # ✅ Keep - For SSL & certificate flexibility (safe for scraping)
     options.add_argument("--ignore-certificate-errors")
     options.add_argument("--allow-insecure-localhost")
 
-    # Use a real Chrome user profile
-    chrome_profile_path = "/Users/matthewmakh/StealthChromeProfile"
-    options.add_argument(f"--user-data-dir={chrome_profile_path}")
-    options.add_argument("--profile-directory=Profile1")
-
-    # Set a realistic user-agent
-    options.add_argument(f"--user-agent={UserAgent().chrome}")
+    # ✅ Keep - Non-critical, for compatibility
     options.add_argument("--lang=en-US,en;q=0.9")
+    options.add_argument(f"--user-agent={UserAgent().chrome}")
+    
+    # 🖥️ Window settings for visible mode
+    options.add_argument("--start-maximized")
 
-    # Configure proxy
-    seleniumwire_options = {}
+    # ✅ Optional - Keep if using a Chrome profile (only works non-headless usually)
+    options.add_argument("--profile-directory=Default")
+
+    # ✅ Configure Proxy (only if USE_PROXY is True)
     if USE_PROXY:
-        seleniumwire_options = {
-            'proxy': {
-                'http': f'http://{PROXY_HOST}:{proxy_port}',
-                'https': f'http://{PROXY_HOST}:{proxy_port}',
-                'no_proxy': 'localhost,127.0.0.1'
-            },
-            'auth': (PROXY_USER, PROXY_PASS)
-        }
+        proxy_auth = f"{PROXY_USER}:{PROXY_PASS}"
+        proxy_string = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
+        options.add_argument(f'--proxy-server=http://{PROXY_HOST}:{proxy_port}')
         print(f"🔄 Using Secure Auth Proxy: {PROXY_HOST}:{proxy_port}")
+    else:
+        print("🌐 Running without proxy (direct connection)")
+        proxy_string = None
 
-    driver = uc.Chrome(options=options, seleniumwire_options=seleniumwire_options)
+    # --- Launch UC Chrome with dynamic paths ---
+    driver_kwargs = {
+        'options': options,
+        'version_main': CHROME_VERSION if CHROME_VERSION else 142,  # Use detected version or fallback
+        'use_subprocess': False
+    }
+    
+    # Only set driver_executable_path if we found it
+    if CHROMEDRIVER_PATH:
+        driver_kwargs['driver_executable_path'] = CHROMEDRIVER_PATH
+    
+    # Only set browser_executable_path if we found it
+    if CHROME_BINARY_PATH:
+        driver_kwargs['browser_executable_path'] = CHROME_BINARY_PATH
+    
+    driver = uc.Chrome(**driver_kwargs)
 
-    # Request interceptor
+
+    # --- Inject Basic Proxy Headers (if needed) ---
     def interceptor(request):
         if "WorkPermitDataServlet" in request.url:
             request.headers["Referer"] = "https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp"
@@ -147,64 +277,22 @@ def create_driver():
 
     driver.request_interceptor = interceptor
 
-    # JavaScript patches to simulate human activity
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": """
-        (function simulateUserBehavior(){
-            function randomInt(min, max) {
-                return Math.floor(Math.random() * (max - min + 1)) + min;
+    # --- Optional: Spoof timezone (only if using proxy) ---
+    if USE_PROXY and proxy_string:
+        try:
+            proxies = {
+                "http": proxy_string,
+                "https": proxy_string,
             }
-            function moveMouse() {
-                const evt = new MouseEvent('mousemove', {
-                    clientX: randomInt(0, window.innerWidth),
-                    clientY: randomInt(0, window.innerHeight),
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                });
-                document.dispatchEvent(evt);
-            }
-            function scrollRandomly() {
-                window.scrollBy({
-                    top: randomInt(-100, 200),
-                    left: 0,
-                    behavior: 'smooth'
-                });
-            }
-
-            // 🐢 Slow down simulation intervals
-            setInterval(moveMouse, randomInt(15000, 30000)); // 15–30 sec
-            setInterval(scrollRandomly, randomInt(20000, 40000)); // 20–40 sec
-        })();
-        """
-    })
-
-    # Proxy-aware timezone spoofing
-    try:
-        proxies = {
-            "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}",
-            "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
-        }
-        ip_info = requests.get("https://ipinfo.io/json", proxies=proxies, timeout=10).json()
-        detected_ip = ip_info.get("ip")
-        detected_timezone = ip_info.get("timezone")
-        city = ip_info.get("city", "Unknown City")
-        region = ip_info.get("region", "Unknown Region")
-        country = ip_info.get("country", "Unknown Country")
-
-        print(f"✅ Public IP (Proxy): {detected_ip}")
-        print(f"🌍 Location: {city}, {region}, {country}")
-        print(f"🕒 Timezone: {detected_timezone}")
-
-        if detected_timezone:
-            driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {
-                "timezoneId": detected_timezone
-            })
-            print(f"🕒 Spoofed timezone to match proxy IP ({detected_ip}): {detected_timezone}")
-        else:
-            print("⚠️ Could not detect timezone from proxy IP.")
-    except Exception as e:
-        print(f"⚠️ Timezone spoofing or IP lookup failed: {e}")
+            ip_info = requests.get("https://ipinfo.io/json", proxies=proxies, timeout=10).json()
+            detected_timezone = ip_info.get("timezone")
+            if detected_timezone:
+                driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {
+                    "timezoneId": detected_timezone
+                })
+                print(f"🕒 Spoofed timezone to match proxy: {detected_timezone}")
+        except Exception as e:
+            print(f"⚠️ Timezone spoofing failed: {e}")
 
     return driver
 
@@ -265,13 +353,17 @@ def extract_names_and_phones(driver):
         return [], {"use": None, "stories": None, "total_units": None, "occupied_units": None}
 
 def process_permit_page(driver):
-    global rate_limit_count, successful_links_opened, proxy_rotation_count
+    global rate_limit_count, successful_links_opened
     permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
     print(f"✅ Found {len(permit_links)} permit links.")
 
     for i in range(len(permit_links)):
         if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
             print(f"✅ Limit of {MAX_SUCCESSFUL_LINKS} reached.")
+            return
+
+        if rate_limit_count >= MAX_RATE_LIMITS:
+            print(f"🚫 Rate limit threshold reached during loop ({rate_limit_count}). Stopping page processing.")
             return
 
         permit_links = driver.find_elements(By.XPATH, "/html/body/center/table[3]//a[contains(@href, 'WorkPermitDataServlet')]")
@@ -293,35 +385,17 @@ def process_permit_page(driver):
             continue
 
         try:
-            for attempt in range(2):  # Try once, retry once
-                print(f"➡️ Clicking permit {permit_no} (Attempt {attempt + 1})...")
-                driver.execute_script("arguments[0].setAttribute('target','_self')", link_element)
-                link_element.click()
+            print(f"➡️ Clicking permit {permit_no}...")
+            driver.execute_script("arguments[0].setAttribute('target','_self')", link_element)
+            link_element.click()
+            human_delay()
+
+            if is_access_denied(driver):
+                print("🚫 Access Denied. Skipping this permit.")
+                rate_limit_count += 1
+                driver.back()
                 human_delay()
-
-                if not is_access_denied(driver):
-                    break  # Success
-                else:
-                    print("🚫 Access Denied.")
-                    rate_limit_count += 1
-                    if attempt == 0:
-                        print("🔁 Retrying current permit one more time...")
-                        driver.back()
-                        human_delay()
-                    else:
-                        print("🔄 Switching to new proxy and restarting driver...")
-                        proxy_rotation_count += 1
-
-                        if proxy_rotation_count >= MAX_PROXY_ROTATIONS:
-                            print("🛑 Too many proxy rotations. Exiting program.")
-                            exit()  # clean shutdown
-
-                        driver.quit()
-                        driver = create_driver()
-                        wait = WebDriverWait(driver, 10)
-                        driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
-                        human_delay()
-                        return
+                continue
 
             contacts, permit_info = extract_names_and_phones(driver)
             print(f"🔍 Permit Details: {permit_info}")
@@ -362,16 +436,11 @@ def process_permit_page(driver):
         except Exception as e:
             print(f"⚠️ Error on permit {permit_no}: {e}")
             rate_limit_count += 1
-            driver.quit()
-            driver = create_driver()
-            wait = WebDriverWait(driver, 10)
-            driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
-            human_delay()
-            return
 
         print("🔙 Returning to results page...")
         driver.back()
         human_delay()
+
 
 def go_to_next_page(driver):
     try:
@@ -385,61 +454,79 @@ def go_to_next_page(driver):
         return False
 
 # -------------------- MAIN --------------------
-try:
-    test_proxy_health()
 
-    driver = create_driver()
-    wait = WebDriverWait(driver, 10)
+def run_scraper():
+    global rate_limit_count, successful_links_opened
 
-    print("🟡 Opening search form...")
-    driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
-    time.sleep(random.uniform(0.35,4.65))
-
-    wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
-    form_inputs = driver.find_element(By.ID, 'allstartdate_month')
-    driver.execute_script("arguments[0].scrollIntoView({ behavior: 'smooth', block: 'center' });", form_inputs)
-
-    Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value(f"{int(start_month):02}")
-    time.sleep(random.uniform(0.35, 2.65))
-
-    #input_field = driver.find_element(By.ID, 'allstartdate_day').send_keys(f"{int(start_day):02}")
-    day_str = f"{int(start_day):02}"
-    input_field = driver.find_element(By.ID, 'allstartdate_day')
-    for char in day_str:
-        input_field.send_keys(char)
-        time.sleep(random.uniform(0.08, 0.25))
-
-    input_field = driver.find_element(By.ID, 'allstartdate_year').send_keys(start_year)
-    '''for char in start_year:
-        input_field.send_keys(char)
-        time.sleep(random.uniform(0.08, 0.25))'''
-
-    time.sleep(random.uniform(0.35, 3.14))
-    Select(driver.find_element(By.ID, 'allpermittype')).select_by_value(permit_type)
-    time.sleep(random.uniform(0.35, 3.14))
-    driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
-    human_delay()
-
-    while True:
-        if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
-            print(f"✅ Limit of {MAX_SUCCESSFUL_LINKS} reached. Stopping main loop.")
-            break
-
-        process_permit_page(driver)
-        human_delay()
-        if not go_to_next_page(driver):
-            print("🔚 No more pages.")
-            break
-
-except Exception as e:
-    print(f"❌ Script failed: {e}")
-
-finally:
-    print(f"🔝 Done. Total rate limit evasions: {rate_limit_count}")
     try:
-        driver.quit()
-        del driver
+        test_proxy_health()
+        driver = create_driver()
+        wait = WebDriverWait(driver, 10)
+
+        print("🟡 Opening search form...")
+        driver.get('https://a810-bisweb.nyc.gov/bisweb/bispi00.jsp')
+        time.sleep(random.uniform(0.35, 4.65))
+
+        wait.until(EC.presence_of_element_located((By.ID, 'allstartdate_month')))
+        form_inputs = driver.find_element(By.ID, 'allstartdate_month')
+        driver.execute_script("arguments[0].scrollIntoView({ behavior: 'smooth', block: 'center' });", form_inputs)
+
+        Select(driver.find_element(By.ID, 'allstartdate_month')).select_by_value(f"{int(start_month):02}")
+        time.sleep(random.uniform(0.35, 2.65))
+
+        day_str = f"{int(start_day):02}"
+        input_field = driver.find_element(By.ID, 'allstartdate_day')
+        for char in day_str:
+            input_field.send_keys(char)
+            time.sleep(random.uniform(0.08, 0.25))
+
+        driver.find_element(By.ID, 'allstartdate_year').send_keys(start_year)
+
+        time.sleep(random.uniform(0.35, 3.14))
+        Select(driver.find_element(By.ID, 'allpermittype')).select_by_value(permit_type)
+        time.sleep(random.uniform(0.35, 3.14))
+        driver.find_element(By.XPATH, "/html/body/div/table[2]/tbody/tr[20]/td/table/tbody/tr/td[2]/table/tbody/tr[2]/td[2]/input").click()
+        human_delay()
+
+        while True:
+            if successful_links_opened >= MAX_SUCCESSFUL_LINKS:
+                print(f"✅ Limit of {MAX_SUCCESSFUL_LINKS} reached. Stopping main loop.")
+                return "success"
+
+            if rate_limit_count >= MAX_RATE_LIMITS:
+                print(f"🚫 Rate limit threshold reached ({rate_limit_count}). Exiting early.")
+                return "rate_limited"
+
+            process_permit_page(driver)
+            human_delay()
+
+            if not go_to_next_page(driver):
+                print("🖚 No more pages.")
+                return "success"
+
     except Exception as e:
-        print(f"⚠️ Cleanup issue: {e}")
-    cursor.close()
-    conn.close()
+        print(f"❌ Script failed: {e}")
+        return "error"
+
+    finally:
+        print(f"🖁 Done. Total rate limit evasions: {rate_limit_count}")
+        try:
+            driver.quit()
+            del driver
+        except Exception as e:
+            print(f"⚠️ Cleanup issue: {e}")
+        cursor.close()
+        conn.close()
+
+# -------------------- ENTRY POINT --------------------
+if __name__ == "__main__":
+    result = run_scraper()
+
+    if result == "rate_limited":
+        print("🧐 Triggering backup scraper due to rate limit...")
+        remaining = MAX_SUCCESSFUL_LINKS - successful_links_opened
+        remote_scraper(remaining)
+    elif result == "error":
+        print("⚠️ Script ended with an error. Investigate.")
+    else:
+        print("✅ Scraper finished successfully.")
