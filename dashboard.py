@@ -344,24 +344,30 @@ def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contac
             query += " AND p.stories <= %s"
             params.append(max_stories)
         
-        # Permit status filter
+        # Permit status filter - Fixed logic to handle multiple selections properly
         if permit_status:
+            status_conditions = []
+            
             if DB_TYPE == 'postgresql':
                 if 'Active' in permit_status:
-                    query += " AND p.exp_date >= CURRENT_DATE"
+                    status_conditions.append("p.exp_date >= CURRENT_DATE")
                 if 'Expired' in permit_status:
-                    if 'Active' not in permit_status:
-                        query += " AND p.exp_date < CURRENT_DATE"
-                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                    query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
+                    status_conditions.append("p.exp_date < CURRENT_DATE")
+                if 'Expiring Soon' in permit_status:
+                    # Expiring soon = between now and 30 days from now (subset of Active)
+                    status_conditions.append("p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'")
             else:
                 if 'Active' in permit_status:
-                    query += " AND p.exp_date >= CURDATE()"
+                    status_conditions.append("p.exp_date >= CURDATE()")
                 if 'Expired' in permit_status:
-                    if 'Active' not in permit_status:
-                        query += " AND p.exp_date < CURDATE()"
-                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                    query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+                    status_conditions.append("p.exp_date < CURDATE()")
+                if 'Expiring Soon' in permit_status:
+                    # Expiring soon = between now and 30 days from now (subset of Active)
+                    status_conditions.append("p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)")
+            
+            # Combine conditions with OR (user wants any of these statuses)
+            if status_conditions:
+                query += " AND (" + " OR ".join(status_conditions) + ")"
         
         query += " GROUP BY p.id"
         
@@ -863,10 +869,9 @@ elif st.session_state.quick_filter_type == "large":
     smart_filter_min_units = 50
 elif st.session_state.quick_filter_type == "demo":
     filter_permit_type = "DM"
-    # Recent demolitions are hot leads
-    date_from = datetime.now() - timedelta(days=60)
+    # Don't override date range - use the user's selected date filter
 elif st.session_state.quick_filter_type == "multifamily_alt":
-    filter_permit_type = "AL"
+    # Show all permit types with 2+ units, not just Alterations
     filter_multi_family = True  # 2+ units
 elif st.session_state.quick_filter_type == "single_family":
     filter_single_family = True  # 1 unit or residential use
