@@ -16,7 +16,7 @@ DB_CONFIG = {
     'database': os.getenv('DB_NAME')
 }
 
-NUMVERIFY_API_KEY = 'c9275958e9fe70cd8d4f76e25ed1e8c8'
+NUMVERIFY_API_KEY = os.getenv('NUMVERIFY_API_KEY')
 NUMVERIFY_URL = 'http://apilayer.net/api/validate'
 
 # === CONNECT TO DATABASE ===

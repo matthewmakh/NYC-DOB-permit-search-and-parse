@@ -5,13 +5,16 @@ Import database schema and data to Railway PostgreSQL
 import psycopg2
 import os
 
-# Railway PostgreSQL credentials
+# Railway PostgreSQL credentials from environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 DB_CONFIG = {
-    'host': 'maglev.proxy.rlwy.net',
-    'port': 26571,
-    'user': 'postgres',
-    'password': 'rYOeFwAQciYdTdUVPxuCqNparvRNbUov',
-    'database': 'railway'
+    'host': os.getenv('DB_HOST'),
+    'port': int(os.getenv('DB_PORT', 5432)),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD'),
+    'database': os.getenv('DB_NAME')
 }
 
 def import_sql_file(cursor, filepath):
