@@ -86,17 +86,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Database connection
+# Database connection with autocommit and recovery
 @st.cache_resource
 def get_db_connection():
     if DB_TYPE == 'postgresql':
-        return psycopg2.connect(
+        conn = psycopg2.connect(
             host=os.getenv('DB_HOST', 'localhost'),
             port=int(os.getenv('DB_PORT', '5432')),
             user=os.getenv('DB_USER', 'scraper_user'),
             password=os.getenv('DB_PASSWORD'),
             database=os.getenv('DB_NAME', 'permit_scraper')
         )
+        # CRITICAL: Set autocommit to avoid transaction blocks
+        conn.autocommit = True
+        return conn
     else:  # mysql
         return mysql.connector.connect(
             host=os.getenv('DB_HOST', 'localhost'),
@@ -108,6 +111,49 @@ def get_db_connection():
 
 conn = get_db_connection()
 
+# Add helper function to handle connection recovery
+def safe_execute(query, params=None):
+    """Execute query with automatic connection recovery"""
+    global conn
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            if DB_TYPE == 'postgresql':
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            else:
+                cursor = conn.cursor(dictionary=True)
+            
+            cursor.execute(query, params or [])
+            results = cursor.fetchall()
+            cursor.close()
+            return results
+            
+        except (psycopg2.errors.InFailedSqlTransaction, 
+                psycopg2.OperationalError,
+                psycopg2.InterfaceError) as e:
+            
+            # Connection is broken - reset it
+            try:
+                if DB_TYPE == 'postgresql' and hasattr(conn, 'autocommit') and not conn.autocommit:
+                    conn.rollback()
+                conn.close()
+            except:
+                pass
+            
+            # Clear cache and get new connection
+            st.cache_resource.clear()
+            conn = get_db_connection()
+            
+            if attempt == max_retries - 1:
+                st.error(f"Database connection error after {max_retries} attempts: {str(e)}")
+                raise
+        
+        except Exception as e:
+            cursor.close()
+            st.error(f"Database error: {str(e)}")
+            raise
+
 # Count total results for pagination
 @st.cache_data(ttl=300)
 def count_permits(permit_type=None, date_from=None, date_to=None, has_contacts=True, 
@@ -116,72 +162,67 @@ def count_permits(permit_type=None, date_from=None, date_to=None, has_contacts=T
                   only_mobile=False, min_stories=None, max_stories=None,
                   permit_status=None):
     """Count total permits matching filters for pagination"""
-    if DB_TYPE == 'postgresql':
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    else:
-        cursor = conn.cursor(dictionary=True)
-    
-    # Build count query (same filters as main query)
-    query = "SELECT COUNT(DISTINCT p.id) as total FROM permits p LEFT JOIN contacts c ON p.id = c.permit_id"
-    
-    if only_mobile:
-        if DB_TYPE == 'postgresql':
-            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = true")
-        else:
-            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = 1")
-    
-    query += " WHERE 1=1"
-    params = []
-    
-    if has_contacts:
-        query += " AND c.id IS NOT NULL"
-    
-    if permit_type and permit_type != "All":
-        query += " AND p.job_type = %s"
-        params.append(permit_type)
-    
-    if date_from:
-        query += " AND p.issue_date >= %s"
-        params.append(date_from)
-    
-    if date_to:
-        query += " AND p.issue_date <= %s"
-        params.append(date_to)
-    
-    if min_stories is not None:
-        query += " AND p.stories >= %s"
-        params.append(min_stories)
-    
-    if max_stories is not None:
-        query += " AND p.stories <= %s"
-        params.append(max_stories)
-    
-    if permit_status:
-        if DB_TYPE == 'postgresql':
-            if 'Active' in permit_status:
-                query += " AND p.exp_date >= CURRENT_DATE"
-            if 'Expired' in permit_status:
-                if 'Active' not in permit_status:
-                    query += " AND p.exp_date < CURRENT_DATE"
-            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
-        else:
-            if 'Active' in permit_status:
-                query += " AND p.exp_date >= CURDATE()"
-            if 'Expired' in permit_status:
-                if 'Active' not in permit_status:
-                    query += " AND p.exp_date < CURDATE()"
-            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
-    
-    cursor.execute(query, params)
-    result = cursor.fetchone()
-    cursor.close()
-    
-    if DB_TYPE == 'postgresql':
-        return result['total'] if result else 0
-    else:
-        return result['total'] if result else 0
+    try:
+        # Build count query (same filters as main query)
+        query = "SELECT COUNT(DISTINCT p.id) as total FROM permits p LEFT JOIN contacts c ON p.id = c.permit_id"
+        
+        if only_mobile:
+            if DB_TYPE == 'postgresql':
+                query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = true")
+            else:
+                query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = 1")
+        
+        query += " WHERE 1=1"
+        params = []
+        
+        if has_contacts:
+            query += " AND c.id IS NOT NULL"
+        
+        if permit_type and permit_type != "All":
+            query += " AND p.job_type = %s"
+            params.append(permit_type)
+        
+        if date_from:
+            query += " AND p.issue_date >= %s"
+            params.append(date_from)
+        
+        if date_to:
+            query += " AND p.issue_date <= %s"
+            params.append(date_to)
+        
+        if min_stories is not None:
+            query += " AND p.stories >= %s"
+            params.append(min_stories)
+        
+        if max_stories is not None:
+            query += " AND p.stories <= %s"
+            params.append(max_stories)
+        
+        if permit_status:
+            if DB_TYPE == 'postgresql':
+                if 'Active' in permit_status:
+                    query += " AND p.exp_date >= CURRENT_DATE"
+                if 'Expired' in permit_status:
+                    if 'Active' not in permit_status:
+                        query += " AND p.exp_date < CURRENT_DATE"
+                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                    query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
+            else:
+                if 'Active' in permit_status:
+                    query += " AND p.exp_date >= CURDATE()"
+                if 'Expired' in permit_status:
+                    if 'Active' not in permit_status:
+                        query += " AND p.exp_date < CURDATE()"
+                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                    query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+        
+        # Use safe_execute
+        result = safe_execute(query, params)
+        return result[0]['total'] if result and result[0] else 0
+        
+    except Exception as e:
+        st.error(f"Error counting permits: {str(e)}")
+        return 0
 
 # Fetch data function with caching (increased TTL to 5 minutes)
 @st.cache_data(ttl=300)
@@ -190,153 +231,161 @@ def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contac
                       single_family=False, multi_family=False, min_contacts=None, 
                       only_mobile=False, min_stories=None, max_stories=None,
                       permit_status=None, limit=None, offset=0):
-    if DB_TYPE == 'postgresql':
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    else:
-        cursor = conn.cursor(dictionary=True)
-    
-    # PostgreSQL uses string_agg() instead of GROUP_CONCAT(), CURRENT_DATE instead of CURDATE()
-    if DB_TYPE == 'postgresql':
-        query = """
-            SELECT 
-                p.id,
-                p.permit_no,
-                p.applicant,
-                p.job_type,
-                p.issue_date,
-                p.exp_date,
-                p.address,
-                p.bin,
-                p.use_type,
-                p.stories,
-                p.total_units,
-                p.occupied_units,
-                p.link,
-                p.latitude,
-                p.longitude,
-                (p.exp_date - CURRENT_DATE) as days_until_exp,
-                string_agg(DISTINCT c.name, ' | ') as contact_names,
-                string_agg(DISTINCT c.phone, ' | ') as contact_phones,
-                COUNT(DISTINCT c.id) as contact_count,
-                SUM(CASE WHEN c.is_mobile = true THEN 1 ELSE 0 END) as mobile_count
-            FROM permits p
-            LEFT JOIN contacts c ON p.id = c.permit_id AND c.phone IS NOT NULL AND c.phone != ''
-        """
-    else:
-        query = """
-            SELECT 
-                p.id,
-                p.permit_no,
-                p.applicant,
-                p.job_type,
-                p.issue_date,
-                p.exp_date,
-                p.address,
-                p.bin,
-                p.use_type,
-                p.stories,
-                p.total_units,
-                p.occupied_units,
-                p.link,
-                p.latitude,
-                p.longitude,
-                DATEDIFF(p.exp_date, CURDATE()) as days_until_exp,
-                GROUP_CONCAT(DISTINCT c.name SEPARATOR ' | ') as contact_names,
-                GROUP_CONCAT(DISTINCT c.phone SEPARATOR ' | ') as contact_phones,
-                COUNT(DISTINCT c.id) as contact_count,
-                SUM(CASE WHEN c.is_mobile = 1 THEN 1 ELSE 0 END) as mobile_count
-            FROM permits p
-            LEFT JOIN contacts c ON p.id = c.permit_id AND c.phone IS NOT NULL AND c.phone != ''
-        """
-    
-    # Add mobile filter to JOIN if needed
-    if only_mobile:
+    try:
+        # PostgreSQL uses string_agg() instead of GROUP_CONCAT(), CURRENT_DATE instead of CURDATE()
         if DB_TYPE == 'postgresql':
-            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = true")
+            query = """
+                SELECT 
+                    p.id,
+                    p.permit_no,
+                    p.applicant,
+                    p.job_type,
+                    p.issue_date,
+                    p.exp_date,
+                    p.address,
+                    p.bin,
+                    p.use_type,
+                    p.stories,
+                    p.total_units,
+                    p.occupied_units,
+                    p.link,
+                    p.latitude,
+                    p.longitude,
+                    (p.exp_date - CURRENT_DATE) as days_until_exp,
+                    string_agg(DISTINCT c.name, ' | ') as contact_names,
+                    string_agg(DISTINCT c.phone, ' | ') as contact_phones,
+                    COUNT(DISTINCT c.id) as contact_count,
+                    SUM(CASE WHEN c.is_mobile = true THEN 1 ELSE 0 END) as mobile_count
+                FROM permits p
+                LEFT JOIN contacts c ON p.id = c.permit_id AND c.phone IS NOT NULL AND c.phone != ''
+            """
         else:
-            query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = 1")
-    
-    query += " WHERE 1=1"
-    
-    params = []
-    
-    if has_contacts:
-        query += " AND c.id IS NOT NULL"
-    
-    if permit_type and permit_type != "All":
-        query += " AND p.job_type = %s"
-        params.append(permit_type)
-    
-    if date_from:
-        query += " AND p.issue_date >= %s"
-        params.append(date_from)
-    
-    if date_to:
-        query += " AND p.issue_date <= %s"
-        params.append(date_to)
-    
-    # Stories filter
-    if min_stories is not None:
-        query += " AND p.stories >= %s"
-        params.append(min_stories)
-    
-    if max_stories is not None:
-        query += " AND p.stories <= %s"
-        params.append(max_stories)
-    
-    # Permit status filter
-    if permit_status:
-        if DB_TYPE == 'postgresql':
-            if 'Active' in permit_status:
-                query += " AND p.exp_date >= CURRENT_DATE"
-            if 'Expired' in permit_status:
-                if 'Active' not in permit_status:
-                    query += " AND p.exp_date < CURRENT_DATE"
-            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
-        else:
-            if 'Active' in permit_status:
-                query += " AND p.exp_date >= CURDATE()"
-            if 'Expired' in permit_status:
-                if 'Active' not in permit_status:
-                    query += " AND p.exp_date < CURDATE()"
-            if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
-    
-    query += " GROUP BY p.id"
-    
-    # Apply HAVING clauses
-    having_clauses = []
-    
-    if single_family:
-        having_clauses.append("(p.total_units = 1) OR (COALESCE(p.total_units, 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
-    elif multi_family:
-        having_clauses.append("p.total_units IS NOT NULL AND p.total_units >= 2")
-    elif has_units_info:
-        having_clauses.append("p.total_units IS NOT NULL AND p.total_units > 0")
-    elif max_units is not None:
-        having_clauses.append(f"p.total_units IS NOT NULL AND p.total_units <= {max_units} AND p.total_units > 0")
-    elif min_units is not None:
-        having_clauses.append(f"p.total_units IS NOT NULL AND p.total_units >= {min_units}")
-    
-    # Contact count filter
-    if min_contacts is not None:
-        having_clauses.append(f"contact_count >= {min_contacts}")
-    
-    if having_clauses:
-        query += " HAVING " + " AND ".join(having_clauses)
-    
-    query += " ORDER BY p.issue_date DESC, p.id DESC"
-    
-    # Add pagination
-    if limit is not None:
-        query += f" LIMIT {limit} OFFSET {offset}"
-    
-    cursor.execute(query, params)
-    results = cursor.fetchall()
-    cursor.close()
-    
-    return pd.DataFrame(results) if results else pd.DataFrame()
+            query = """
+                SELECT 
+                    p.id,
+                    p.permit_no,
+                    p.applicant,
+                    p.job_type,
+                    p.issue_date,
+                    p.exp_date,
+                    p.address,
+                    p.bin,
+                    p.use_type,
+                    p.stories,
+                    p.total_units,
+                    p.occupied_units,
+                    p.link,
+                    p.latitude,
+                    p.longitude,
+                    DATEDIFF(p.exp_date, CURDATE()) as days_until_exp,
+                    GROUP_CONCAT(DISTINCT c.name SEPARATOR ' | ') as contact_names,
+                    GROUP_CONCAT(DISTINCT c.phone SEPARATOR ' | ') as contact_phones,
+                    COUNT(DISTINCT c.id) as contact_count,
+                    SUM(CASE WHEN c.is_mobile = 1 THEN 1 ELSE 0 END) as mobile_count
+                FROM permits p
+                LEFT JOIN contacts c ON p.id = c.permit_id AND c.phone IS NOT NULL AND c.phone != ''
+            """
+        
+        # Add mobile filter to JOIN if needed
+        if only_mobile:
+            if DB_TYPE == 'postgresql':
+                query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = true")
+            else:
+                query = query.replace("AND c.phone != ''", "AND c.phone != '' AND c.is_mobile = 1")
+        
+        query += " WHERE 1=1"
+        
+        params = []
+        
+        if has_contacts:
+            query += " AND c.id IS NOT NULL"
+        
+        if permit_type and permit_type != "All":
+            query += " AND p.job_type = %s"
+            params.append(permit_type)
+        
+        if date_from:
+            query += " AND p.issue_date >= %s"
+            params.append(date_from)
+        
+        if date_to:
+            query += " AND p.issue_date <= %s"
+            params.append(date_to)
+        
+        # Stories filter
+        if min_stories is not None:
+            query += " AND p.stories >= %s"
+            params.append(min_stories)
+        
+        if max_stories is not None:
+            query += " AND p.stories <= %s"
+            params.append(max_stories)
+        
+        # Permit status filter
+        if permit_status:
+            if DB_TYPE == 'postgresql':
+                if 'Active' in permit_status:
+                    query += " AND p.exp_date >= CURRENT_DATE"
+                if 'Expired' in permit_status:
+                    if 'Active' not in permit_status:
+                        query += " AND p.exp_date < CURRENT_DATE"
+                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                    query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
+            else:
+                if 'Active' in permit_status:
+                    query += " AND p.exp_date >= CURDATE()"
+                if 'Expired' in permit_status:
+                    if 'Active' not in permit_status:
+                        query += " AND p.exp_date < CURDATE()"
+                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
+                    query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+        
+        query += " GROUP BY p.id"
+        
+        # Apply HAVING clauses with parameterized queries
+        having_clauses = []
+        
+        if single_family:
+            having_clauses.append("(p.total_units = 1) OR (COALESCE(p.total_units, 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
+        elif multi_family:
+            having_clauses.append("p.total_units IS NOT NULL AND p.total_units >= 2")
+        elif has_units_info:
+            having_clauses.append("p.total_units IS NOT NULL AND p.total_units > 0")
+        elif max_units is not None:
+            # Use parameterized query for security
+            having_clauses.append("p.total_units IS NOT NULL AND p.total_units <= %s AND p.total_units > 0")
+            params.append(max_units)
+        elif min_units is not None:
+            # Use parameterized query for security
+            having_clauses.append("p.total_units IS NOT NULL AND p.total_units >= %s")
+            params.append(min_units)
+        
+        # Contact count filter with parameterized query
+        if min_contacts is not None:
+            having_clauses.append("contact_count >= %s")
+            params.append(min_contacts)
+        
+        if having_clauses:
+            query += " HAVING " + " AND ".join(having_clauses)
+        
+        query += " ORDER BY p.issue_date DESC, p.id DESC"
+        
+        # Add pagination with validation and parameterized queries
+        if limit is not None:
+            # Validate and cap limit to prevent DoS
+            safe_limit = min(int(limit), 10000)  # Cap at 10,000 records
+            safe_offset = max(int(offset), 0)  # Ensure non-negative
+            query += " LIMIT %s OFFSET %s"
+            params.append(safe_limit)
+            params.append(safe_offset)
+        
+        # Use safe_execute
+        results = safe_execute(query, params)
+        return pd.DataFrame(results) if results else pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"Error fetching permit data: {str(e)}")
+        return pd.DataFrame()
 
 # Calculate lead score (0-100)
 def calculate_lead_score(row):
@@ -517,73 +566,81 @@ def get_score_breakdown(row):
 # Get unique permit types
 @st.cache_data(ttl=300)
 def get_permit_types():
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT job_type FROM permits ORDER BY job_type")
-    types = [row[0] for row in cursor.fetchall() if row[0]]
-    cursor.close()
-    return ["All"] + types
+    try:
+        results = safe_execute("SELECT DISTINCT job_type FROM permits ORDER BY job_type")
+        types = [row['job_type'] for row in results if row.get('job_type')]
+        return ["All"] + types
+    except Exception as e:
+        st.error(f"Error fetching permit types: {str(e)}")
+        return ["All"]
 
 # Get stories range from database
 @st.cache_data(ttl=300)
 def get_stories_range():
-    cursor = conn.cursor()
-    # Convert varchar to numeric, filter out NULL and 0
-    if DB_TYPE == 'postgresql':
-        cursor.execute("""
-            SELECT 
-                CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as min_stories,
-                CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as max_stories
-            FROM permits 
-            WHERE stories IS NOT NULL 
-            AND stories != '' 
-            AND CAST(stories AS DECIMAL(10,2)) > 0
-        """)
-    else:
-        cursor.execute("""
-            SELECT 
-                CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as min_stories,
-                CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as max_stories
-            FROM permits 
-            WHERE stories IS NOT NULL 
-            AND stories != '' 
-            AND CAST(stories AS DECIMAL(10,2)) > 0
-        """)
-    result = cursor.fetchone()
-    cursor.close()
-    if result and result[0] is not None:
-        return int(result[0]), int(result[1])
-    return 1, 100  # Default fallback
+    try:
+        # Convert varchar to numeric, filter out NULL and 0
+        if DB_TYPE == 'postgresql':
+            query = """
+                SELECT 
+                    CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as min_stories,
+                    CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS INTEGER) as max_stories
+                FROM permits 
+                WHERE stories IS NOT NULL 
+                AND stories != '' 
+                AND CAST(stories AS DECIMAL(10,2)) > 0
+            """
+        else:
+            query = """
+                SELECT 
+                    CAST(MIN(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as min_stories,
+                    CAST(MAX(CAST(stories AS DECIMAL(10,2))) AS UNSIGNED) as max_stories
+                FROM permits 
+                WHERE stories IS NOT NULL 
+                AND stories != '' 
+                AND CAST(stories AS DECIMAL(10,2)) > 0
+            """
+        
+        result = safe_execute(query)
+        if result and result[0] and result[0]['min_stories'] is not None:
+            return int(result[0]['min_stories']), int(result[0]['max_stories'])
+        return 1, 100  # Default fallback
+    except Exception as e:
+        st.error(f"Error fetching stories range: {str(e)}")
+        return 1, 100
 
 # Get units range from database
 @st.cache_data(ttl=300)
 def get_units_range():
-    cursor = conn.cursor()
-    # Convert varchar to numeric, filter out NULL and 0
-    if DB_TYPE == 'postgresql':
-        cursor.execute("""
-            SELECT 
-                CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as min_units,
-                CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as max_units
-            FROM permits 
-            WHERE total_units IS NOT NULL 
-            AND total_units != '' 
-            AND CAST(total_units AS DECIMAL(10,2)) > 0
-        """)
-    else:
-        cursor.execute("""
-            SELECT 
-                CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as min_units,
-                CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as max_units
-            FROM permits 
-            WHERE total_units IS NOT NULL 
-            AND total_units != '' 
-            AND CAST(total_units AS DECIMAL(10,2)) > 0
-        """)
-    result = cursor.fetchone()
-    cursor.close()
-    if result and result[0] is not None:
-        return int(result[0]), int(result[1])
-    return 1, 500  # Default fallback
+    try:
+        # Convert varchar to numeric, filter out NULL and 0
+        if DB_TYPE == 'postgresql':
+            query = """
+                SELECT 
+                    CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as min_units,
+                    CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS INTEGER) as max_units
+                FROM permits 
+                WHERE total_units IS NOT NULL 
+                AND total_units != '' 
+                AND CAST(total_units AS DECIMAL(10,2)) > 0
+            """
+        else:
+            query = """
+                SELECT 
+                    CAST(MIN(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as min_units,
+                    CAST(MAX(CAST(total_units AS DECIMAL(10,2))) AS UNSIGNED) as max_units
+                FROM permits 
+                WHERE total_units IS NOT NULL 
+                AND total_units != '' 
+                AND CAST(total_units AS DECIMAL(10,2)) > 0
+            """
+        
+        result = safe_execute(query)
+        if result and result[0] and result[0]['min_units'] is not None:
+            return int(result[0]['min_units']), int(result[0]['max_units'])
+        return 1, 500  # Default fallback
+    except Exception as e:
+        st.error(f"Error fetching units range: {str(e)}")
+        return 1, 500
 
 # Header
 st.markdown('<p class="main-header">📋 DOB Permit Leads Dashboard</p>', unsafe_allow_html=True)
@@ -810,10 +867,15 @@ total_permits = count_permits(
     permit_status=filter_permit_status_override if filter_permit_status_override else (permit_status if permit_status else None)
 )
 
-# Calculate pagination
+# Calculate pagination with validation
 total_pages = max(1, (total_permits + results_per_page - 1) // results_per_page)
 if st.session_state.page_number >= total_pages:
     st.session_state.page_number = 0
+
+# Validate pagination inputs for security
+safe_results_per_page = min(max(int(results_per_page), 1), 1000)  # Between 1-1000
+safe_page_number = max(int(st.session_state.page_number), 0)  # Non-negative
+safe_offset = safe_page_number * safe_results_per_page
 
 # Fetch data with pagination
 df = fetch_permit_data(
@@ -831,8 +893,8 @@ df = fetch_permit_data(
     min_stories=min_stories,
     max_stories=max_stories,
     permit_status=filter_permit_status_override if filter_permit_status_override else (permit_status if permit_status else None),
-    limit=results_per_page,
-    offset=st.session_state.page_number * results_per_page
+    limit=safe_results_per_page,
+    offset=safe_offset
 )
 
 # Calculate lead scores
