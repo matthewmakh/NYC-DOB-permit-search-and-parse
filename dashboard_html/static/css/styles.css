@@ -1009,13 +1009,64 @@ input[type="range"]::-webkit-slider-thumb:hover {
     gap: 0.625rem;
 }
 
-.smart-insights {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
+.smart-insights-wrapper {
+    margin-top: 1.5rem;
     border-radius: var(--radius-lg);
-    padding: 2rem;
+    overflow: hidden;
     border: 1px solid rgba(102, 126, 234, 0.3);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+}
+
+.smart-insights-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    cursor: pointer;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+    transition: all 0.3s var(--ease-out);
+    border-bottom: 1px solid rgba(102, 126, 234, 0.2);
+    user-select: none;
+}
+
+.smart-insights-header:hover {
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
+    padding-left: 1.75rem;
+}
+
+.smart-insights-header:active {
+    transform: scale(0.99);
+}
+
+.smart-insights-header h4 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.insights-toggle-icon {
+    color: var(--primary-color);
+    font-size: 1rem;
+    transition: transform 0.3s var(--ease-out);
+}
+
+.smart-insights {
+    max-height: 1000px;
+    padding: 2rem;
     position: relative;
     overflow: hidden;
+    opacity: 1;
+    transition: max-height 0.5s var(--ease-out), padding 0.5s var(--ease-out), opacity 0.3s ease;
+}
+
+.smart-insights.collapsed {
+    max-height: 0;
+    padding: 0 2rem;
+    opacity: 0;
 }
 
 .smart-insights::before {
@@ -1032,15 +1083,6 @@ input[type="range"]::-webkit-slider-thumb:hover {
 @keyframes rotate {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-}
-
-.smart-insights h4 {
-    position: relative;
-    z-index: 1;
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin-bottom: 1.5rem;
-    color: var(--text-primary);
 }
 
 .insight-item {

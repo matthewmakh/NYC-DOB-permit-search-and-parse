@@ -297,6 +297,17 @@ function renderLeads() {
     renderPagination();
 }
 
+// Toggle Smart Insights section
+function toggleInsights(header) {
+    const insightsSection = header.nextElementSibling;
+    const icon = header.querySelector('.insights-toggle-icon');
+    
+    insightsSection.classList.toggle('collapsed');
+    icon.style.transform = insightsSection.classList.contains('collapsed') 
+        ? 'rotate(0deg)' 
+        : 'rotate(180deg)';
+}
+
 // Create lead card HTML
 function createLeadCard(permit) {
     const quality = getLeadQuality(permit.lead_score);
@@ -399,9 +410,14 @@ function createLeadCard(permit) {
                     </div>
                 </div>
                 
-                <div class="smart-insights">
-                    <h4>💡 Smart Insights & Analytics</h4>
-                    ${createSmartInsights(permit)}
+                <div class="smart-insights-wrapper">
+                    <div class="smart-insights-header" onclick="toggleInsights(this)">
+                        <h4>💡 Smart Insights & Analytics</h4>
+                        <i class="fas fa-chevron-down insights-toggle-icon"></i>
+                    </div>
+                    <div class="smart-insights collapsed">
+                        ${createSmartInsights(permit)}
+                    </div>
                 </div>
             </div>
         </div>
