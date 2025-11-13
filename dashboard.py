@@ -219,23 +219,78 @@ def count_permits(permit_type=None, date_from=None, date_to=None, has_contacts=T
             query += " AND p.stories <= %s"
             params.append(max_stories)
         
+        # Permit status filter - Fixed logic to handle multiple selections properly (matches fetch_permit_data)
         if permit_status:
+            status_conditions = []
+            
             if DB_TYPE == 'postgresql':
                 if 'Active' in permit_status:
-                    query += " AND p.exp_date >= CURRENT_DATE"
+                    status_conditions.append("p.exp_date >= CURRENT_DATE")
                 if 'Expired' in permit_status:
-                    if 'Active' not in permit_status:
-                        query += " AND p.exp_date < CURRENT_DATE"
-                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                    query += " AND p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'"
+                    status_conditions.append("p.exp_date < CURRENT_DATE")
+                if 'Expiring Soon' in permit_status:
+                    status_conditions.append("p.exp_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'")
             else:
                 if 'Active' in permit_status:
-                    query += " AND p.exp_date >= CURDATE()"
+                    status_conditions.append("p.exp_date >= CURDATE()")
                 if 'Expired' in permit_status:
-                    if 'Active' not in permit_status:
-                        query += " AND p.exp_date < CURDATE()"
-                if 'Expiring Soon' in permit_status and 'Active' not in permit_status:
-                    query += " AND p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+                    status_conditions.append("p.exp_date < CURDATE()")
+                if 'Expiring Soon' in permit_status:
+                    status_conditions.append("p.exp_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)")
+            
+            # Combine conditions with OR (user wants any of these statuses)
+            if status_conditions:
+                query += " AND (" + " OR ".join(status_conditions) + ")"
+        
+        # Add GROUP BY to enable HAVING clauses for unit-based filters
+        query += " GROUP BY p.id"
+        
+        # Apply HAVING clauses (same logic as fetch_permit_data)
+        having_clauses = []
+        
+        if single_family:
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("(CAST(p.total_units AS DECIMAL) = 1) OR (COALESCE(CAST(p.total_units AS DECIMAL), 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
+            else:
+                having_clauses.append("(CAST(p.total_units AS DECIMAL) = 1) OR (COALESCE(CAST(p.total_units AS DECIMAL), 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
+        elif multi_family:
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= 2")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= 2")
+        elif has_units_info:
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) > 0")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) > 0")
+        elif max_units is not None:
+            # Use parameterized query for security with type casting
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) <= %s AND CAST(p.total_units AS DECIMAL) > 0")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) <= %s AND CAST(p.total_units AS DECIMAL) > 0")
+            params.append(max_units)
+        elif min_units is not None:
+            # Use parameterized query for security with type casting
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= %s")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= %s")
+            params.append(min_units)
+        
+        # Contact count filter with parameterized query
+        if min_contacts is not None and min_contacts > 0:
+            having_clauses.append("COUNT(DISTINCT c.id) >= %s")
+            params.append(min_contacts)
+        
+        if having_clauses:
+            query += " HAVING " + " AND ".join(having_clauses)
+        
+        # Wrap the query in a subquery to count the grouped results
+        query = f"SELECT COUNT(*) as total FROM ({query}) as filtered_permits"
         
         # Use safe_execute
         result = safe_execute(query, params)
