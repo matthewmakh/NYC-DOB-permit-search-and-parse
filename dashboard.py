@@ -7,12 +7,27 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import plotly.express as px
+import html
+from urllib.parse import urlparse
 
 # Load environment variables
 load_dotenv()
 
 # Detect database type
 DB_TYPE = os.getenv('DB_TYPE', 'mysql')  # 'mysql' or 'postgresql'
+
+# Security: URL validation to prevent phishing
+def is_safe_dob_link(url):
+    """Validate that link is from NYC DOB website to prevent XSS/phishing attacks"""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        # Only allow NYC government domains
+        allowed_domains = ['nyc.gov', 'www.nyc.gov']
+        return any(parsed.netloc.endswith(domain) for domain in allowed_domains)
+    except:
+        return False
 
 # Page config
 st.set_page_config(
@@ -146,12 +161,18 @@ def safe_execute(query, params=None):
             conn = get_db_connection()
             
             if attempt == max_retries - 1:
-                st.error(f"Database connection error after {max_retries} attempts: {str(e)}")
+                # Security: Generic error message to prevent information disclosure
+                st.error("Database connection unavailable. Please try again later.")
+                # Log detailed error server-side (not shown to user)
+                print(f"[ERROR] Database connection failed after {max_retries} attempts: {str(e)}")
                 raise
         
         except Exception as e:
             cursor.close()
-            st.error(f"Database error: {str(e)}")
+            # Security: Generic error message to prevent information disclosure
+            st.error("An error occurred while processing your request. Please try again.")
+            # Log detailed error server-side (not shown to user)
+            print(f"[ERROR] Database query failed: {str(e)}")
             raise
 
 # Count total results for pagination
@@ -221,7 +242,9 @@ def count_permits(permit_type=None, date_from=None, date_to=None, has_contacts=T
         return result[0]['total'] if result and result[0] else 0
         
     except Exception as e:
-        st.error(f"Error counting permits: {str(e)}")
+        # Security: Generic error message to prevent information disclosure
+        st.error("Unable to count permits. Please try refreshing the page.")
+        print(f"[ERROR] Count permits failed: {str(e)}")
         return 0
 
 # Fetch data function with caching (increased TTL to 5 minutes)
@@ -384,7 +407,9 @@ def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contac
         return pd.DataFrame(results) if results else pd.DataFrame()
         
     except Exception as e:
-        st.error(f"Error fetching permit data: {str(e)}")
+        # Security: Generic error message to prevent information disclosure
+        st.error("Unable to load permit data. Please try adjusting your filters.")
+        print(f"[ERROR] Fetch permit data failed: {str(e)}")
         return pd.DataFrame()
 
 # Calculate lead score (0-100)
@@ -571,7 +596,9 @@ def get_permit_types():
         types = [row['job_type'] for row in results if row.get('job_type')]
         return ["All"] + types
     except Exception as e:
-        st.error(f"Error fetching permit types: {str(e)}")
+        # Security: Generic error message to prevent information disclosure
+        st.warning("Unable to load permit types. Using defaults.")
+        print(f"[ERROR] Fetch permit types failed: {str(e)}")
         return ["All"]
 
 # Get stories range from database
@@ -605,7 +632,8 @@ def get_stories_range():
             return int(result[0]['min_stories']), int(result[0]['max_stories'])
         return 1, 100  # Default fallback
     except Exception as e:
-        st.error(f"Error fetching stories range: {str(e)}")
+        # Security: Generic error message to prevent information disclosure
+        print(f"[ERROR] Fetch stories range failed: {str(e)}")
         return 1, 100
 
 # Get units range from database
@@ -639,7 +667,8 @@ def get_units_range():
             return int(result[0]['min_units']), int(result[0]['max_units'])
         return 1, 500  # Default fallback
     except Exception as e:
-        st.error(f"Error fetching units range: {str(e)}")
+        # Security: Generic error message to prevent information disclosure
+        print(f"[ERROR] Fetch units range failed: {str(e)}")
         return 1, 500
 
 # Header
@@ -1062,17 +1091,24 @@ with tab1:
                         phones = str(row['contact_phones']).split(' | ')
                         
                         for name, phone in zip(names, phones):
+                            # Security: Escape HTML to prevent XSS attacks
+                            safe_name = html.escape(name)
+                            safe_phone = html.escape(phone)
                             st.markdown(f"""
                             <div class='contact-card'>
-                                <strong>👤 {name}</strong><br>
-                                📱 <a href='tel:{phone}' style='color: #4a9eff; text-decoration: none;'>{phone}</a>
+                                <strong>👤 {safe_name}</strong><br>
+                                📱 <a href='tel:{safe_phone}' style='color: #4a9eff; text-decoration: none;'>{safe_phone}</a>
                             </div>
                             """, unsafe_allow_html=True)
                     else:
                         st.info("No contacts available")
                     
                     st.markdown("---")
-                    st.markdown(f"[🔗 View Permit Details]({row['link']})")
+                    # Security: Validate URL to prevent phishing attacks
+                    if row['link'] and is_safe_dob_link(row['link']):
+                        st.markdown(f"[🔗 View Permit Details]({row['link']})")
+                    else:
+                        st.caption("🔗 Permit link unavailable")
         
         # Pagination controls at the bottom
         st.markdown("---")
@@ -1089,7 +1125,9 @@ with tab1:
                 st.rerun()
         
         with col3:
-            st.markdown(f"<div style='text-align: center; padding: 8px;'><strong>Page {st.session_state.page_number + 1} of {total_pages}</strong><br><small>Showing {len(df)} of {total_permits} permits</small></div>", unsafe_allow_html=True)
+            # Safe pagination display without HTML injection risk
+            st.markdown(f"**Page {st.session_state.page_number + 1} of {total_pages}**", unsafe_allow_html=False)
+            st.caption(f"Showing {len(df)} of {total_permits} permits")
         
         with col4:
             if st.button("Next ▶️", disabled=st.session_state.page_number >= total_pages - 1):
