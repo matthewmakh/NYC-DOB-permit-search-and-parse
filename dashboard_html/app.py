@@ -178,6 +178,7 @@ def search_contact():
         
         search_query = """
             SELECT DISTINCT
+                p.id,
                 p.permit_no,
                 p.address,
                 p.job_type,
@@ -462,6 +463,122 @@ def health_check():
         }), 500
 
 
+@app.route('/permit/<int:permit_id>')
+def permit_detail(permit_id):
+    """Serve detailed permit view page"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get permit with all details
+        query = """
+            SELECT 
+                p.*,
+                COALESCE(contact_info.contact_count, 0) as contact_count,
+                COALESCE(contact_info.has_mobile, false) as has_mobile
+            FROM permits p
+            LEFT JOIN (
+                SELECT 
+                    permit_id,
+                    COUNT(*) as contact_count,
+                    BOOL_OR(COALESCE(is_mobile, false)) as has_mobile
+                FROM contacts
+                WHERE name IS NOT NULL AND name != ''
+                GROUP BY permit_id
+            ) contact_info ON p.id = contact_info.permit_id
+            WHERE p.id = %s;
+        """
+        
+        cur.execute(query, (permit_id,))
+        permit = cur.fetchone()
+        
+        if not permit:
+            cur.close()
+            conn.close()
+            return "Permit not found", 404
+        
+        # Get all contacts for this permit
+        cur.execute("""
+            SELECT name, phone, is_mobile 
+            FROM contacts 
+            WHERE permit_id = %s AND name IS NOT NULL AND name != ''
+            ORDER BY name;
+        """, (permit_id,))
+        contacts = cur.fetchall()
+        
+        # Calculate lead score
+        permit['lead_score'] = calculate_lead_score(permit)
+        
+        cur.close()
+        conn.close()
+        
+        return render_template('permit_detail.html', permit=permit, contacts=contacts)
+        
+    except Exception as e:
+        print(f"Error fetching permit detail: {e}")
+        return f"Error loading permit: {str(e)}", 500
+
+
+@app.route('/api/permit/<int:permit_id>')
+def get_permit_detail(permit_id):
+    """API endpoint for getting single permit details (JSON)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get permit with all details
+        query = """
+            SELECT 
+                p.*,
+                COALESCE(contact_info.contact_count, 0) as contact_count,
+                COALESCE(contact_info.has_mobile, false) as has_mobile,
+                contact_info.contact_names,
+                contact_info.contact_phones
+            FROM permits p
+            LEFT JOIN (
+                SELECT 
+                    permit_id,
+                    COUNT(*) as contact_count,
+                    BOOL_OR(COALESCE(is_mobile, false)) as has_mobile,
+                    STRING_AGG(name, '|' ORDER BY name) as contact_names,
+                    STRING_AGG(phone, '|' ORDER BY name) as contact_phones
+                FROM contacts
+                WHERE name IS NOT NULL AND name != ''
+                GROUP BY permit_id
+            ) contact_info ON p.id = contact_info.permit_id
+            WHERE p.id = %s;
+        """
+        
+        cur.execute(query, (permit_id,))
+        permit = cur.fetchone()
+        
+        if not permit:
+            cur.close()
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Permit not found'
+            }), 404
+        
+        # Calculate lead score
+        permit['lead_score'] = calculate_lead_score(permit)
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'permit': permit
+        })
+        
+    except Exception as e:
+        print(f"Error fetching permit detail: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     print("Starting DOB Permit Dashboard API...")
     print(f"Database: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
@@ -469,3 +586,4 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_ENV') != 'production'
     print(f"Visit: http://localhost:{port}")
     app.run(debug=debug, host='0.0.0.0', port=port)
+

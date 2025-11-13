@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ permit.address or 'Permit Details' }} - DOB Permit</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        .detail-page {
+            min-height: 100vh;
+            background: var(--bg-primary);
+            padding: 2rem;
+        }
+        
+        .detail-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .detail-header {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .detail-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient);
+        }
+        
+        .back-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.25rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            text-decoration: none;
+            border-radius: var(--radius-md);
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        
+        .back-button:hover {
+            background: var(--bg-hover);
+            border-color: var(--primary-color);
+            transform: translateX(-4px);
+        }
+        
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        
+        .header-title h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header-title p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+        
+        .lead-score-badge {
+            padding: 1rem 1.5rem;
+            border-radius: var(--radius-lg);
+            text-align: center;
+        }
+        
+        .lead-score-badge.hot {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            box-shadow: 0 8px 24px rgba(239, 68, 68, 0.3);
+        }
+        
+        .lead-score-badge.warm {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            box-shadow: 0 8px 24px rgba(245, 158, 11, 0.3);
+        }
+        
+        .lead-score-badge.cold {
+            background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+            box-shadow: 0 8px 24px rgba(6, 182, 212, 0.3);
+        }
+        
+        .lead-score-badge h3 {
+            font-size: 2.5rem;
+            margin: 0;
+            color: white;
+        }
+        
+        .lead-score-badge p {
+            margin: 0.5rem 0 0 0;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .detail-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        
+        .detail-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+            border-color: rgba(102, 126, 234, 0.3);
+        }
+        
+        .detail-card h3 {
+            font-size: 1.125rem;
+            margin-bottom: 1.25rem;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .detail-label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        
+        .detail-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            text-align: right;
+        }
+        
+        .contact-item {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-radius: var(--radius-md);
+            margin-bottom: 0.75rem;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+        
+        .contact-item:hover {
+            border-color: var(--primary-color);
+            background: var(--bg-hover);
+        }
+        
+        .contact-item strong {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+        
+        .contact-item a {
+            color: var(--primary-color);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .contact-item a:hover {
+            text-decoration: underline;
+        }
+        
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+        }
+        
+        .placeholder-card {
+            opacity: 0.6;
+            position: relative;
+        }
+        
+        .placeholder-card::after {
+            content: 'Coming Soon';
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: var(--warning-color);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        @media (max-width: 768px) {
+            .detail-page {
+                padding: 1rem;
+            }
+            
+            .header-top {
+                flex-direction: column;
+            }
+            
+            .detail-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="detail-page">
+        <div class="detail-container">
+            <a href="javascript:window.close()" class="back-button">
+                <i class="fas fa-times"></i> Close
+            </a>
+            
+            <div class="detail-header">
+                <div class="header-top">
+                    <div class="header-title">
+                        <h1>{{ permit.address or 'No Address' }}</h1>
+                        <p>Permit #{{ permit.permit_no or 'N/A' }}</p>
+                    </div>
+                    
+                    <div class="lead-score-badge {{ 'hot' if permit.lead_score >= 70 else 'warm' if permit.lead_score >= 40 else 'cold' }}">
+                        <h3>{{ permit.lead_score }}/100</h3>
+                        <p>{{ 'Hot Lead' if permit.lead_score >= 70 else 'Warm Lead' if permit.lead_score >= 40 else 'Cold Lead' }}</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="detail-grid">
+                <!-- Permit Information -->
+                <div class="detail-card">
+                    <h3><i class="fas fa-file-alt"></i> Permit Information</h3>
+                    <div class="detail-row">
+                        <span class="detail-label">Job Type</span>
+                        <span class="detail-value">{{ permit.job_type or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Use Type</span>
+                        <span class="detail-value">{{ permit.use_type or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Issue Date</span>
+                        <span class="detail-value">{{ permit.issue_date.strftime('%b %d, %Y') if permit.issue_date else 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Expiration Date</span>
+                        <span class="detail-value">{{ permit.exp_date.strftime('%b %d, %Y') if permit.exp_date else 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Status</span>
+                        <span class="detail-value">{{ permit.status or 'N/A' }}</span>
+                    </div>
+                </div>
+                
+                <!-- Property Details -->
+                <div class="detail-card">
+                    <h3><i class="fas fa-building"></i> Property Details</h3>
+                    <div class="detail-row">
+                        <span class="detail-label">Total Units</span>
+                        <span class="detail-value">{{ permit.total_units or 0 }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Stories</span>
+                        <span class="detail-value">{{ permit.stories or 0 }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Height (ft)</span>
+                        <span class="detail-value">{{ permit.height_ft or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Borough</span>
+                        <span class="detail-value">{{ permit.borough or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Block & Lot</span>
+                        <span class="detail-value">{{ permit.block or 'N/A' }} - {{ permit.lot or 'N/A' }}</span>
+                    </div>
+                </div>
+                
+                <!-- Applicant Information -->
+                <div class="detail-card">
+                    <h3><i class="fas fa-briefcase"></i> Applicant</h3>
+                    <div class="detail-row">
+                        <span class="detail-label">Name</span>
+                        <span class="detail-value">{{ permit.applicant or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">License</span>
+                        <span class="detail-value">{{ permit.applicant_lic or 'N/A' }}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Contacts Section -->
+            {% if contacts %}
+            <div class="detail-card" style="margin-bottom: 2rem;">
+                <h3><i class="fas fa-users"></i> Contacts ({{ contacts|length }})</h3>
+                {% for contact in contacts %}
+                <div class="contact-item">
+                    <strong><i class="fas fa-user-circle"></i> {{ contact.name }}</strong>
+                    <a href="tel:{{ contact.phone }}">
+                        <i class="fas fa-phone-alt"></i> {{ contact.phone }}
+                        {% if contact.is_mobile %}<span style="color: var(--success-color);">(Mobile)</span>{% endif %}
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            
+            <!-- Map Section -->
+            {% if permit.latitude and permit.longitude %}
+            <div class="detail-card" style="margin-bottom: 2rem;">
+                <h3><i class="fas fa-map-marker-alt"></i> Location</h3>
+                <div id="map"></div>
+            </div>
+            {% endif %}
+            
+            <!-- Placeholder Sections for Future Features -->
+            <div class="detail-grid">
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-chart-line"></i> Project Timeline</h3>
+                    <p style="color: var(--text-muted);">Visual timeline of permit milestones and construction phases</p>
+                </div>
+                
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-dollar-sign"></i> Cost Estimate</h3>
+                    <p style="color: var(--text-muted);">Estimated project value based on type, size, and location</p>
+                </div>
+                
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-history"></i> Change History</h3>
+                    <p style="color: var(--text-muted);">Track amendments and modifications to the permit</p>
+                </div>
+                
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-file-pdf"></i> Documents</h3>
+                    <p style="color: var(--text-muted);">View and download related permit documents</p>
+                </div>
+                
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-bell"></i> Alerts & Reminders</h3>
+                    <p style="color: var(--text-muted);">Set notifications for key dates and status changes</p>
+                </div>
+                
+                <div class="detail-card placeholder-card">
+                    <h3><i class="fas fa-sticky-note"></i> Notes</h3>
+                    <p style="color: var(--text-muted);">Add private notes and follow-up reminders</p>
+                </div>
+            </div>
+            
+            <!-- External Link -->
+            {% if permit.link %}
+            <div style="text-align: center; margin-top: 2rem;">
+                <a href="{{ permit.link }}" target="_blank" class="btn btn-primary" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 1rem 2rem; text-decoration: none;">
+                    <i class="fas fa-external-link-alt"></i> View Official DOB Record
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <script>
+        // Initialize map if coordinates exist
+        {% if permit.latitude and permit.longitude %}
+        document.addEventListener('DOMContentLoaded', function() {
+            // Small delay to ensure DOM is fully loaded
+            setTimeout(function() {
+                const lat = parseFloat({{ permit.latitude }});
+                const lng = parseFloat({{ permit.longitude }});
+                
+                console.log('Initializing map at:', lat, lng);
+                
+                const map = L.map('map').setView([lat, lng], 16);
+                
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors',
+                    maxZoom: 19
+                }).addTo(map);
+                
+                // Add marker with popup
+                L.marker([lat, lng])
+                    .bindPopup('<strong>{{ permit.address | replace("'", "\\'") }}</strong><br>{{ permit.job_type or "N/A" }}')
+                    .addTo(map)
+                    .openPopup();
+                    
+                // Fix any rendering issues
+                setTimeout(function() {
+                    map.invalidateSize();
+                }, 100);
+            }, 100);
+        });
+        {% else %}
+        console.log('No coordinates available for this permit');
+        {% endif %}
+    </script>
+</body>
+</html>

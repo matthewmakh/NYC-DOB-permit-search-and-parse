@@ -20,7 +20,8 @@ const state = {
         contactSearch: '',
         globalSearch: ''
     },
-    charts: {}
+    charts: {},
+    mapInstance: null
 };
 
 // API Base URL
@@ -739,13 +740,13 @@ async function handleContactSearch(e) {
             resultsDiv.innerHTML = `
                 <p style="color: var(--success-color); margin-bottom: 0.5rem;">✅ Found ${data.results.length} permit(s)</p>
                 ${data.results.slice(0, 5).map(r => `
-                    <div class="search-result-item">
+                    <a href="/permit/${r.id}" target="_blank" class="search-result-item" style="text-decoration: none; color: inherit; display: block;">
                         <strong>${r.address}</strong>
-                        <p>📞 ${r.phone} | 🏗️ ${r.job_type}</p>
+                        <p>📞 ${r.contact_phone} | 🏗️ ${r.job_type}</p>
                         <p>📅 ${formatDate(r.issue_date)}</p>
-                    </div>
+                    </a>
                 `).join('')}
-                ${data.results.length > 5 ? `<p style="text-align: center; color: var(--text-secondary); font-size: 0.85rem;">Showing 5 of ${data.results.length} results</p>` : ''}
+                ${data.results.length > 5 ? `<p style="text-align: center; color: var(--text-secondary); font-size: 0.85rem;">Showing 5 of ${data.results.length} results - Click to view details</p>` : ''}
             `;
         } else {
             resultsDiv.innerHTML = `<p style="color: var(--warning-color);">No permits found for "${query}"</p>`;
@@ -835,31 +836,88 @@ function loadMap() {
     const mapDiv = document.getElementById('map');
     if (!mapDiv) return;
     
+    // Clear existing map if it exists
+    if (state.mapInstance) {
+        state.mapInstance.remove();
+        state.mapInstance = null;
+    }
+    
     const permits = state.filteredPermits.filter(p => p.latitude && p.longitude);
     
     if (permits.length === 0) {
-        alert('No permits with location data to display');
+        mapDiv.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted);"><p>No permits with location data to display</p></div>';
         return;
     }
+    
+    // Clear the map div
+    mapDiv.innerHTML = '';
     
     // Initialize Leaflet map
     const avgLat = permits.reduce((sum, p) => sum + parseFloat(p.latitude), 0) / permits.length;
     const avgLng = permits.reduce((sum, p) => sum + parseFloat(p.longitude), 0) / permits.length;
     
     const map = L.map('map').setView([avgLat, avgLng], 11);
+    state.mapInstance = map;
     
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19
     }).addTo(map);
     
-    // Add markers
+    // Add markers with enhanced popups
     permits.forEach(permit => {
-        L.marker([parseFloat(permit.latitude), parseFloat(permit.longitude)])
-            .bindPopup(`
-                <strong>${permit.address}</strong><br>
-                ${permit.job_type}<br>
-                Score: ${permit.lead_score}
-            `)
+        const quality = getLeadQuality(permit.lead_score);
+        const issueDate = permit.issue_date ? new Date(permit.issue_date).toLocaleDateString() : 'N/A';
+        
+        // Create custom marker icon based on lead quality
+        const markerColor = quality.class === 'hot' ? '#ef4444' : quality.class === 'warm' ? '#f59e0b' : '#06b6d4';
+        
+        const customIcon = L.divIcon({
+            className: 'custom-marker',
+            html: `<div style="background: ${markerColor}; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${permit.lead_score}</div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        });
+        
+        const popupContent = `
+            <div style="min-width: 220px; font-family: 'Inter', sans-serif;">
+                <div style="font-weight: 700; font-size: 1.1em; margin-bottom: 0.5rem; color: #1a1a2e;">
+                    ${escapeHtml(permit.address || 'No Address')}
+                </div>
+                <div style="padding: 0.5rem 0; border-top: 1px solid #e2e8f0;">
+                    <div style="display: flex; justify-content: space-between; margin: 0.25rem 0;">
+                        <span style="color: #64748b; font-size: 0.85em;">Job Type:</span>
+                        <strong style="color: #1a1a2e; font-size: 0.85em;">${permit.job_type || 'N/A'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin: 0.25rem 0;">
+                        <span style="color: #64748b; font-size: 0.85em;">Units:</span>
+                        <strong style="color: #1a1a2e; font-size: 0.85em;">${permit.total_units || 0}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin: 0.25rem 0;">
+                        <span style="color: #64748b; font-size: 0.85em;">Contacts:</span>
+                        <strong style="color: #1a1a2e; font-size: 0.85em;">${permit.contact_count || 0}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin: 0.25rem 0;">
+                        <span style="color: #64748b; font-size: 0.85em;">Issued:</span>
+                        <strong style="color: #1a1a2e; font-size: 0.85em;">${issueDate}</strong>
+                    </div>
+                </div>
+                <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e2e8f0;">
+                    <div style="display: inline-block; padding: 0.25rem 0.75rem; background: ${markerColor}; color: white; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                        ${quality.icon} ${permit.lead_score}/100 - ${quality.label}
+                    </div>
+                </div>
+                <a href="/permit/${permit.id}" target="_blank" style="display: block; margin-top: 0.75rem; padding: 0.5rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 0.85em;">
+                    View Details →
+                </a>
+            </div>
+        `;
+        
+        L.marker([parseFloat(permit.latitude), parseFloat(permit.longitude)], { icon: customIcon })
+            .bindPopup(popupContent, {
+                maxWidth: 300,
+                className: 'custom-popup'
+            })
             .addTo(map);
     });
 }
