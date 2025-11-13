@@ -5,7 +5,7 @@ const state = {
     permits: [],
     filteredPermits: [],
     filters: {
-        dateFilter: 'quarter',
+        dateFilter: 'all',
         dateFrom: null,
         dateTo: null,
         smartFilter: 'all',

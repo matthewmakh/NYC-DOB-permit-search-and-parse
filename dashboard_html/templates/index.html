@@ -29,10 +29,10 @@
                     <option value="24h">Last 24 Hours</option>
                     <option value="week">Last Week</option>
                     <option value="month">Last Month</option>
-                    <option value="quarter" selected>Last Quarter</option>
+                    <option value="quarter">Last Quarter</option>
                     <option value="6months">Last 6 Months</option>
                     <option value="year">Last Year</option>
-                    <option value="all">All Time</option>
+                    <option value="all" selected>All Time</option>
                 </select>
 
                 <div id="customDateRange" class="custom-date-range" style="display: none;">
@@ -259,10 +259,96 @@
         </main>
     </div>
 
-    <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="spinner"></div>
-        <p>Loading...</p>
+    <!-- Loading Overlay with Skeleton -->
+    <div id="loadingOverlay">
+        <div class="skeleton-container">
+            <!-- Skeleton Sidebar -->
+            <div class="skeleton-sidebar">
+                <div class="skeleton skeleton-header"></div>
+                
+                <div class="skeleton-section">
+                    <div class="skeleton skeleton-text short"></div>
+                    <div class="skeleton skeleton-input"></div>
+                </div>
+                
+                <div class="skeleton-section">
+                    <div class="skeleton skeleton-text short"></div>
+                    <div class="skeleton skeleton-button"></div>
+                    <div class="skeleton skeleton-button"></div>
+                    <div class="skeleton skeleton-button"></div>
+                    <div class="skeleton skeleton-button"></div>
+                </div>
+                
+                <div class="skeleton-section">
+                    <div class="skeleton skeleton-text short"></div>
+                    <div class="skeleton skeleton-input"></div>
+                </div>
+                
+                <div class="skeleton-section">
+                    <div class="skeleton skeleton-text short"></div>
+                    <div class="skeleton skeleton-input"></div>
+                    <div class="skeleton skeleton-input"></div>
+                </div>
+            </div>
+            
+            <!-- Skeleton Main Content -->
+            <div class="skeleton-main">
+                <!-- Skeleton Stats -->
+                <div class="skeleton-stats-grid">
+                    <div class="skeleton-stat-card">
+                        <div class="skeleton skeleton-stat-title"></div>
+                        <div class="skeleton skeleton-stat-value"></div>
+                    </div>
+                    <div class="skeleton-stat-card">
+                        <div class="skeleton skeleton-stat-title"></div>
+                        <div class="skeleton skeleton-stat-value"></div>
+                    </div>
+                    <div class="skeleton-stat-card">
+                        <div class="skeleton skeleton-stat-title"></div>
+                        <div class="skeleton skeleton-stat-value"></div>
+                    </div>
+                    <div class="skeleton-stat-card">
+                        <div class="skeleton skeleton-stat-title"></div>
+                        <div class="skeleton skeleton-stat-value"></div>
+                    </div>
+                </div>
+                
+                <!-- Skeleton Tabs -->
+                <div class="skeleton-tabs">
+                    <div class="skeleton skeleton-tab"></div>
+                    <div class="skeleton skeleton-tab"></div>
+                    <div class="skeleton skeleton-tab"></div>
+                </div>
+                
+                <!-- Skeleton Cards -->
+                <div class="skeleton-card">
+                    <div class="skeleton skeleton-card-header"></div>
+                    <div class="skeleton-card-content">
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                    </div>
+                </div>
+                
+                <div class="skeleton-card">
+                    <div class="skeleton skeleton-card-header"></div>
+                    <div class="skeleton-card-content">
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                    </div>
+                </div>
+                
+                <div class="skeleton-card">
+                    <div class="skeleton skeleton-card-header"></div>
+                    <div class="skeleton-card-content">
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                        <div class="skeleton skeleton-card-line"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/static/js/app.js"></script>
