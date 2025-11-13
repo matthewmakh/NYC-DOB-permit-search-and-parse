@@ -35,30 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Event Listeners
 function initializeEventListeners() {
-    // Sidebar toggle
-    const sidebarToggle = document.getElementById('sidebarToggle');
-    const sidebar = document.getElementById('sidebar');
-    const sidebarOverlay = document.getElementById('sidebarOverlay');
-    
-    sidebarToggle?.addEventListener('click', () => {
-        sidebar.classList.toggle('active');
-        sidebarOverlay.classList.toggle('active');
-    });
-    
-    // Close sidebar when clicking overlay
-    sidebarOverlay?.addEventListener('click', () => {
-        sidebar.classList.remove('active');
-        sidebarOverlay.classList.remove('active');
-    });
-    
-    // Close sidebar when pressing Escape key
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && sidebar.classList.contains('active')) {
-            sidebar.classList.remove('active');
-            sidebarOverlay.classList.remove('active');
-        }
-    });
-
     // Date filter
     document.getElementById('dateFilter').addEventListener('change', handleDateFilterChange);
 
@@ -294,20 +270,6 @@ function renderLeads() {
         });
     });
     
-    // Add click handlers to Smart Insights headers
-    document.querySelectorAll('.smart-insights-header').forEach(header => {
-        header.addEventListener('click', (e) => {
-            e.stopPropagation(); // Prevent card from toggling
-            const insightsSection = header.nextElementSibling;
-            const icon = header.querySelector('.insights-toggle-icon');
-            
-            insightsSection.classList.toggle('collapsed');
-            icon.style.transform = insightsSection.classList.contains('collapsed') 
-                ? 'rotate(0deg)' 
-                : 'rotate(180deg)';
-        });
-    });
-    
     renderPagination();
 }
 
@@ -413,12 +375,11 @@ function createLeadCard(permit) {
                     </div>
                 </div>
                 
-                <div class="smart-insights-wrapper">
-                    <div class="smart-insights-header">
+                <div class="smart-insights">
+                    <div class="insights-header">
                         <h4>💡 Smart Insights & Analytics</h4>
-                        <i class="fas fa-chevron-down insights-toggle-icon"></i>
                     </div>
-                    <div class="smart-insights collapsed">
+                    <div class="insights-content">
                         ${createSmartInsights(permit)}
                     </div>
                 </div>

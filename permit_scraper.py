@@ -10,10 +10,15 @@ import shutil
 from datetime import datetime
 from bs4 import BeautifulSoup
 import mysql.connector
+import psycopg2
+import psycopg2.extras
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
+
+# Database configuration
+DB_TYPE = os.getenv('DB_TYPE', 'postgresql')  # Default to PostgreSQL (Railway)
 
 
 def find_chromedriver():
@@ -98,25 +103,52 @@ def create_driver(chrome_path, chromedriver_path, chrome_version):
     return driver
 
 
+def get_db_connection():
+    """Get database connection based on DB_TYPE"""
+    if DB_TYPE == 'postgresql':
+        return psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=int(os.getenv('DB_PORT', '5432')),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME', 'railway')
+        )
+    else:  # mysql
+        return mysql.connector.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=int(os.getenv('DB_PORT', '3306')),
+            user=os.getenv('DB_USER', 'scraper_user'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME', 'permit_scraper')
+        )
+
+
 def get_db_config():
     """Get latest search config from database"""
-    conn = mysql.connector.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        user=os.getenv('DB_USER', 'scraper_user'),
-        password=os.getenv('DB_PASSWORD'),
-        database=os.getenv('DB_NAME', 'permit_scraper')
-    )
-    cursor = conn.cursor()
+    conn = get_db_connection()
+    
+    if DB_TYPE == 'postgresql':
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    else:
+        cursor = conn.cursor()
     
     cursor.execute("SELECT * FROM permit_search_config ORDER BY created_at DESC LIMIT 1")
     config = cursor.fetchone()
     
-    return conn, cursor, {
-        'month': config[1],
-        'day': config[2],
-        'year': config[3],
-        'type': config[4]
-    }
+    if DB_TYPE == 'postgresql':
+        return conn, cursor, {
+            'month': config['start_month'],
+            'day': config['start_day'],
+            'year': config['start_year'],
+            'type': config['permit_type']
+        }
+    else:
+        return conn, cursor, {
+            'month': config[1],
+            'day': config[2],
+            'year': config[3],
+            'type': config[4]
+        }
 
 
 def get_or_create_job(cursor, conn, config):
@@ -129,8 +161,12 @@ def get_or_create_job(cursor, conn, config):
     
     result = cursor.fetchone()
     if result:
-        print(f"Using existing job ID: {result[0]}")
-        return result[0]
+        if DB_TYPE == 'postgresql':
+            job_id = result['id'] if isinstance(result, dict) else result[0]
+        else:
+            job_id = result[0]
+        print(f"Using existing job ID: {job_id}")
+        return job_id
     
     cursor.execute("""
         INSERT INTO contact_scrape_jobs (permit_type, start_month, start_day, start_year)
@@ -138,7 +174,11 @@ def get_or_create_job(cursor, conn, config):
     """, (config['type'], config['month'], config['day'], config['year']))
     conn.commit()
     
-    cursor.execute("SELECT LAST_INSERT_ID()")
+    if DB_TYPE == 'postgresql':
+        cursor.execute("SELECT lastval()")
+    else:
+        cursor.execute("SELECT LAST_INSERT_ID()")
+    
     job_id = cursor.fetchone()[0]
     print(f"Created new job ID: {job_id}")
     return job_id

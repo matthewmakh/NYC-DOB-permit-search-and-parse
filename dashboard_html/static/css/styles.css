@@ -127,56 +127,7 @@ body::before {
     font-size: 0.875rem;
 }
 
-.sidebar-toggle {
-    display: none;
-    position: fixed;
-    top: 1rem;
-    left: 1rem;
-    z-index: 1001;
-    background: var(--primary-gradient);
-    border: none;
-    color: white;
-    padding: 0.875rem 1rem;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: 1.2rem;
-    box-shadow: var(--shadow-lg);
-    transition: all 0.3s var(--ease-out);
-    font-weight: 600;
-}
 
-.sidebar-toggle:hover {
-    box-shadow: var(--shadow-glow);
-    transform: translateY(-2px);
-}
-
-.sidebar-toggle:active {
-    transform: scale(0.95);
-}
-
-.sidebar-toggle span {
-    display: inline-block;
-    margin-left: 0.5rem;
-}
-
-.sidebar-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(4px);
-    z-index: 999;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.sidebar-overlay.active {
-    display: block;
-    opacity: 1;
-}
 
 .filter-section {
     padding: 1.5rem;
@@ -1009,75 +960,48 @@ input[type="range"]::-webkit-slider-thumb:hover {
     gap: 0.625rem;
 }
 
-.smart-insights-wrapper {
+.smart-insights {
     margin-top: 1.5rem;
     border-radius: var(--radius-lg);
-    overflow: hidden;
     border: 1px solid rgba(102, 126, 234, 0.3);
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+    overflow: hidden;
 }
 
-.smart-insights-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.insights-header {
     padding: 1.25rem 1.5rem;
-    cursor: pointer;
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
-    transition: all 0.3s var(--ease-out);
-    border-bottom: 1px solid rgba(102, 126, 234, 0.2);
-    user-select: none;
 }
 
-.smart-insights-header:hover {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
-    padding-left: 1.75rem;
-}
-
-.smart-insights-header:active {
-    transform: scale(0.99);
-}
-
-.smart-insights-header h4 {
+.insights-header h4 {
     font-size: 1.125rem;
     font-weight: 600;
     margin: 0;
     color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
 }
 
-.insights-toggle-icon {
+.toggle-icon {
     color: var(--primary-color);
     font-size: 1rem;
-    transition: transform 0.3s var(--ease-out);
+    transition: all 0.3s ease;
 }
 
-.smart-insights {
-    max-height: 1000px;
+.insights-content {
     padding: 2rem;
     position: relative;
-    overflow: hidden;
-    opacity: 1;
-    transition: max-height 0.5s var(--ease-out), padding 0.5s var(--ease-out), opacity 0.3s ease;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.02), rgba(118, 75, 162, 0.02));
 }
 
-.smart-insights.collapsed {
-    max-height: 0;
-    padding: 0 2rem;
-    opacity: 0;
-}
-
-.smart-insights::before {
+.insights-content::before {
     content: '';
     position: absolute;
     top: -50%;
     right: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle, rgba(102, 126, 234, 0.1) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(102, 126, 234, 0.05) 0%, transparent 70%);
     animation: rotate 20s linear infinite;
+    pointer-events: none;
 }
 
 @keyframes rotate {
@@ -1312,36 +1236,35 @@ input[type="range"]::-webkit-slider-thumb:hover {
 }
 
 @media (max-width: 1024px) {
-    .sidebar {
-        transform: translateX(-100%);
-        z-index: 1000;
+    .container {
+        flex-direction: column;
     }
     
-    .sidebar.active {
-        transform: translateX(0);
-        box-shadow: var(--shadow-lg);
+    .sidebar {
+        width: 100%;
+        position: relative;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
     }
     
     .main-content {
         margin-left: 0;
-        padding-top: 5rem; /* Space for toggle button */
+        width: 100%;
     }
     
     .sidebar-toggle {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
+        display: none !important;
     }
     
-    .top-bar {
-        margin-top: 1rem;
+    .sidebar-overlay {
+        display: none !important;
     }
 }
 
 @media (max-width: 768px) {
     .main-content {
         padding: 1rem;
-        padding-top: 5rem;
     }
     
     .top-bar {
@@ -1357,12 +1280,5 @@ input[type="range"]::-webkit-slider-thumb:hover {
     
     .search-container {
         max-width: 100%;
-    }
-    
-    .sidebar-toggle {
-        top: 0.75rem;
-        left: 0.75rem;
-        padding: 0.75rem 0.875rem;
-        font-size: 1.1rem;
     }
 }

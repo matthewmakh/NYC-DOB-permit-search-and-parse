@@ -39,10 +39,15 @@ def export_table(table_name, output_file):
     cursor.execute(f"SELECT * FROM {table_name}")
     rows = cursor.fetchall()
     
-    # Get column names
+    # Get column names and types
     cursor.execute(f"SHOW COLUMNS FROM {table_name}")
-    columns = [col[0] for col in cursor.fetchall()]
-    columns_str = ', '.join(columns)
+    columns_info = cursor.fetchall()
+    columns = [col[0] for col in columns_info]
+    column_types = {col[0]: col[1] for col in columns_info}
+    
+    # Exclude 'id' column for auto-increment
+    cols_without_id = [col for col in columns if col != 'id']
+    cols_str = ', '.join(cols_without_id)
     
     print(f"\nExporting {table_name}: {len(rows)} rows")
     
@@ -50,13 +55,25 @@ def export_table(table_name, output_file):
         f.write(f"\n-- Data for table: {table_name}\n")
         
         for row in rows:
-            values = ', '.join(escape_value(val) for val in row)
-            # Skip the auto-increment ID column
-            cols_without_id = [col for col in columns if col != 'id']
-            vals_without_id = [escape_value(val) for i, val in enumerate(row) if columns[i] != 'id']
+            # Convert boolean values and exclude id column
+            converted_row = []
+            for i, val in enumerate(row):
+                col_name = columns[i]
+                
+                # Skip id column
+                if col_name == 'id':
+                    continue
+                    
+                col_type = column_types[col_name]
+                
+                # Check if column is boolean (tinyint(1))
+                if 'tinyint(1)' in col_type.lower() and val in (0, 1):
+                    converted_row.append('TRUE' if val == 1 else 'FALSE')
+                else:
+                    converted_row.append(escape_value(val))
             
-            insert_stmt = f"INSERT INTO {table_name} ({', '.join(cols_without_id)}) VALUES ({', '.join(vals_without_id)});\n"
-            f.write(insert_stmt)
+            values_str = ', '.join(converted_row)
+            f.write(f"INSERT INTO {table_name} ({cols_str}) VALUES ({values_str});\n")
     
     return len(rows)
 
@@ -66,15 +83,25 @@ with open(output_file, 'w') as f:
     f.write("-- PostgreSQL Data Export\n")
     f.write(f"-- Generated: {datetime.now()}\n\n")
 
-# Export each table
-tables = ['permit_search_config', 'contact_scrape_jobs', 'permits']
-total_rows = 0
+# Export all tables (in order of dependencies)
+tables_to_export = [
+    'permit_search_config',
+    'contact_scrape_jobs',
+    'permits',
+    'contacts',
+    'assignment_log'
+]
 
-for table in tables:
-    count = export_table(table, output_file)
-    total_rows += count
+total_rows = 0
+for table in tables_to_export:
+    try:
+        rows = export_table(table, output_file)
+        total_rows += rows
+    except Exception as e:
+        print(f"⚠️  Warning: Could not export {table}: {e}")
 
 print(f"\n✅ Export complete: {total_rows} total rows")
 print(f"📁 File created: {output_file}")
 
+cursor.close()
 conn.close()

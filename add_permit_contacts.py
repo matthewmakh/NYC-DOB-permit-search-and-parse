@@ -10,6 +10,8 @@ import time
 import random
 from bs4 import BeautifulSoup
 import mysql.connector
+import psycopg2
+import psycopg2.extras
 from datetime import datetime
 from fake_useragent import UserAgent
 import requests
@@ -22,6 +24,9 @@ from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc  # ✅ Correct import
 
 from remote_add_permit_contacts import remote_scraper
+
+# Database configuration
+DB_TYPE = os.getenv('DB_TYPE', 'postgresql')  # Default to PostgreSQL (Railway)
 
 # -------------------- DYNAMIC PATH DETECTION --------------------
 
@@ -138,17 +143,37 @@ except Exception as e:
 
 # -------------------- DATABASE --------------------
 
-conn = mysql.connector.connect(
-    host=os.getenv('DB_HOST'),
-    user=os.getenv('DB_USER'),
-    password=os.getenv('DB_PASSWORD'),
-    database=os.getenv('DB_NAME')
-)
-cursor = conn.cursor()
+if DB_TYPE == 'postgresql':
+    conn = psycopg2.connect(
+        host=os.getenv('DB_HOST'),
+        port=int(os.getenv('DB_PORT', '5432')),
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASSWORD'),
+        database=os.getenv('DB_NAME')
+    )
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+else:  # mysql
+    conn = mysql.connector.connect(
+        host=os.getenv('DB_HOST'),
+        port=int(os.getenv('DB_PORT', '3306')),
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASSWORD'),
+        database=os.getenv('DB_NAME')
+    )
+    cursor = conn.cursor()
 
 cursor.execute("SELECT * FROM permit_search_config ORDER BY created_at DESC LIMIT 1")
 config = cursor.fetchone()
-start_month, start_day, start_year, permit_type, contact_search_limit = config[1], config[2], config[3], config[4], config[9]
+
+if DB_TYPE == 'postgresql':
+    start_month = config['start_month']
+    start_day = config['start_day']
+    start_year = config['start_year']
+    permit_type = config['permit_type']
+    contact_search_limit = config['max_successful_links']
+else:
+    start_month, start_day, start_year, permit_type, contact_search_limit = config[1], config[2], config[3], config[4], config[9]
+
 print(f'latest config: {config}')
 
 rate_limit_count = 0

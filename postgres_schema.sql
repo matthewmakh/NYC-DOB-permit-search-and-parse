@@ -49,7 +49,31 @@ CREATE TABLE permit_search_config (
   max_successful_links INTEGER DEFAULT 7
 );
 
+-- Table: contacts
+CREATE TABLE contacts (
+  id SERIAL PRIMARY KEY,
+  permit_id INTEGER,
+  name VARCHAR(225),
+  phone VARCHAR(50),
+  is_checked BOOLEAN DEFAULT FALSE,
+  is_mobile BOOLEAN,
+  assigned_to VARCHAR(255),
+  assigned_at TIMESTAMP,
+  FOREIGN KEY (permit_id) REFERENCES permits(id)
+);
+
+-- Table: assignment_log
+CREATE TABLE assignment_log (
+  id SERIAL PRIMARY KEY,
+  permit_id INTEGER,
+  contact_id INTEGER,
+  assigned_to VARCHAR(255),
+  assigned_at TIMESTAMP
+);
+
 -- Create indexes for better performance
 CREATE INDEX idx_permits_permit_no ON permits(permit_no);
 CREATE INDEX idx_permits_job_id ON permits(job_id);
 CREATE INDEX idx_contact_scrape_jobs_dates ON contact_scrape_jobs(start_year, start_month, start_day, permit_type);
+CREATE INDEX idx_contacts_permit_id ON contacts(permit_id);
+CREATE INDEX idx_contacts_is_mobile ON contacts(is_mobile);

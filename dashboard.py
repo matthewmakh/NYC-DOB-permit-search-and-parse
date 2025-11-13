@@ -750,6 +750,244 @@ def get_units_range():
         print(f"[ERROR] Fetch units range failed: {str(e)}")
         return 1, 500
 
+# ============================================================================
+# SMART INSIGHTS FUNCTIONS (Tier 1 Features)
+# ============================================================================
+
+@st.cache_data(ttl=300)
+def get_permit_history_by_address(address):
+    """Get previous permits at the same address"""
+    try:
+        if not address:
+            return []
+        
+        query = """
+            SELECT permit_no, job_type, issue_date, exp_date, applicant
+            FROM permits 
+            WHERE LOWER(address) = LOWER(%s)
+            ORDER BY issue_date DESC
+            LIMIT 10
+        """
+        results = safe_execute(query, [address])
+        return results if results else []
+    except Exception as e:
+        print(f"[ERROR] Get permit history failed: {str(e)}")
+        return []
+
+@st.cache_data(ttl=300)
+def get_contact_permit_count(contact_names):
+    """Count how many permits are associated with these contacts"""
+    try:
+        if not contact_names or pd.isna(contact_names):
+            return 0
+        
+        # Split multiple contacts and search for each
+        names = [name.strip() for name in str(contact_names).split('|') if name.strip()]
+        if not names:
+            return 0
+        
+        # Search for any of these contact names
+        placeholders = ' OR '.join(['c.name LIKE %s' for _ in names])
+        query = f"""
+            SELECT COUNT(DISTINCT p.id) as count
+            FROM permits p
+            JOIN contacts c ON p.id = c.permit_id
+            WHERE {placeholders}
+        """
+        params = [f"%{name}%" for name in names]
+        
+        result = safe_execute(query, params)
+        return result[0]['count'] if result and result[0] else 0
+    except Exception as e:
+        print(f"[ERROR] Get contact permit count failed: {str(e)}")
+        return 0
+
+@st.cache_data(ttl=300)
+def get_block_permit_count(address, days=30):
+    """Count permits on the same block in the last N days"""
+    try:
+        if not address:
+            return 0
+        
+        # Extract street name (remove building number)
+        import re
+        # Remove leading numbers and clean up
+        street = re.sub(r'^\d+\s+', '', str(address))
+        street = re.sub(r'\s+#.*$', '', street)  # Remove apartment numbers
+        street = street.strip()
+        
+        if not street or len(street) < 5:  # Too short to be reliable
+            return 0
+        
+        # Count permits with similar street address in last N days
+        if DB_TYPE == 'postgresql':
+            query = """
+                SELECT COUNT(*) as count
+                FROM permits
+                WHERE address LIKE %s
+                AND issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            """
+            params = [f"%{street}%", days]
+        else:
+            query = """
+                SELECT COUNT(*) as count
+                FROM permits
+                WHERE address LIKE %s
+                AND issue_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+            """
+            params = [f"%{street}%", days]
+        
+        result = safe_execute(query, params)
+        return result[0]['count'] if result and result[0] else 0
+    except Exception as e:
+        print(f"[ERROR] Get block permit count failed: {str(e)}")
+        return 0
+
+def estimate_project_cost(job_type, total_units, stories):
+    """Estimate project cost based on permit type, units, and stories"""
+    try:
+        # Base costs per unit by permit type
+        base_costs = {
+            'NB': 200000,  # New Building - $200k per unit
+            'AL': 50000,   # Alteration - $50k per unit
+            'DM': 30000,   # Demolition - $30k per unit
+            'A1': 75000,   # Major Alteration - $75k per unit
+        }
+        
+        base = base_costs.get(job_type, 50000)  # Default $50k
+        
+        # Calculate based on units
+        units = pd.to_numeric(total_units, errors='coerce')
+        if pd.notna(units) and units > 0:
+            cost = base * units
+        else:
+            # Fallback to stories if no unit data
+            floors = pd.to_numeric(stories, errors='coerce')
+            if pd.notna(floors) and floors > 0:
+                # Assume 2 units per floor for estimate
+                cost = base * floors * 2
+            else:
+                cost = base  # Minimum estimate
+        
+        # Cap at reasonable ranges
+        cost = max(cost, 25000)   # Minimum $25k
+        cost = min(cost, 50000000)  # Maximum $50M
+        
+        return cost
+    except:
+        return 50000  # Default fallback
+
+@st.cache_data(ttl=600)
+def get_neighborhood_permit_trends():
+    """Get permit volume by neighborhood over time for gentrification analysis"""
+    try:
+        # Extract neighborhood from address (simplified - uses zip code)
+        if DB_TYPE == 'postgresql':
+            query = """
+                SELECT 
+                    SUBSTRING(address FROM '[0-9]{5}') as neighborhood,
+                    DATE_TRUNC('month', issue_date) as month,
+                    COUNT(*) as permit_count
+                FROM permits
+                WHERE issue_date >= CURRENT_DATE - INTERVAL '2 years'
+                AND SUBSTRING(address FROM '[0-9]{5}') IS NOT NULL
+                GROUP BY SUBSTRING(address FROM '[0-9]{5}'), DATE_TRUNC('month', issue_date)
+                ORDER BY month DESC, permit_count DESC
+            """
+        else:
+            query = """
+                SELECT 
+                    SUBSTRING(address, -5) as neighborhood,
+                    DATE_FORMAT(issue_date, '%Y-%m') as month,
+                    COUNT(*) as permit_count
+                FROM permits
+                WHERE issue_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+                AND SUBSTRING(address, -5) IS NOT NULL
+                GROUP BY SUBSTRING(address, -5), DATE_FORMAT(issue_date, '%Y-%m')
+                ORDER BY month DESC, permit_count DESC
+            """
+        
+        results = safe_execute(query)
+        return results if results else []
+    except Exception as e:
+        print(f"[ERROR] Get neighborhood trends failed: {str(e)}")
+        return []
+
+@st.cache_data(ttl=600)
+def get_top_contacts_with_multiple_permits(limit=10):
+    """Get contacts with the most permits"""
+    try:
+        # Use appropriate aggregation function based on DB type
+        if DB_TYPE == 'postgresql':
+            query = """
+                SELECT 
+                    c.name,
+                    COUNT(DISTINCT p.id) as permit_count,
+                    string_agg(DISTINCT p.job_type, ', ') as permit_types
+                FROM contacts c
+                JOIN permits p ON c.permit_id = p.id
+                WHERE c.name IS NOT NULL AND c.name != ''
+                GROUP BY c.name
+                HAVING COUNT(DISTINCT p.id) > 1
+                ORDER BY permit_count DESC
+                LIMIT %s
+            """
+        else:
+            query = """
+                SELECT 
+                    c.name,
+                    COUNT(DISTINCT p.id) as permit_count,
+                    GROUP_CONCAT(DISTINCT p.job_type) as permit_types
+                FROM contacts c
+                JOIN permits p ON c.permit_id = p.id
+                WHERE c.name IS NOT NULL AND c.name != ''
+                GROUP BY c.name
+                HAVING permit_count > 1
+                ORDER BY permit_count DESC
+                LIMIT %s
+            """
+        
+        results = safe_execute(query, [limit])
+        return results if results else []
+    except Exception as e:
+        print(f"[ERROR] Get top contacts failed: {str(e)}")
+        return []
+
+@st.cache_data(ttl=300)
+def search_permits_by_contact(contact_name):
+    """Search for all permits associated with a contact name"""
+    try:
+        if not contact_name or len(contact_name) < 2:
+            return []
+        
+        # Search for contact and return their permits
+        query = """
+            SELECT DISTINCT
+                p.id,
+                p.permit_no,
+                p.address,
+                p.job_type,
+                p.issue_date,
+                p.exp_date,
+                p.applicant,
+                p.total_units,
+                p.stories,
+                p.link,
+                c.name as contact_name,
+                c.phone as contact_phone
+            FROM permits p
+            JOIN contacts c ON p.id = c.permit_id
+            WHERE c.name LIKE %s
+            ORDER BY p.issue_date DESC
+            LIMIT 50
+        """
+        
+        results = safe_execute(query, [f"%{contact_name}%"])
+        return results if results else []
+    except Exception as e:
+        print(f"[ERROR] Search permits by contact failed: {str(e)}")
+        return []
+
 # Header
 st.markdown('<p class="main-header">📋 DOB Permit Leads Dashboard</p>', unsafe_allow_html=True)
 st.markdown("---")
@@ -889,6 +1127,46 @@ with st.sidebar:
     st.subheader("Permit Type")
     permit_types = get_permit_types()
     selected_permit_type = st.selectbox("Select Permit Type", permit_types)
+    
+    st.markdown("---")
+    
+    st.subheader("🔍 Search by Contact")
+    contact_search = st.text_input(
+        "Enter contact name",
+        placeholder="e.g., John Smith",
+        key="sidebar_contact_search",
+        help="Search for a contact to see all their permits"
+    )
+    
+    if contact_search and len(contact_search) >= 2:
+        with st.spinner(f"Searching for '{contact_search}'..."):
+            search_results = search_permits_by_contact(contact_search)
+            
+            if search_results and len(search_results) > 0:
+                st.success(f"✅ Found {len(search_results)} permit(s)")
+                
+                # Display results in an expander
+                with st.expander(f"📋 View Results", expanded=True):
+                    for result in search_results[:5]:  # Show first 5 in sidebar
+                        contact_name = result.get('contact_name', 'Unknown')
+                        phone = result.get('contact_phone', 'N/A')
+                        address = result.get('address', 'N/A')
+                        job_type = result.get('job_type', 'N/A')
+                        issue_date = result.get('issue_date', 'N/A')
+                        
+                        st.markdown(f"""
+                        **{address[:30]}...**  
+                        📞 {phone}  
+                        🏗️ {job_type} | 📅 {issue_date}
+                        """)
+                        st.markdown("---")
+                    
+                    if len(search_results) > 5:
+                        st.caption(f"Showing 5 of {len(search_results)} results. Clear search to see all leads.")
+            else:
+                st.warning(f"No permits found for '{contact_search}'")
+    elif contact_search and len(contact_search) < 2:
+        st.info("Enter at least 2 characters")
     
     st.markdown("---")
     
@@ -1180,6 +1458,92 @@ with tab1:
                             """, unsafe_allow_html=True)
                     else:
                         st.info("No contacts available")
+                    
+                    st.markdown("---")
+                    
+                    # ===== SMART INSIGHTS SECTION =====
+                    # Calculate insight count
+                    insight_count = 0
+                    permit_history = get_permit_history_by_address(row['address'])
+                    contact_permits = get_contact_permit_count(row.get('contact_names'))
+                    block_permits = get_block_permit_count(row['address'], days=30)
+                    
+                    if len(permit_history) > 1:  # More than just this permit
+                        insight_count += 1
+                    if contact_permits > 1:
+                        insight_count += 1
+                    if block_permits >= 3:
+                        insight_count += 1
+                    insight_count += 1  # Always show pricing estimate
+                    
+                    # Smart Insights collapsible section
+                    with st.expander(f"💡 {insight_count} Smart Insights Available", expanded=False):
+                        
+                        # 1. Permit History at Address
+                        st.markdown("#### 📋 Permit History")
+                        if len(permit_history) > 1:
+                            st.success(f"Found {len(permit_history)} total permits at this address")
+                            for i, permit in enumerate(permit_history[:5]):  # Show max 5
+                                issue_date = permit.get('issue_date', 'N/A')
+                                job_type = permit.get('job_type', 'N/A')
+                                applicant = permit.get('applicant', 'N/A')
+                                st.caption(f"• {issue_date} - **{job_type}** by {applicant[:30]}")
+                            if len(permit_history) > 5:
+                                st.caption(f"... and {len(permit_history) - 5} more")
+                        else:
+                            st.info("No previous permit history at this address")
+                        
+                        st.markdown("---")
+                        
+                        # 2. Contact's Other Projects
+                        st.markdown("#### 👥 Contact Portfolio")
+                        if contact_permits > 1:
+                            if contact_permits >= 10:
+                                st.error(f"🔥 HIGH-VOLUME CONTACT: {contact_permits} active permits!")
+                                st.caption("This is likely a professional contractor or developer")
+                            elif contact_permits >= 5:
+                                st.warning(f"⚡ ACTIVE CONTACT: {contact_permits} active permits")
+                                st.caption("Experienced contractor with multiple projects")
+                            else:
+                                st.info(f"💡 This contact has {contact_permits} active permits")
+                        else:
+                            st.info("Contact has only this permit on record")
+                        
+                        st.markdown("---")
+                        
+                        # 3. Block Hotspot Detection
+                        st.markdown("#### 📍 Block Activity (30 days)")
+                        if block_permits >= 5:
+                            st.error(f"🔥 MAJOR HOTSPOT: {block_permits} permits on this block!")
+                            st.caption("High construction activity - great clustering opportunity")
+                        elif block_permits >= 3:
+                            st.warning(f"⚡ HOTSPOT: {block_permits} permits on this block")
+                            st.caption("Multiple projects nearby - consider bundling services")
+                        else:
+                            st.info(f"{block_permits} permit(s) on this block")
+                        
+                        st.markdown("---")
+                        
+                        # 4. Project Cost Estimate
+                        st.markdown("#### 💰 Estimated Project Value")
+                        estimated_cost = estimate_project_cost(
+                            row['job_type'],
+                            row.get('total_units'),
+                            row.get('stories')
+                        )
+                        
+                        # Format with proper color
+                        if estimated_cost >= 1000000:
+                            st.success(f"${estimated_cost:,.0f}")
+                            st.caption("🔥 High-value project")
+                        elif estimated_cost >= 250000:
+                            st.info(f"${estimated_cost:,.0f}")
+                            st.caption("⚡ Medium-value project")
+                        else:
+                            st.caption(f"${estimated_cost:,.0f}")
+                            st.caption("💡 Standard project")
+                        
+                        st.caption("*Estimate based on permit type, units, and stories")
                     
                     st.markdown("---")
                     # Security: Validate URL to prevent phishing attacks
