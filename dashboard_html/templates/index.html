@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOB Permit Leads Dashboard</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <!-- Chart.js for visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Leaflet for maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1>🔍 Filters</h1>
+                <button class="sidebar-toggle" id="sidebarToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+
+            <!-- Quick Date Filters -->
+            <div class="filter-section">
+                <h3>⚡ Quick Date Filters</h3>
+                <select id="dateFilter" class="filter-select">
+                    <option value="custom">Custom</option>
+                    <option value="24h">Last 24 Hours</option>
+                    <option value="week">Last Week</option>
+                    <option value="month">Last Month</option>
+                    <option value="quarter" selected>Last Quarter</option>
+                    <option value="6months">Last 6 Months</option>
+                    <option value="year">Last Year</option>
+                    <option value="all">All Time</option>
+                </select>
+
+                <div id="customDateRange" class="custom-date-range" style="display: none;">
+                    <input type="date" id="dateFrom" class="filter-input">
+                    <input type="date" id="dateTo" class="filter-input">
+                </div>
+            </div>
+
+            <!-- Smart Filters -->
+            <div class="filter-section">
+                <h3>🎯 Smart Filters</h3>
+                <div class="smart-filters-grid">
+                    <button class="smart-filter-btn" data-filter="small_nb">
+                        🏢 Small New Buildings<br><small>(&lt;30 units)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="multifamily_alt">
+                        🏘️ Multi-Family<br><small>Renovations</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="large">
+                        📐 Large Projects<br><small>(50+ units)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="single_family">
+                        🏠 Single-Family<br><small>Homes</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="demo">
+                        💥 Active Demo<br><small>Sites</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="recent">
+                        🆕 Recently Issued<br><small>(30 days)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="expiring_soon">
+                        ⏰ Expiring Soon<br><small>(30 days)</small>
+                    </button>
+                    <button class="smart-filter-btn active" data-filter="all">
+                        📋 Show All
+                    </button>
+                </div>
+            </div>
+
+            <!-- Contact Search -->
+            <div class="filter-section">
+                <h3>🔍 Search by Contact</h3>
+                <input type="text" id="contactSearch" class="filter-input" placeholder="e.g., John Smith" minlength="2">
+                <div id="contactSearchResults" class="search-results"></div>
+            </div>
+
+            <!-- Manual Filters -->
+            <div class="filter-section">
+                <h3>Manual Filters</h3>
+                
+                <label class="checkbox-label">
+                    <input type="checkbox" id="hasContacts" checked>
+                    Only show leads with phone numbers
+                </label>
+
+                <label class="checkbox-label">
+                    <input type="checkbox" id="mobileOnly">
+                    📱 Mobile numbers only
+                </label>
+
+                <div class="slider-group">
+                    <label>Minimum contacts: <span id="minContactsValue">0</span></label>
+                    <input type="range" id="minContacts" min="0" max="5" value="0" class="slider">
+                </div>
+
+                <div class="slider-group">
+                    <label>Minimum lead score: <span id="minScoreValue">0</span></label>
+                    <input type="range" id="minScore" min="0" max="100" step="5" value="0" class="slider">
+                </div>
+
+                <div class="filter-group">
+                    <label>Permit Status</label>
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="permitStatus" value="Active" checked>
+                            Active
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="permitStatus" value="Expired">
+                            Expired
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="permitStatus" value="Expiring Soon">
+                            Expiring Soon
+                        </label>
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label>Permit Type</label>
+                    <select id="permitType" class="filter-select">
+                        <option value="all">All</option>
+                        <!-- Will be populated dynamically -->
+                    </select>
+                </div>
+
+                <div class="slider-group">
+                    <label>Total Units: <span id="unitsRangeValue">All</span></label>
+                    <input type="range" id="unitsRange" min="0" max="500" value="500" class="slider">
+                </div>
+
+                <div class="slider-group">
+                    <label>Building Stories: <span id="storiesRangeValue">All</span></label>
+                    <input type="range" id="storiesRange" min="0" max="100" value="100" class="slider">
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="filter-section">
+                <h3>Actions</h3>
+                <div class="action-buttons">
+                    <button class="btn btn-primary" id="refreshBtn">
+                        <i class="fas fa-sync"></i> Refresh
+                    </button>
+                    <button class="btn btn-secondary" id="clearBtn">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="header">
+                <h1>📋 DOB Permit Leads Dashboard</h1>
+            </header>
+
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="leads">📊 Leads Dashboard</button>
+                <button class="tab-btn" data-tab="visualizations">📈 Visualizations</button>
+                <button class="tab-btn" data-tab="map">🗺️ Map View</button>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="tab-content active" id="leadsTab">
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Leads</div>
+                        <div class="stat-value" id="totalLeads">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Contacts</div>
+                        <div class="stat-value" id="totalContacts">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Avg Lead Score</div>
+                        <div class="stat-value" id="avgScore">0</div>
+                    </div>
+                    <div class="stat-card hot">
+                        <div class="stat-label">🔥 Hot Leads</div>
+                        <div class="stat-value" id="hotLeads">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">📱 Mobile #s</div>
+                        <div class="stat-value" id="mobileCount">0</div>
+                    </div>
+                </div>
+
+                <!-- Search Bar -->
+                <div class="search-bar">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="globalSearch" placeholder="🔍 Search by Address, Applicant, or Permit #">
+                </div>
+
+                <!-- Results Header -->
+                <div class="results-header">
+                    <h2>Showing <span id="resultsCount">0</span> Leads</h2>
+                    <div class="results-per-page">
+                        <label>Results per page:</label>
+                        <select id="resultsPerPage">
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="250">250</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Leads Cards -->
+                <div id="leadsContainer" class="leads-container">
+                    <!-- Will be populated dynamically -->
+                </div>
+
+                <!-- Pagination -->
+                <div class="pagination" id="pagination">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+
+            <div class="tab-content" id="visualizationsTab">
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <h3>📊 Permits by Job Type</h3>
+                        <canvas id="jobTypeChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>📅 Permit Trends Over Time</h3>
+                        <canvas id="trendsChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>🏢 Top 10 Applicants</h3>
+                        <canvas id="applicantsChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>🏗️ Building Stories Distribution</h3>
+                        <canvas id="storiesChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="mapTab">
+                <div class="map-controls">
+                    <button class="btn btn-primary" id="loadMapBtn">🗺️ Load Interactive Map</button>
+                </div>
+                <div id="map" class="map-container"></div>
+            </div>
+
+            <footer class="footer">
+                <p>Last updated: <span id="lastUpdated"></span></p>
+            </footer>
+        </main>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
