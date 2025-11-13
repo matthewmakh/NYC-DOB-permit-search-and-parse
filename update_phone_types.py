@@ -15,7 +15,7 @@ load_dotenv()
 # === CONFIGURATION ===
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'maglev.proxy.rlwy.net'),
-    'port': int(os.getenv('DB_PORT', '26571')),
+    'port': int(os.getenv('DB_PORT') or '26571'),
     'user': os.getenv('DB_USER', 'postgres'),
     'password': os.getenv('DB_PASSWORD'),
     'database': os.getenv('DB_NAME', 'railway')
