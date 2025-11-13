@@ -13,17 +13,32 @@ import os
 load_dotenv()
 
 # === CONFIGURATION ===
+DB_HOST = os.getenv('DB_HOST') or 'maglev.proxy.rlwy.net'
+DB_PORT = os.getenv('DB_PORT') or '26571'
+DB_USER = os.getenv('DB_USER') or 'postgres'
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+DB_NAME = os.getenv('DB_NAME') or 'railway'
+
+print(f"🔍 DB Connection Info:")
+print(f"   Host: {DB_HOST}")
+print(f"   Port: {DB_PORT}")
+print(f"   User: {DB_USER}")
+print(f"   Database: {DB_NAME}")
+print(f"   Password: {'***' if DB_PASSWORD else 'NOT SET'}")
+
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'maglev.proxy.rlwy.net'),
-    'port': int(os.getenv('DB_PORT') or '26571'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD'),
-    'database': os.getenv('DB_NAME', 'railway')
+    'host': DB_HOST,
+    'port': int(DB_PORT),
+    'user': DB_USER,
+    'password': DB_PASSWORD,
+    'database': DB_NAME
 }
 
 # Twilio credentials
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+
+print(f"🔍 Twilio Account SID: {TWILIO_ACCOUNT_SID[:10]}..." if TWILIO_ACCOUNT_SID else "NOT SET")
 
 # Initialize Twilio client
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
