@@ -294,18 +294,21 @@ function renderLeads() {
         });
     });
     
-    renderPagination();
-}
-
-// Toggle Smart Insights section
-function toggleInsights(header) {
-    const insightsSection = header.nextElementSibling;
-    const icon = header.querySelector('.insights-toggle-icon');
+    // Add click handlers to Smart Insights headers
+    document.querySelectorAll('.smart-insights-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent card from toggling
+            const insightsSection = header.nextElementSibling;
+            const icon = header.querySelector('.insights-toggle-icon');
+            
+            insightsSection.classList.toggle('collapsed');
+            icon.style.transform = insightsSection.classList.contains('collapsed') 
+                ? 'rotate(0deg)' 
+                : 'rotate(180deg)';
+        });
+    });
     
-    insightsSection.classList.toggle('collapsed');
-    icon.style.transform = insightsSection.classList.contains('collapsed') 
-        ? 'rotate(0deg)' 
-        : 'rotate(180deg)';
+    renderPagination();
 }
 
 // Create lead card HTML
@@ -411,7 +414,7 @@ function createLeadCard(permit) {
                 </div>
                 
                 <div class="smart-insights-wrapper">
-                    <div class="smart-insights-header" onclick="toggleInsights(this)">
+                    <div class="smart-insights-header">
                         <h4>💡 Smart Insights & Analytics</h4>
                         <i class="fas fa-chevron-down insights-toggle-icon"></i>
                     </div>
