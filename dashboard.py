@@ -369,18 +369,36 @@ def fetch_permit_data(permit_type=None, date_from=None, date_to=None, has_contac
         having_clauses = []
         
         if single_family:
-            having_clauses.append("(p.total_units = 1) OR (COALESCE(p.total_units, 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("(CAST(p.total_units AS DECIMAL) = 1) OR (COALESCE(CAST(p.total_units AS DECIMAL), 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
+            else:
+                having_clauses.append("(CAST(p.total_units AS DECIMAL) = 1) OR (COALESCE(CAST(p.total_units AS DECIMAL), 0) <= 1 AND (p.use_type LIKE '%FAMILY%' OR p.use_type LIKE '%RESIDENTIAL%'))")
         elif multi_family:
-            having_clauses.append("p.total_units IS NOT NULL AND p.total_units >= 2")
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= 2")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= 2")
         elif has_units_info:
-            having_clauses.append("p.total_units IS NOT NULL AND p.total_units > 0")
+            # Cast VARCHAR to numeric for comparison
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) > 0")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) > 0")
         elif max_units is not None:
-            # Use parameterized query for security
-            having_clauses.append("p.total_units IS NOT NULL AND p.total_units <= %s AND p.total_units > 0")
+            # Use parameterized query for security with type casting
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) <= %s AND CAST(p.total_units AS DECIMAL) > 0")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) <= %s AND CAST(p.total_units AS DECIMAL) > 0")
             params.append(max_units)
         elif min_units is not None:
-            # Use parameterized query for security
-            having_clauses.append("p.total_units IS NOT NULL AND p.total_units >= %s")
+            # Use parameterized query for security with type casting
+            if DB_TYPE == 'postgresql':
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= %s")
+            else:
+                having_clauses.append("p.total_units IS NOT NULL AND p.total_units != '' AND CAST(p.total_units AS DECIMAL) >= %s")
             params.append(min_units)
         
         # Contact count filter with parameterized query
