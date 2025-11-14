@@ -233,12 +233,16 @@ function applyFilters() {
     
     // Global search
     if (state.filters.globalSearch) {
-        const search = state.filters.globalSearch;
-        filtered = filtered.filter(p => 
-            p.address?.toLowerCase().includes(search) ||
-            p.applicant?.toLowerCase().includes(search) ||
-            p.permit_no?.toLowerCase().includes(search)
-        );
+        const search = state.filters.globalSearch.replace(/\s+/g, ' ');
+        filtered = filtered.filter(p => {
+            const address = p.address?.toLowerCase().replace(/\s+/g, ' ') || '';
+            const applicant = p.applicant?.toLowerCase().replace(/\s+/g, ' ') || '';
+            const permitNo = p.permit_no?.toLowerCase().replace(/\s+/g, ' ') || '';
+            
+            return address.includes(search) || 
+                   applicant.includes(search) || 
+                   permitNo.includes(search);
+        });
     }
     
     state.filteredPermits = filtered;
