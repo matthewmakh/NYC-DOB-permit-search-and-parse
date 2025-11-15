@@ -201,7 +201,25 @@ def geocode_with_nominatim(address):
         clean_address = re.sub(r'(\d+)(?:[T][hH]|[N][dD]|[R][dD]|[S][tT])\b', fix_ordinals, clean_address)
         
         # Fix bare numbers before Street/Avenue/Place (e.g., "5 Street" → "5th Street")
-        clean_address = re.sub(r'(\d+)\s+(Street|Avenue|Place|Road)\b', lambda m: f"{fix_ordinals(re.match(r'(\d+)', m.group(1)))} {m.group(2)}", clean_address)
+        def fix_bare_number_street(match):
+            num = match.group(1)
+            street_type = match.group(2)
+            # Determine correct suffix
+            last_digit = num[-1]
+            last_two = num[-2:] if len(num) >= 2 else num
+            if last_two in ['11', '12', '13']:
+                suffix = 'th'
+            elif last_digit == '1':
+                suffix = 'st'
+            elif last_digit == '2':
+                suffix = 'nd'
+            elif last_digit == '3':
+                suffix = 'rd'
+            else:
+                suffix = 'th'
+            return f"{num}{suffix} {street_type}"
+        
+        clean_address = re.sub(r'(\d+)\s+(Street|Avenue|Place|Road)\b', fix_bare_number_street, clean_address)
         
         # Fix common street abbreviations
         replacements = {
