@@ -382,11 +382,12 @@ function createLeadCard(permit) {
                     </div>
                 </div>
                 
-                <div class="smart-insights">
-                    <div class="insights-header">
+                <div class="smart-insights expandable-section">
+                    <div class="insights-header expandable-header" onclick="this.parentElement.classList.toggle('expanded')">
                         <h4>💡 Smart Insights & Analytics</h4>
+                        <i class="fas fa-chevron-down expand-icon"></i>
                     </div>
-                    <div class="insights-content">
+                    <div class="insights-content expandable-content">
                         ${createSmartInsights(permit)}
                     </div>
                 </div>
@@ -408,13 +409,24 @@ function createSmartInsights(permit) {
     const status = getPermitStatus(permit.exp_date);
     
     // Building Intelligence - Show if available
-    if (permit.current_owner_name || permit.year_built || permit.residential_units) {
+    if (permit.current_owner_name || permit.owner_name_rpad || permit.year_built || permit.residential_units || permit.assessed_total_value) {
         insights.push(`
             <div class="insight-item" style="border-left-color: var(--primary-color); background: var(--primary-light);">
                 <strong>🏢 Building Intelligence</strong>
-                ${permit.current_owner_name ? `<p><strong>Owner:</strong> ${permit.current_owner_name}</p>` : ''}
+                ${permit.current_owner_name || permit.owner_name_rpad ? `
+                    <div style="margin-bottom: 0.5rem;">
+                        ${permit.current_owner_name ? `<p><strong>Corporate Owner:</strong> ${permit.current_owner_name}</p>` : ''}
+                        ${permit.owner_name_rpad ? `<p style="color: #666;"><strong>Current Taxpayer:</strong> ${permit.owner_name_rpad}</p>` : ''}
+                    </div>
+                ` : ''}
+                ${permit.assessed_total_value ? `
+                    <p style="font-weight: 600; color: #4CAF50; margin-bottom: 0.5rem;">
+                        <strong>Assessed Value:</strong> $${parseInt(permit.assessed_total_value).toLocaleString()}
+                    </p>
+                ` : ''}
                 <div class="building-metrics-inline">
-                    ${permit.year_built ? `<div class="building-metric-chip"><span class="icon">📅</span><span class="value">${permit.year_built}</span></div>` : ''}
+                    ${permit.year_built ? `<div class="building-metric-chip"><span class="icon">📅</span><span class="value">Built ${permit.year_built}</span></div>` : ''}
+                    ${permit.year_altered ? `<div class="building-metric-chip ${(2025 - permit.year_altered) <= 5 ? 'recent-reno' : ''}"><span class="icon">${(2025 - permit.year_altered) <= 5 ? '🔥' : '🔧'}</span><span class="value">Altered ${permit.year_altered}</span></div>` : ''}
                     ${permit.residential_units ? `<div class="building-metric-chip"><span class="icon">🏠</span><span class="value">${permit.residential_units} units</span></div>` : ''}
                     ${permit.num_floors ? `<div class="building-metric-chip"><span class="icon">📏</span><span class="value">${permit.num_floors} floors</span></div>` : ''}
                     ${permit.building_sqft ? `<div class="building-metric-chip"><span class="icon">📐</span><span class="value">${parseInt(permit.building_sqft).toLocaleString()} ft²</span></div>` : ''}
@@ -1060,7 +1072,11 @@ function renderBuildings() {
         return;
     }
     
-    container.innerHTML = state.buildings.map(building => `
+    container.innerHTML = state.buildings.map(building => {
+        const yearsSinceAlteration = building.year_altered ? (2025 - building.year_altered) : null;
+        const isRecentRenovation = yearsSinceAlteration !== null && yearsSinceAlteration <= 5;
+        
+        return `
         <div class="building-card">
             <div class="building-header">
                 <div class="building-title">
@@ -1068,24 +1084,48 @@ function renderBuildings() {
                     <div class="building-bbl">BBL: ${building.bbl}</div>
                 </div>
                 <div class="enrichment-badges">
+                    ${building.assessed_total_value ? `<span class="enrichment-badge value" style="background: #4CAF50; color: white; font-weight: 600;">💰 $${(building.assessed_total_value / 1000).toFixed(0)}K</span>` : ''}
+                    ${isRecentRenovation ? '<span class="enrichment-badge recent" style="background: #FF5722; color: white;">🔥 Recent Reno</span>' : ''}
                     ${building.current_owner_name ? '<span class="enrichment-badge pluto">✓ PLUTO</span>' : ''}
                     ${building.purchase_date ? '<span class="enrichment-badge acris">✓ ACRIS</span>' : ''}
                     ${building.linked_permits > 0 ? `<span class="enrichment-badge contacts">${building.linked_permits} Permits</span>` : ''}
                 </div>
             </div>
             
-            ${building.current_owner_name ? `
+            ${building.current_owner_name || building.owner_name_rpad ? `
                 <div class="building-owner">
-                    <div class="owner-label">Property Owner</div>
-                    <div class="owner-name">${building.current_owner_name}</div>
+                    ${building.current_owner_name ? `
+                        <div style="margin-bottom: 0.25rem;">
+                            <div class="owner-label">Corporate Owner</div>
+                            <div class="owner-name">${building.current_owner_name}</div>
+                        </div>
+                    ` : ''}
+                    ${building.owner_name_rpad ? `
+                        <div>
+                            <div class="owner-label" style="color: #888;">Current Taxpayer</div>
+                            <div class="owner-name" style="color: #666; font-size: 0.9em;">${building.owner_name_rpad}</div>
+                        </div>
+                    ` : ''}
                 </div>
             ` : ''}
             
             <div class="building-metrics">
+                ${building.assessed_total_value ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Assessed Value</div>
+                        <div class="metric-value highlight" style="color: #4CAF50; font-weight: 600;">$${parseInt(building.assessed_total_value).toLocaleString()}</div>
+                    </div>
+                ` : ''}
                 ${building.year_built ? `
                     <div class="metric-item">
                         <div class="metric-label">Year Built</div>
                         <div class="metric-value">${building.year_built}</div>
+                    </div>
+                ` : ''}
+                ${building.year_altered ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Year Altered</div>
+                        <div class="metric-value">${building.year_altered}${isRecentRenovation ? ' 🔥' : ''}</div>
                     </div>
                 ` : ''}
                 ${building.residential_units ? `
@@ -1112,25 +1152,25 @@ function renderBuildings() {
                         <div class="metric-value">${building.building_class}</div>
                     </div>
                 ` : ''}
-                ${building.purchase_price ? `
-                    <div class="metric-item">
-                        <div class="metric-label">Purchase Price</div>
-                        <div class="metric-value highlight">$${parseInt(building.purchase_price).toLocaleString()}</div>
-                    </div>
-                ` : ''}
             </div>
             
             <div class="building-footer">
                 <div class="permit-count-badge">
                     <i class="fas fa-file-alt"></i>
                     <span class="count">${building.linked_permits || 0}</span> Linked Permits
+                    ${building.last_permit_date ? `
+                        <span style="color: #888; font-size: 0.85em; margin-left: 0.5rem;">
+                            Latest: ${new Date(building.last_permit_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                        </span>
+                    ` : ''}
                 </div>
                 <button class="view-building-btn" onclick="viewBuildingDetail(${building.id})">
-                    View Details <i class="fas fa-arrow-right"></i>
+                    View Full History <i class="fas fa-arrow-right"></i>
                 </button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 // View building detail
@@ -1162,18 +1202,20 @@ function showBuildingModal(data) {
                 </div>
                 <div class="modal-body">
                     <!-- Owner Section -->
-                    ${building.current_owner_name ? `
+                    ${building.current_owner_name || building.owner_name_rpad ? `
                         <div class="detail-section">
                             <h3><i class="fas fa-user"></i> Owner Information</h3>
                             <div class="detail-grid">
-                                <div class="detail-item">
-                                    <div class="detail-label">Owner Name</div>
-                                    <div class="detail-value">${building.current_owner_name}</div>
-                                </div>
-                                ${building.owner_mailing_address ? `
+                                ${building.current_owner_name ? `
                                     <div class="detail-item">
-                                        <div class="detail-label">Mailing Address</div>
-                                        <div class="detail-value">${building.owner_mailing_address}</div>
+                                        <div class="detail-label">Corporate Owner</div>
+                                        <div class="detail-value">${building.current_owner_name}</div>
+                                    </div>
+                                ` : ''}
+                                ${building.owner_name_rpad ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Current Taxpayer</div>
+                                        <div class="detail-value" style="color: #666;">${building.owner_name_rpad}</div>
                                     </div>
                                 ` : ''}
                             </div>
@@ -1192,6 +1234,15 @@ function showBuildingModal(data) {
                                 <div class="detail-item">
                                     <div class="detail-label">Year Built</div>
                                     <div class="detail-value">${building.year_built}</div>
+                                </div>
+                            ` : ''}
+                            ${building.year_altered ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Year Altered</div>
+                                    <div class="detail-value">
+                                        ${building.year_altered}
+                                        ${(2025 - building.year_altered) <= 5 ? '<span style="color: #4CAF50; font-weight: 600; margin-left: 8px;">🔥 Recent!</span>' : ''}
+                                    </div>
                                 </div>
                             ` : ''}
                             ${building.building_class ? `
@@ -1234,10 +1285,24 @@ function showBuildingModal(data) {
                     </div>
                     
                     <!-- Financial Information -->
-                    ${building.purchase_date || building.purchase_price ? `
+                    ${building.purchase_date || building.purchase_price || building.assessed_total_value ? `
                         <div class="detail-section">
                             <h3><i class="fas fa-dollar-sign"></i> Financial Information</h3>
                             <div class="detail-grid">
+                                ${building.assessed_total_value ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Assessed Value</div>
+                                        <div class="detail-value" style="font-weight: 600; color: #4CAF50;">
+                                            $${parseInt(building.assessed_total_value).toLocaleString()}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                ${building.assessed_land_value ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Land Value</div>
+                                        <div class="detail-value">$${parseInt(building.assessed_land_value).toLocaleString()}</div>
+                                    </div>
+                                ` : ''}
                                 ${building.purchase_date ? `
                                     <div class="detail-item">
                                         <div class="detail-label">Purchase Date</div>

@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-Step 2: Enrich buildings from NYC PLUTO dataset
-- Downloads latest MapPLUTO data from NYC Open Data
-- Matches buildings by BBL
-- Extracts owner name, address, building class, units, sq footage, year built
+Enhanced Building Enrichment - Dual Source (PLUTO + RPAD)
+
+Combines data from:
+1. NYC PLUTO (MapPLUTO) - Corporate ownership, building characteristics
+2. NYC RPAD (Property Tax) - Current taxpayer, assessed values
+
+Populates:
+- current_owner_name (PLUTO) - Corporate entity
+- owner_name_rpad (RPAD) - Current taxpayer
+- assessed_land_value, assessed_total_value (RPAD)
+- year_altered (PLUTO) - Recent renovations
+- Plus all existing building data
 """
 
 import psycopg2
@@ -19,7 +27,6 @@ load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 if not DATABASE_URL:
-    # Build from individual components
     DB_HOST = os.getenv('DB_HOST')
     DB_PORT = os.getenv('DB_PORT', '5432')
     DB_USER = os.getenv('DB_USER')
@@ -31,22 +38,19 @@ if not DATABASE_URL:
     
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# NYC Open Data PLUTO API endpoint
+# API endpoints
 PLUTO_API_BASE = "https://data.cityofnewyork.us/resource/64uk-42ks.json"
+RPAD_API_BASE = "https://data.cityofnewyork.us/resource/yjxr-fw8i.json"
+
+# Rate limiting
+API_DELAY = float(os.getenv('API_DELAY', 0.1))  # 100ms delay between API calls
 
 
-def get_pluto_data_for_bbl(bbl):
-    """
-    Query NYC Open Data API for PLUTO data by BBL
-    BBL format: 10-digit string (borough + block + lot)
-    """
+def get_pluto_data(bbl):
+    """Query PLUTO for building characteristics and corporate owner"""
     try:
-        # PLUTO uses BBL as a 10-digit string
-        params = {
-            "$where": f"bbl='{bbl}'",
-            "$limit": 1
-        }
-        
+        time.sleep(API_DELAY)  # Rate limiting
+        params = {"$where": f"bbl='{bbl}'", "$limit": 1}
         response = requests.get(PLUTO_API_BASE, params=params, timeout=10)
         response.raise_for_status()
         
@@ -56,10 +60,8 @@ def get_pluto_data_for_bbl(bbl):
             
         record = data[0]
         
-        # Extract key fields - map to existing database columns
         return {
             'owner_name': record.get('ownername'),
-            'owner_address': record.get('address'),
             'building_class': record.get('bldgclass'),
             'land_use': record.get('landuse'),
             'residential_units': int(float(record.get('unitsres', 0) or 0)),
@@ -68,46 +70,77 @@ def get_pluto_data_for_bbl(bbl):
             'building_sqft': int(float(record.get('bldgarea', 0) or 0)),
             'lot_sqft': int(float(record.get('lotarea', 0) or 0)),
             'year_built': int(float(record.get('yearbuilt', 0) or 0)) if record.get('yearbuilt') else None,
+            'year_altered': int(float(record.get('yearalter1', 0) or 0)) if record.get('yearalter1') else None,
+            'assessed_land': float(record.get('assessland', 0) or 0),
+            'assessed_total': float(record.get('assesstot', 0) or 0),
             'zip_code': record.get('zipcode')
         }
         
     except Exception as e:
-        print(f"⚠️ Error fetching PLUTO data for BBL {bbl}: {e}")
+        print(f"  ⚠️  PLUTO error: {e}")
         return None
 
 
-def enrich_buildings_from_pluto():
-    """
-    Main process:
-    1. Get all buildings without owner data
-    2. Query PLUTO API for each BBL
-    3. Update building record with PLUTO data
-    """
+def get_rpad_data(bbl):
+    """Query RPAD for current taxpayer and assessed values"""
+    try:
+        time.sleep(API_DELAY)  # Rate limiting
+        params = {"bble": bbl, "$limit": 1}
+        response = requests.get(RPAD_API_BASE, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        if not data:
+            return None
+            
+        record = data[0]
+        
+        return {
+            'owner_name_rpad': record.get('owner'),
+            'assessed_land_value': float(record.get('avland', 0) or 0),
+            'assessed_total_value': float(record.get('avtot', 0) or 0)
+        }
+        
+    except Exception as e:
+        print(f"  ⚠️  RPAD error: {e}")
+        return None
+
+
+def enrich_buildings():
+    """Main enrichment process - fetches data from PLUTO and RPAD for buildings"""
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
     
-    print("Step 2: Enriching Buildings from PLUTO")
-    print("=" * 60)
+    # Get batch size from environment (default 500 for production)
+    batch_size = int(os.getenv('BUILDING_BATCH_SIZE', 500))
     
-    # Get buildings that need PLUTO data
-    cur.execute("""
+    print("=" * 70)
+    print("🏢 DUAL-SOURCE BUILDING ENRICHMENT (PLUTO + RPAD)")
+    print("=" * 70)
+    print(f"📦 Batch size: {batch_size}")
+    
+    # Get buildings that need enrichment
+    cur.execute(f"""
         SELECT id, bbl, address
         FROM buildings
         WHERE bbl IS NOT NULL
-        AND current_owner_name IS NULL
+        AND (current_owner_name IS NULL OR owner_name_rpad IS NULL)
         ORDER BY id
+        LIMIT {batch_size}
     """)
     
     buildings = cur.fetchall()
-    print(f"\n📊 Found {len(buildings)} buildings to enrich")
+    print(f"\n📊 Found {len(buildings)} buildings to enrich\n")
     
     if not buildings:
-        print("   No buildings need enrichment. All done!")
+        print("✅ All buildings already enriched!")
         cur.close()
         conn.close()
         return
     
-    enriched = 0
+    pluto_success = 0
+    rpad_success = 0
+    both_success = 0
     failed = 0
     
     for i, building in enumerate(buildings, 1):
@@ -115,75 +148,115 @@ def enrich_buildings_from_pluto():
         building_id = building['id']
         address = building['address']
         
-        print(f"\n🔍 [{i}/{len(buildings)}] BBL {bbl} ({address})...")
+        print(f"[{i}/{len(buildings)}] BBL {bbl} ({address})")
         
-        # Get PLUTO data
-        pluto_data = get_pluto_data_for_bbl(bbl)
+        # Get data from both sources
+        pluto_data = get_pluto_data(bbl)
+        rpad_data = get_rpad_data(bbl)
         
         if pluto_data:
-            # Update building record with correct column names
-            cur.execute("""
+            print(f"  ✅ PLUTO: {pluto_data['owner_name']}")
+            pluto_success += 1
+        
+        if rpad_data:
+            print(f"  ✅ RPAD:  {rpad_data['owner_name_rpad']}")
+            rpad_success += 1
+        
+        # Update database with all available data
+        if pluto_data or rpad_data:
+            update_fields = []
+            update_values = []
+            
+            if pluto_data:
+                update_fields.extend([
+                    "current_owner_name = %s",
+                    "building_class = %s",
+                    "land_use = %s",
+                    "residential_units = %s",
+                    "total_units = %s",
+                    "num_floors = %s",
+                    "building_sqft = %s",
+                    "lot_sqft = %s",
+                    "year_built = %s",
+                    "year_altered = %s"
+                ])
+                update_values.extend([
+                    pluto_data['owner_name'],
+                    pluto_data['building_class'],
+                    pluto_data['land_use'],
+                    pluto_data['residential_units'],
+                    pluto_data['total_units'],
+                    pluto_data['num_floors'],
+                    pluto_data['building_sqft'],
+                    pluto_data['lot_sqft'],
+                    pluto_data['year_built'],
+                    pluto_data['year_altered']
+                ])
+            
+            if rpad_data:
+                update_fields.append("owner_name_rpad = %s")
+                update_values.append(rpad_data['owner_name_rpad'])
+                
+                # RPAD has more current assessed values - use them if available
+                if rpad_data['assessed_land_value'] > 0:
+                    update_fields.append("assessed_land_value = %s")
+                    update_values.append(rpad_data['assessed_land_value'])
+                if rpad_data['assessed_total_value'] > 0:
+                    update_fields.append("assessed_total_value = %s")
+                    update_values.append(rpad_data['assessed_total_value'])
+            elif pluto_data:
+                # Use PLUTO assessment values if RPAD not available
+                update_fields.extend([
+                    "assessed_land_value = %s",
+                    "assessed_total_value = %s"
+                ])
+                update_values.extend([
+                    pluto_data['assessed_land'],
+                    pluto_data['assessed_total']
+                ])
+            
+            update_fields.append("last_updated = CURRENT_TIMESTAMP")
+            
+            query = f"""
                 UPDATE buildings
-                SET current_owner_name = %s,
-                    owner_mailing_address = %s,
-                    building_class = %s,
-                    land_use = %s,
-                    residential_units = %s,
-                    total_units = %s,
-                    num_floors = %s,
-                    building_sqft = %s,
-                    lot_sqft = %s,
-                    year_built = %s,
-                    last_updated = CURRENT_TIMESTAMP
+                SET {', '.join(update_fields)}
                 WHERE id = %s
-            """, (
-                pluto_data['owner_name'],
-                pluto_data['owner_address'],
-                pluto_data['building_class'],
-                pluto_data['land_use'],
-                pluto_data['residential_units'],
-                pluto_data['total_units'],
-                pluto_data['num_floors'],
-                pluto_data['building_sqft'],
-                pluto_data['lot_sqft'],
-                pluto_data['year_built'],
-                building_id
-            ))
+            """
+            update_values.append(building_id)
+            
+            cur.execute(query, update_values)
             conn.commit()
             
-            print(f"   ✅ Owner: {pluto_data['owner_name']}")
-            print(f"      Units: {pluto_data['residential_units']}, Built: {pluto_data['year_built']}")
-            enriched += 1
+            if pluto_data and rpad_data:
+                both_success += 1
+            
+            print()
         else:
-            print(f"   ❌ No PLUTO data found")
+            print("  ❌ No data from either source\n")
             failed += 1
         
-        # Rate limit: 0.5 second delay between API calls
-        if i < len(buildings):
-            time.sleep(0.5)
+        # Rate limiting
+        time.sleep(0.1)
     
-    print(f"\n✅ Complete!")
-    print(f"   Buildings enriched: {enriched}")
-    print(f"   Failed/No data: {failed}")
+    # Summary
+    print("=" * 70)
+    print("📊 ENRICHMENT SUMMARY")
+    print("=" * 70)
+    print(f"✅ PLUTO data retrieved: {pluto_success}")
+    print(f"✅ RPAD data retrieved: {rpad_success}")
+    print(f"🎯 Both sources retrieved: {both_success}")
+    print(f"❌ Failed: {failed}")
+    print("=" * 70)
     
-    # Show sample results
-    cur.execute("""
-        SELECT bbl, address, current_owner_name, residential_units, year_built
-        FROM buildings
-        WHERE current_owner_name IS NOT NULL
-        LIMIT 5
-    """)
-    
-    results = cur.fetchall()
-    if results:
-        print(f"\n📋 Sample enriched buildings:")
-        for r in results:
-            print(f"   {r['bbl']}: {r['current_owner_name']}")
-            print(f"      {r['address']} ({r['residential_units']} units, built {r['year_built']})")
-    
-    cur.close()
     conn.close()
 
 
 if __name__ == "__main__":
-    enrich_buildings_from_pluto()
+    try:
+        enrich_buildings()
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()

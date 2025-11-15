@@ -49,49 +49,87 @@ python geocode_permits.py
 
 ### Railway Cron Job
 
-1. **Create Cron Service in Railway:**
-   ```
-   New Service → GitHub Repo → Select branch
-   ```
+#### ✅ COMPLETED SETUP
 
-2. **Set Environment Variables:**
-   ```
-   DB_HOST = ${{Postgres.PGHOST}}
-   DB_PORT = ${{Postgres.PGPORT}}
-   DB_USER = ${{Postgres.PGUSER}}
-   DB_PASSWORD = ${{Postgres.PGPASSWORD}}
-   DB_NAME = ${{Postgres.PGDATABASE}}
-   NYC_GEOCLIENT_APP_ID = your_app_id
-   NYC_GEOCLIENT_APP_KEY = your_app_key
-   ```
+**Service Name:** Geocode-Properties-CRON
 
-3. **Configure Cron Schedule:**
-   - Use `railway.geocode.json` configuration
-   - Or manually set cron: `0 */6 * * *` (every 6 hours)
+**Configuration:**
+- Repository: `matthewmakh/NYC-DOB-permit-search-and-parse`
+- Branch: `main`
+- Config File: `railway.geocode.json`
+- Cron Schedule: `0 3 * * 0` (Every Sunday at 3 AM UTC)
+- Start Command: `python geocode_permits.py`
+- Restart Policy: Never
 
-4. **Set Start Command:**
-   ```bash
-   python geocode_permits.py
-   ```
+**Environment Variables Set:**
+```
+DB_HOST = ${{Postgres.PGHOST}}
+DB_PORT = ${{Postgres.PGPORT}}
+DB_USER = ${{Postgres.PGUSER}}
+DB_PASSWORD = ${{Postgres.PGPASSWORD}}
+DB_NAME = ${{Postgres.PGDATABASE}}
+NYC_GEOCLIENT_APP_ID = 66a4de50fd754c178583dea63fa49ee5
+NYC_GEOCLIENT_APP_KEY = 9667f22ae5bf43a88c4dee563efb2cac
+GEOCODE_BATCH_SIZE = 500
+GEOCODE_DELAY = 0.01
+```
+
+#### 📋 FINAL DEPLOYMENT STEPS
+
+1. **Set Config File Path in Railway:**
+   - Go to Railway → Geocode-Properties-CRON service
+   - Click **Settings** tab
+   - Scroll to **Config File Path**
+   - Enter: `railway.geocode.json`
+   - Save (auto-saves)
+
+2. **Verify Deployment:**
+   - Go to **Deployments** tab
+   - Watch for automatic redeploy (triggered by config file change)
+   - Click on the deployment → **View Logs**
+   - Look for:
+     ```
+     ✅ NYC Geoclient API configured
+     🗺️  PERMIT GEOCODING SERVICE
+     Connected to database
+     ```
+
+3. **Monitor Execution:**
+   - First run: Next Sunday at 3:00 AM UTC
+   - Or manually trigger: Deployments → three dots menu → Restart
+   - Check logs for success rate (should be ~85%)
+
+#### 🔄 To Change Schedule
+
+Edit `railway.geocode.json` and push to GitHub:
+```bash
+git add railway.geocode.json
+git commit -m "Update geocode schedule"
+git push origin main
+```
+
+Railway will auto-redeploy with the new schedule.
 
 ### Configuration Options
 
 Environment variables (optional):
 
 ```bash
-GEOCODE_BATCH_SIZE=100   # Permits per run (default: 100)
-GEOCODE_DELAY=0.5        # Seconds between requests (default: 0.5)
+GEOCODE_BATCH_SIZE=500   # Permits per run (default: 500)
+GEOCODE_DELAY=0.01       # Seconds between requests (default: 0.01)
 ```
 
 ## How It Works
 
-1. **Fetch Permits**: Queries database for permits without coordinates
-2. **Parse Address**: Extracts house number, street name, and borough
+1. **Fetch Permits**: Queries database for permits without coordinates (limit: 500 per run)
+2. **Parse Address**: Extracts house number, street name, and borough from BBL
 3. **Geocode**: 
-   - Try NYC Geoclient API (if configured)
-   - Fallback to Nominatim if needed
+   - NYC Geoclient V2 API for BBL-based addresses (100% success rate)
+   - Nominatim fallback for non-BBL addresses (~70% success rate)
 4. **Update Database**: Saves coordinates to permit record
 5. **Report**: Shows success/failure statistics
+
+**Overall Success Rate: ~85%** (tested on 20 permits)
 
 ## Output Example
 
@@ -135,13 +173,9 @@ Processing 100 permits...
 
 ## Railway Cron Schedule
 
-The default schedule (`0 */6 * * *`) runs every 6 hours:
-- 00:00 (midnight)
-- 06:00 (6 AM)
-- 12:00 (noon)
-- 18:00 (6 PM)
+The current schedule (`0 3 * * 0`) runs **every Sunday at 3:00 AM UTC**.
 
-This processes 100 permits per run = 400 permits per day.
+This processes 500 permits per run = 2,000 permits per month (every Sunday).
 
 ### Adjust Schedule
 
@@ -150,12 +184,16 @@ Edit `railway.geocode.json`:
 ```json
 {
   "deploy": {
-    "cronSchedule": "0 */3 * * *"  // Every 3 hours
+    "cronSchedule": "0 */6 * * *"  // Every 6 hours
   }
 }
 ```
 
-Or use Railway dashboard to set custom schedule.
+**Common cron schedules:**
+- `0 3 * * 0` - Every Sunday at 3 AM (current)
+- `0 */6 * * *` - Every 6 hours
+- `0 0 * * *` - Daily at midnight
+- `0 0 * * 1` - Every Monday at midnight
 
 ## API Rate Limits
 

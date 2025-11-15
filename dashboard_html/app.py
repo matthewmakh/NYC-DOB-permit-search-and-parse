@@ -85,7 +85,7 @@ def get_permits():
                 contact_info.contact_phones,
                 b.id as building_id,
                 b.current_owner_name,
-                b.owner_mailing_address,
+                b.owner_name_rpad,
                 b.building_class,
                 b.land_use,
                 b.residential_units,
@@ -94,6 +94,9 @@ def get_permits():
                 b.building_sqft,
                 b.lot_sqft,
                 b.year_built,
+                b.year_altered,
+                b.assessed_land_value,
+                b.assessed_total_value,
                 b.purchase_date,
                 b.purchase_price,
                 b.mortgage_amount
@@ -515,7 +518,7 @@ def permit_detail(permit_id):
                 b.bbl,
                 b.address as building_address,
                 b.current_owner_name,
-                b.owner_mailing_address,
+                b.owner_name_rpad,
                 b.building_class,
                 b.land_use,
                 b.residential_units,
@@ -524,6 +527,9 @@ def permit_detail(permit_id):
                 b.building_sqft,
                 b.lot_sqft,
                 b.year_built,
+                b.year_altered,
+                b.assessed_land_value,
+                b.assessed_total_value,
                 b.purchase_date,
                 b.purchase_price,
                 b.mortgage_amount,
@@ -606,11 +612,12 @@ def get_buildings():
             SELECT 
                 b.*,
                 COUNT(DISTINCT p.id) as linked_permits,
+                MAX(p.issue_date) as last_permit_date,
                 STRING_AGG(DISTINCT p.permit_no, ', ' ORDER BY p.permit_no) as permit_numbers
             FROM buildings b
             LEFT JOIN permits p ON b.bbl = p.bbl
             GROUP BY b.id
-            ORDER BY b.id DESC;
+            ORDER BY b.assessed_total_value DESC NULLS LAST, b.id DESC;
         """
         
         cur.execute(query)

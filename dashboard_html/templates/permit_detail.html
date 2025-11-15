@@ -394,12 +394,17 @@
             {% endif %}
         </div>
         
-        {% if permit.current_owner_name %}
+        {% if permit.current_owner_name or permit.owner_name_rpad %}
         <div class="highlight-box">
-            <h3>🏢 Property Owner: {{ permit.current_owner_name }}</h3>
-            {% if permit.owner_mailing_address %}
-            <p style="color: var(--text-secondary); margin-top: 0.5rem;">
-                📫 {{ permit.owner_mailing_address }}
+            <h3>🏢 Property Ownership</h3>
+            {% if permit.current_owner_name %}
+            <p style="margin: 0.5rem 0;">
+                <strong>Corporate Owner:</strong> {{ permit.current_owner_name }}
+            </p>
+            {% endif %}
+            {% if permit.owner_name_rpad %}
+            <p style="margin: 0.5rem 0; color: var(--text-secondary);">
+                <strong>Current Taxpayer:</strong> {{ permit.owner_name_rpad }}
             </p>
             {% endif %}
         </div>
@@ -455,6 +460,18 @@
                     <span class="info-value">{{ permit.year_built }}</span>
                 </div>
                 {% endif %}
+                {% if permit.year_altered %}
+                <div class="info-row">
+                    <span class="info-label">Year Altered</span>
+                    <span class="info-value">
+                        {{ permit.year_altered }}
+                        {% set years_since = 2025 - permit.year_altered %}
+                        {% if years_since <= 5 %}
+                            <span style="color: var(--accent-color); font-weight: 600;">🔥 Recent Renovation!</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endif %}
                 {% if permit.residential_units %}
                 <div class="info-row">
                     <span class="info-label">Residential Units</span>
@@ -495,9 +512,23 @@
             {% endif %}
             
             <!-- Financial Information -->
-            {% if permit.purchase_price or permit.mortgage_amount %}
+            {% if permit.purchase_price or permit.mortgage_amount or permit.assessed_total_value %}
             <div class="info-card">
                 <h2><i class="fas fa-dollar-sign"></i> Financial Data</h2>
+                {% if permit.assessed_total_value %}
+                <div class="info-row">
+                    <span class="info-label">Assessed Value</span>
+                    <span class="info-value" style="font-weight: 600; color: var(--accent-color);">
+                        ${{ "{:,}".format(permit.assessed_total_value|int) }}
+                    </span>
+                </div>
+                {% endif %}
+                {% if permit.assessed_land_value %}
+                <div class="info-row">
+                    <span class="info-label">Land Value</span>
+                    <span class="info-value">${{ "{:,}".format(permit.assessed_land_value|int) }}</span>
+                </div>
+                {% endif %}
                 {% if permit.purchase_date %}
                 <div class="info-row">
                     <span class="info-label">Purchase Date</span>
