@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "cronSchedule": "0 */6 * * *",
+    "cronSchedule": "0 3 * * 0",
     "startCommand": "python geocode_permits.py",
     "restartPolicyType": "NEVER"
   }
