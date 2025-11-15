@@ -25,9 +25,10 @@ import psycopg2.extras
 
 load_dotenv()
 
-# Configuration
-BATCH_SIZE = int(os.getenv('GEOCODE_BATCH_SIZE', '100'))  # Process 100 permits per run
-RATE_LIMIT_DELAY = float(os.getenv('GEOCODE_DELAY', '0.5'))  # 0.5 seconds between requests
+# Configuration - Optimized for NYC Geoclient V2 User
+# V2 Limits: 100 calls/sec, 2,500 calls/min, 500,000 calls/day
+BATCH_SIZE = int(os.getenv('GEOCODE_BATCH_SIZE', '500'))  # Process 500 permits per run
+RATE_LIMIT_DELAY = float(os.getenv('GEOCODE_DELAY', '0.01'))  # 0.01s = 100 requests/sec
 
 # Database configuration
 DB_HOST = os.getenv('DB_HOST')
@@ -77,8 +78,8 @@ def parse_nyc_address(address):
     if not address:
         return None, None, None
     
-    # Clean up address
-    address = address.strip().upper()
+    # Clean up address - remove extra whitespace
+    address = ' '.join(address.split()).strip().upper()
     
     # Try to extract house number and street
     match = re.match(r'^(\d+[\w-]*)\s+(.+)$', address)
@@ -86,7 +87,7 @@ def parse_nyc_address(address):
         return None, None, None
     
     house_number = match.group(1)
-    street_name = match.group(2)
+    street_name = match.group(2).strip()
     
     # Extract borough if present (usually at the end)
     # Common patterns: "STREET, BOROUGH" or "STREET BOROUGH"
@@ -100,54 +101,64 @@ def parse_nyc_address(address):
     return house_number, street_name, borough
 
 
-def geocode_with_nyc_geoclient(house_number, street_name, borough=None):
+def geocode_with_nyc_geoclient(address, borough=None):
     """
-    Geocode using NYC Geoclient API
-    Returns: (latitude, longitude) or (None, None)
+    Geocode an address using NYC Geoclient API V2.
+    V2 API requires either borough or zip code.
+    Returns (latitude, longitude) or (None, None) if failed.
     """
-    if not USE_GEOCLIENT:
+    if not NYC_APP_ID or not NYC_APP_KEY:
         return None, None
     
+    # Parse the NYC address
+    house_number, street_name, parsed_borough = parse_nyc_address(address)
+    if not house_number or not street_name:
+        return None, None
+    
+    # Use provided borough (from BBL) over parsed borough
+    final_borough = borough or parsed_borough
+    if not final_borough:
+        # V2 API requires borough or zip - if we don't have either, skip NYC Geoclient
+        return None, None
+    
+    # V2 API uses subscription key in header, not query params
+    url = "https://api.nyc.gov/geoclient/v2/address"
+    headers = {
+        'Ocp-Apim-Subscription-Key': NYC_APP_ID  # Primary key goes in header
+    }
+    params = {
+        'houseNumber': house_number,
+        'street': street_name,
+        'borough': final_borough
+    }
+    
     try:
-        # NYC Geoclient Address endpoint
-        url = "https://api.cityofnewyork.us/geoclient/v1/address.json"
-        
-        params = {
-            'houseNumber': house_number,
-            'street': street_name,
-            'app_id': NYC_APP_ID,
-            'app_key': NYC_APP_KEY
-        }
-        
-        # Add borough if available
-        if borough:
-            # Convert borough name to code
-            borough_codes = {
-                'MANHATTAN': 'Manhattan',
-                'BROOKLYN': 'Brooklyn', 
-                'QUEENS': 'Queens',
-                'BRONX': 'Bronx',
-                'STATEN ISLAND': 'Staten Island'
-            }
-            params['borough'] = borough_codes.get(borough, borough)
-        
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
+            
+            # V2 API returns data in 'address' object
             if 'address' in data:
                 addr_data = data['address']
+                # Get coordinates - V2 uses different field names
                 lat = addr_data.get('latitude')
                 lon = addr_data.get('longitude')
                 
                 if lat and lon:
                     return float(lat), float(lon)
-        
-        return None, None
-        
+        else:
+            # Debug: show what went wrong
+            try:
+                error_data = response.json()
+                print(f"⚠️ NYC Geoclient status {response.status_code}: {error_data.get('message', 'Unknown error')[:80]}")
+            except:
+                print(f"⚠️ NYC Geoclient returned status {response.status_code}")
+            
     except Exception as e:
-        print(f"  ⚠️  Geocoding error: {str(e)}")
-        return None, None
+        print(f"⚠️ NYC Geoclient error: {str(e)}")
+    
+    return None, None
 
 
 def geocode_with_nominatim(address):
@@ -156,17 +167,69 @@ def geocode_with_nominatim(address):
     Returns: (latitude, longitude) or (None, None)
     """
     try:
-        # Add "New York, NY" to improve results
-        full_address = f"{address}, New York, NY, USA"
+        import re
         
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {
-            'q': full_address,
-            'format': 'json',
-            'limit': 1
+        # Clean up address and convert to proper case for better results
+        clean_address = ' '.join(address.split())  # Remove extra whitespace
+        
+        # Convert to title case for better OSM matching
+        clean_address = clean_address.title()
+        
+        # Fix ordinal numbers (141TH → 141st, 22ND → 22nd, etc.)
+        def fix_ordinals(match):
+            num = match.group(1)
+            suffix = match.group(2).lower() if match.group(2) else ''
+            
+            # Determine correct suffix based on number
+            last_digit = num[-1]
+            last_two = num[-2:] if len(num) >= 2 else num
+            
+            if last_two in ['11', '12', '13']:
+                correct_suffix = 'th'
+            elif last_digit == '1':
+                correct_suffix = 'st'
+            elif last_digit == '2':
+                correct_suffix = 'nd'
+            elif last_digit == '3':
+                correct_suffix = 'rd'
+            else:
+                correct_suffix = 'th'
+            
+            return f"{num}{correct_suffix}"
+        
+        # Fix explicit ordinals (141TH, 22ND, etc.)
+        clean_address = re.sub(r'(\d+)(?:[T][hH]|[N][dD]|[R][dD]|[S][tT])\b', fix_ordinals, clean_address)
+        
+        # Fix bare numbers before Street/Avenue/Place (e.g., "5 Street" → "5th Street")
+        clean_address = re.sub(r'(\d+)\s+(Street|Avenue|Place|Road)\b', lambda m: f"{fix_ordinals(re.match(r'(\d+)', m.group(1)))} {m.group(2)}", clean_address)
+        
+        # Fix common street abbreviations
+        replacements = {
+            r'\bSt\b\.?': 'Street',
+            r'\bAve\b\.?': 'Avenue',
+            r'\bRd\b\.?': 'Road',
+            r'\bBlvd\b\.?': 'Boulevard',
+            r'\bPl\b\.?': 'Place',
+            r'\bDr\b\.?': 'Drive',
+            r'\bCt\b\.?': 'Court',
+            r'\bLn\b\.?': 'Lane',
+            r'\bPkwy\b\.?': 'Parkway'
         }
+        
+        for pattern, replacement in replacements.items():
+            clean_address = re.sub(pattern, replacement, clean_address)
+        
+        # Try with just NYC first (most likely to work)
+        url = "https://nominatim.openstreetmap.org/search"
         headers = {
-            'User-Agent': 'DOB-Permit-Geocoder/1.0'  # Required by Nominatim
+            'User-Agent': 'DOB-Permit-Geocoder/1.0'
+        }
+        
+        params = {
+            'q': f"{clean_address}, New York, NY",
+            'format': 'json',
+            'limit': 1,
+            'countrycodes': 'us'
         }
         
         response = requests.get(url, params=params, headers=headers, timeout=10)
@@ -178,6 +241,9 @@ def geocode_with_nominatim(address):
                 lat = float(result['lat'])
                 lon = float(result['lon'])
                 return lat, lon
+        
+        # Rate limit for Nominatim (1 request per second)
+        time.sleep(1)
         
         return None, None
         
@@ -209,8 +275,32 @@ def geocode_permits():
     print("=" * 70)
     print("🗺️  PERMIT GEOCODING SERVICE")
     print("=" * 70)
+    print()
+    
+    # Test API connection first
+    if USE_GEOCLIENT:
+        print("🔧 Testing NYC Geoclient API connection...")
+        try:
+            test_url = "https://api.nyc.gov/geoclient/v2/address"
+            test_headers = {
+                'Ocp-Apim-Subscription-Key': NYC_APP_ID
+            }
+            test_params = {
+                'houseNumber': '1',
+                'street': 'Centre Street',
+                'borough': 'Manhattan'
+            }
+            test_response = requests.get(test_url, params=test_params, headers=test_headers, timeout=5)
+            if test_response.status_code == 200:
+                print("✅ NYC Geoclient API is working!\n")
+            else:
+                print(f"⚠️  NYC Geoclient returned status {test_response.status_code}\n")
+        except Exception as e:
+            print(f"❌ NYC Geoclient API test failed: {str(e)[:100]}")
+            print("Falling back to OpenStreetMap only\n")
     
     # Connect to database
+    print("🔌 Connecting to database...")
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -220,6 +310,7 @@ def geocode_permits():
         sys.exit(1)
     
     # Get statistics
+    print("📊 Fetching statistics...")
     cur.execute("SELECT COUNT(*) as total FROM permits")
     total_permits = cur.fetchone()['total']
     
@@ -227,7 +318,7 @@ def geocode_permits():
     with_coords = cur.fetchone()['with_coords']
     
     without_coords = total_permits - with_coords
-    
+    print()
     print(f"📊 Database Statistics:")
     print(f"   Total permits: {total_permits:,}")
     print(f"   With coordinates: {with_coords:,} ({with_coords/total_permits*100:.1f}%)")
@@ -241,15 +332,18 @@ def geocode_permits():
         return
     
     # Fetch permits without coordinates (limited by batch size)
+    # Prioritize permits with BBL (can use NYC Geoclient V2)
     print(f"🔍 Fetching {min(BATCH_SIZE, without_coords)} permits to geocode...\n")
     
     cur.execute("""
-        SELECT id, address, bin
+        SELECT id, address, bbl
         FROM permits 
         WHERE (latitude IS NULL OR longitude IS NULL)
             AND address IS NOT NULL 
             AND address != ''
-        ORDER BY id
+        ORDER BY 
+            CASE WHEN bbl IS NOT NULL AND bbl != '' THEN 0 ELSE 1 END,
+            id
         LIMIT %s
     """, (BATCH_SIZE,))
     
@@ -266,24 +360,51 @@ def geocode_permits():
     # Geocode each permit
     success_count = 0
     fail_count = 0
+    start_time = time.time()
     
     for i, permit in enumerate(permits_to_geocode, 1):
         permit_id = permit['id']
         address = permit['address']
+        bbl = permit.get('bbl')
+        
+        # Extract borough from BBL if available
+        borough = None
+        if bbl and len(str(bbl)) >= 1:
+            borough_map = {
+                '1': 'Manhattan',
+                '2': 'Bronx', 
+                '3': 'Brooklyn',
+                '4': 'Queens',
+                '5': 'Staten Island'
+            }
+            borough = borough_map.get(str(bbl)[0])
+        
+        # Progress indicator every 50 permits
+        if i % 50 == 0:
+            elapsed = time.time() - start_time
+            rate = i / elapsed if elapsed > 0 else 0
+            remaining = len(permits_to_geocode) - i
+            eta = remaining / rate if rate > 0 else 0
+            print(f"\n⏱️  Progress: {i}/{len(permits_to_geocode)} | {rate:.1f} permits/sec | ETA: {eta/60:.1f} min\n")
         
         print(f"[{i}/{len(permits_to_geocode)}] Permit #{permit_id}: {address}")
+        if borough:
+            print(f"  🏙️  Borough: {borough} (from BBL)")
         
-        # Try NYC Geoclient first (if configured)
+        # Try NYC Geoclient first (if configured and we have BBL)
         lat, lon = None, None
         
-        if USE_GEOCLIENT:
-            house_number, street_name, borough = parse_nyc_address(address)
-            
-            if house_number and street_name:
-                print(f"  📍 Using NYC Geoclient: {house_number} {street_name}")
-                lat, lon = geocode_with_nyc_geoclient(house_number, street_name, borough)
+        if USE_GEOCLIENT and borough:
+            print(f"  📍 NYC Geoclient V2: {address}")
+            lat, lon = geocode_with_nyc_geoclient(address, borough)
         
-        # Fallback to Nominatim if NYC Geoclient didn't work
+        # Fallback to Nominatim if NYC Geoclient didn't work or no BBL
+        if lat is None or lon is None:
+            if borough:
+                print(f"  🌐 Trying OpenStreetMap Nominatim...")
+            else:
+                print(f"  ⚠️  No BBL/borough - using OpenStreetMap Nominatim...")
+            lat, lon = geocode_with_nominatim(address)
         if lat is None or lon is None:
             print(f"  🌐 Trying OpenStreetMap Nominatim...")
             lat, lon = geocode_with_nominatim(address)
