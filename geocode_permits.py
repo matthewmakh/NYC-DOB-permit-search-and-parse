@@ -351,6 +351,7 @@ def geocode_permits():
     
     # Fetch permits without coordinates (limited by batch size)
     # Prioritize permits with BBL (can use NYC Geoclient V2)
+    # Skip permits that have already failed geocoding
     print(f"🔍 Fetching {min(BATCH_SIZE, without_coords)} permits to geocode...\n")
     
     cur.execute("""
@@ -359,6 +360,7 @@ def geocode_permits():
         WHERE (latitude IS NULL OR longitude IS NULL)
             AND address IS NOT NULL 
             AND address != ''
+            AND (geocode_failed IS NULL OR geocode_failed = FALSE)
         ORDER BY 
             CASE WHEN bbl IS NOT NULL AND bbl != '' THEN 0 ELSE 1 END,
             id
@@ -437,6 +439,12 @@ def geocode_permits():
                 fail_count += 1
         else:
             print(f"  ❌ Could not geocode address")
+            # Mark as failed so we don't retry it
+            try:
+                cur.execute("UPDATE permits SET geocode_failed = TRUE WHERE id = %s", (permit_id,))
+                conn.commit()
+            except Exception as e:
+                print(f"  ⚠️  Could not mark as failed: {e}")
             fail_count += 1
         
         # Rate limiting
