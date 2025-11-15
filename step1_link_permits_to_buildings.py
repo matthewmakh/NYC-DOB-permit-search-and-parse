@@ -74,10 +74,9 @@ def derive_bbl_from_permit(block, lot, permit_no=None):
 def link_permits_to_buildings():
     """
     Main process:
-    1. Find all permits with block/lot but no BBL
-    2. Generate BBL for each
-    3. Create building record if doesn't exist
-    4. Update permit with BBL
+    1. Get ALL permits with BBL (existing or derivable)
+    2. Create building records for unique BBLs
+    3. Link permits to buildings via BBL
     """
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
@@ -85,59 +84,72 @@ def link_permits_to_buildings():
     print("Step 1: Linking Permits to Buildings")
     print("=" * 60)
     
-    # Get all permits with block/lot data
-    print("\n📊 Analyzing permits...")
+    # Phase 1: Derive BBL for permits with block/lot but no BBL
+    print("\n📊 Phase 1: Deriving BBLs from block/lot...")
     cur.execute("""
-        SELECT id, permit_no, address, block, lot, bin, bbl
+        SELECT id, permit_no, address, block, lot, bin
         FROM permits
-        WHERE block IS NOT NULL AND lot IS NOT NULL
+        WHERE block IS NOT NULL 
+        AND lot IS NOT NULL 
+        AND bbl IS NULL
     """)
     
-    permits = cur.fetchall()
-    print(f"   Found {len(permits)} permits with block/lot data")
+    permits_to_derive = cur.fetchall()
+    print(f"   Found {len(permits_to_derive)} permits needing BBL derivation")
     
-    # Process each permit
-    buildings_created = 0
-    permits_updated = 0
-    permits_skipped = 0
-    
-    for permit in permits:
-        # Skip if already has BBL
-        if permit['bbl']:
-            permits_skipped += 1
-            continue
-        
-        # Generate BBL with borough from permit number
+    derived_count = 0
+    for permit in permits_to_derive:
         bbl = derive_bbl_from_permit(permit['block'], permit['lot'], permit['permit_no'])
-        
-        if not bbl:
-            continue
-        
-        # Create building record if doesn't exist
-        cur.execute("SELECT id FROM buildings WHERE bbl = %s", (bbl,))
-        if not cur.fetchone():
+        if bbl:
+            cur.execute("UPDATE permits SET bbl = %s WHERE id = %s", (bbl, permit['id']))
+            derived_count += 1
+    
+    conn.commit()
+    print(f"   ✅ Derived {derived_count} BBLs from block/lot data")
+    
+    # Phase 2: Create building records from ALL unique BBLs
+    print("\n📊 Phase 2: Creating building records...")
+    cur.execute("""
+        SELECT DISTINCT ON (p.bbl)
+            p.bbl,
+            p.address,
+            p.block,
+            p.lot,
+            p.bin
+        FROM permits p
+        WHERE p.bbl IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM buildings b WHERE b.bbl = p.bbl
+        )
+        ORDER BY p.bbl, p.issue_date DESC NULLS LAST
+    """)
+    
+    buildings_to_create = cur.fetchall()
+    print(f"   Found {len(buildings_to_create)} new buildings to create")
+    
+    buildings_created = 0
+    for building in buildings_to_create:
+        try:
             cur.execute("""
                 INSERT INTO buildings (bbl, address, block, lot, bin)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (bbl) DO NOTHING
-            """, (bbl, permit['address'], permit['block'], permit['lot'], permit['bin']))
+            """, (building['bbl'], building['address'], building['block'], 
+                  building['lot'], building['bin']))
             buildings_created += 1
-        
-        # Update permit with BBL
-        cur.execute("UPDATE permits SET bbl = %s WHERE id = %s", (bbl, permit['id']))
-        permits_updated += 1
-        
-        # Commit every 100 permits
-        if permits_updated % 100 == 0:
-            conn.commit()
-            print(f"   Processed {permits_updated} permits...")
+            
+            if buildings_created % 100 == 0:
+                conn.commit()
+                print(f"   Created {buildings_created}/{len(buildings_to_create)} buildings...")
+        except Exception as e:
+            print(f"   ⚠️ Error creating building {building['bbl']}: {e}")
+            continue
     
     conn.commit()
     
     print(f"\n✅ Complete!")
     print(f"   Buildings created: {buildings_created}")
-    print(f"   Permits updated: {permits_updated}")
-    print(f"   Permits skipped (already had BBL): {permits_skipped}")
+    print(f"   BBLs derived: {derived_count}")
     
     # Show summary stats
     cur.execute("SELECT COUNT(DISTINCT bbl) FROM buildings WHERE bbl IS NOT NULL")
