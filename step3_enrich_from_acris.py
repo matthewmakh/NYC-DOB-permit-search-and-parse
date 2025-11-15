@@ -44,13 +44,24 @@ def get_acris_transactions_for_bbl(bbl):
     Returns most recent deed and mortgage
     """
     try:
-        # ACRIS data - try simple query first
+        # ACRIS uses separate borough, block, lot fields (not combined BBL)
+        # BBL format: B-BBBBB-LLLL (1-5 digits, 5 digits, 4 digits)
+        if not bbl or len(bbl) != 10:
+            print(f"      Invalid BBL format: {bbl}")
+            return None
+        
+        borough = bbl[0]  # First digit
+        block = str(int(bbl[1:6]))  # Remove leading zeros from block
+        lot = str(int(bbl[6:10]))   # Remove leading zeros from lot
+        
         params = {
-            "bbl": bbl,
+            "borough": borough,
+            "block": block,
+            "lot": lot,
             "$limit": 50
         }
         
-        print(f"      Querying ACRIS legals...")
+        print(f"      Querying ACRIS legals (Boro:{borough}, Block:{block}, Lot:{lot})...")
         response = requests.get(ACRIS_REAL_PROPERTY_LEGALS, params=params, timeout=15)
         
         if response.status_code != 200:

@@ -1,24 +1,36 @@
-# Building Enrichment Cron Setup - Railway
+# 🚀 Master Enrichment Pipeline - Railway Setup
 
-## Overview
+## ⚠️ DEPRECATED: Use Master Pipeline Instead
+
+**This document is OUTDATED.** The old approach of running `step2_enrich_from_pluto.py` separately has been replaced.
+
+**✅ NEW APPROACH:** Use `run_enrichment_pipeline.py` - See `ENRICHMENT_PIPELINE_GUIDE.md`
+
+The master pipeline runs all enrichment steps (step1, step2, step3, geocode) in one reliable, sequential execution.
+
+---
+
+## Legacy Documentation (For Reference Only)
+
+### Old Overview
 The `step2_enrich_from_pluto.py` script enriches building data from two NYC open data sources:
 - **PLUTO (MapPLUTO)**: Corporate ownership, building characteristics, year altered
 - **RPAD (Property Tax)**: Current taxpayer, assessed values
 
-## Railway Setup
+### Old Railway Setup (DO NOT USE)
 
-### 1. Create New Service
+#### 1. Create New Service
 1. In Railway dashboard, create a new service in your project
 2. Name it: `Building-Enrichment-CRON` or `Step2-PLUTO-RPAD-CRON`
 
-### 2. Configure Service Settings
+#### 2. Configure Service Settings
 - **Config File Path**: `railway.step2.json`
 - **Environment Variables**:
   - `DATABASE_URL`: (should already be available from Railway PostgreSQL)
   - `BUILDING_BATCH_SIZE`: `500` (processes 500 buildings per run)
   - `API_DELAY`: `0.1` (100ms delay between API calls for rate limiting)
 
-### 3. Set Cron Schedule (Railway UI)
+#### 3. Set Cron Schedule (Railway UI)
 - Go to service settings → Cron Schedule
 - Recommended: `0 4 * * *` (daily at 4 AM)
 - Alternative: `0 4 * * 0` (weekly on Sunday at 4 AM)

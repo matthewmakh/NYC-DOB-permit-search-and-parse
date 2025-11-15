@@ -2,12 +2,22 @@
 
 Automatically adds latitude/longitude coordinates to permits that don't have them.
 
+## ⚠️ NOTE: Included in Master Pipeline
+
+**Geocoding is now part of `run_enrichment_pipeline.py` (Step 4).**
+
+You can still run geocoding separately using this service, or let the master pipeline handle it automatically.
+
+See: `ENRICHMENT_PIPELINE_GUIDE.md` for the integrated approach.
+
+---
+
 ## Features
 
 - ✅ **Dual API Support**: NYC Geoclient API (primary) + OpenStreetMap Nominatim (fallback)
 - ✅ **Smart Address Parsing**: Extracts house number, street, and borough
 - ✅ **Rate Limiting**: Configurable delays between API calls
-- ✅ **Batch Processing**: Process 100 permits per run (configurable)
+- ✅ **Batch Processing**: Process 10 permits per run (configurable with GEOCODE_BATCH_SIZE)
 - ✅ **Progress Tracking**: Detailed logging of success/failure
 - ✅ **Railway Cron Ready**: Designed for scheduled execution
 
@@ -74,30 +84,33 @@ GEOCODE_BATCH_SIZE = 500
 GEOCODE_DELAY = 0.01
 ```
 
-#### 📋 FINAL DEPLOYMENT STEPS
+#### 📋 DEPLOYMENT STATUS
 
-1. **Set Config File Path in Railway:**
-   - Go to Railway → Geocode-Properties-CRON service
-   - Click **Settings** tab
-   - Scroll to **Config File Path**
-   - Enter: `railway.geocode.json`
-   - Save (auto-saves)
+**✅ DEPLOYED** as separate service: `Geocode-Properties-CRON`
 
-2. **Verify Deployment:**
-   - Go to **Deployments** tab
-   - Watch for automatic redeploy (triggered by config file change)
-   - Click on the deployment → **View Logs**
+**Note:** This separate geocoding service can coexist with the master pipeline. If both run:
+- They won't conflict (each skips already-geocoded permits)
+- Master pipeline is more efficient (runs all steps together)
+- You can keep this for standalone geocoding runs or disable it
+
+**Recommendation:** 
+- Keep this service if you want geocoding to run independently
+- OR disable it and let `run_enrichment_pipeline.py` handle geocoding as Step 4
+
+1. **Current Config File Path:** `railway.geocode.json`
+
+2. **Current Schedule:** `0 3 * * 0` (Every Sunday at 3 AM UTC)
+
+3. **Monitor Execution:**
+   - Go to Railway → Geocode-Properties-CRON → Deployments
+   - Click on deployment → View Logs
    - Look for:
      ```
      ✅ NYC Geoclient API configured
      🗺️  PERMIT GEOCODING SERVICE
      Connected to database
+     📊 Success rate: ~100%
      ```
-
-3. **Monitor Execution:**
-   - First run: Next Sunday at 3:00 AM UTC
-   - Or manually trigger: Deployments → three dots menu → Restart
-   - Check logs for success rate (should be ~85%)
 
 #### 🔄 To Change Schedule
 
