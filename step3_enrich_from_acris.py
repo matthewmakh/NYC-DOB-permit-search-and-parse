@@ -248,7 +248,8 @@ def enrich_buildings_from_acris():
         for r in results:
             print(f"   {r['bbl']}: {r['current_owner_name']}")
             print(f"      {r['address']}")
-            print(f"      Purchased: {r['purchase_date']} for ${r['purchase_price']:,.0f}")
+            price_str = f"${r['purchase_price']:,.0f}" if r['purchase_price'] else "Unknown"
+            print(f"      Purchased: {r['purchase_date']} for {price_str}")
             if r['mortgage_amount']:
                 print(f"      Mortgage: ${r['mortgage_amount']:,.0f}")
     
