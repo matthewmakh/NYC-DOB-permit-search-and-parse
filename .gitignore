@@ -35,3 +35,16 @@ Thumbs.db
 
 # Debug files
 dob_debug_dump.html
+
+# Test files
+test_*.py
+test2.py
+
+# Data files
+*.csv
+phone_type_results.csv
+postgres_data.sql
+postgres_schema.sql
+
+# Proxy auth
+proxy_auth_plugin.zip

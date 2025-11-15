@@ -70,19 +70,33 @@ def index():
 
 @app.route('/api/permits')
 def get_permits():
-    """Get all permits with calculated scores and contact info"""
+    """Get all permits with calculated scores, contact info, and building intelligence"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Query with contact information aggregated
+        # Query with contact information and building intelligence
         query = """
             SELECT 
                 p.*,
                 COALESCE(contact_info.contact_count, 0) as contact_count,
                 COALESCE(contact_info.has_mobile, false) as has_mobile,
                 contact_info.contact_names,
-                contact_info.contact_phones
+                contact_info.contact_phones,
+                b.id as building_id,
+                b.current_owner_name,
+                b.owner_mailing_address,
+                b.building_class,
+                b.land_use,
+                b.residential_units,
+                b.total_units,
+                b.num_floors,
+                b.building_sqft,
+                b.lot_sqft,
+                b.year_built,
+                b.purchase_date,
+                b.purchase_price,
+                b.mortgage_amount
             FROM permits p
             LEFT JOIN (
                 SELECT 
@@ -95,6 +109,7 @@ def get_permits():
                 WHERE name IS NOT NULL AND name != ''
                 GROUP BY permit_id
             ) contact_info ON p.id = contact_info.permit_id
+            LEFT JOIN buildings b ON p.bbl = b.bbl
             ORDER BY p.issue_date DESC;
         """
         
@@ -124,7 +139,7 @@ def get_permits():
 
 @app.route('/api/stats')
 def get_stats():
-    """Get dashboard statistics"""
+    """Get dashboard statistics including building intelligence"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -141,15 +156,35 @@ def get_stats():
         cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile = TRUE;")
         mobile_contacts = cur.fetchone()['total']
         
+        # Building intelligence stats
+        cur.execute("SELECT COUNT(*) as total FROM buildings;")
+        total_buildings = cur.fetchone()['total']
+        
+        cur.execute("SELECT COUNT(*) as total FROM buildings WHERE current_owner_name IS NOT NULL;")
+        buildings_with_owners = cur.fetchone()['total']
+        
+        cur.execute("SELECT COUNT(*) as total FROM buildings WHERE purchase_date IS NOT NULL;")
+        buildings_with_acris = cur.fetchone()['total']
+        
+        cur.execute("SELECT COUNT(*) as total FROM permits WHERE bbl IS NOT NULL;")
+        permits_with_bbl = cur.fetchone()['total']
+        
         cur.close()
         conn.close()
+        
+        enrichment_rate = (buildings_with_owners / total_buildings * 100) if total_buildings > 0 else 0
         
         return jsonify({
             'success': True,
             'stats': {
                 'total_permits': total_permits,
                 'total_contacts': total_contacts,
-                'mobile_contacts': mobile_contacts
+                'mobile_contacts': mobile_contacts,
+                'total_buildings': total_buildings,
+                'buildings_with_owners': buildings_with_owners,
+                'buildings_with_acris': buildings_with_acris,
+                'permits_with_bbl': permits_with_bbl,
+                'enrichment_rate': round(enrichment_rate, 1)
             }
         })
         
@@ -465,17 +500,34 @@ def health_check():
 
 @app.route('/permit/<int:permit_id>')
 def permit_detail(permit_id):
-    """Serve detailed permit view page"""
+    """Serve detailed permit view page with comprehensive building information"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Get permit with all details
+        # Get permit with all details including building info
         query = """
             SELECT 
                 p.*,
                 COALESCE(contact_info.contact_count, 0) as contact_count,
-                COALESCE(contact_info.has_mobile, false) as has_mobile
+                COALESCE(contact_info.has_mobile, false) as has_mobile,
+                b.id as building_id,
+                b.bbl,
+                b.address as building_address,
+                b.current_owner_name,
+                b.owner_mailing_address,
+                b.building_class,
+                b.land_use,
+                b.residential_units,
+                b.total_units,
+                b.num_floors,
+                b.building_sqft,
+                b.lot_sqft,
+                b.year_built,
+                b.purchase_date,
+                b.purchase_price,
+                b.mortgage_amount,
+                b.bin
             FROM permits p
             LEFT JOIN (
                 SELECT 
@@ -486,6 +538,7 @@ def permit_detail(permit_id):
                 WHERE name IS NOT NULL AND name != ''
                 GROUP BY permit_id
             ) contact_info ON p.id = contact_info.permit_id
+            LEFT JOIN buildings b ON p.bbl = b.bbl
             WHERE p.id = %s;
         """
         
@@ -506,17 +559,278 @@ def permit_detail(permit_id):
         """, (permit_id,))
         contacts = cur.fetchall()
         
+        # Get all permits for the same building (if BBL exists)
+        related_permits = []
+        if permit['bbl']:
+            cur.execute("""
+                SELECT 
+                    p.id,
+                    p.permit_no,
+                    p.job_type,
+                    p.issue_date,
+                    p.address,
+                    COUNT(c.id) as contact_count
+                FROM permits p
+                LEFT JOIN contacts c ON p.id = c.permit_id
+                WHERE p.bbl = %s AND p.id != %s
+                GROUP BY p.id
+                ORDER BY p.issue_date DESC
+                LIMIT 20;
+            """, (permit['bbl'], permit_id))
+            related_permits = cur.fetchall()
+        
         # Calculate lead score
         permit['lead_score'] = calculate_lead_score(permit)
         
         cur.close()
         conn.close()
         
-        return render_template('permit_detail.html', permit=permit, contacts=contacts)
+        return render_template('permit_detail.html', 
+                             permit=permit, 
+                             contacts=contacts,
+                             related_permits=related_permits)
         
     except Exception as e:
         print(f"Error fetching permit detail: {e}")
         return f"Error loading permit: {str(e)}", 500
+
+
+@app.route('/api/buildings')
+def get_buildings():
+    """Get all buildings with owner and enrichment data"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        query = """
+            SELECT 
+                b.*,
+                COUNT(DISTINCT p.id) as linked_permits,
+                STRING_AGG(DISTINCT p.permit_no, ', ' ORDER BY p.permit_no) as permit_numbers
+            FROM buildings b
+            LEFT JOIN permits p ON b.bbl = p.bbl
+            GROUP BY b.id
+            ORDER BY b.id DESC;
+        """
+        
+        cur.execute(query)
+        buildings = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'buildings': buildings,
+            'count': len(buildings)
+        })
+        
+    except Exception as e:
+        print(f"Error fetching buildings: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/buildings/<int:building_id>')
+def get_building_detail(building_id):
+    """Get detailed building information including all permits and contacts"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get building info
+        cur.execute("SELECT * FROM buildings WHERE id = %s;", (building_id,))
+        building = cur.fetchone()
+        
+        if not building:
+            return jsonify({
+                'success': False,
+                'error': 'Building not found'
+            }), 404
+        
+        # Get all permits for this building
+        cur.execute("""
+            SELECT p.*, 
+                   COUNT(c.id) as contact_count
+            FROM permits p
+            LEFT JOIN contacts c ON p.id = c.permit_id
+            WHERE p.bbl = %s
+            GROUP BY p.id
+            ORDER BY p.issue_date DESC;
+        """, (building['bbl'],))
+        permits = cur.fetchall()
+        
+        # Get all contacts from all permits
+        cur.execute("""
+            SELECT DISTINCT c.*
+            FROM contacts c
+            INNER JOIN permits p ON c.permit_id = p.id
+            WHERE p.bbl = %s
+            ORDER BY c.name;
+        """, (building['bbl'],))
+        contacts = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'building': building,
+            'permits': permits,
+            'contacts': contacts
+        })
+        
+    except Exception as e:
+        print(f"Error fetching building detail: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/charts/owners')
+def get_top_owners():
+    """Get top property owners by permit activity"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                b.current_owner_name,
+                COUNT(DISTINCT p.id) as permit_count,
+                COUNT(DISTINCT b.id) as building_count,
+                SUM(COALESCE(b.total_permit_spend, 0)) as total_spend
+            FROM buildings b
+            INNER JOIN permits p ON b.bbl = p.bbl
+            WHERE b.current_owner_name IS NOT NULL
+            GROUP BY b.current_owner_name
+            HAVING COUNT(DISTINCT p.id) > 0
+            ORDER BY permit_count DESC
+            LIMIT 15;
+        """)
+        
+        data = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'labels': [row['current_owner_name'] for row in data],
+            'permit_counts': [row['permit_count'] for row in data],
+            'building_counts': [row['building_count'] for row in data],
+            'total_spends': [float(row['total_spend']) if row['total_spend'] else 0 for row in data]
+        })
+        
+    except Exception as e:
+        print(f"Error fetching top owners: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/charts/building-ages')
+def get_building_age_distribution():
+    """Get distribution of building ages"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                CASE 
+                    WHEN year_built >= 2020 THEN '2020+'
+                    WHEN year_built >= 2010 THEN '2010-2019'
+                    WHEN year_built >= 2000 THEN '2000-2009'
+                    WHEN year_built >= 1990 THEN '1990-1999'
+                    WHEN year_built >= 1980 THEN '1980-1989'
+                    WHEN year_built >= 1970 THEN '1970-1979'
+                    WHEN year_built >= 1960 THEN '1960-1969'
+                    WHEN year_built >= 1950 THEN '1950-1959'
+                    WHEN year_built >= 1940 THEN '1940-1949'
+                    ELSE 'Pre-1940'
+                END as age_range,
+                COUNT(*) as count
+            FROM buildings
+            WHERE year_built IS NOT NULL
+            GROUP BY age_range
+            ORDER BY age_range DESC;
+        """)
+        
+        data = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'labels': [row['age_range'] for row in data],
+            'data': [row['count'] for row in data]
+        })
+        
+    except Exception as e:
+        print(f"Error fetching building ages: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/charts/unit-distribution')
+def get_unit_distribution():
+    """Get distribution of building sizes by unit count"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                CASE 
+                    WHEN residential_units = 1 THEN 'Single Family'
+                    WHEN residential_units BETWEEN 2 AND 4 THEN '2-4 Units'
+                    WHEN residential_units BETWEEN 5 AND 9 THEN '5-9 Units'
+                    WHEN residential_units BETWEEN 10 AND 19 THEN '10-19 Units'
+                    WHEN residential_units BETWEEN 20 AND 49 THEN '20-49 Units'
+                    WHEN residential_units >= 50 THEN '50+ Units'
+                    ELSE 'Unknown'
+                END as size_category,
+                COUNT(*) as count
+            FROM buildings
+            WHERE residential_units IS NOT NULL
+            GROUP BY size_category
+            ORDER BY 
+                CASE size_category
+                    WHEN 'Single Family' THEN 1
+                    WHEN '2-4 Units' THEN 2
+                    WHEN '5-9 Units' THEN 3
+                    WHEN '10-19 Units' THEN 4
+                    WHEN '20-49 Units' THEN 5
+                    WHEN '50+ Units' THEN 6
+                    ELSE 7
+                END;
+        """)
+        
+        data = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'labels': [row['size_category'] for row in data],
+            'data': [row['count'] for row in data]
+        })
+        
+    except Exception as e:
+        print(f"Error fetching unit distribution: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/permit/<int:permit_id>')

@@ -4,6 +4,8 @@ const state = {
     resultsPerPage: 100,
     permits: [],
     filteredPermits: [],
+    buildings: [],
+    stats: {},
     filters: {
         dateFilter: 'all',
         dateFrom: null,
@@ -13,7 +15,7 @@ const state = {
         mobileOnly: false,
         minContacts: 0,
         minScore: 0,
-        permitStatus: ['Active'],
+        permitStatus: ['Active', 'Expired', 'Expiring Soon'],
         permitType: 'all',
         unitsRange: 500,
         storiesRange: 100,
@@ -405,14 +407,44 @@ function createSmartInsights(permit) {
     const quality = getLeadQuality(permit.lead_score);
     const status = getPermitStatus(permit.exp_date);
     
-    // Project Value
-    insights.push(`
-        <div class="insight-item">
-            <strong>💰 Estimated Project Value</strong>
-            <p>$${estimatedValue.toLocaleString()}</p>
-            <small>Based on job type (${permit.job_type}), ${permit.total_units || 0} units, and ${permit.stories || 0} stories</small>
-        </div>
-    `);
+    // Building Intelligence - Show if available
+    if (permit.current_owner_name || permit.year_built || permit.residential_units) {
+        insights.push(`
+            <div class="insight-item" style="border-left-color: var(--primary-color); background: var(--primary-light);">
+                <strong>🏢 Building Intelligence</strong>
+                ${permit.current_owner_name ? `<p><strong>Owner:</strong> ${permit.current_owner_name}</p>` : ''}
+                <div class="building-metrics-inline">
+                    ${permit.year_built ? `<div class="building-metric-chip"><span class="icon">📅</span><span class="value">${permit.year_built}</span></div>` : ''}
+                    ${permit.residential_units ? `<div class="building-metric-chip"><span class="icon">🏠</span><span class="value">${permit.residential_units} units</span></div>` : ''}
+                    ${permit.num_floors ? `<div class="building-metric-chip"><span class="icon">📏</span><span class="value">${permit.num_floors} floors</span></div>` : ''}
+                    ${permit.building_sqft ? `<div class="building-metric-chip"><span class="icon">📐</span><span class="value">${parseInt(permit.building_sqft).toLocaleString()} ft²</span></div>` : ''}
+                </div>
+                ${permit.building_class ? `<small>Building Class: ${permit.building_class}</small>` : ''}
+            </div>
+        `);
+    }
+    
+    // Property Value Insight
+    if (permit.purchase_price || estimatedValue) {
+        const purchasePrice = permit.purchase_price ? parseFloat(permit.purchase_price) : null;
+        insights.push(`
+            <div class="insight-item">
+                <strong>💰 Property Value</strong>
+                ${purchasePrice ? `<p>Last Sale: $${purchasePrice.toLocaleString()}</p>` : ''}
+                ${permit.purchase_date ? `<small>Purchased: ${new Date(permit.purchase_date).toLocaleDateString()}</small><br>` : ''}
+                <p>Est. Project Value: $${estimatedValue.toLocaleString()}</p>
+                <small>Based on job type (${permit.job_type}), ${permit.total_units || 0} units, and ${permit.stories || 0} stories</small>
+            </div>
+        `);
+    } else {
+        insights.push(`
+            <div class="insight-item">
+                <strong>💰 Estimated Project Value</strong>
+                <p>$${estimatedValue.toLocaleString()}</p>
+                <small>Based on job type (${permit.job_type}), ${permit.total_units || 0} units, and ${permit.stories || 0} stories</small>
+            </div>
+        `);
+    }
     
     // Lead Priority
     insights.push(`
@@ -776,15 +808,19 @@ function switchTab(tabName) {
     
     const tabs = {
         'leads': 'leadsTab',
+        'buildings': 'buildingsTab',
         'visualizations': 'visualizationsTab',
         'map': 'mapTab'
     };
     
     document.getElementById(tabs[tabName]).classList.add('active');
     
-    // Load visualizations if needed
-    if (tabName === 'visualizations' && Object.keys(state.charts).length === 0) {
+    // Load data for specific tabs
+    if (tabName === 'buildings' && state.buildings.length === 0) {
+        loadBuildings();
+    } else if (tabName === 'visualizations' && Object.keys(state.charts).length === 0) {
         loadVisualizations();
+        loadBuildingCharts();
     }
 }
 
@@ -946,7 +982,7 @@ function clearFilters() {
     };
     
     // Reset UI
-    document.getElementById('dateFilter').value = 'quarter';
+    document.getElementById('dateFilter').value = 'all';
     document.getElementById('hasContacts').checked = true;
     document.getElementById('mobileOnly').checked = false;
     document.getElementById('minContacts').value = 0;
@@ -962,7 +998,7 @@ function clearFilters() {
     document.getElementById('contactSearch').value = '';
     
     document.querySelectorAll('input[name="permitStatus"]').forEach(cb => {
-        cb.checked = cb.value === 'Active';
+        cb.checked = true;
     });
     
     document.querySelectorAll('.smart-filter-btn').forEach(btn => {
@@ -994,3 +1030,412 @@ function updateLastUpdated() {
     const now = new Date();
     document.getElementById('lastUpdated').textContent = now.toLocaleString();
 }
+
+// ============================================================================
+// BUILDING INTELLIGENCE FUNCTIONS
+// ============================================================================
+
+// Load buildings data
+async function loadBuildings() {
+    try {
+        const response = await fetch(`${API_BASE}/buildings`);
+        const data = await response.json();
+        
+        if (data.success) {
+            state.buildings = data.buildings || [];
+            renderBuildings();
+        }
+    } catch (error) {
+        console.error('Error loading buildings:', error);
+    }
+}
+
+// Render buildings
+function renderBuildings() {
+    const container = document.getElementById('buildingsContainer');
+    if (!container) return;
+    
+    if (state.buildings.length === 0) {
+        container.innerHTML = '<div class="no-results">No building data available yet. Run building intelligence pipeline to populate this data.</div>';
+        return;
+    }
+    
+    container.innerHTML = state.buildings.map(building => `
+        <div class="building-card">
+            <div class="building-header">
+                <div class="building-title">
+                    <h3>${building.address || 'Address N/A'}</h3>
+                    <div class="building-bbl">BBL: ${building.bbl}</div>
+                </div>
+                <div class="enrichment-badges">
+                    ${building.current_owner_name ? '<span class="enrichment-badge pluto">✓ PLUTO</span>' : ''}
+                    ${building.purchase_date ? '<span class="enrichment-badge acris">✓ ACRIS</span>' : ''}
+                    ${building.linked_permits > 0 ? `<span class="enrichment-badge contacts">${building.linked_permits} Permits</span>` : ''}
+                </div>
+            </div>
+            
+            ${building.current_owner_name ? `
+                <div class="building-owner">
+                    <div class="owner-label">Property Owner</div>
+                    <div class="owner-name">${building.current_owner_name}</div>
+                </div>
+            ` : ''}
+            
+            <div class="building-metrics">
+                ${building.year_built ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Year Built</div>
+                        <div class="metric-value">${building.year_built}</div>
+                    </div>
+                ` : ''}
+                ${building.residential_units ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Units</div>
+                        <div class="metric-value highlight">${building.residential_units}</div>
+                    </div>
+                ` : ''}
+                ${building.num_floors ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Floors</div>
+                        <div class="metric-value">${building.num_floors}</div>
+                    </div>
+                ` : ''}
+                ${building.building_sqft ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Sq Ft</div>
+                        <div class="metric-value">${parseInt(building.building_sqft).toLocaleString()}</div>
+                    </div>
+                ` : ''}
+                ${building.building_class ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Building Class</div>
+                        <div class="metric-value">${building.building_class}</div>
+                    </div>
+                ` : ''}
+                ${building.purchase_price ? `
+                    <div class="metric-item">
+                        <div class="metric-label">Purchase Price</div>
+                        <div class="metric-value highlight">$${parseInt(building.purchase_price).toLocaleString()}</div>
+                    </div>
+                ` : ''}
+            </div>
+            
+            <div class="building-footer">
+                <div class="permit-count-badge">
+                    <i class="fas fa-file-alt"></i>
+                    <span class="count">${building.linked_permits || 0}</span> Linked Permits
+                </div>
+                <button class="view-building-btn" onclick="viewBuildingDetail(${building.id})">
+                    View Details <i class="fas fa-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+// View building detail
+async function viewBuildingDetail(buildingId) {
+    try {
+        const response = await fetch(`${API_BASE}/buildings/${buildingId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            showBuildingModal(data);
+        }
+    } catch (error) {
+        console.error('Error loading building detail:', error);
+    }
+}
+
+// Show building modal
+function showBuildingModal(data) {
+    const { building, permits, contacts } = data;
+    
+    const modalHTML = `
+        <div class="modal-overlay active" id="buildingModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>${building.address || 'Building Details'}</h2>
+                    <button class="modal-close" onclick="closeBuildingModal()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <!-- Owner Section -->
+                    ${building.current_owner_name ? `
+                        <div class="detail-section">
+                            <h3><i class="fas fa-user"></i> Owner Information</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <div class="detail-label">Owner Name</div>
+                                    <div class="detail-value">${building.current_owner_name}</div>
+                                </div>
+                                ${building.owner_mailing_address ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Mailing Address</div>
+                                        <div class="detail-value">${building.owner_mailing_address}</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- Property Details -->
+                    <div class="detail-section">
+                        <h3><i class="fas fa-building"></i> Property Details</h3>
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <div class="detail-label">BBL</div>
+                                <div class="detail-value">${building.bbl}</div>
+                            </div>
+                            ${building.year_built ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Year Built</div>
+                                    <div class="detail-value">${building.year_built}</div>
+                                </div>
+                            ` : ''}
+                            ${building.building_class ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Building Class</div>
+                                    <div class="detail-value">${building.building_class}</div>
+                                </div>
+                            ` : ''}
+                            ${building.residential_units ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Residential Units</div>
+                                    <div class="detail-value">${building.residential_units}</div>
+                                </div>
+                            ` : ''}
+                            ${building.total_units ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Total Units</div>
+                                    <div class="detail-value">${building.total_units}</div>
+                                </div>
+                            ` : ''}
+                            ${building.num_floors ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Number of Floors</div>
+                                    <div class="detail-value">${building.num_floors}</div>
+                                </div>
+                            ` : ''}
+                            ${building.building_sqft ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Building Sq Ft</div>
+                                    <div class="detail-value">${parseInt(building.building_sqft).toLocaleString()}</div>
+                                </div>
+                            ` : ''}
+                            ${building.lot_sqft ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">Lot Sq Ft</div>
+                                    <div class="detail-value">${parseInt(building.lot_sqft).toLocaleString()}</div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                    
+                    <!-- Financial Information -->
+                    ${building.purchase_date || building.purchase_price ? `
+                        <div class="detail-section">
+                            <h3><i class="fas fa-dollar-sign"></i> Financial Information</h3>
+                            <div class="detail-grid">
+                                ${building.purchase_date ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Purchase Date</div>
+                                        <div class="detail-value">${new Date(building.purchase_date).toLocaleDateString()}</div>
+                                    </div>
+                                ` : ''}
+                                ${building.purchase_price ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Purchase Price</div>
+                                        <div class="detail-value">$${parseInt(building.purchase_price).toLocaleString()}</div>
+                                    </div>
+                                ` : ''}
+                                ${building.mortgage_amount ? `
+                                    <div class="detail-item">
+                                        <div class="detail-label">Mortgage Amount</div>
+                                        <div class="detail-value">$${parseInt(building.mortgage_amount).toLocaleString()}</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- Permits -->
+                    ${permits && permits.length > 0 ? `
+                        <div class="detail-section">
+                            <h3><i class="fas fa-file-alt"></i> Linked Permits (${permits.length})</h3>
+                            <div class="contact-list">
+                                ${permits.map(permit => `
+                                    <div class="contact-item">
+                                        <div class="contact-info">
+                                            <div class="contact-name">${permit.permit_no}</div>
+                                            <div class="contact-phone">${permit.job_type || ''} - ${permit.issue_date ? new Date(permit.issue_date).toLocaleDateString() : 'N/A'}</div>
+                                        </div>
+                                        <span style="color: var(--text-muted);">${permit.contact_count || 0} contacts</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- Contacts -->
+                    ${contacts && contacts.length > 0 ? `
+                        <div class="detail-section">
+                            <h3><i class="fas fa-phone"></i> All Contacts (${contacts.length})</h3>
+                            <div class="contact-list">
+                                ${contacts.map(contact => `
+                                    <div class="contact-item">
+                                        <div class="contact-info">
+                                            <div class="contact-name">${contact.name || 'Unknown'}</div>
+                                            <div class="contact-phone">${contact.phone || 'No phone'}</div>
+                                        </div>
+                                        ${contact.is_mobile ? '<span class="enrichment-badge contacts">📱 Mobile</span>' : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existing = document.getElementById('buildingModal');
+    if (existing) existing.remove();
+    
+    // Add modal to body
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    // Close on overlay click
+    document.querySelector('.modal-overlay').addEventListener('click', (e) => {
+        if (e.target.classList.contains('modal-overlay')) {
+            closeBuildingModal();
+        }
+    });
+}
+
+function closeBuildingModal() {
+    const modal = document.getElementById('buildingModal');
+    if (modal) modal.remove();
+}
+
+// Update stats to include building intelligence
+async function updateStats() {
+    try {
+        const response = await fetch(`${API_BASE}/stats`);
+        const data = await response.json();
+        
+        if (data.success) {
+            state.stats = data.stats;
+            
+            // Update stat cards
+            document.getElementById('totalLeads').textContent = data.stats.total_permits.toLocaleString();
+            document.getElementById('totalContacts').textContent = data.stats.total_contacts.toLocaleString();
+            document.getElementById('mobileCount').textContent = data.stats.mobile_contacts.toLocaleString();
+            document.getElementById('totalBuildings').textContent = data.stats.total_buildings.toLocaleString();
+            document.getElementById('enrichmentRate').textContent = `${data.stats.enrichment_rate}%`;
+            
+            // Update building tab stats
+            if (document.getElementById('buildingsTotal')) {
+                document.getElementById('buildingsTotal').textContent = data.stats.total_buildings;
+                document.getElementById('buildingsWithOwners').textContent = data.stats.buildings_with_owners;
+                document.getElementById('buildingsWithAcris').textContent = data.stats.buildings_with_acris;
+                document.getElementById('permitsWithBbl').textContent = data.stats.permits_with_bbl;
+            }
+        }
+    } catch (error) {
+        console.error('Error updating stats:', error);
+    }
+}
+
+// Load building intelligence charts
+async function loadBuildingCharts() {
+    try {
+        // Top Owners Chart
+        const ownersResponse = await fetch(`${API_BASE}/charts/owners`);
+        const ownersData = await ownersResponse.json();
+        
+        if (ownersData.success && ownersData.labels.length > 0) {
+            createBuildingChart('ownersChart', 'bar', ownersData.labels, ownersData.permit_counts, 'Permit Count by Owner');
+        }
+        
+        // Building Age Distribution
+        const ageResponse = await fetch(`${API_BASE}/charts/building-ages`);
+        const ageData = await ageResponse.json();
+        
+        if (ageData.success && ageData.labels.length > 0) {
+            createBuildingChart('buildingAgeChart', 'doughnut', ageData.labels, ageData.data, 'Buildings by Age');
+        }
+        
+        // Unit Distribution
+        const unitResponse = await fetch(`${API_BASE}/charts/unit-distribution`);
+        const unitData = await unitResponse.json();
+        
+        if (unitData.success && unitData.labels.length > 0) {
+            createBuildingChart('unitDistChart', 'pie', unitData.labels, unitData.data, 'Buildings by Size');
+        }
+    } catch (error) {
+        console.error('Error loading building charts:', error);
+    }
+}
+
+function createBuildingChart(canvasId, type, labels, data, title) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    
+    if (state.charts[canvasId]) {
+        state.charts[canvasId].destroy();
+    }
+    
+    const colors = [
+        '#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe',
+        '#00f2fe', '#43e97b', '#38f9d7', '#fa709a', '#fee140'
+    ];
+    
+    state.charts[canvasId] = new Chart(ctx, {
+        type: type,
+        data: {
+            labels: labels,
+            datasets: [{
+                label: title,
+                data: data,
+                backgroundColor: colors,
+                borderColor: type === 'bar' ? colors : 'rgba(255, 255, 255, 0.1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    labels: { 
+                        color: '#ffffff',
+                        font: { size: 12 }
+                    },
+                    display: type !== 'bar'
+                },
+                title: {
+                    display: false
+                }
+            },
+            scales: type === 'bar' ? {
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#ffffff' },
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                },
+                x: {
+                    ticks: { 
+                        color: '#ffffff',
+                        maxRotation: 45,
+                        minRotation: 45
+                    },
+                    grid: { display: false }
+                }
+            } : {}
+        }
+    });
+}
+

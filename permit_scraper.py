@@ -12,13 +12,22 @@ from bs4 import BeautifulSoup
 import mysql.connector
 import psycopg2
 import psycopg2.extras
-import undetected_chromedriver as uc
+from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire for proxy auth
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 
 # Database configuration
 DB_TYPE = os.getenv('DB_TYPE', 'postgresql')  # Default to PostgreSQL (Railway)
+
+# Proxy configuration - pick one proxy per session
+PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009]
+PROXY_PORT = random.choice(PROXY_PORTS)
+PROXY_HOST = os.getenv('PROXY_HOST', 'gate.decodo.com')
+PROXY_USER = os.getenv('PROXY_USER', 'spckyt8xpj')
+PROXY_PASS = os.getenv('PROXY_PASS', 'r~P6RwgDe6hjh6jb6W')
+
+print(f"🔀 Permit scraper using proxy port: {PROXY_PORT}")
 
 
 def find_chromedriver():
@@ -89,6 +98,17 @@ def create_driver(chrome_path, chromedriver_path, chrome_version):
         kwargs['driver_executable_path'] = chromedriver_path
     if chrome_path:
         kwargs['browser_executable_path'] = chrome_path
+    
+    # ✅ IMPORTANT: Configure proxy via seleniumwire_options (not --proxy-server)
+    proxy_string = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    kwargs['seleniumwire_options'] = {
+        'proxy': {
+            'http': proxy_string,
+            'https': proxy_string,
+            'no_proxy': 'localhost,127.0.0.1'
+        }
+    }
+    print(f"🔄 Using Proxy (via seleniumwire): {PROXY_HOST}:{PROXY_PORT}")
     
     driver = uc.Chrome(**kwargs)
     
@@ -161,10 +181,7 @@ def get_or_create_job(cursor, conn, config):
     
     result = cursor.fetchone()
     if result:
-        if DB_TYPE == 'postgresql':
-            job_id = result['id'] if isinstance(result, dict) else result[0]
-        else:
-            job_id = result[0]
+        job_id = result['id'] if isinstance(result, dict) else result[0]
         print(f"Using existing job ID: {job_id}")
         return job_id
     
@@ -176,10 +193,12 @@ def get_or_create_job(cursor, conn, config):
     
     if DB_TYPE == 'postgresql':
         cursor.execute("SELECT lastval()")
+        result = cursor.fetchone()
+        job_id = result['lastval'] if isinstance(result, dict) else result[0]
     else:
         cursor.execute("SELECT LAST_INSERT_ID()")
+        job_id = cursor.fetchone()[0]
     
-    job_id = cursor.fetchone()[0]
     print(f"Created new job ID: {job_id}")
     return job_id
 
@@ -324,7 +343,8 @@ def run_scraper():
         
         # Update job with total count
         cursor.execute("SELECT COUNT(*) FROM permits WHERE job_id = %s", (job_id,))
-        total_permits = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        total_permits = result['count'] if isinstance(result, dict) else result[0]
         cursor.execute("UPDATE contact_scrape_jobs SET total_permits = %s WHERE id = %s", (total_permits, job_id))
         conn.commit()
         

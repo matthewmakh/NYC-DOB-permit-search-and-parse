@@ -20,9 +20,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 
-#from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrapper
-import undetected_chromedriver as uc  # ✅ Correct import
+from seleniumwire import undetected_chromedriver as uc  # Use selenium-wire wrapper for proxy auth
+#import undetected_chromedriver as uc  # ✅ Standard import (no proxy auth support)
 
+# Remote scraper fallback for rate limits
 from remote_add_permit_contacts import remote_scraper
 
 # Database configuration
@@ -123,13 +124,16 @@ os.environ['UC_KEEP_USER_DATA_DIR'] = '1'
 
 # -------------------- CONFIG --------------------
 
-USE_PROXY = False
+USE_PROXY = False  # Set to True when ready to use proxies
 DECODE_PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009]
-proxy_index = 0
 
-PROXY_HOST = os.getenv('PROXY_HOST')
-PROXY_USER = os.getenv('PROXY_USER')
-PROXY_PASS = os.getenv('PROXY_PASS')
+# Pick one random proxy at start of session and use it for entire run
+PROXY_PORT = random.choice(DECODE_PROXY_PORTS)
+print(f"🔀 Selected proxy port for this session: {PROXY_PORT}")
+
+PROXY_HOST = os.getenv('PROXY_HOST', 'gate.decodo.com')
+PROXY_USER = os.getenv('PROXY_USER', 'spckyt8xpj')
+PROXY_PASS = os.getenv('PROXY_PASS', 'r~P6RwgDe6hjh6jb6W')
 
 USER_AGENT = UserAgent().chrome
 
@@ -177,7 +181,7 @@ else:
 print(f'latest config: {config}')
 
 rate_limit_count = 0
-MAX_RATE_LIMITS = 1  # You can adjust this
+MAX_RATE_LIMITS = 3  # Switch to remote scraper after 3 rate limit hits
 
 # Use the contact_search_limit from the database config
 MAX_SUCCESSFUL_LINKS = contact_search_limit
@@ -202,11 +206,9 @@ def fix_date_format(date_str):
 # -------------------- PROXY HEALTH TEST --------------------
 
 def test_proxy_health():
-    global proxy_index
-    proxy_port = DECODE_PROXY_PORTS[proxy_index % len(DECODE_PROXY_PORTS)]
     proxies = {
-        "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}",
-        "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
+        "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+        "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
     }
 
     print("🧪 Testing proxy health...")
@@ -233,10 +235,6 @@ def test_proxy_health():
 # -------------------- SELENIUM DRIVER --------------------
 
 def create_driver():
-    global proxy_index
-    proxy_port = random.choice(DECODE_PROXY_PORTS)
-    proxy_index += 1
-
     # --- Setup Chrome Options ---
     options = uc.ChromeOptions()
     
@@ -265,12 +263,10 @@ def create_driver():
     # ✅ Optional - Keep if using a Chrome profile (only works non-headless usually)
     options.add_argument("--profile-directory=Default")
 
-    # ✅ Configure Proxy (only if USE_PROXY is True)
+    # ✅ Configure Proxy (using the port selected at session start)
     if USE_PROXY:
-        proxy_auth = f"{PROXY_USER}:{PROXY_PASS}"
-        proxy_string = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{proxy_port}"
-        options.add_argument(f'--proxy-server=http://{PROXY_HOST}:{proxy_port}')
-        print(f"🔄 Using Secure Auth Proxy: {PROXY_HOST}:{proxy_port}")
+        proxy_string = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+        print(f"🔄 Using Proxy: {PROXY_HOST}:{PROXY_PORT}")
     else:
         print("🌐 Running without proxy (direct connection)")
         proxy_string = None
@@ -289,6 +285,16 @@ def create_driver():
     # Only set browser_executable_path if we found it
     if CHROME_BINARY_PATH:
         driver_kwargs['browser_executable_path'] = CHROME_BINARY_PATH
+    
+    # ✅ IMPORTANT: seleniumwire_options for proxy authentication
+    if USE_PROXY and proxy_string:
+        driver_kwargs['seleniumwire_options'] = {
+            'proxy': {
+                'http': proxy_string,
+                'https': proxy_string,
+                'no_proxy': 'localhost,127.0.0.1'
+            }
+        }
     
     driver = uc.Chrome(**driver_kwargs)
 
@@ -366,21 +372,33 @@ def extract_names_and_phones(driver):
                 return None
         
         def extract_bbl_info():
-            """Extract Block and Lot from the page (Field 1)"""
+            """Extract Block and Lot from table[2] (Field 1)"""
             try:
-                # BBL info is typically: "BIN: 3428710    Block: 5008    Lot: 65"
-                bbl_elem = driver.find_element(By.XPATH, "//td[contains(text(), 'Block:')]")
-                bbl_text = bbl_elem.text
+                # BBL info is in table[2]: "BIN: 3428710    Block: 5008    Lot: 65"
+                table2 = driver.find_element(By.XPATH, "/html/body/center/table[2]")
+                table2_text = table2.text
                 
                 import re
-                block_match = re.search(r'Block:\s*(\d+)', bbl_text)
-                lot_match = re.search(r'Lot:\s*(\d+)', bbl_text)
+                block_match = re.search(r'Block:\s*(\d+)', table2_text)
+                lot_match = re.search(r'Lot:\s*(\d+)', table2_text)
+                
+                block = block_match.group(1) if block_match else None
+                lot = lot_match.group(1) if lot_match else None
+                
+                if not block or not lot:
+                    print(f"⚠️ BBL extraction incomplete - Block: {block}, Lot: {lot}")
+                    print(f"   Table content: {table2_text[:200]}")
                 
                 return {
-                    'block': block_match.group(1) if block_match else None,
-                    'lot': lot_match.group(1) if lot_match else None
+                    'block': block,
+                    'lot': lot
                 }
-            except:
+            except Exception as e:
+                print(f"❌ BBL extraction failed: {e}")
+                try:
+                    print(f"   Page source available: {len(driver.page_source)} bytes")
+                except:
+                    pass
                 return {'block': None, 'lot': None}
         
         def extract_permit_details():
@@ -526,7 +544,7 @@ def process_permit_page(driver):
             print(f"❌ Skipping untracked permit: {permit_no}")
             continue
 
-        permit_id = result[0]
+        permit_id = result['id'] if isinstance(result, dict) else result[0]
         cursor.execute("SELECT 1 FROM contacts WHERE permit_id = %s AND is_checked = TRUE LIMIT 1", (permit_id,))
         if cursor.fetchone():
             print(f"✅ Already checked: {permit_no}")
@@ -705,7 +723,7 @@ if __name__ == "__main__":
     result = run_scraper()
 
     if result == "rate_limited":
-        print("🧐 Triggering backup scraper due to rate limit...")
+        print("🧐 Rate limited - switching to remote scraper")
         remaining = MAX_SUCCESSFUL_LINKS - successful_links_opened
         remote_scraper(remaining)
     elif result == "error":

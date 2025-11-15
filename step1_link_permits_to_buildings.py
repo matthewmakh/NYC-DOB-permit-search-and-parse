@@ -13,14 +13,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:rYOeFwAQciYdTdUVPxuCqNparvRNbUov@maglev.proxy.rlwy.net:26571/railway')
+# Support both DATABASE_URL and individual DB_* variables
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+if not DATABASE_URL:
+    # Build from individual components
+    DB_HOST = os.getenv('DB_HOST')
+    DB_PORT = os.getenv('DB_PORT', '5432')
+    DB_USER = os.getenv('DB_USER')
+    DB_PASSWORD = os.getenv('DB_PASSWORD')
+    DB_NAME = os.getenv('DB_NAME')
+    
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        raise ValueError("Either DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME must be set")
+    
+    DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 
-def derive_bbl_from_permit(block, lot, borough_from_address=None):
+def derive_bbl_from_permit(block, lot, permit_no=None):
     """
     Create BBL from block and lot
-    BBL format: B-BLOCK-LOT where B is borough code (1-5)
-    For now, assume Brooklyn (3) if not specified
+    BBL format: BBBBBLLLL where B is borough code (1-5), block is 5 digits, lot is 4 digits
+    Borough is extracted from the first digit of the permit number
     """
     if not block or not lot:
         return None
@@ -29,14 +43,32 @@ def derive_bbl_from_permit(block, lot, borough_from_address=None):
     block = str(block).strip()
     lot = str(lot).strip()
     
-    # Default to Brooklyn (3) - you can enhance this by parsing address
-    borough_code = "3"
+    # Validate block and lot are numeric
+    if not block.isdigit() or not lot.isdigit():
+        print(f"⚠️ Invalid block/lot (non-numeric): block={block}, lot={lot}")
+        return None
+    
+    # Extract borough code from permit number (first digit)
+    borough_code = "3"  # Default to Brooklyn
+    if permit_no and len(permit_no) > 0:
+        borough_code = permit_no[0]
+        # Validate borough code is 1-5
+        if borough_code not in ['1', '2', '3', '4', '5']:
+            print(f"⚠️ Invalid borough code in permit {permit_no}: {borough_code}")
+            borough_code = "3"  # Fallback to Brooklyn
     
     # Pad block to 5 digits, lot to 4 digits
     block_padded = block.zfill(5)
     lot_padded = lot.zfill(4)
     
-    return f"{borough_code}{block_padded}{lot_padded}"
+    bbl = f"{borough_code}{block_padded}{lot_padded}"
+    
+    # Final validation: BBL must be exactly 10 digits
+    if len(bbl) != 10 or not bbl.isdigit():
+        print(f"⚠️ Generated invalid BBL: {bbl} (from block={block}, lot={lot}, permit={permit_no})")
+        return None
+    
+    return bbl
 
 
 def link_permits_to_buildings():
@@ -56,7 +88,7 @@ def link_permits_to_buildings():
     # Get all permits with block/lot data
     print("\n📊 Analyzing permits...")
     cur.execute("""
-        SELECT id, address, block, lot, bin, bbl
+        SELECT id, permit_no, address, block, lot, bin, bbl
         FROM permits
         WHERE block IS NOT NULL AND lot IS NOT NULL
     """)
@@ -75,8 +107,8 @@ def link_permits_to_buildings():
             permits_skipped += 1
             continue
         
-        # Generate BBL
-        bbl = derive_bbl_from_permit(permit['block'], permit['lot'])
+        # Generate BBL with borough from permit number
+        bbl = derive_bbl_from_permit(permit['block'], permit['lot'], permit['permit_no'])
         
         if not bbl:
             continue
@@ -109,10 +141,12 @@ def link_permits_to_buildings():
     
     # Show summary stats
     cur.execute("SELECT COUNT(DISTINCT bbl) FROM buildings WHERE bbl IS NOT NULL")
-    total_buildings = cur.fetchone()[0]
+    result = cur.fetchone()
+    total_buildings = result['count'] if isinstance(result, dict) else result[0]
     
     cur.execute("SELECT COUNT(*) FROM permits WHERE bbl IS NOT NULL")
-    linked_permits = cur.fetchone()[0]
+    result = cur.fetchone()
+    linked_permits = result['count'] if isinstance(result, dict) else result[0]
     
     print(f"\n📈 Database Summary:")
     print(f"   Total unique buildings: {total_buildings}")

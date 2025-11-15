@@ -121,12 +121,11 @@ def fix_date_format(date_str):
 
 def main():
     # DB Connection
-    conn = mysql.connector.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        user=os.getenv('DB_USER', 'scraper_user'),
-        password=os.getenv('DB_PASSWORD', 'Tyemakharadze9'),
-        database=os.getenv('DB_NAME', 'permit_scraper')
-    )
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=int(os.getenv('DB_PORT', '5432')),
+            password=os.getenv('DB_PASSWORD'),
     cursor = conn.cursor()
 
     #get permit search info from database

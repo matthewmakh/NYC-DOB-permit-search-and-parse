@@ -3,14 +3,18 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import mysql.connector
 import permit_scraper
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 #
 # Setup Database
 conn = mysql.connector.connect(
-    host='localhost',
-    user='scraper_user',
-    password='Tyemakharadze9',
-    database='permit_scraper'
+    host=os.getenv('DB_HOST', 'localhost'),
+    user=os.getenv('DB_USER', 'scraper_user'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME', 'permit_scraper')
 )
 cursor = conn.cursor()
 

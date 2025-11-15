@@ -111,11 +111,11 @@
                             Active
                         </label>
                         <label class="checkbox-label">
-                            <input type="checkbox" name="permitStatus" value="Expired">
+                            <input type="checkbox" name="permitStatus" value="Expired" checked>
                             Expired
                         </label>
                         <label class="checkbox-label">
-                            <input type="checkbox" name="permitStatus" value="Expiring Soon">
+                            <input type="checkbox" name="permitStatus" value="Expiring Soon" checked>
                             Expiring Soon
                         </label>
                     </div>
@@ -163,6 +163,7 @@
             <!-- Tabs -->
             <div class="tabs">
                 <button class="tab-btn active" data-tab="leads">📊 Leads Dashboard</button>
+                <button class="tab-btn" data-tab="buildings">🏢 Building Intelligence</button>
                 <button class="tab-btn" data-tab="visualizations">📈 Visualizations</button>
                 <button class="tab-btn" data-tab="map">🗺️ Map View</button>
             </div>
@@ -180,8 +181,12 @@
                         <div class="stat-value" id="totalContacts">0</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Avg Lead Score</div>
-                        <div class="stat-value" id="avgScore">0</div>
+                        <div class="stat-label">🏢 Buildings</div>
+                        <div class="stat-value" id="totalBuildings">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">✅ Enrichment Rate</div>
+                        <div class="stat-value" id="enrichmentRate">0%</div>
                     </div>
                     <div class="stat-card hot">
                         <div class="stat-label">🔥 Hot Leads</div>
@@ -225,11 +230,75 @@
                 </div>
             </div>
 
+            <div class="tab-content" id="buildingsTab">
+                <!-- Building Intelligence Dashboard -->
+                <div class="building-stats-row">
+                    <div class="building-stat-card primary">
+                        <div class="stat-icon">🏢</div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="buildingsTotal">0</div>
+                            <div class="stat-description">Total Buildings</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card success">
+                        <div class="stat-icon">👤</div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="buildingsWithOwners">0</div>
+                            <div class="stat-description">With Owner Data</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card info">
+                        <div class="stat-icon">📋</div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="buildingsWithAcris">0</div>
+                            <div class="stat-description">With Purchase History</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card warning">
+                        <div class="stat-icon">📍</div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="permitsWithBbl">0</div>
+                            <div class="stat-description">Permits with BBL</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Owner Directory Header -->
+                <div class="section-header">
+                    <h2>🏢 Building Portfolio</h2>
+                    <div class="view-toggles">
+                        <button class="view-toggle-btn active" data-view="cards">
+                            <i class="fas fa-th-large"></i> Cards
+                        </button>
+                        <button class="view-toggle-btn" data-view="table">
+                            <i class="fas fa-table"></i> Table
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Buildings Container -->
+                <div id="buildingsContainer" class="buildings-container">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+
             <div class="tab-content" id="visualizationsTab">
                 <div class="charts-grid">
                     <div class="chart-card">
                         <h3>📊 Permits by Job Type</h3>
                         <canvas id="jobTypeChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>👤 Top Property Owners</h3>
+                        <canvas id="ownersChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>🏗️ Building Age Distribution</h3>
+                        <canvas id="buildingAgeChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>📏 Unit Size Distribution</h3>
+                        <canvas id="unitDistChart"></canvas>
                     </div>
                     <div class="chart-card">
                         <h3>📅 Permit Trends Over Time</h3>
