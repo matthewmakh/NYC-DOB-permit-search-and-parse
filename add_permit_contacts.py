@@ -364,18 +364,141 @@ def extract_names_and_phones(driver):
                 return value_cell.text.strip()
             except:
                 return None
+        
+        def extract_bbl_info():
+            """Extract Block and Lot from the page (Field 1)"""
+            try:
+                # BBL info is typically: "BIN: 3428710    Block: 5008    Lot: 65"
+                bbl_elem = driver.find_element(By.XPATH, "//td[contains(text(), 'Block:')]")
+                bbl_text = bbl_elem.text
+                
+                import re
+                block_match = re.search(r'Block:\s*(\d+)', bbl_text)
+                lot_match = re.search(r'Lot:\s*(\d+)', bbl_text)
+                
+                return {
+                    'block': block_match.group(1) if block_match else None,
+                    'lot': lot_match.group(1) if lot_match else None
+                }
+            except:
+                return {'block': None, 'lot': None}
+        
+        def extract_permit_details():
+            """Extract specific permit details"""
+            try:
+                details = {}
+                
+                # Field 14: Job Number - from "Job No:" field
+                try:
+                    job_no_elem = driver.find_element(By.XPATH, "//td[contains(text(), 'Job No:')]/following-sibling::td[1]")
+                    details['job_number'] = job_no_elem.text.strip()
+                except:
+                    details['job_number'] = None
+                
+                # Field 8: Filing Date - might have "ERENEWAL" or other suffix
+                filing_text = get_text_by_label("Filing Date:")
+                if filing_text:
+                    # Extract just the date part (MM/DD/YYYY)
+                    import re
+                    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', filing_text)
+                    details['filing_date'] = date_match.group(1) if date_match else None
+                else:
+                    details['filing_date'] = None
+                
+                # Field 10: Status
+                details['status'] = get_text_by_label("Status:")
+                
+                # Field 7: Fee Type
+                details['fee_type'] = get_text_by_label("Fee:")
+                
+                # Field 11: Proposed Job Start
+                details['proposed_job_start'] = get_text_by_label("Proposed Job Start:")
+                
+                # Field 12: Work Approved
+                details['work_approved'] = get_text_by_label("Work Approved:")
+                
+                # Field 3: Site Fill
+                details['site_fill'] = get_text_by_label("Site Fill:")
+                
+                # Field 13: Work Description - combine all work description rows
+                try:
+                    work_desc_parts = []
+                    # Look for the "Work:" label and collect subsequent content rows
+                    work_label = driver.find_element(By.XPATH, "//td[@class='label' and contains(text(), 'Work:')]")
+                    # Get parent row and following siblings
+                    parent_row = work_label.find_element(By.XPATH, "./..")
+                    following_rows = parent_row.find_elements(By.XPATH, "./following-sibling::tr")
+                    
+                    for row in following_rows[:5]:  # Limit to next 5 rows to avoid going too far
+                        cells = row.find_elements(By.TAG_NAME, "td")
+                        for cell in cells:
+                            if cell.get_attribute("class") == "content":
+                                text = cell.text.strip()
+                                if text and not text.startswith("--") and len(text) > 5:
+                                    work_desc_parts.append(text)
+                        # Stop if we hit a separator or new section
+                        if any(cell.get_attribute("class") == "label" for cell in cells):
+                            break
+                    
+                    details['work_description'] = ' '.join(work_desc_parts) if work_desc_parts else None
+                except:
+                    details['work_description'] = None
+                
+                # Field 5: Total Dwelling Units
+                total_units_text = get_text_by_label("Total Number of Dwelling Units at Location:")
+                details['total_dwelling_units'] = int(total_units_text) if total_units_text and total_units_text.isdigit() else None
+                
+                # Field 6: Dwelling Units Occupied
+                occupied_text = get_text_by_label("Number of Dwelling Units Occupied During Construction:")
+                details['dwelling_units_occupied'] = int(occupied_text) if occupied_text and occupied_text.isdigit() else None
+                
+                return details
+            except Exception as e:
+                print(f"⚠️ Error extracting permit details: {e}")
+                return {}
 
+        # Get all the information
+        bbl_info = extract_bbl_info()
+        permit_details = extract_permit_details()
+        
         details = {
             "use": get_text_by_label("Use:"),
             "stories": get_text_by_label("Stories:"),
             "total_units": get_text_by_label("Total Number of Dwelling Units at Location:"),
-            "occupied_units": get_text_by_label("Number of Dwelling Units Occupied During Construction:")
+            "occupied_units": get_text_by_label("Number of Dwelling Units Occupied During Construction:"),
+            # Field 1: BBL info
+            "block": bbl_info['block'],
+            "lot": bbl_info['lot'],
+            # Field 3: Site Fill
+            "site_fill": permit_details.get('site_fill'),
+            # Fields 5 & 6: Dwelling units
+            "total_dwelling_units": permit_details.get('total_dwelling_units'),
+            "dwelling_units_occupied": permit_details.get('dwelling_units_occupied'),
+            # Field 7: Fee Type
+            "fee_type": permit_details.get('fee_type'),
+            # Field 8: Filing Date
+            "filing_date": permit_details.get('filing_date'),
+            # Field 10: Status
+            "status": permit_details.get('status'),
+            # Fields 11 & 12: Dates
+            "proposed_job_start": permit_details.get('proposed_job_start'),
+            "work_approved": permit_details.get('work_approved'),
+            # Field 13: Work Description
+            "work_description": permit_details.get('work_description'),
+            # Field 14: Job Number
+            "job_number": permit_details.get('job_number')
         }
 
         return people, details
     except Exception as e:
         print(f"⚠️ Failed to extract data: {e}")
-        return [], {"use": None, "stories": None, "total_units": None, "occupied_units": None}
+        return [], {
+            "use": None, "stories": None, "total_units": None, "occupied_units": None,
+            "block": None, "lot": None, "site_fill": None, "total_dwelling_units": None,
+            "dwelling_units_occupied": None, "fee_type": None, "filing_date": None,
+            "status": None, "proposed_job_start": None, "work_approved": None,
+            "work_description": None, "job_number": None
+        }
 
 def process_permit_page(driver):
     global rate_limit_count, successful_links_opened
@@ -440,18 +563,52 @@ def process_permit_page(driver):
                 """, (permit_id, name, phone, True))
             conn.commit()
 
+            # Helper function to convert date strings to proper format
+            def convert_date(date_str):
+                if not date_str:
+                    return None
+                try:
+                    from datetime import datetime
+                    return datetime.strptime(date_str, "%m/%d/%Y").strftime("%Y-%m-%d")
+                except:
+                    return None
+
             cursor.execute("""
                 UPDATE permits
                 SET use_type = %s,
                     stories = %s,
                     total_units = %s,
-                    occupied_units = %s
+                    occupied_units = %s,
+                    block = %s,
+                    lot = %s,
+                    site_fill = %s,
+                    total_dwelling_units = %s,
+                    dwelling_units_occupied = %s,
+                    fee_type = %s,
+                    filing_date = %s,
+                    status = %s,
+                    proposed_job_start = %s,
+                    work_approved = %s,
+                    work_description = %s,
+                    job_number = %s
                 WHERE id = %s
             """, (
                 permit_info['use'],
                 permit_info['stories'],
                 permit_info['total_units'],
                 permit_info['occupied_units'],
+                permit_info['block'],
+                permit_info['lot'],
+                permit_info['site_fill'],
+                permit_info['total_dwelling_units'],
+                permit_info['dwelling_units_occupied'],
+                permit_info['fee_type'],
+                convert_date(permit_info['filing_date']),
+                permit_info['status'],
+                convert_date(permit_info['proposed_job_start']),
+                convert_date(permit_info['work_approved']),
+                permit_info['work_description'],
+                permit_info['job_number'],
                 permit_id
             ))
             conn.commit()

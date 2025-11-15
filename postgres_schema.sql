@@ -19,7 +19,20 @@ CREATE TABLE permits (
   longitude DOUBLE PRECISION,
   job_id INTEGER,
   assigned_to VARCHAR(255),
-  assigned_at TIMESTAMP
+  assigned_at TIMESTAMP,
+  -- New fields from permit details page
+  block VARCHAR(20),                    -- 1. BBL Block
+  lot VARCHAR(20),                      -- 1. BBL Lot
+  site_fill VARCHAR(100),               -- 3. Site Fill
+  total_dwelling_units INTEGER,        -- 5. Total Dwelling Units at Location
+  dwelling_units_occupied INTEGER,     -- 6. Dwelling Units Occupied During Construction
+  fee_type VARCHAR(50),                 -- 7. Fee Type
+  filing_date DATE,                     -- 8. Filing Date
+  status VARCHAR(50),                   -- 10. Status
+  proposed_job_start DATE,              -- 11. Proposed Job Start
+  work_approved DATE,                   -- 12. Work Approved
+  work_description TEXT,                -- 13. Work Description (full)
+  job_number VARCHAR(50)                -- 14. Job Number
 );
 
 -- Table: contact_scrape_jobs
