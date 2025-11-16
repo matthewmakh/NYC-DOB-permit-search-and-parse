@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Enhanced Building Enrichment - Dual Source (PLUTO + RPAD)
+Step 2: Tri-Source Building Enrichment (PLUTO + RPAD + HPD)
 
-Combines data from:
+Data Sources:
 1. NYC PLUTO (MapPLUTO) - Corporate ownership, building characteristics
 2. NYC RPAD (Property Tax) - Current taxpayer, assessed values
+3. NYC HPD (Housing Preservation) - Registered owner, violations, complaints
 
 Populates:
-- current_owner_name (PLUTO) - Corporate entity
-- owner_name_rpad (RPAD) - Current taxpayer
-- assessed_land_value, assessed_total_value (RPAD)
-- year_altered (PLUTO) - Recent renovations
-- Plus all existing building data
+- Owner data: current_owner_name (PLUTO), owner_name_rpad (RPAD), owner_name_hpd (HPD)
+- Building data: units, sqft, year built/altered, building class
+- Financial data: assessed values
+- Quality indicators: HPD violations and complaints counts
 """
 
 import psycopg2
@@ -27,6 +27,7 @@ load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 if not DATABASE_URL:
+    # Build from individual components
     DB_HOST = os.getenv('DB_HOST')
     DB_PORT = os.getenv('DB_PORT', '5432')
     DB_USER = os.getenv('DB_USER')
@@ -38,29 +39,43 @@ if not DATABASE_URL:
     
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# API endpoints
+# NYC Open Data API endpoints
 PLUTO_API_BASE = "https://data.cityofnewyork.us/resource/64uk-42ks.json"
 RPAD_API_BASE = "https://data.cityofnewyork.us/resource/yjxr-fw8i.json"
+HPD_REGISTRATION_API = "https://data.cityofnewyork.us/resource/tesw-yqqr.json"
+HPD_CONTACTS_API = "https://data.cityofnewyork.us/resource/feu5-w2e2.json"
+HPD_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
+HPD_COMPLAINTS_API = "https://data.cityofnewyork.us/resource/uwyv-629c.json"
 
-# Rate limiting
-API_DELAY = float(os.getenv('API_DELAY', 0.1))  # 100ms delay between API calls
+# Configuration
+API_DELAY = float(os.getenv('API_DELAY', '0.1'))
+BUILDING_BATCH_SIZE = int(os.getenv('BUILDING_BATCH_SIZE', '500'))
 
 
-def get_pluto_data(bbl):
-    """Query PLUTO for building characteristics and corporate owner"""
+def get_pluto_data_for_bbl(bbl):
+    """
+    Query NYC Open Data API for PLUTO data by BBL
+    Returns (data_dict, error_message) tuple
+    """
     try:
-        time.sleep(API_DELAY)  # Rate limiting
-        params = {"$where": f"bbl='{bbl}'", "$limit": 1}
+        # PLUTO uses BBL as a 10-digit string
+        params = {
+            "$where": f"bbl='{bbl}'",
+            "$limit": 1
+        }
+        
         response = requests.get(PLUTO_API_BASE, params=params, timeout=10)
         response.raise_for_status()
+        time.sleep(API_DELAY)
         
         data = response.json()
         if not data:
-            return None
+            return None, None  # Not found, but not an error
             
         record = data[0]
         
-        return {
+        # Extract key fields - map to existing database columns
+        result = {
             'owner_name': record.get('ownername'),
             'building_class': record.get('bldgclass'),
             'land_use': record.get('landuse'),
@@ -71,192 +86,362 @@ def get_pluto_data(bbl):
             'lot_sqft': int(float(record.get('lotarea', 0) or 0)),
             'year_built': int(float(record.get('yearbuilt', 0) or 0)) if record.get('yearbuilt') else None,
             'year_altered': int(float(record.get('yearalter1', 0) or 0)) if record.get('yearalter1') else None,
-            'assessed_land': float(record.get('assessland', 0) or 0),
-            'assessed_total': float(record.get('assesstot', 0) or 0),
             'zip_code': record.get('zipcode')
         }
+        return result, None
         
     except Exception as e:
-        print(f"  ⚠️  PLUTO error: {e}")
-        return None
+        return None, f"PLUTO API error: {str(e)}"
 
 
-def get_rpad_data(bbl):
-    """Query RPAD for current taxpayer and assessed values"""
+def get_rpad_data_for_bbl(bbl):
+    """
+    Query NYC Open Data API for RPAD (Property Tax) data by BBL
+    Returns (data_dict, error_message) tuple
+    """
     try:
-        time.sleep(API_DELAY)  # Rate limiting
-        params = {"bble": bbl, "$limit": 1}
+        # RPAD BBL format: separate boro, block, lot components
+        boro = bbl[0]
+        block = str(int(bbl[1:6]))  # Remove leading zeros
+        lot = str(int(bbl[6:10]))   # Remove leading zeros
+        
+        params = {
+            "$where": f"boro='{boro}' AND block='{block}' AND lot='{lot}'",
+            "$limit": 1
+        }
+        
         response = requests.get(RPAD_API_BASE, params=params, timeout=10)
         response.raise_for_status()
+        time.sleep(API_DELAY)
         
         data = response.json()
         if not data:
-            return None
+            return None, None  # Not found, but not an error
             
         record = data[0]
         
-        return {
+        result = {
             'owner_name_rpad': record.get('owner'),
-            'assessed_land_value': float(record.get('avland', 0) or 0),
-            'assessed_total_value': float(record.get('avtot', 0) or 0)
+            'assessed_land_value': int(float(record.get('avland', 0) or 0)),
+            'assessed_total_value': int(float(record.get('avtot', 0) or 0))
         }
+        return result, None
         
     except Exception as e:
-        print(f"  ⚠️  RPAD error: {e}")
-        return None
+        return None, f"RPAD API error: {str(e)}"
 
 
-def enrich_buildings():
-    """Main enrichment process - fetches data from PLUTO and RPAD for buildings"""
+def get_hpd_data_for_bbl(bbl):
+    """
+    Query NYC HPD APIs for owner, violations, and complaints data
+    Returns (data_dict, error_message) tuple
+    """
+    try:
+        boro = bbl[0]
+        block = str(int(bbl[1:6]))
+        lot = str(int(bbl[6:10]))
+        
+        result = {
+            'owner_name_hpd': None,
+            'hpd_registration_id': None,
+            'hpd_open_violations': 0,
+            'hpd_total_violations': 0,
+            'hpd_open_complaints': 0,
+            'hpd_total_complaints': 0
+        }
+        
+        # 1. Get HPD registration
+        params = {'boroid': boro, 'block': block, 'lot': lot, '$limit': 1}
+        r = requests.get(HPD_REGISTRATION_API, params=params, timeout=10)
+        r.raise_for_status()
+        time.sleep(API_DELAY)
+        
+        registration = r.json()
+        if not registration:
+            return result, None  # Building not in HPD (not an error)
+        
+        reg_id = registration[0].get('registrationid')
+        result['hpd_registration_id'] = reg_id
+        
+        # 2. Get owner from HPD contacts
+        if reg_id:
+            r = requests.get(HPD_CONTACTS_API, 
+                           params={'registrationid': reg_id, 'type': 'CorporateOwner', '$limit': 1},
+                           timeout=10)
+            r.raise_for_status()
+            time.sleep(API_DELAY)
+            
+            contacts = r.json()
+            if contacts:
+                result['owner_name_hpd'] = contacts[0].get('corporationname')
+        
+        # 3. Get violations count
+        r = requests.get(HPD_VIOLATIONS_API,
+                        params={'boroid': boro, 'block': block, 'lot': lot, 
+                               '$select': 'currentstatus', '$limit': 1000},
+                        timeout=10)
+        r.raise_for_status()
+        time.sleep(API_DELAY)
+        
+        violations = r.json()
+        result['hpd_total_violations'] = len(violations)
+        result['hpd_open_violations'] = sum(1 for v in violations 
+                                            if v.get('currentstatus') not in ['VIOLATION CLOSED', 'VIOLATION DISMISSED'])
+        
+        # 4. Get complaints count (optional - may have access restrictions)
+        try:
+            r = requests.get(HPD_COMPLAINTS_API,
+                            params={'boroughid': boro, 'block': block, 'lot': lot,
+                                   '$select': 'status', '$limit': 1000},
+                            timeout=10)
+            r.raise_for_status()
+            time.sleep(API_DELAY)
+            
+            complaints = r.json()
+            result['hpd_total_complaints'] = len(complaints)
+            result['hpd_open_complaints'] = sum(1 for c in complaints 
+                                               if c.get('status') not in ['CLOSE', 'CLOSED'])
+        except:
+            # Complaints API may have access restrictions - not critical
+            pass
+        
+        return result, None
+        
+    except Exception as e:
+        return None, f"HPD API error: {str(e)}"
+
+
+def enrich_buildings_from_pluto():
+    """
+    Main process - Tri-Source Enrichment:
+    1. Get buildings without owner data
+    2. Query PLUTO, RPAD, and HPD APIs for each BBL
+    3. Update building record with combined data from all sources
+    """
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
     
-    # Get batch size from environment (default 500 for production)
-    batch_size = int(os.getenv('BUILDING_BATCH_SIZE', 500))
-    
     print("=" * 70)
-    print("🏢 DUAL-SOURCE BUILDING ENRICHMENT (PLUTO + RPAD)")
+    print("🏢 Step 2: Tri-Source Building Enrichment (PLUTO + RPAD + HPD)")
     print("=" * 70)
-    print(f"📦 Batch size: {batch_size}")
     
-    # Get buildings that need enrichment
-    cur.execute(f"""
+    # Get buildings that need data from ANY source
+    cur.execute("""
         SELECT id, bbl, address
         FROM buildings
         WHERE bbl IS NOT NULL
-        AND (current_owner_name IS NULL OR owner_name_rpad IS NULL)
+        AND (current_owner_name IS NULL OR owner_name_rpad IS NULL OR owner_name_hpd IS NULL)
         ORDER BY id
-        LIMIT {batch_size}
-    """)
+        LIMIT %s
+    """, (BUILDING_BATCH_SIZE,))
     
     buildings = cur.fetchall()
-    print(f"\n📊 Found {len(buildings)} buildings to enrich\n")
+    total = len(buildings)
+    print(f"\n📊 Found {total} buildings to enrich (max batch: {BUILDING_BATCH_SIZE})")
     
     if not buildings:
-        print("✅ All buildings already enriched!")
+        print("   No buildings need enrichment. All done!")
         cur.close()
         conn.close()
         return
     
+    enriched = 0
     pluto_success = 0
     rpad_success = 0
-    both_success = 0
+    hpd_success = 0
     failed = 0
+    already_enriched = 0
     
     for i, building in enumerate(buildings, 1):
         bbl = building['bbl']
         building_id = building['id']
         address = building['address']
         
-        print(f"[{i}/{len(buildings)}] BBL {bbl} ({address})")
+        print(f"\n🔍 [{i}/{total}] BBL {bbl} ({address})...")
         
-        # Get data from both sources
-        pluto_data = get_pluto_data(bbl)
-        rpad_data = get_rpad_data(bbl)
+        # Check if building already has data
+        cur.execute("""
+            SELECT current_owner_name, owner_name_rpad, owner_name_hpd
+            FROM buildings WHERE id = %s
+        """, (building_id,))
+        existing = cur.fetchone()
         
+        has_pluto = existing['current_owner_name'] is not None
+        has_rpad = existing['owner_name_rpad'] is not None
+        has_hpd = existing['owner_name_hpd'] is not None
+        
+        # Get data from all three sources
+        pluto_data, pluto_error = get_pluto_data_for_bbl(bbl)
+        rpad_data, rpad_error = get_rpad_data_for_bbl(bbl)
+        hpd_data, hpd_error = get_hpd_data_for_bbl(bbl)
+        
+        # Report errors if any
+        if pluto_error:
+            print(f"   ⚠️ {pluto_error}")
+        if rpad_error:
+            print(f"   ⚠️ {rpad_error}")
+        if hpd_error:
+            print(f"   ⚠️ {hpd_error}")
+        
+        # Check what's available
+        if not pluto_data and not rpad_data and not hpd_data and not pluto_error and not rpad_error and not hpd_error:
+            sources = []
+            if has_pluto:
+                sources.append("PLUTO")
+            if has_rpad:
+                sources.append("RPAD")
+            if has_hpd:
+                sources.append("HPD")
+            
+            if sources:
+                print(f"   ✓ Already enriched ({' + '.join(sources)})")
+                already_enriched += 1
+            else:
+                print(f"   ℹ️  No data found in any source")
+                failed += 1
+            continue
+        
+        # Skip if errors occurred
+        if pluto_error or rpad_error or hpd_error:
+            failed += 1
+            continue
+        
+        # Build update query dynamically
+        update_parts = []
+        update_values = []
+        
+        # PLUTO data (corporate ownership)
         if pluto_data:
-            print(f"  ✅ PLUTO: {pluto_data['owner_name']}")
+            update_parts.extend([
+                "current_owner_name = %s",
+                "building_class = %s",
+                "land_use = %s",
+                "residential_units = %s",
+                "total_units = %s",
+                "num_floors = %s",
+                "building_sqft = %s",
+                "lot_sqft = %s",
+                "year_built = %s",
+                "year_altered = %s"
+            ])
+            update_values.extend([
+                pluto_data['owner_name'],
+                pluto_data['building_class'],
+                pluto_data['land_use'],
+                pluto_data['residential_units'],
+                pluto_data['total_units'],
+                pluto_data['num_floors'],
+                pluto_data['building_sqft'],
+                pluto_data['lot_sqft'],
+                pluto_data['year_built'],
+                pluto_data['year_altered']
+            ])
             pluto_success += 1
+            print(f"   ✅ PLUTO: {pluto_data['owner_name']}")
+            if pluto_data['year_altered']:
+                print(f"      📅 Built: {pluto_data['year_built']}, Altered: {pluto_data['year_altered']}")
         
+        # RPAD data (current taxpayer + assessed values)
         if rpad_data:
-            print(f"  ✅ RPAD:  {rpad_data['owner_name_rpad']}")
+            update_parts.extend([
+                "owner_name_rpad = %s",
+                "assessed_land_value = %s",
+                "assessed_total_value = %s"
+            ])
+            update_values.extend([
+                rpad_data['owner_name_rpad'],
+                rpad_data['assessed_land_value'],
+                rpad_data['assessed_total_value']
+            ])
             rpad_success += 1
+            print(f"   💰 RPAD: {rpad_data['owner_name_rpad']}")
+            print(f"      💵 Assessed: ${rpad_data['assessed_total_value']:,}")
         
-        # Update database with all available data
-        if pluto_data or rpad_data:
-            update_fields = []
-            update_values = []
-            
-            if pluto_data:
-                update_fields.extend([
-                    "current_owner_name = %s",
-                    "building_class = %s",
-                    "land_use = %s",
-                    "residential_units = %s",
-                    "total_units = %s",
-                    "num_floors = %s",
-                    "building_sqft = %s",
-                    "lot_sqft = %s",
-                    "year_built = %s",
-                    "year_altered = %s"
-                ])
-                update_values.extend([
-                    pluto_data['owner_name'],
-                    pluto_data['building_class'],
-                    pluto_data['land_use'],
-                    pluto_data['residential_units'],
-                    pluto_data['total_units'],
-                    pluto_data['num_floors'],
-                    pluto_data['building_sqft'],
-                    pluto_data['lot_sqft'],
-                    pluto_data['year_built'],
-                    pluto_data['year_altered']
-                ])
-            
-            if rpad_data:
-                update_fields.append("owner_name_rpad = %s")
-                update_values.append(rpad_data['owner_name_rpad'])
-                
-                # RPAD has more current assessed values - use them if available
-                if rpad_data['assessed_land_value'] > 0:
-                    update_fields.append("assessed_land_value = %s")
-                    update_values.append(rpad_data['assessed_land_value'])
-                if rpad_data['assessed_total_value'] > 0:
-                    update_fields.append("assessed_total_value = %s")
-                    update_values.append(rpad_data['assessed_total_value'])
-            elif pluto_data:
-                # Use PLUTO assessment values if RPAD not available
-                update_fields.extend([
-                    "assessed_land_value = %s",
-                    "assessed_total_value = %s"
-                ])
-                update_values.extend([
-                    pluto_data['assessed_land'],
-                    pluto_data['assessed_total']
-                ])
-            
-            update_fields.append("last_updated = CURRENT_TIMESTAMP")
-            
-            query = f"""
-                UPDATE buildings
-                SET {', '.join(update_fields)}
-                WHERE id = %s
-            """
-            update_values.append(building_id)
-            
+        # HPD data (registered owner + quality indicators)
+        if hpd_data and hpd_data.get('owner_name_hpd'):
+            update_parts.extend([
+                "owner_name_hpd = %s",
+                "hpd_registration_id = %s",
+                "hpd_open_violations = %s",
+                "hpd_total_violations = %s",
+                "hpd_open_complaints = %s",
+                "hpd_total_complaints = %s"
+            ])
+            update_values.extend([
+                hpd_data['owner_name_hpd'],
+                hpd_data['hpd_registration_id'],
+                hpd_data['hpd_open_violations'],
+                hpd_data['hpd_total_violations'],
+                hpd_data['hpd_open_complaints'],
+                hpd_data['hpd_total_complaints']
+            ])
+            hpd_success += 1
+            print(f"   🏘️  HPD: {hpd_data['owner_name_hpd']}")
+            if hpd_data['hpd_total_violations'] > 0:
+                print(f"      ⚠️  Violations: {hpd_data['hpd_open_violations']} open / {hpd_data['hpd_total_violations']} total")
+            if hpd_data['hpd_total_complaints'] > 0:
+                print(f"      📋 Complaints: {hpd_data['hpd_open_complaints']} open / {hpd_data['hpd_total_complaints']} total")
+        
+        # Execute update
+        update_parts.append("last_updated = CURRENT_TIMESTAMP")
+        update_values.append(building_id)
+        
+        query = f"""
+            UPDATE buildings
+            SET {', '.join(update_parts)}
+            WHERE id = %s
+        """
+        
+        try:
             cur.execute(query, update_values)
             conn.commit()
-            
-            if pluto_data and rpad_data:
-                both_success += 1
-            
-            print()
-        else:
-            print("  ❌ No data from either source\n")
+            enriched += 1
+        except Exception as e:
+            print(f"   ❌ Database error: {e}")
+            conn.rollback()
             failed += 1
-        
-        # Rate limiting
-        time.sleep(0.1)
     
-    # Summary
-    print("=" * 70)
-    print("📊 ENRICHMENT SUMMARY")
-    print("=" * 70)
-    print(f"✅ PLUTO data retrieved: {pluto_success}")
-    print(f"✅ RPAD data retrieved: {rpad_success}")
-    print(f"🎯 Both sources retrieved: {both_success}")
-    print(f"❌ Failed: {failed}")
+    print(f"\n" + "=" * 70)
+    print(f"✅ Complete!")
+    print(f"   Buildings enriched: {enriched}")
+    print(f"   Already enriched: {already_enriched}")
+    print(f"   PLUTO data retrieved: {pluto_success}")
+    print(f"   RPAD data retrieved: {rpad_success}")
+    print(f"   HPD data retrieved: {hpd_success}")
+    print(f"   Failed/No data: {failed}")
     print("=" * 70)
     
+    # Show sample results
+    cur.execute("""
+        SELECT bbl, address, current_owner_name, owner_name_rpad, owner_name_hpd,
+               assessed_total_value, hpd_open_violations, hpd_total_violations,
+               residential_units, year_built
+        FROM buildings
+        WHERE current_owner_name IS NOT NULL OR owner_name_rpad IS NOT NULL OR owner_name_hpd IS NOT NULL
+        LIMIT 3
+    """)
+    
+    results = cur.fetchall()
+    if results:
+        print(f"\n📋 Sample enriched buildings:")
+        for r in results:
+            print(f"\n   🏢 {r['address']}")
+            print(f"      BBL: {r['bbl']}")
+            if r['current_owner_name']:
+                print(f"      Owner (PLUTO): {r['current_owner_name']}")
+            if r['owner_name_rpad']:
+                print(f"      Owner (RPAD): {r['owner_name_rpad']}")
+            if r['owner_name_hpd']:
+                print(f"      Owner (HPD): {r['owner_name_hpd']}")
+            if r['assessed_total_value']:
+                print(f"      Assessed Value: ${r['assessed_total_value']:,}")
+            if r['hpd_total_violations'] and r['hpd_total_violations'] > 0:
+                print(f"      HPD Violations: {r['hpd_open_violations']} open / {r['hpd_total_violations']} total")
+            print(f"      {r['residential_units']} units, built {r['year_built']}")
+    
+    cur.close()
     conn.close()
 
 
 if __name__ == "__main__":
-    try:
-        enrich_buildings()
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted by user")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+    enrich_buildings_from_pluto()
