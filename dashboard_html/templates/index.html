@@ -162,8 +162,8 @@
 
             <!-- Tabs -->
             <div class="tabs">
-                <button class="tab-btn active" data-tab="leads">📊 Leads Dashboard</button>
-                <button class="tab-btn" data-tab="buildings">🏢 Building Intelligence</button>
+                <button class="tab-btn active" data-tab="leads">🏗️ Permit View</button>
+                <button class="tab-btn" data-tab="buildings">🏢 Building View</button>
                 <button class="tab-btn" data-tab="visualizations">📈 Visualizations</button>
                 <button class="tab-btn" data-tab="map">🗺️ Map View</button>
             </div>
@@ -231,7 +231,7 @@
             </div>
 
             <div class="tab-content" id="buildingsTab">
-                <!-- Building Intelligence Dashboard -->
+                <!-- Building View Dashboard -->
                 <div class="building-stats-row">
                     <div class="building-stat-card primary">
                         <div class="stat-icon">🏢</div>
@@ -420,6 +420,166 @@
         </div>
     </div>
 
+    <!-- Building Detail Modal -->
+    <div id="buildingDetailModal" class="modal">
+        <div class="modal-content building-detail-modal">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <h2 id="buildingDetailAddress">Building Details</h2>
+                    <div class="building-meta">
+                        <span class="bbl-badge" id="buildingDetailBBL"></span>
+                        <span class="owner-badge" id="buildingDetailOwner"></span>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="closeBuildingDetail()">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Overview Section -->
+                <div class="detail-section">
+                    <h3>🏢 Property Overview</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <span class="detail-label">Building Type</span>
+                            <span class="detail-value" id="buildingClass">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Land Use</span>
+                            <span class="detail-value" id="landUse">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Year Built</span>
+                            <span class="detail-value" id="yearBuilt">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Year Altered</span>
+                            <span class="detail-value" id="yearAltered">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Units (Residential)</span>
+                            <span class="detail-value" id="residentialUnits">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Total Units</span>
+                            <span class="detail-value" id="totalUnits">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Number of Floors</span>
+                            <span class="detail-value" id="numFloors">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Building Sq Ft</span>
+                            <span class="detail-value" id="buildingSqft">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Lot Sq Ft</span>
+                            <span class="detail-value" id="lotSqft">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">ZIP Code</span>
+                            <span class="detail-value" id="zipCode">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Owner Information Section -->
+                <div class="detail-section">
+                    <h3>👤 Ownership Information</h3>
+                    <div class="owner-sources">
+                        <div class="owner-source-card" id="plutoOwner">
+                            <div class="source-badge pluto">PLUTO</div>
+                            <div class="owner-name" id="plutoOwnerName">-</div>
+                        </div>
+                        <div class="owner-source-card" id="rpadOwner">
+                            <div class="source-badge rpad">RPAD</div>
+                            <div class="owner-name" id="rpadOwnerName">-</div>
+                        </div>
+                        <div class="owner-source-card" id="hpdOwner">
+                            <div class="source-badge hpd">HPD</div>
+                            <div class="owner-name" id="hpdOwnerName">-</div>
+                            <div class="owner-detail" id="hpdRegistration"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Financial Information -->
+                <div class="detail-section">
+                    <h3>💰 Financial Information</h3>
+                    <div class="financial-grid">
+                        <div class="financial-card">
+                            <div class="financial-label">Assessed Land Value</div>
+                            <div class="financial-value" id="assessedLand">-</div>
+                        </div>
+                        <div class="financial-card">
+                            <div class="financial-label">Assessed Total Value</div>
+                            <div class="financial-value" id="assessedTotal">-</div>
+                        </div>
+                        <div class="financial-card" id="acrisCard">
+                            <div class="financial-label">Last Sale Price</div>
+                            <div class="financial-value" id="lastSalePrice">-</div>
+                            <div class="financial-date" id="lastSaleDate"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quality Indicators -->
+                <div class="detail-section" id="qualitySection">
+                    <h3>⚠️ Quality Indicators</h3>
+                    <div class="quality-grid">
+                        <div class="quality-card violations">
+                            <div class="quality-icon">🚨</div>
+                            <div class="quality-content">
+                                <div class="quality-number" id="violationsOpen">0</div>
+                                <div class="quality-label">Open Violations</div>
+                                <div class="quality-detail" id="violationsTotal">0 total</div>
+                            </div>
+                        </div>
+                        <div class="quality-card complaints">
+                            <div class="quality-icon">📞</div>
+                            <div class="quality-content">
+                                <div class="quality-number" id="complaintsOpen">0</div>
+                                <div class="quality-label">Open Complaints</div>
+                                <div class="quality-detail" id="complaintsTotal">0 total</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Map Section -->
+                <div class="detail-section">
+                    <h3>📍 Location</h3>
+                    <div id="buildingMap" class="building-map"></div>
+                    <div class="coordinates-info" id="coordinatesInfo"></div>
+                </div>
+
+                <!-- Connected Permits -->
+                <div class="detail-section">
+                    <h3>📋 Connected Permits (<span id="permitCount">0</span>)</h3>
+                    <div id="connectedPermits" class="connected-permits">
+                        <!-- Permits will be loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- All Contacts -->
+                <div class="detail-section">
+                    <h3>📞 All Contacts (<span id="contactCount">0</span>)</h3>
+                    <div id="allContacts" class="all-contacts">
+                        <!-- Contacts will be loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Nearby Buildings -->
+                <div class="detail-section" id="nearbySection">
+                    <h3>🏘️ Nearby Buildings in System</h3>
+                    <div id="nearbyBuildings" class="nearby-buildings">
+                        <!-- Nearby buildings will be loaded dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>
+

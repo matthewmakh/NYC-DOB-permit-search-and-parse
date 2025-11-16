@@ -616,11 +616,12 @@ def get_buildings():
             SELECT 
                 b.*,
                 COUNT(DISTINCT p.id) as linked_permits,
+                MAX(p.issue_date) as last_permit_date,
                 STRING_AGG(DISTINCT p.permit_no, ', ' ORDER BY p.permit_no) as permit_numbers
             FROM buildings b
             LEFT JOIN permits p ON b.bbl = p.bbl
             GROUP BY b.id
-            ORDER BY b.id DESC;
+            ORDER BY b.assessed_total_value DESC NULLS LAST, b.id DESC;
         """
         
         cur.execute(query)
@@ -698,6 +699,46 @@ def get_building_detail(building_id):
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/buildings/<int:building_id>/contacts')
+def get_building_contacts(building_id):
+    """Get all contacts for a building"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get building BBL
+        cur.execute("SELECT bbl FROM buildings WHERE id = %s;", (building_id,))
+        building = cur.fetchone()
+        
+        if not building:
+            return jsonify([])
+        
+        # Get all unique contacts from all permits for this BBL
+        cur.execute("""
+            SELECT DISTINCT 
+                c.name,
+                c.role,
+                c.phone,
+                c.phone_type,
+                c.email,
+                p.permit_number
+            FROM contacts c
+            INNER JOIN permits p ON c.permit_id = p.id
+            WHERE p.bbl = %s
+            ORDER BY c.name, c.role;
+        """, (building['bbl'],))
+        contacts = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify(contacts)
+        
+    except Exception as e:
+        print(f"Error fetching building contacts: {e}")
+        return jsonify([])
 
 
 @app.route('/api/charts/owners')
