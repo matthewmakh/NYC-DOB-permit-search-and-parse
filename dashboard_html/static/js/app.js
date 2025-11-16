@@ -1164,8 +1164,8 @@ function renderBuildings() {
                         </span>
                     ` : ''}
                 </div>
-                <button class="view-building-btn" onclick="viewBuildingDetail(${building.id})">
-                    View Full History <i class="fas fa-arrow-right"></i>
+                <button class="view-building-btn" onclick="openBuildingDetail(${building.id})">
+                    View Details <i class="fas fa-arrow-right"></i>
                 </button>
             </div>
         </div>
@@ -1504,3 +1504,305 @@ function createBuildingChart(canvasId, type, labels, data, title) {
     });
 }
 
+// Building Detail Modal Functions
+function openBuildingDetail(buildingId) {
+    const building = state.buildings.find(b => b.id === buildingId);
+    if (!building) return;
+
+    // Populate basic info
+    document.getElementById('buildingDetailAddress').textContent = building.address || 'Unknown Address';
+    document.getElementById('buildingDetailBBL').textContent = `BBL: ${building.bbl || 'N/A'}`;
+    
+    // Owner badge - show the best available owner
+    const ownerName = building.owner_name_hpd || building.current_owner_name || building.owner_name_rpad || 'Unknown Owner';
+    document.getElementById('buildingDetailOwner').textContent = ownerName;
+
+    // Property Overview
+    document.getElementById('buildingClass').textContent = building.building_class || '-';
+    document.getElementById('landUse').textContent = building.land_use || '-';
+    document.getElementById('yearBuilt').textContent = building.year_built || '-';
+    document.getElementById('yearAltered').textContent = building.year_altered || '-';
+    document.getElementById('residentialUnits').textContent = building.residential_units || '-';
+    document.getElementById('totalUnits').textContent = building.total_units || '-';
+    document.getElementById('numFloors').textContent = building.num_floors || '-';
+    document.getElementById('buildingSqft').textContent = building.building_sqft ? formatNumber(building.building_sqft) : '-';
+    document.getElementById('lotSqft').textContent = building.lot_sqft ? formatNumber(building.lot_sqft) : '-';
+    document.getElementById('zipCode').textContent = building.zip_code || '-';
+
+    // Owner Information
+    populateOwnerInfo(building);
+
+    // Financial Information
+    populateFinancialInfo(building);
+
+    // Quality Indicators
+    populateQualityIndicators(building);
+
+    // Map
+    initializeBuildingMap(building);
+
+    // Connected Permits
+    loadConnectedPermits(building.id);
+
+    // All Contacts
+    loadAllContacts(building.id);
+
+    // Nearby Buildings
+    loadNearbyBuildings(building);
+
+    // Show modal
+    document.getElementById('buildingDetailModal').style.display = 'flex';
+}
+
+function closeBuildingDetail() {
+    document.getElementById('buildingDetailModal').style.display = 'none';
+}
+
+function populateOwnerInfo(building) {
+    // PLUTO Owner
+    const plutoOwnerName = document.getElementById('plutoOwnerName');
+    if (building.current_owner_name) {
+        plutoOwnerName.textContent = building.current_owner_name;
+        document.getElementById('plutoOwner').style.opacity = '1';
+    } else {
+        plutoOwnerName.textContent = 'Not available';
+        document.getElementById('plutoOwner').style.opacity = '0.5';
+    }
+
+    // RPAD Owner
+    const rpadOwnerName = document.getElementById('rpadOwnerName');
+    if (building.owner_name_rpad) {
+        rpadOwnerName.textContent = building.owner_name_rpad;
+        document.getElementById('rpadOwner').style.opacity = '1';
+    } else {
+        rpadOwnerName.textContent = 'Not available';
+        document.getElementById('rpadOwner').style.opacity = '0.5';
+    }
+
+    // HPD Owner
+    const hpdOwnerName = document.getElementById('hpdOwnerName');
+    const hpdRegistration = document.getElementById('hpdRegistration');
+    if (building.owner_name_hpd) {
+        hpdOwnerName.textContent = building.owner_name_hpd;
+        hpdRegistration.textContent = building.hpd_registration_id ? `Reg ID: ${building.hpd_registration_id}` : '';
+        document.getElementById('hpdOwner').style.opacity = '1';
+    } else {
+        hpdOwnerName.textContent = 'Not available';
+        hpdRegistration.textContent = '';
+        document.getElementById('hpdOwner').style.opacity = '0.5';
+    }
+}
+
+function populateFinancialInfo(building) {
+    // Assessed Values
+    document.getElementById('assessedLand').textContent = building.assessed_land_value 
+        ? `$${formatNumber(building.assessed_land_value)}` 
+        : '-';
+    document.getElementById('assessedTotal').textContent = building.assessed_total_value 
+        ? `$${formatNumber(building.assessed_total_value)}` 
+        : '-';
+
+    // ACRIS Sale Info
+    const acrisCard = document.getElementById('acrisCard');
+    if (building.last_sale_price) {
+        document.getElementById('lastSalePrice').textContent = `$${formatNumber(building.last_sale_price)}`;
+        document.getElementById('lastSaleDate').textContent = building.last_sale_date 
+            ? new Date(building.last_sale_date).toLocaleDateString() 
+            : '';
+        acrisCard.style.opacity = '1';
+    } else {
+        document.getElementById('lastSalePrice').textContent = 'No sales data';
+        document.getElementById('lastSaleDate').textContent = '';
+        acrisCard.style.opacity = '0.5';
+    }
+}
+
+function populateQualityIndicators(building) {
+    const hasQualityData = building.hpd_open_violations !== null || building.hpd_open_complaints !== null;
+    const qualitySection = document.getElementById('qualitySection');
+
+    if (hasQualityData) {
+        document.getElementById('violationsOpen').textContent = building.hpd_open_violations || 0;
+        document.getElementById('violationsTotal').textContent = `${building.hpd_total_violations || 0} total`;
+        document.getElementById('complaintsOpen').textContent = building.hpd_open_complaints || 0;
+        document.getElementById('complaintsTotal').textContent = `${building.hpd_total_complaints || 0} total`;
+        qualitySection.style.display = 'block';
+    } else {
+        qualitySection.style.display = 'none';
+    }
+}
+
+function initializeBuildingMap(building) {
+    const mapContainer = document.getElementById('buildingMap');
+    const coordInfo = document.getElementById('coordinatesInfo');
+
+    // Remove existing map
+    mapContainer.innerHTML = '';
+
+    if (building.latitude && building.longitude) {
+        const map = L.map('buildingMap').setView([building.latitude, building.longitude], 16);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        L.marker([building.latitude, building.longitude])
+            .addTo(map)
+            .bindPopup(`<b>${building.address}</b><br>BBL: ${building.bbl}`)
+            .openPopup();
+
+        coordInfo.textContent = `Coordinates: ${building.latitude.toFixed(6)}, ${building.longitude.toFixed(6)}`;
+    } else {
+        mapContainer.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted);">📍 Location data not available</div>';
+        coordInfo.textContent = '';
+    }
+}
+
+async function loadConnectedPermits(buildingId) {
+    const container = document.getElementById('connectedPermits');
+    const countEl = document.getElementById('permitCount');
+
+    // Filter permits for this building
+    const buildingPermits = state.permits.filter(p => p.building_id === buildingId);
+    countEl.textContent = buildingPermits.length;
+
+    if (buildingPermits.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No permits found for this building</div>';
+        return;
+    }
+
+    container.innerHTML = buildingPermits.map(permit => `
+        <div class="permit-item" onclick="viewPermitDetail('${permit.permit_number}')">
+            <div class="permit-header">
+                <span class="permit-number">${permit.permit_number}</span>
+                <span class="permit-type">${permit.permit_type || 'N/A'}</span>
+            </div>
+            <div class="permit-details">
+                ${permit.work_type || 'No work description'} - ${permit.work_on_floor || 'All floors'}
+            </div>
+            <div class="permit-date">
+                Issued: ${permit.issuance_date ? new Date(permit.issuance_date).toLocaleDateString() : 'N/A'}
+                ${permit.expiration_date ? `| Expires: ${new Date(permit.expiration_date).toLocaleDateString()}` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function loadAllContacts(buildingId) {
+    const container = document.getElementById('allContacts');
+    const countEl = document.getElementById('contactCount');
+
+    try {
+        const response = await fetch(`${API_BASE}/buildings/${buildingId}/contacts`);
+        const contacts = await response.json();
+        countEl.textContent = contacts.length;
+
+        if (contacts.length === 0) {
+            container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No contacts found for this building</div>';
+            return;
+        }
+
+        container.innerHTML = contacts.map(contact => `
+            <div class="contact-card">
+                <div class="contact-name">${contact.name || 'Unknown'}</div>
+                <div class="contact-role">${contact.role || 'N/A'}</div>
+                <div class="contact-info">
+                    ${contact.phone ? `
+                        <div class="contact-phone">
+                            <i class="fas fa-phone"></i>
+                            <span>${formatPhoneNumber(contact.phone)}</span>
+                            ${contact.phone_type ? `<span class="phone-type-badge">${contact.phone_type}</span>` : ''}
+                        </div>
+                    ` : ''}
+                    ${contact.email ? `
+                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                            <i class="fas fa-envelope"></i> ${contact.email}
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error loading contacts:', error);
+        container.innerHTML = '<div style="color: var(--danger-color); text-align: center; padding: 2rem;">Error loading contacts</div>';
+    }
+}
+
+async function loadNearbyBuildings(building) {
+    const container = document.getElementById('nearbyBuildings');
+    const section = document.getElementById('nearbySection');
+
+    if (!building.latitude || !building.longitude) {
+        section.style.display = 'none';
+        return;
+    }
+
+    section.style.display = 'block';
+
+    // Find nearby buildings (simple distance calculation)
+    const nearbyBuildings = state.buildings
+        .filter(b => b.id !== building.id && b.latitude && b.longitude)
+        .map(b => ({
+            ...b,
+            distance: calculateDistance(
+                building.latitude, building.longitude,
+                b.latitude, b.longitude
+            )
+        }))
+        .filter(b => b.distance < 0.5) // Within 0.5 miles
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 10);
+
+    if (nearbyBuildings.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No nearby buildings in system</div>';
+        return;
+    }
+
+    container.innerHTML = nearbyBuildings.map(nb => `
+        <div class="nearby-building" onclick="openBuildingDetail(${nb.id})">
+            <div class="nearby-header">
+                <span class="nearby-address">${nb.address || 'Unknown Address'}</span>
+                <span class="distance-badge">${nb.distance.toFixed(2)} mi</span>
+            </div>
+            <div class="nearby-details">
+                ${nb.current_owner_name || nb.owner_name_rpad || nb.owner_name_hpd || 'Owner unknown'}
+            </div>
+            <div class="nearby-meta">
+                ${nb.residential_units ? `<span>🏠 ${nb.residential_units} units</span>` : ''}
+                ${nb.year_built ? `<span>📅 Built ${nb.year_built}</span>` : ''}
+                ${nb.assessed_total_value ? `<span>💰 $${formatNumber(nb.assessed_total_value)}</span>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 3959; // Earth's radius in miles
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+function formatNumber(num) {
+    return new Intl.NumberFormat('en-US').format(num);
+}
+
+function formatPhoneNumber(phone) {
+    const cleaned = phone.replace(/\D/g, '');
+    if (cleaned.length === 10) {
+        return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+    }
+    return phone;
+}
+
+// Close modal when clicking outside
+window.onclick = function(event) {
+    const modal = document.getElementById('buildingDetailModal');
+    if (event.target === modal) {
+        closeBuildingDetail();
+    }
+}

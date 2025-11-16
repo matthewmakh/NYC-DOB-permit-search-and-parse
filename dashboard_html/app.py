@@ -701,6 +701,46 @@ def get_building_detail(building_id):
         }), 500
 
 
+@app.route('/api/buildings/<int:building_id>/contacts')
+def get_building_contacts(building_id):
+    """Get all contacts for a building"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get building BBL
+        cur.execute("SELECT bbl FROM buildings WHERE id = %s;", (building_id,))
+        building = cur.fetchone()
+        
+        if not building:
+            return jsonify([])
+        
+        # Get all unique contacts from all permits for this BBL
+        cur.execute("""
+            SELECT DISTINCT 
+                c.name,
+                c.role,
+                c.phone,
+                c.phone_type,
+                c.email,
+                p.permit_number
+            FROM contacts c
+            INNER JOIN permits p ON c.permit_id = p.id
+            WHERE p.bbl = %s
+            ORDER BY c.name, c.role;
+        """, (building['bbl'],))
+        contacts = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify(contacts)
+        
+    except Exception as e:
+        print(f"Error fetching building contacts: {e}")
+        return jsonify([])
+
+
 @app.route('/api/charts/owners')
 def get_top_owners():
     """Get top property owners by permit activity"""
