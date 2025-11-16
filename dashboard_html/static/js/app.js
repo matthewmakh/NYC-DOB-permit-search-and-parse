@@ -1538,11 +1538,11 @@ function openBuildingDetail(buildingId) {
     // Quality Indicators
     populateQualityIndicators(building);
 
-    // Map
-    initializeBuildingMap(building);
-
-    // Connected Permits
+    // Connected Permits (load first to get geocoding data)
     loadConnectedPermits(building.id);
+
+    // Map (will use lat/lon from first permit if building doesn't have it)
+    initializeBuildingMap(building);
 
     // All Contacts
     loadAllContacts(building.id);
@@ -1639,21 +1639,54 @@ function initializeBuildingMap(building) {
     // Remove existing map
     mapContainer.innerHTML = '';
 
-    if (building.latitude && building.longitude) {
-        const map = L.map('buildingMap').setView([building.latitude, building.longitude], 16);
-        
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
+    // Check for various possible lat/lon field names in building
+    let lat = building.latitude || building.lat || building.geocoded_latitude;
+    let lon = building.longitude || building.lon || building.lng || building.geocoded_longitude;
 
-        L.marker([building.latitude, building.longitude])
-            .addTo(map)
-            .bindPopup(`<b>${building.address}</b><br>BBL: ${building.bbl}`)
-            .openPopup();
+    // If building doesn't have lat/lon, try to get it from its permits
+    if (!lat || !lon || lat === 0 || lon === 0) {
+        const buildingPermits = state.permits.filter(p => p.bbl === building.bbl);
+        const permitWithCoords = buildingPermits.find(p => p.latitude && p.longitude && p.latitude !== 0 && p.longitude !== 0);
+        if (permitWithCoords) {
+            lat = permitWithCoords.latitude;
+            lon = permitWithCoords.longitude;
+        }
+    }
 
-        coordInfo.textContent = `Coordinates: ${building.latitude.toFixed(6)}, ${building.longitude.toFixed(6)}`;
+    if (lat && lon && lat !== 0 && lon !== 0) {
+        // Give the container a moment to be visible before creating map
+        setTimeout(() => {
+            // Create map with proper cleanup
+            const map = L.map('buildingMap', {
+                scrollWheelZoom: false
+            }).setView([lat, lon], 17);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(map);
+
+            L.marker([lat, lon])
+                .addTo(map)
+                .bindPopup(`<b>${building.address}</b><br>BBL: ${building.bbl}`)
+                .openPopup();
+
+            // Force map to recalculate size and center properly
+            setTimeout(() => {
+                map.invalidateSize();
+                map.setView([lat, lon], 17);
+            }, 100);
+
+            coordInfo.textContent = `Coordinates: ${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+            
+            // Store map instance for cleanup
+            if (window.currentBuildingMap) {
+                window.currentBuildingMap.remove();
+            }
+            window.currentBuildingMap = map;
+        }, 100);
     } else {
-        mapContainer.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted);">📍 Location data not available</div>';
+        mapContainer.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); padding: 2rem; text-align: center;">📍 Location data not available<br><small style="margin-top: 0.5rem;">Geocoding may be needed for this building</small></div>';
         coordInfo.textContent = '';
     }
 }
@@ -1662,8 +1695,16 @@ async function loadConnectedPermits(buildingId) {
     const container = document.getElementById('connectedPermits');
     const countEl = document.getElementById('permitCount');
 
-    // Filter permits for this building
-    const buildingPermits = state.permits.filter(p => p.building_id === buildingId);
+    // Get the building's BBL first
+    const building = state.buildings.find(b => b.id === buildingId);
+    if (!building || !building.bbl) {
+        container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No BBL available for this building</div>';
+        countEl.textContent = '0';
+        return;
+    }
+
+    // Filter permits by BBL (permits are linked to buildings via BBL, not building_id)
+    const buildingPermits = state.permits.filter(p => p.bbl === building.bbl);
     countEl.textContent = buildingPermits.length;
 
     if (buildingPermits.length === 0) {
@@ -1672,20 +1713,51 @@ async function loadConnectedPermits(buildingId) {
     }
 
     container.innerHTML = buildingPermits.map(permit => `
-        <div class="permit-item" onclick="viewPermitDetail('${permit.permit_number}')">
+        <div class="permit-item" onclick="window.open('/permit/${permit.id}', '_blank')">
             <div class="permit-header">
-                <span class="permit-number">${permit.permit_number}</span>
+                <span class="permit-number">${permit.permit_no || permit.permit_number || 'N/A'}</span>
                 <span class="permit-type">${permit.permit_type || 'N/A'}</span>
             </div>
             <div class="permit-details">
-                ${permit.work_type || 'No work description'} - ${permit.work_on_floor || 'All floors'}
+                ${permit.work_type || 'No work description'} ${permit.work_on_floor ? `- ${permit.work_on_floor}` : ''}
             </div>
             <div class="permit-date">
-                Issued: ${permit.issuance_date ? new Date(permit.issuance_date).toLocaleDateString() : 'N/A'}
+                Issued: ${permit.issue_date || permit.issuance_date ? new Date(permit.issue_date || permit.issuance_date).toLocaleDateString() : 'N/A'}
                 ${permit.expiration_date ? `| Expires: ${new Date(permit.expiration_date).toLocaleDateString()}` : ''}
             </div>
         </div>
     `).join('');
+}
+
+// Function to scroll to and highlight a permit in the Permit View (alternative method)
+function scrollToPermit(permitNumber) {
+    // Close the building modal
+    closeBuildingDetail();
+    
+    // Switch to Permit View tab
+    const leadsTab = document.querySelector('[data-tab="leads"]');
+    if (leadsTab) {
+        leadsTab.click();
+    }
+    
+    // Wait for tab to switch, then scroll to permit
+    setTimeout(() => {
+        const permitCards = document.querySelectorAll('.lead-card');
+        for (const card of permitCards) {
+            const permitNo = card.querySelector('.permit-number')?.textContent;
+            if (permitNo && permitNo.includes(permitNumber)) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Highlight the card temporarily
+                card.style.border = '2px solid var(--primary-color)';
+                card.style.boxShadow = '0 0 20px rgba(102, 126, 234, 0.5)';
+                setTimeout(() => {
+                    card.style.border = '';
+                    card.style.boxShadow = '';
+                }, 3000);
+                break;
+            }
+        }
+    }, 300);
 }
 
 async function loadAllContacts(buildingId) {
@@ -1732,7 +1804,11 @@ async function loadNearbyBuildings(building) {
     const container = document.getElementById('nearbyBuildings');
     const section = document.getElementById('nearbySection');
 
-    if (!building.latitude || !building.longitude) {
+    // Check for various possible lat/lon field names
+    const buildingLat = building.latitude || building.lat || building.geocoded_latitude;
+    const buildingLon = building.longitude || building.lon || building.lng || building.geocoded_longitude;
+
+    if (!buildingLat || !buildingLon || buildingLat === 0 || buildingLon === 0) {
         section.style.display = 'none';
         return;
     }
@@ -1741,20 +1817,26 @@ async function loadNearbyBuildings(building) {
 
     // Find nearby buildings (simple distance calculation)
     const nearbyBuildings = state.buildings
-        .filter(b => b.id !== building.id && b.latitude && b.longitude)
-        .map(b => ({
-            ...b,
-            distance: calculateDistance(
-                building.latitude, building.longitude,
-                b.latitude, b.longitude
-            )
-        }))
+        .filter(b => {
+            if (b.id === building.id) return false;
+            const lat = b.latitude || b.lat || b.geocoded_latitude;
+            const lon = b.longitude || b.lon || b.lng || b.geocoded_longitude;
+            return lat && lon && lat !== 0 && lon !== 0;
+        })
+        .map(b => {
+            const lat = b.latitude || b.lat || b.geocoded_latitude;
+            const lon = b.longitude || b.lon || b.lng || b.geocoded_longitude;
+            return {
+                ...b,
+                distance: calculateDistance(buildingLat, buildingLon, lat, lon)
+            };
+        })
         .filter(b => b.distance < 0.5) // Within 0.5 miles
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 10);
 
     if (nearbyBuildings.length === 0) {
-        container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No nearby buildings in system</div>';
+        container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">No nearby buildings in system within 0.5 miles</div>';
         return;
     }
 
