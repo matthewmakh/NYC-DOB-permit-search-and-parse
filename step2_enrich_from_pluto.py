@@ -150,8 +150,14 @@ def get_hpd_data_for_bbl(bbl):
             'hpd_total_complaints': 0
         }
         
-        # 1. Get HPD registration
-        params = {'boroid': boro, 'block': block, 'lot': lot, '$limit': 1}
+        # 1. Get HPD registration (most recent)
+        params = {
+            'boroid': boro,
+            'block': block,
+            'lot': lot,
+            '$order': 'registrationenddate DESC',
+            '$limit': 1
+        }
         r = requests.get(HPD_REGISTRATION_API, params=params, timeout=10)
         r.raise_for_status()
         time.sleep(API_DELAY)
@@ -163,17 +169,24 @@ def get_hpd_data_for_bbl(bbl):
         reg_id = registration[0].get('registrationid')
         result['hpd_registration_id'] = reg_id
         
-        # 2. Get owner from HPD contacts
+        # 2. Get owner from HPD contacts (try multiple contact types)
         if reg_id:
-            r = requests.get(HPD_CONTACTS_API, 
-                           params={'registrationid': reg_id, 'type': 'CorporateOwner', '$limit': 1},
-                           timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            contacts = r.json()
-            if contacts:
-                result['owner_name_hpd'] = contacts[0].get('corporationname')
+            # Try HeadOfficer first (best quality), then CorporateOwner, then IndividualOwner
+            for contact_type in ['HeadOfficer', 'CorporateOwner', 'IndividualOwner']:
+                r = requests.get(HPD_CONTACTS_API, 
+                               params={'registrationid': reg_id, 'type': contact_type, '$limit': 1},
+                               timeout=10)
+                r.raise_for_status()
+                time.sleep(API_DELAY)
+                
+                contacts = r.json()
+                if contacts:
+                    contact = contacts[0]
+                    corp_name = contact.get('corporationname', '')
+                    first_name = contact.get('firstname', '')
+                    last_name = contact.get('lastname', '')
+                    result['owner_name_hpd'] = corp_name if corp_name else f"{first_name} {last_name}".strip()
+                    break  # Found owner, stop trying other types
         
         # 3. Get violations count
         r = requests.get(HPD_VIOLATIONS_API,
@@ -226,18 +239,22 @@ def enrich_buildings_from_pluto():
     print("=" * 70)
     
     # Get buildings that need data from ANY source
+    # Only select buildings where:
+    # 1. Never attempted (last_updated IS NULL), OR
+    # 2. Last updated more than 30 days ago (periodic refresh)
+    # This ensures data stays fresh and new sources might become available
     cur.execute("""
         SELECT id, bbl, address
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (current_owner_name IS NULL OR owner_name_rpad IS NULL OR owner_name_hpd IS NULL)
+        AND (last_updated IS NULL OR last_updated < NOW() - INTERVAL '30 days')
         ORDER BY id
-        LIMIT %s
-    """, (BUILDING_BATCH_SIZE,))
+    """)
     
     buildings = cur.fetchall()
     total = len(buildings)
-    print(f"\n📊 Found {total} buildings to enrich (max batch: {BUILDING_BATCH_SIZE})")
+    print(f"\n📊 Found {total} buildings to enrich (never attempted or >30 days old)")
     
     if not buildings:
         print("   No buildings need enrichment. All done!")
@@ -297,7 +314,17 @@ def enrich_buildings_from_pluto():
                 print(f"   ✓ Already enriched ({' + '.join(sources)})")
                 already_enriched += 1
             else:
-                print(f"   ℹ️  No data found in any source")
+                print(f"   ℹ️  No data found in any source - marking as attempted")
+                # Mark as attempted to avoid re-querying on future runs
+                try:
+                    cur.execute("""
+                        UPDATE buildings
+                        SET last_updated = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (building_id,))
+                    conn.commit()
+                except Exception as e:
+                    print(f"   ❌ Database error: {e}")
                 failed += 1
             continue
         
