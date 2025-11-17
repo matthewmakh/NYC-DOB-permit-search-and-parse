@@ -165,10 +165,10 @@ def get_acris_full_history(bbl):
                 
                 doc = docs[0]
                 
-                # Get document details
+                # Get document details (using correct API field names)
                 doc_type = doc.get('doc_type', '').upper()
-                doc_amount = float(doc.get('doc_amount', 0) or 0)
-                doc_date = parse_acris_date(doc.get('doc_date'))
+                doc_amount = float(doc.get('document_amt', 0) or 0)  # API field is 'document_amt' not 'doc_amount'
+                doc_date = parse_acris_date(doc.get('document_date'))  # API field is 'document_date' not 'doc_date'
                 recorded_date = parse_acris_date(doc.get('recorded_datetime'))
                 crfn = doc.get('crfn', '')
                 

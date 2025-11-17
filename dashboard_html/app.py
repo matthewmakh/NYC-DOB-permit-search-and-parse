@@ -741,6 +741,141 @@ def get_building_contacts(building_id):
         return jsonify([])
 
 
+@app.route('/api/seller-leads')
+def get_seller_leads():
+    """Get previous property owners (sellers) with addresses for outreach campaign"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Filter parameters
+        min_sale_price = request.args.get('min_price', type=float)
+        state_filter = request.args.get('state', type=str)
+        limit = request.args.get('limit', 100, type=int)
+        
+        # Base query - exclude banks and financial institutions
+        query = """
+            SELECT 
+                b.id as building_id,
+                b.bbl,
+                b.address as property_address,
+                b.borough,
+                ap.party_name as seller_name,
+                ap.address_1 as seller_address_1,
+                ap.address_2 as seller_address_2,
+                ap.city as seller_city,
+                ap.state as seller_state,
+                ap.zip_code as seller_zip,
+                ap.country as seller_country,
+                t.doc_type,
+                t.doc_date as sale_date,
+                t.recorded_date,
+                t.doc_amount as sale_price,
+                t.crfn,
+                -- Parse C/O if it exists
+                CASE 
+                    WHEN ap.address_2 ILIKE 'C/O%%' THEN TRIM(SUBSTRING(ap.address_2 FROM 5))
+                    WHEN ap.address_1 ILIKE 'C/O%%' THEN TRIM(SUBSTRING(ap.address_1 FROM 5))
+                    ELSE NULL
+                END as care_of_contact,
+                -- Check if multi-property owner
+                (SELECT COUNT(DISTINCT building_id) 
+                 FROM acris_parties ap2 
+                 WHERE ap2.party_name = ap.party_name 
+                 AND ap2.party_type = 'seller'
+                ) as properties_sold_count
+            FROM acris_parties ap
+            JOIN buildings b ON ap.building_id = b.id
+            JOIN acris_transactions t ON ap.transaction_id = t.id
+            WHERE ap.party_type = 'seller'
+            AND ap.is_lead = TRUE
+            AND ap.address_1 IS NOT NULL
+            AND ap.address_1 != ''
+            AND t.doc_type LIKE '%%DEED%%'
+            AND ap.party_name NOT ILIKE '%%bank%%'
+            AND ap.party_name NOT ILIKE '%%federal%%'
+            AND ap.party_name NOT ILIKE '%%credit union%%'
+            AND ap.party_name NOT ILIKE '%%mortgage%%'
+            AND ap.party_name NOT ILIKE '%%lending%%'
+            AND ap.party_name NOT ILIKE '%%savings%%'
+            AND ap.party_name NOT ILIKE '%%trust company%%'
+            AND ap.party_name NOT ILIKE '%%capital%%'
+            AND ap.party_name NOT ILIKE '%%funding%%'
+        """
+        
+        params = []
+        
+        # Apply filters
+        if min_sale_price:
+            query += " AND t.doc_amount >= %s"
+            params.append(min_sale_price)
+        
+        if state_filter:
+            query += " AND ap.state = %s"
+            params.append(state_filter.upper())
+        
+        query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
+        query += f" LIMIT {limit}"
+        
+        cur.execute(query, params)
+        leads = cur.fetchall()
+        
+        # Format leads for frontend
+        formatted_leads = []
+        for lead in leads:
+            try:
+                # Build full address
+                addr_parts = []
+                if lead.get('seller_address_1'):
+                    addr_parts.append(str(lead['seller_address_1']))
+                if lead.get('seller_address_2'):
+                    addr_parts.append(str(lead['seller_address_2']))
+                if lead.get('seller_city'):
+                    addr_parts.append(str(lead['seller_city']))
+                if lead.get('seller_state'):
+                    addr_parts.append(str(lead['seller_state']))
+                if lead.get('seller_zip'):
+                    addr_parts.append(str(lead['seller_zip']))
+                
+                formatted_leads.append({
+                    'building_id': lead.get('building_id'),
+                    'bbl': lead.get('bbl'),
+                    'property_address': lead.get('property_address') or 'Unknown',
+                    'borough': lead.get('borough'),
+                    'seller_name': lead.get('seller_name') or 'Unknown',
+                    'seller_address_full': ', '.join(addr_parts) if addr_parts else 'No address',
+                    'seller_address_1': lead.get('seller_address_1'),
+                    'seller_address_2': lead.get('seller_address_2'),
+                    'seller_city': lead.get('seller_city'),
+                    'seller_state': lead.get('seller_state'),
+                    'seller_zip': lead.get('seller_zip'),
+                    'care_of_contact': lead.get('care_of_contact'),
+                    'sale_date': (lead['sale_date'] or lead['recorded_date']).isoformat() if (lead.get('sale_date') or lead.get('recorded_date')) else None,
+                    'sale_price': float(lead['sale_price']) if lead.get('sale_price') else None,
+                    'doc_type': lead.get('doc_type'),
+                    'crfn': lead.get('crfn'),
+                    'properties_sold_count': lead.get('properties_sold_count', 1),
+                    'is_repeat_seller': lead.get('properties_sold_count', 1) > 1
+                })
+            except Exception as lead_error:
+                print(f"Error formatting lead: {lead_error}")
+                continue
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'leads': formatted_leads,
+            'total': len(formatted_leads)
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"Error fetching seller leads: {e}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e), 'leads': [], 'total': 0})
+
+
 @app.route('/api/charts/owners')
 def get_top_owners():
     """Get top property owners by permit activity"""

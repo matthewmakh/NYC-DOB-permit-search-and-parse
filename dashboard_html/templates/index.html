@@ -164,6 +164,7 @@
             <div class="tabs">
                 <button class="tab-btn active" data-tab="leads">🏗️ Permit View</button>
                 <button class="tab-btn" data-tab="buildings">🏢 Building View</button>
+                <button class="tab-btn" data-tab="sellers">💰 Seller Leads</button>
                 <button class="tab-btn" data-tab="visualizations">📈 Visualizations</button>
                 <button class="tab-btn" data-tab="map">🗺️ Map View</button>
             </div>
@@ -279,6 +280,123 @@
                 <!-- Buildings Container -->
                 <div id="buildingsContainer" class="buildings-container">
                     <!-- Will be populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Seller Leads Tab -->
+            <div class="tab-content" id="sellersTab">
+                <!-- Header -->
+                <div class="seller-leads-header">
+                    <h2>💰 Previous Owners Campaign - Seller Leads</h2>
+                    <p class="section-description">
+                        Property owners who have sold buildings in NYC - potential leads for new investment opportunities. 
+                        Includes mailing addresses and C/O contacts (lawyers, agents, managers).
+                    </p>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="stats-row" style="margin-bottom: 20px;">
+                    <div class="building-stat-card">
+                        <div class="stat-icon">👥</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Total Sellers</div>
+                            <div class="stat-value" id="totalSellers">0</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card">
+                        <div class="stat-icon">🏢</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Properties Sold</div>
+                            <div class="stat-value" id="propertiesSold">0</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card">
+                        <div class="stat-icon">🔁</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Repeat Sellers</div>
+                            <div class="stat-value" id="repeatSellers">0</div>
+                        </div>
+                    </div>
+                    <div class="building-stat-card">
+                        <div class="stat-icon">📧</div>
+                        <div class="stat-content">
+                            <div class="stat-label">C/O Contacts</div>
+                            <div class="stat-value" id="careOfContacts">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filters Row -->
+                <div class="seller-filters-row">
+                    <div class="filter-group">
+                        <label for="stateFilter">State:</label>
+                        <select id="stateFilter" class="filter-select">
+                            <option value="">All States</option>
+                            <option value="NY">New York</option>
+                            <option value="NJ">New Jersey</option>
+                            <option value="CT">Connecticut</option>
+                            <option value="PA">Pennsylvania</option>
+                            <option value="FL">Florida</option>
+                            <option value="CA">California</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="priceFilter">Min Sale Price:</label>
+                        <select id="priceFilter" class="filter-select">
+                            <option value="0">All Prices</option>
+                            <option value="500000">$500K+</option>
+                            <option value="1000000">$1M+</option>
+                            <option value="2000000">$2M+</option>
+                            <option value="5000000">$5M+</option>
+                            <option value="10000000">$10M+</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>
+                            <input type="checkbox" id="repeatOnlyFilter">
+                            Repeat Sellers Only
+                        </label>
+                    </div>
+                    <div class="filter-group" style="margin-left: auto;">
+                        <button id="refreshSellerLeads" class="btn btn-secondary">
+                            🔄 Refresh
+                        </button>
+                        <button id="exportSellerCSV" class="btn btn-primary">
+                            📥 Export CSV
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Table Container -->
+                <div class="table-container">
+                    <table class="seller-leads-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-column="seller_name">Seller Name</th>
+                                <th>Mailing Address</th>
+                                <th>C/O Contact</th>
+                                <th>Property Sold</th>
+                                <th class="sortable" data-column="sale_date">Sale Date</th>
+                                <th class="sortable" data-column="sale_price">Sale Price</th>
+                                <th class="sortable" data-column="properties_sold_count">Properties</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sellerLeadsBody">
+                            <!-- Will be populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Loading State -->
+                <div id="sellerLoadingState" class="loading-state" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Loading seller leads...</p>
+                </div>
+
+                <!-- No Results Message -->
+                <div id="sellerNoResults" class="no-results" style="display: none;">
+                    <p>No seller leads found matching your filters.</p>
                 </div>
             </div>
 

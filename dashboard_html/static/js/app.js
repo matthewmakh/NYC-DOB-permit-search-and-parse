@@ -22,6 +22,24 @@ const state = {
         contactSearch: '',
         globalSearch: ''
     },
+    // Seller Leads State
+    sellerLeads: [],
+    filteredSellerLeads: [],
+    sellerStats: {
+        totalSellers: 0,
+        propertiesSold: 0,
+        repeatSellers: 0,
+        careOfContacts: 0
+    },
+    sellerFilters: {
+        state: '',
+        minPrice: 0,
+        repeatOnly: false
+    },
+    sellerSort: {
+        column: 'sale_date',
+        direction: 'desc'
+    },
     charts: {},
     mapInstance: null
 };
@@ -136,6 +154,9 @@ function initializeEventListeners() {
 
     // Map load button
     document.getElementById('loadMapBtn')?.addEventListener('click', loadMap);
+    
+    // Initialize seller leads listeners
+    initSellerLeadsListeners();
 }
 
 // Load initial data
@@ -821,6 +842,7 @@ function switchTab(tabName) {
     const tabs = {
         'leads': 'leadsTab',
         'buildings': 'buildingsTab',
+        'sellers': 'sellersTab',
         'visualizations': 'visualizationsTab',
         'map': 'mapTab'
     };
@@ -830,6 +852,8 @@ function switchTab(tabName) {
     // Load data for specific tabs
     if (tabName === 'buildings' && state.buildings.length === 0) {
         loadBuildings();
+    } else if (tabName === 'sellers' && state.sellerLeads.length === 0) {
+        loadSellerLeads();
     } else if (tabName === 'visualizations' && Object.keys(state.charts).length === 0) {
         loadVisualizations();
         loadBuildingCharts();
@@ -1806,3 +1830,355 @@ window.onclick = function(event) {
         closeBuildingDetail();
     }
 }
+
+// ============================================
+// SELLER LEADS FUNCTIONALITY
+// ============================================
+
+// Load seller leads data from API
+async function loadSellerLeads() {
+    const loadingState = document.getElementById('sellerLoadingState');
+    const noResults = document.getElementById('sellerNoResults');
+    const tableContainer = document.querySelector('.table-container');
+    
+    if (loadingState) loadingState.style.display = 'block';
+    if (noResults) noResults.style.display = 'none';
+    if (tableContainer) tableContainer.style.display = 'none';
+    
+    try {
+        // Build query parameters
+        const params = new URLSearchParams();
+        if (state.sellerFilters.state) {
+            params.append('state_filter', state.sellerFilters.state);
+        }
+        if (state.sellerFilters.minPrice > 0) {
+            params.append('min_price', state.sellerFilters.minPrice);
+        }
+        params.append('limit', 1000); // Get all results for client-side filtering
+        
+        const response = await fetch(`${API_BASE}/seller-leads?${params}`);
+        if (!response.ok) throw new Error('Failed to load seller leads');
+        
+        const data = await response.json();
+        state.sellerLeads = data.leads || [];
+        
+        // Apply filters and sort
+        filterAndRenderSellerLeads();
+        
+    } catch (error) {
+        console.error('Error loading seller leads:', error);
+        alert('Failed to load seller leads. Please try again.');
+    } finally {
+        if (loadingState) loadingState.style.display = 'none';
+    }
+}
+
+// Filter and render seller leads
+function filterAndRenderSellerLeads() {
+    let filtered = [...state.sellerLeads];
+    
+    // Apply repeat-only filter
+    if (state.sellerFilters.repeatOnly) {
+        filtered = filtered.filter(lead => lead.is_repeat_seller);
+    }
+    
+    // Sort the results
+    filtered.sort((a, b) => {
+        const col = state.sellerSort.column;
+        const dir = state.sellerSort.direction === 'asc' ? 1 : -1;
+        
+        let aVal = a[col];
+        let bVal = b[col];
+        
+        // Handle null values
+        if (aVal === null || aVal === undefined) return 1;
+        if (bVal === null || bVal === undefined) return -1;
+        
+        // String comparison for names and addresses
+        if (typeof aVal === 'string') {
+            return aVal.localeCompare(bVal) * dir;
+        }
+        
+        // Numeric comparison for prices and counts
+        return (aVal - bVal) * dir;
+    });
+    
+    state.filteredSellerLeads = filtered;
+    
+    // Update stats
+    updateSellerStats(filtered);
+    
+    // Render table
+    renderSellerLeadsTable(filtered);
+}
+
+// Update seller stats display
+function updateSellerStats(leads) {
+    const stats = {
+        totalSellers: leads.length,
+        propertiesSold: new Set(leads.map(l => l.building_id)).size,
+        repeatSellers: leads.filter(l => l.is_repeat_seller).length,
+        careOfContacts: leads.filter(l => l.care_of_contact).length
+    };
+    
+    state.sellerStats = stats;
+    
+    // Update DOM
+    document.getElementById('totalSellers').textContent = formatNumber(stats.totalSellers);
+    document.getElementById('propertiesSold').textContent = formatNumber(stats.propertiesSold);
+    document.getElementById('repeatSellers').textContent = formatNumber(stats.repeatSellers);
+    document.getElementById('careOfContacts').textContent = formatNumber(stats.careOfContacts);
+}
+
+// Render seller leads table
+function renderSellerLeadsTable(leads) {
+    const tbody = document.getElementById('sellerLeadsBody');
+    const noResults = document.getElementById('sellerNoResults');
+    const tableContainer = document.querySelector('.table-container');
+    
+    if (!tbody) return;
+    
+    if (leads.length === 0) {
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (noResults) noResults.style.display = 'block';
+        return;
+    }
+    
+    if (tableContainer) tableContainer.style.display = 'block';
+    if (noResults) noResults.style.display = 'none';
+    
+    tbody.innerHTML = leads.map(lead => {
+        const saleDate = lead.sale_date ? new Date(lead.sale_date).toLocaleDateString() : 'N/A';
+        const salePrice = lead.sale_price > 0 ? `$${formatNumber(lead.sale_price)}` : 'N/A';
+        
+        return `
+            <tr>
+                <td>
+                    <div class="seller-name">${escapeHtml(lead.seller_name || 'Unknown')}</div>
+                </td>
+                <td>
+                    <div class="seller-address">
+                        ${escapeHtml(lead.seller_address_full || 'No address available')}
+                    </div>
+                </td>
+                <td>
+                    ${lead.care_of_contact ? 
+                        `<span class="care-of-tag">📧 ${escapeHtml(lead.care_of_contact)}</span>` : 
+                        '<span style="color: var(--text-muted);">—</span>'}
+                </td>
+                <td>
+                    <div class="property-info">
+                        <div class="property-address">${escapeHtml(lead.property_address || 'Unknown')}</div>
+                        <div class="property-bbl">BBL: ${escapeHtml(lead.bbl || 'N/A')}</div>
+                    </div>
+                </td>
+                <td>${saleDate}</td>
+                <td><span class="sale-price">${salePrice}</span></td>
+                <td>
+                    ${lead.is_repeat_seller ? 
+                        `<span class="repeat-seller-badge">🔁 ${lead.properties_sold_count}</span>` : 
+                        lead.properties_sold_count || '1'}
+                </td>
+                <td>
+                    <div class="seller-actions">
+                        <button class="btn btn-sm btn-secondary" onclick="copySellerAddress('${escapeHtml(lead.seller_address_full || '')}')">
+                            📋 Copy
+                        </button>
+                        ${lead.building_id ? 
+                            `<button class="btn btn-sm btn-primary" onclick="viewBuildingFromSeller(${lead.building_id})">
+                                🏢 View
+                            </button>` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Update sort indicators
+    document.querySelectorAll('.seller-leads-table th.sortable').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (th.dataset.column === state.sellerSort.column) {
+            th.classList.add(`sort-${state.sellerSort.direction}`);
+        }
+    });
+}
+
+// Copy seller address to clipboard
+function copySellerAddress(address) {
+    if (!address || address === 'null') {
+        alert('No address available to copy');
+        return;
+    }
+    
+    navigator.clipboard.writeText(address).then(() => {
+        // Show temporary success message
+        const btn = event.target;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '✓ Copied!';
+        btn.style.background = 'var(--success-color)';
+        
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.style.background = '';
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy address. Please try again.');
+    });
+}
+
+// View building from seller lead
+function viewBuildingFromSeller(buildingId) {
+    // Switch to buildings tab and filter by building ID
+    switchTab('buildings');
+    
+    // Wait for buildings to load if needed
+    setTimeout(() => {
+        const building = state.buildings.find(b => b.id === buildingId);
+        if (building) {
+            showBuildingDetail(building);
+        } else {
+            alert('Building details not available');
+        }
+    }, 500);
+}
+
+// Export seller leads to CSV
+function exportSellerLeadsCSV() {
+    const leads = state.filteredSellerLeads;
+    
+    if (leads.length === 0) {
+        alert('No seller leads to export');
+        return;
+    }
+    
+    // CSV headers
+    const headers = [
+        'Seller Name',
+        'Address',
+        'City',
+        'State',
+        'Zip',
+        'C/O Contact',
+        'Property Sold',
+        'BBL',
+        'Sale Date',
+        'Sale Price',
+        'Properties Sold Count',
+        'Is Repeat Seller'
+    ];
+    
+    // CSV rows
+    const rows = leads.map(lead => {
+        // Parse address components (basic parsing)
+        const addr = lead.seller_address_full || '';
+        const parts = addr.split(',').map(p => p.trim());
+        
+        return [
+            lead.seller_name || '',
+            parts[0] || '',
+            parts[1] || '',
+            parts[2] || '',
+            parts[3] || '',
+            lead.care_of_contact || '',
+            lead.property_address || '',
+            lead.bbl || '',
+            lead.sale_date || '',
+            lead.sale_price || '',
+            lead.properties_sold_count || '1',
+            lead.is_repeat_seller ? 'Yes' : 'No'
+        ].map(field => `"${String(field).replace(/"/g, '""')}"`);
+    });
+    
+    // Combine headers and rows
+    const csv = [
+        headers.join(','),
+        ...rows.map(row => row.join(','))
+    ].join('\n');
+    
+    // Create download
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `seller_leads_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+}
+
+// Sort seller leads by column
+function sortSellerLeads(column) {
+    if (state.sellerSort.column === column) {
+        // Toggle direction
+        state.sellerSort.direction = state.sellerSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        // New column, default to desc
+        state.sellerSort.column = column;
+        state.sellerSort.direction = 'desc';
+    }
+    
+    filterAndRenderSellerLeads();
+}
+
+// Initialize seller leads event listeners
+function initSellerLeadsListeners() {
+    // State filter
+    const stateFilter = document.getElementById('stateFilter');
+    if (stateFilter) {
+        stateFilter.addEventListener('change', (e) => {
+            state.sellerFilters.state = e.target.value;
+            loadSellerLeads(); // Reload from API with new state filter
+        });
+    }
+    
+    // Price filter
+    const priceFilter = document.getElementById('priceFilter');
+    if (priceFilter) {
+        priceFilter.addEventListener('change', (e) => {
+            state.sellerFilters.minPrice = parseInt(e.target.value) || 0;
+            loadSellerLeads(); // Reload from API with new price filter
+        });
+    }
+    
+    // Repeat-only filter
+    const repeatFilter = document.getElementById('repeatOnlyFilter');
+    if (repeatFilter) {
+        repeatFilter.addEventListener('change', (e) => {
+            state.sellerFilters.repeatOnly = e.target.checked;
+            filterAndRenderSellerLeads(); // Client-side filter
+        });
+    }
+    
+    // Refresh button
+    const refreshBtn = document.getElementById('refreshSellerLeads');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+            loadSellerLeads();
+        });
+    }
+    
+    // Export button
+    const exportBtn = document.getElementById('exportSellerCSV');
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
+            exportSellerLeadsCSV();
+        });
+    }
+    
+    // Sortable column headers
+    document.querySelectorAll('.seller-leads-table th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            sortSellerLeads(th.dataset.column);
+        });
+    });
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
