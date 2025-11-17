@@ -123,8 +123,7 @@ def get_acris_full_history(bbl):
         # Step 1: Get all legal records for this property
         params = {
             "$where": f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
-            "$limit": 500,
-            "$order": "recorded_datetime DESC"
+            "$limit": 500
         }
         
         print(f"      Querying ACRIS legals (boro={boro}, block={block}, lot={lot})...")
@@ -172,7 +171,13 @@ def get_acris_full_history(bbl):
                 doc_date = parse_acris_date(doc.get('doc_date'))
                 recorded_date = parse_acris_date(doc.get('recorded_datetime'))
                 crfn = doc.get('crfn', '')
-                percent_transferred = doc.get('percent_trans')
+                
+                # Parse percent_transferred (can be string like "100.000000")
+                percent_trans_str = doc.get('percent_trans', '')
+                try:
+                    percent_transferred = float(percent_trans_str) if percent_trans_str else None
+                except (ValueError, TypeError):
+                    percent_transferred = None
                 
                 # Get parties for this document
                 parties = get_parties_for_document(doc_id)
@@ -419,6 +424,7 @@ def enrich_buildings_from_acris():
     enriched = 0
     no_data = 0
     failed = 0
+    skipped_unchanged = 0
     
     for i, building in enumerate(buildings, 1):
         bbl = building['bbl']
@@ -431,7 +437,47 @@ def enrich_buildings_from_acris():
         print(f"   Owner: {owner}")
         
         try:
-            # Get full ACRIS transaction history
+            # OPTIMIZATION: Check if ACRIS data has changed before doing full processing
+            # Query ACRIS Legals just to get document count (fast, single API call)
+            boro, block, lot = parse_bbl(bbl)
+            params = {
+                "$select": "document_id",
+                "$where": f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
+                "$limit": 500
+            }
+            
+            response = requests.get(ACRIS_REAL_PROPERTY_LEGALS, params=params, timeout=15)
+            if response.status_code == 200:
+                legals = response.json()
+                api_doc_count = len(set([legal['document_id'] for legal in legals if 'document_id' in legal]))
+                
+                # Check existing transaction count in database
+                cur.execute("""
+                    SELECT COUNT(DISTINCT document_id) as existing_count
+                    FROM acris_transactions
+                    WHERE building_id = %s
+                """, (building_id,))
+                
+                result = cur.fetchone()
+                existing_count = result['existing_count'] if result else 0
+                
+                # If counts match, data hasn't changed - skip expensive re-processing
+                if existing_count > 0 and api_doc_count == existing_count:
+                    print(f"      ⏭️  Unchanged: {existing_count} documents (skipping re-processing)")
+                    # Just update the timestamp so it doesn't get re-checked for another 30 days
+                    cur.execute("""
+                        UPDATE buildings
+                        SET acris_last_enriched = CURRENT_TIMESTAMP,
+                            last_updated = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (building_id,))
+                    conn.commit()
+                    skipped_unchanged += 1
+                    continue
+                elif existing_count > 0 and api_doc_count != existing_count:
+                    print(f"      🔄 Change detected: {existing_count} → {api_doc_count} documents (re-enriching)")
+            
+            # Get full ACRIS transaction history (only if changed or never processed)
             transactions = get_acris_full_history(bbl)
             
             if transactions:
@@ -495,8 +541,13 @@ def enrich_buildings_from_acris():
     print(f"\n" + "=" * 70)
     print(f"✅ ACRIS Enrichment Complete!")
     print(f"   Buildings enriched: {enriched}")
+    print(f"   Skipped (unchanged): {skipped_unchanged}")
     print(f"   No data found: {no_data}")
     print(f"   Failed: {failed}")
+    
+    if skipped_unchanged > 0:
+        print(f"\n💡 Optimization: Skipped {skipped_unchanged} buildings with unchanged ACRIS data")
+        print(f"   (Saved ~{skipped_unchanged * 30} API calls and ~{skipped_unchanged * 0.5:.1f} minutes)")
     
     # Show enrichment statistics
     cur.execute("""
