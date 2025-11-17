@@ -94,7 +94,9 @@
                 
                 container.innerHTML = results.map(result => `
                     <div class="info-card" style="cursor: pointer; transition: all var(--transition-base);" 
-                         onclick="window.location.href='/property/${result.bbl}'">
+                         onclick="window.location.href='/property/${result.bbl}'"
+                         onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(0,0,0,0.15)'"
+                         onmouseout="this.style.transform=''; this.style.boxShadow=''">
                         <div style="display: flex; justify-content: space-between; align-items: start;">
                             <div style="flex: 1;">
                                 <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: var(--spacing-sm); color: var(--text-primary);">
@@ -103,9 +105,27 @@
                                 <div style="color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
                                     <strong>Owner:</strong> ${result.owner || 'Unknown'}
                                 </div>
-                                <div style="display: flex; gap: var(--spacing-md); color: var(--text-muted); font-size: 0.875rem;">
+                                
+                                <!-- Match Reasons -->
+                                ${result.match_reasons && result.match_reasons.length > 0 ? `
+                                    <div style="margin: var(--spacing-sm) 0;">
+                                        <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.25rem; font-weight: 600;">
+                                            Why this matched:
+                                        </div>
+                                        <div style="display: flex; flex-wrap: wrap; gap: 0.375rem;">
+                                            ${result.match_reasons.map(reason => `
+                                                <span style="background: var(--bg-tertiary); color: var(--primary); padding: 0.25rem 0.625rem; border-radius: var(--radius-sm); font-size: 0.75rem; font-weight: 600; border: 1px solid var(--primary-light);">
+                                                    ${reason}
+                                                </span>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                
+                                <div style="display: flex; gap: var(--spacing-md); color: var(--text-muted); font-size: 0.875rem; margin-top: var(--spacing-sm);">
                                     <span><i class="fas fa-building"></i> BBL: ${formatBBL(result.bbl)}</span>
                                     <span><i class="fas fa-file-alt"></i> ${result.permits || 0} permit${result.permits !== 1 ? 's' : ''}</span>
+                                    ${result.assessed_value ? `<span><i class="fas fa-dollar-sign"></i> $${formatNumber(result.assessed_value)}</span>` : ''}
                                 </div>
                             </div>
                             <div style="color: var(--primary); font-size: 1.5rem;">
@@ -140,6 +160,11 @@
                 return `${bblStr[0]}-${bblStr.substr(1, 5)}-${bblStr.substr(6, 4)}`;
             }
             return bblStr;
+        }
+        
+        function formatNumber(num) {
+            if (!num) return '0';
+            return Math.round(num).toLocaleString();
         }
     </script>
 </body>

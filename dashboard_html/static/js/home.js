@@ -116,12 +116,28 @@ async function performSearch() {
 async function fetchSuggestions(query) {
     const suggestions = document.getElementById('searchSuggestions');
     
+    // Show loading state
+    suggestions.innerHTML = `
+        <div class="suggestion-item" style="justify-content: center; padding: 1rem;">
+            <div class="inline-loading">
+                <div class="spinner spinner-sm"></div>
+                <span>Searching...</span>
+            </div>
+        </div>
+    `;
+    suggestions.classList.add('active');
+    
     try {
         const response = await fetch(`/api/suggest?q=${encodeURIComponent(query)}&limit=5`);
         const results = await response.json();
         
         if (results.length === 0) {
-            suggestions.classList.remove('active');
+            suggestions.innerHTML = `
+                <div class="suggestion-item" style="justify-content: center; padding: 1rem; color: var(--text-muted);">
+                    <i class="fas fa-search" style="margin-right: 0.5rem;"></i>
+                    No results found
+                </div>
+            `;
             return;
         }
         
@@ -129,12 +145,19 @@ async function fetchSuggestions(query) {
         suggestions.innerHTML = results.map(result => `
             <div class="suggestion-item" onclick="selectSuggestion('${result.bbl}')">
                 <div style="display: flex; justify-content: space-between; align-items: start;">
-                    <div>
+                    <div style="flex: 1;">
                         <div style="font-weight: 600; color: var(--text-primary);">
                             ${result.address}
                         </div>
-                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem;">
-                            ${result.owner || 'Owner unknown'} • BBL: ${formatBBL(result.bbl)}
+                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>${result.owner || 'Owner unknown'}</span>
+                            <span style="color: var(--border-color);">•</span>
+                            <span>BBL: ${formatBBL(result.bbl)}</span>
+                            ${result.match_type ? `
+                                <span style="background: var(--primary-light); color: var(--primary); padding: 0.125rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.75rem; font-weight: 600;">
+                                    ${result.match_type}
+                                </span>
+                            ` : ''}
                         </div>
                     </div>
                     <div style="font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; margin-left: 1rem;">
@@ -147,6 +170,12 @@ async function fetchSuggestions(query) {
         suggestions.classList.add('active');
     } catch (error) {
         console.error('Suggestion fetch error:', error);
+        suggestions.innerHTML = `
+            <div class="suggestion-item" style="justify-content: center; padding: 1rem; color: var(--text-muted);">
+                <i class="fas fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>
+                Error loading suggestions
+            </div>
+        `;
     }
 }
 
@@ -183,6 +212,15 @@ function initializeExamples() {
 // =========================
 
 async function loadMarketStats() {
+    // Show skeleton loaders
+    const statElements = ['activePermits', 'recentSales', 'totalProperties', 'qualifiedLeads'];
+    statElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.innerHTML = '<div class="dot-loader"><span></span><span></span><span></span></div>';
+        }
+    });
+    
     try {
         const response = await fetch('/api/market-stats');
         const stats = await response.json();
@@ -196,7 +234,11 @@ async function loadMarketStats() {
         state.stats = stats;
     } catch (error) {
         console.error('Failed to load market stats:', error);
-        // Use fallback values already set in HTML
+        // Use fallback values
+        animateNumber('activePermits', 1968);
+        animateNumber('recentSales', 1141);
+        animateNumber('totalProperties', 1361);
+        animateNumber('qualifiedLeads', 937);
     }
 }
 

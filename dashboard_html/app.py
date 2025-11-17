@@ -1123,54 +1123,133 @@ def property_detail(bbl):
 
 @app.route('/api/search')
 def api_search():
-    """Universal search endpoint"""
+    """Enhanced universal search endpoint with match reasons"""
     query = request.args.get('q', '').strip()
     
     if not query:
         return jsonify([])
-    
+
+    # Split into tokens so multi-word queries like "810 sterling" or "haim levy"
+    # match records where tokens may appear in any order (not only as an exact phrase).
+    tokens = [t.strip() for t in query.split() if t.strip()]
+    if not tokens:
+        return jsonify([])
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # Search across multiple fields
-        search_query = f"%{query}%"
-        
-        cur.execute("""
-            SELECT DISTINCT
-                b.bbl,
-                b.address,
-                b.current_owner_name as owner,
-                b.assessed_total_value as assessed_value,
-                b.sale_price,
-                COUNT(DISTINCT p.job_number) as permits
-            FROM buildings b
-            LEFT JOIN permits p ON b.bbl = p.bbl
-            WHERE 
-                b.address ILIKE %s
-                OR b.current_owner_name ILIKE %s
-                OR b.owner_name_rpad ILIKE %s
-                OR b.owner_name_hpd ILIKE %s
-                OR b.bbl::text LIKE %s
-            GROUP BY b.bbl, b.address, b.current_owner_name, b.assessed_total_value, b.sale_price
-            ORDER BY permits DESC
+
+        # helper to build AND-joined ILIKE clauses (field ILIKE %t1% AND field ILIKE %t2% ...)
+        def and_like_clause(field, tok_count):
+            return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
+
+        # Build clauses and params
+        tok_count = len(tokens)
+        addr_clause = and_like_clause('b.address', tok_count)
+        owner_clause = and_like_clause('b.current_owner_name', tok_count)
+        owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
+        owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
+
+        # bbl match will use full query as a contains
+        bbl_clause = 'b.bbl::text LIKE %s'
+
+        # contact / applicant matches will use LOWER(...) so use lowercased tokens
+        contact_clause = and_like_clause('LOWER(c.name)', tok_count)
+        applicant_clause = and_like_clause('LOWER(p.applicant)', tok_count)
+
+        # params order must match placeholders in SQL below
+        params = []
+        # address params
+        params += [f"%{t}%" for t in tokens]
+        # owner params
+        params += [f"%{t}%" for t in tokens]
+        # owner_rpad params
+        params += [f"%{t}%" for t in tokens]
+        # owner_hpd params
+        params += [f"%{t}%" for t in tokens]
+        # bbl param (use full query)
+        params.append(f"%{query}%")
+        # contact params (lowercase)
+        params += [f"%{t.lower()}%" for t in tokens]
+        # applicant params (lowercase)
+        params += [f"%{t.lower()}%" for t in tokens]
+
+        # prefix and contains helpers for priority scoring
+        prefix_param = f"{query}%"
+        contains_param = f"%{query}%"
+
+        sql = f"""
+            WITH contact_matches AS (
+                SELECT DISTINCT p.bbl,
+                    ARRAY_AGG(DISTINCT 'Contact: ' || c.name) as contact_reasons
+                FROM permits p
+                INNER JOIN contacts c ON p.id = c.permit_id
+                WHERE {contact_clause}
+                AND c.name IS NOT NULL AND c.name != ''
+                GROUP BY p.bbl
+            ),
+            applicant_matches AS (
+                SELECT DISTINCT p.bbl,
+                    ARRAY_AGG(DISTINCT 'Applicant: ' || p.applicant) as applicant_reasons
+                FROM permits p
+                WHERE {applicant_clause}
+                AND p.applicant IS NOT NULL AND p.applicant != ''
+                GROUP BY p.bbl
+            ),
+            property_matches AS (
+                SELECT b.bbl, b.address, b.current_owner_name as owner, b.assessed_total_value as assessed_value, b.sale_price,
+                    COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits,
+                    -- simple reasons
+                    ARRAY_REMOVE(ARRAY[
+                        CASE WHEN b.address ILIKE %s THEN 'Address prefix' END,
+                        CASE WHEN b.address ILIKE %s THEN 'Address contains' END,
+                        CASE WHEN b.current_owner_name ILIKE %s THEN 'Owner' END,
+                        CASE WHEN b.bbl::text LIKE %s THEN 'BBL' END
+                    ], NULL) as match_reasons,
+                    CASE
+                        WHEN b.address ILIKE %s THEN 1
+                        WHEN b.address ILIKE %s THEN 2
+                        WHEN b.current_owner_name ILIKE %s THEN 3
+                        WHEN b.bbl::text LIKE %s THEN 4
+                        ELSE 5
+                    END as match_priority
+                FROM buildings b
+                LEFT JOIN permits p ON b.bbl = p.bbl
+                WHERE ({addr_clause}) OR ({owner_clause}) OR ({owner_rpad_clause}) OR ({owner_hpd_clause}) OR ({bbl_clause})
+                GROUP BY b.bbl, b.address, b.current_owner_name, b.assessed_total_value, b.sale_price
+            )
+            SELECT pm.bbl, pm.address, pm.owner, pm.assessed_value, pm.sale_price, pm.permits,
+                pm.match_reasons || COALESCE(cm.contact_reasons, ARRAY[]::text[]) || COALESCE(am.applicant_reasons, ARRAY[]::text[]) as match_reasons,
+                pm.match_priority
+            FROM property_matches pm
+            LEFT JOIN contact_matches cm ON pm.bbl = cm.bbl
+            LEFT JOIN applicant_matches am ON pm.bbl = am.bbl
+            ORDER BY pm.match_priority, pm.permits DESC
             LIMIT 50
-        """, (search_query, search_query, search_query, search_query, search_query))
-        
+        """
+
+        # execute: need to provide the extra prefix/contains/owner/bbl params before the dynamic params
+        exec_params = [prefix_param, contains_param, contains_param, contains_param, prefix_param, contains_param, contains_param, contains_param]
+        # Then append the dynamic params constructed above: addr, owner, owner_rpad, owner_hpd, bbl, contact, applicant
+        exec_params += params
+
+        cur.execute(sql, tuple(exec_params))
         results = cur.fetchall()
         cur.close()
         conn.close()
-        
+
         return jsonify([dict(r) for r in results])
-        
+
     except Exception as e:
         print(f"Search error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify([])
 
 
 @app.route('/api/suggest')
 def api_suggest():
-    """Autocomplete suggestions endpoint"""
+    """Enhanced autocomplete suggestions with match types"""
     query = request.args.get('q', '').strip()
     limit = request.args.get('limit', 5, type=int)
     
@@ -1180,39 +1259,81 @@ def api_suggest():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        search_query = f"%{query}%"
-        prefix_query = f"{query}%"
-        
-        cur.execute("""
-            SELECT 
-                b.bbl,
-                b.address,
-                b.current_owner_name as owner,
-                COUNT(DISTINCT p.job_number) as permits,
-                CASE 
-                    WHEN b.address ILIKE %s THEN 1
-                    WHEN b.current_owner_name ILIKE %s THEN 2
-                    ELSE 3
-                END as match_priority
-            FROM buildings b
-            LEFT JOIN permits p ON b.bbl = p.bbl
-            WHERE 
-                b.address ILIKE %s
-                OR b.current_owner_name ILIKE %s
-            GROUP BY b.bbl, b.address, b.current_owner_name
-            ORDER BY match_priority, permits DESC
+        # Tokenize query so multi-word input works regardless of order
+        tokens = [t.strip() for t in query.split() if t.strip()]
+        tok_count = len(tokens)
+
+        def and_like_clause(field, tok_count):
+            return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
+
+        addr_clause = and_like_clause('b.address', tok_count)
+        owner_clause = and_like_clause('b.current_owner_name', tok_count)
+        owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
+        owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
+        contact_clause = and_like_clause('LOWER(c.name)', tok_count)
+
+        params = []
+        params += [f"%{t}%" for t in tokens]         # addr
+        params += [f"%{t}%" for t in tokens]         # owner
+        params += [f"%{t}%" for t in tokens]         # owner_rpad
+        params += [f"%{t}%" for t in tokens]         # owner_hpd
+        params += [f"%{t.lower()}%" for t in tokens] # contact
+
+        sql = f"""
+            WITH address_matches AS (
+                SELECT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Address' as match_type, 1 as priority
+                FROM buildings b
+                LEFT JOIN permits p ON b.bbl = p.bbl
+                WHERE {addr_clause}
+                GROUP BY b.bbl, b.address, b.current_owner_name
+                ORDER BY permits DESC
+                LIMIT %s
+            ),
+            owner_matches AS (
+                SELECT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Owner' as match_type, 2 as priority
+                FROM buildings b
+                LEFT JOIN permits p ON b.bbl = p.bbl
+                WHERE ({owner_clause}) OR ({owner_rpad_clause}) OR ({owner_hpd_clause})
+                AND b.bbl NOT IN (SELECT bbl FROM address_matches)
+                GROUP BY b.bbl, b.address, b.current_owner_name
+                ORDER BY permits DESC
+                LIMIT %s
+            ),
+            contact_matches AS (
+                SELECT DISTINCT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Contact' as match_type, 3 as priority
+                FROM buildings b
+                LEFT JOIN permits p ON b.bbl = p.bbl
+                INNER JOIN contacts c ON p.id = c.permit_id
+                WHERE {contact_clause} AND c.name IS NOT NULL
+                AND b.bbl NOT IN (SELECT bbl FROM address_matches UNION SELECT bbl FROM owner_matches)
+                GROUP BY b.bbl, b.address, b.current_owner_name
+                ORDER BY permits DESC
+                LIMIT %s
+            )
+            SELECT * FROM address_matches
+            UNION ALL
+            SELECT * FROM owner_matches
+            UNION ALL
+            SELECT * FROM contact_matches
+            ORDER BY priority, permits DESC
             LIMIT %s
-        """, (prefix_query, prefix_query, search_query, search_query, limit))
-        
+        """
+
+        exec_params = params[:tok_count] + params[tok_count:tok_count*2] + params[tok_count*2:tok_count*3] + params[tok_count*3:tok_count*4] + params[tok_count*4:tok_count*5]
+        # address limit, owner limit, contact limit, final limit
+        exec_params = exec_params + [limit, limit, limit, limit]
+
+        cur.execute(sql, tuple(exec_params))
         results = cur.fetchall()
         cur.close()
         conn.close()
-        
+
         return jsonify([dict(r) for r in results])
-        
+
     except Exception as e:
         print(f"Suggest error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify([])
 
 

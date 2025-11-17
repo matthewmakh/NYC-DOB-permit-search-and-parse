@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // =========================
 
 async function loadPropertyData() {
+    // Show loading state
+    showLoadingState();
+    
     try {
         const response = await fetch(`/api/property/${BBL}`);
         const data = await response.json();
@@ -30,7 +33,8 @@ async function loadPropertyData() {
         
         propertyData = data;
         
-        // Populate all sections
+        // Populate all sections with slight delay for animation
+        hideLoadingState();
         populateHeader(data.building);
         populateStats(data);
         populateOverview(data.building);
@@ -42,6 +46,45 @@ async function loadPropertyData() {
     } catch (error) {
         console.error('Error loading property:', error);
         showError('Failed to load property data');
+    }
+}
+
+function showLoadingState() {
+    // Add loading overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'pageLoadingOverlay';
+    overlay.className = 'page-loading';
+    overlay.innerHTML = `
+        <div class="page-loading-content">
+            <div class="spinner spinner-lg"></div>
+            <div class="loading-text" style="font-size: 1rem; margin-top: 1rem;">Loading property data...</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    // Show skeleton loaders in tabs
+    const tabContents = ['overviewData', 'permitsData', 'salesData', 'financialsData', 'ownerData'];
+    tabContents.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.innerHTML = `
+                <div class="skeleton skeleton-title"></div>
+                <div class="skeleton skeleton-line"></div>
+                <div class="skeleton skeleton-line"></div>
+                <div class="skeleton skeleton-line"></div>
+                <div class="skeleton skeleton-card"></div>
+                <div class="skeleton skeleton-line"></div>
+                <div class="skeleton skeleton-line"></div>
+            `;
+        }
+    });
+}
+
+function hideLoadingState() {
+    const overlay = document.getElementById('pageLoadingOverlay');
+    if (overlay) {
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.remove(), 200);
     }
 }
 
