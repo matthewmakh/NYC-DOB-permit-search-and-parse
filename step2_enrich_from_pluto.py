@@ -240,9 +240,9 @@ def enrich_buildings_from_pluto():
     
     # Get buildings that need data from ANY source
     # Only select buildings where:
-    # 1. Never attempted (last_updated IS NULL), OR
-    # 2. Last updated more than 30 days ago (periodic refresh)
-    # This ensures data stays fresh and new sources might become available
+    # 1. At least one owner field is NULL (missing data), AND
+    # 2. Never attempted (last_updated IS NULL), OR last updated >30 days ago
+    # This ensures new buildings get enriched immediately and old data gets refreshed
     cur.execute("""
         SELECT id, bbl, address
         FROM buildings

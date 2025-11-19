@@ -131,8 +131,8 @@ def link_permits_to_buildings():
     for building in buildings_to_create:
         try:
             cur.execute("""
-                INSERT INTO buildings (bbl, address, block, lot, bin)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO buildings (bbl, address, block, lot, bin, last_updated)
+                VALUES (%s, %s, %s, %s, %s, NULL)
                 ON CONFLICT (bbl) DO NOTHING
             """, (building['bbl'], building['address'], building['block'], 
                   building['lot'], building['bin']))
