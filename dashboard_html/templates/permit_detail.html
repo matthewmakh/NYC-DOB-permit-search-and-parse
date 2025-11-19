@@ -419,8 +419,16 @@
                     <span class="info-value">{{ permit.permit_no }}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">Job Type</span>
-                    <span class="info-value">{{ permit.job_type or 'N/A' }}</span>
+                    <span class="info-label">Work Type</span>
+                    <span class="info-value">
+                        {% if permit.job_type == 'NB' %}New Building
+                        {% elif permit.job_type == 'A1' %}Alteration Type 1
+                        {% elif permit.job_type == 'A2' %}Alteration Type 2
+                        {% elif permit.job_type == 'A3' %}Alteration Type 3
+                        {% elif permit.job_type == 'DM' %}Demolition
+                        {% elif permit.job_type %}{{ permit.job_type }}
+                        {% else %}N/A{% endif %}
+                    </span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">Issue Date</span>
@@ -430,19 +438,179 @@
                     <span class="info-label">Expiration Date</span>
                     <span class="info-value">{{ permit.exp_date.strftime('%b %d, %Y') if permit.exp_date else 'N/A' }}</span>
                 </div>
+                {% if permit.permit_type %}
+                <div class="info-row">
+                    <span class="info-label">Permit Type</span>
+                    <span class="info-value">{{ permit.permit_type }}{% if permit.permit_subtype %} - {{ permit.permit_subtype }}{% endif %}</span>
+                </div>
+                {% endif %}
+                {% if permit.permit_status %}
+                <div class="info-row">
+                    <span class="info-label">Status</span>
+                    <span class="info-value" style="color: {% if permit.permit_status == 'ISSUED' %}#10b981{% elif permit.permit_status == 'PENDING' %}#f59e0b{% else %}#6b7280{% endif %}; font-weight: 600;">
+                        {{ permit.permit_status }}
+                    </span>
+                </div>
+                {% endif %}
+                {% if permit.filing_status %}
+                <div class="info-row">
+                    <span class="info-label">Filing Status</span>
+                    <span class="info-value">{{ permit.filing_status }}</span>
+                </div>
+                {% endif %}
+                {% if permit.filing_date %}
+                <div class="info-row">
+                    <span class="info-label">Filing Date</span>
+                    <span class="info-value">{{ permit.filing_date.strftime('%b %d, %Y') if permit.filing_date else 'N/A' }}</span>
+                </div>
+                {% endif %}
+                {% if permit.job_number %}
+                <div class="info-row">
+                    <span class="info-label">Job Number</span>
+                    <span class="info-value">{{ permit.job_number }}</span>
+                </div>
+                {% endif %}
+                {% if permit.self_cert %}
+                <div class="info-row">
+                    <span class="info-label">Self Certified</span>
+                    <span class="info-value">{{ 'Yes' if permit.self_cert == 'Y' else 'No' }}</span>
+                </div>
+                {% endif %}
+                {% if permit.work_type %}
                 <div class="info-row">
                     <span class="info-label">Work Type</span>
-                    <span class="info-value">{{ permit.work_type or 'N/A' }}</span>
+                    <span class="info-value">{{ permit.work_type }}</span>
                 </div>
-                <div class="info-row">
-                    <span class="info-label">Use Type</span>
-                    <span class="info-value">{{ permit.use_type or 'N/A' }}</span>
-                </div>
+                {% endif %}
                 <div class="info-row">
                     <span class="info-label">Applicant</span>
                     <span class="info-value">{{ permit.applicant or 'N/A' }}</span>
                 </div>
             </div>
+            
+            <!-- Contacts Information -->
+            {% if permit.permittee_business_name or permit.owner_business_name or permit.superintendent_name or permit.site_safety_mgr_business_name %}
+            <div class="info-card">
+                <h2><i class="fas fa-address-book"></i> Contacts</h2>
+                
+                <!-- Permittee (Contractor) -->
+                {% if permit.permittee_business_name or permit.permittee_first_name %}
+                <div class="contact-section" style="margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border);">
+                    <h3 style="color: var(--primary-color); font-size: 1.1rem; margin-bottom: 0.75rem;">
+                        <i class="fas fa-hard-hat"></i> Permittee (Contractor)
+                    </h3>
+                    {% if permit.permittee_first_name or permit.permittee_last_name %}
+                    <div class="info-row">
+                        <span class="info-label">Name</span>
+                        <span class="info-value">{{ permit.permittee_first_name }} {{ permit.permittee_last_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.permittee_business_name %}
+                    <div class="info-row">
+                        <span class="info-label">Business</span>
+                        <span class="info-value">{{ permit.permittee_business_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.permittee_phone %}
+                    <div class="info-row">
+                        <span class="info-label">Phone</span>
+                        <span class="info-value"><a href="tel:{{ permit.permittee_phone }}" style="color: var(--primary-color);">{{ permit.permittee_phone }}</a></span>
+                    </div>
+                    {% endif %}
+                    {% if permit.permittee_license_type or permit.permittee_license_number %}
+                    <div class="info-row">
+                        <span class="info-label">License</span>
+                        <span class="info-value">{{ permit.permittee_license_type }} #{{ permit.permittee_license_number }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <!-- Property Owner -->
+                {% if permit.owner_business_name or permit.owner_first_name %}
+                <div class="contact-section" style="margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border);">
+                    <h3 style="color: var(--primary-color); font-size: 1.1rem; margin-bottom: 0.75rem;">
+                        <i class="fas fa-user-tie"></i> Property Owner
+                    </h3>
+                    {% if permit.owner_first_name or permit.owner_last_name %}
+                    <div class="info-row">
+                        <span class="info-label">Name</span>
+                        <span class="info-value">{{ permit.owner_first_name }} {{ permit.owner_last_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.owner_business_name and permit.owner_business_name != 'N/A' %}
+                    <div class="info-row">
+                        <span class="info-label">Business</span>
+                        <span class="info-value">{{ permit.owner_business_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.owner_business_type %}
+                    <div class="info-row">
+                        <span class="info-label">Type</span>
+                        <span class="info-value">{{ permit.owner_business_type }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.owner_phone %}
+                    <div class="info-row">
+                        <span class="info-label">Phone</span>
+                        <span class="info-value"><a href="tel:{{ permit.owner_phone }}" style="color: var(--primary-color);">{{ permit.owner_phone }}</a></span>
+                    </div>
+                    {% endif %}
+                    {% if permit.owner_house_number or permit.owner_street_name %}
+                    <div class="info-row">
+                        <span class="info-label">Address</span>
+                        <span class="info-value">
+                            {{ permit.owner_house_number }} {{ permit.owner_street_name }}<br>
+                            {{ permit.owner_city }}, {{ permit.owner_state }} {{ permit.owner_zip_code }}
+                        </span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <!-- Superintendent -->
+                {% if permit.superintendent_name or permit.superintendent_business_name %}
+                <div class="contact-section" style="margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border);">
+                    <h3 style="color: var(--primary-color); font-size: 1.1rem; margin-bottom: 0.75rem;">
+                        <i class="fas fa-clipboard-check"></i> Superintendent
+                    </h3>
+                    {% if permit.superintendent_name %}
+                    <div class="info-row">
+                        <span class="info-label">Name</span>
+                        <span class="info-value">{{ permit.superintendent_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.superintendent_business_name %}
+                    <div class="info-row">
+                        <span class="info-label">Business</span>
+                        <span class="info-value">{{ permit.superintendent_business_name }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <!-- Site Safety Manager -->
+                {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_business_name %}
+                <div class="contact-section" style="margin-bottom: 0;">
+                    <h3 style="color: var(--primary-color); font-size: 1.1rem; margin-bottom: 0.75rem;">
+                        <i class="fas fa-hard-hat"></i> Site Safety Manager
+                    </h3>
+                    {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name %}
+                    <div class="info-row">
+                        <span class="info-label">Name</span>
+                        <span class="info-value">{{ permit.site_safety_mgr_first_name }} {{ permit.site_safety_mgr_last_name }}</span>
+                    </div>
+                    {% endif %}
+                    {% if permit.site_safety_mgr_business_name %}
+                    <div class="info-row">
+                        <span class="info-label">Business</span>
+                        <span class="info-value">{{ permit.site_safety_mgr_business_name }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
             
             <!-- Property Information -->
             {% if permit.bbl or permit.residential_units or permit.year_built %}
@@ -506,6 +674,61 @@
                 <div class="info-row">
                     <span class="info-label">Building Class</span>
                     <span class="info-value">{{ permit.building_class }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+            
+            <!-- Location & GIS Information -->
+            {% if permit.borough or permit.zip_code or permit.community_board or permit.council_district %}
+            <div class="info-card">
+                <h2><i class="fas fa-map-marker-alt"></i> Location Details</h2>
+                {% if permit.borough %}
+                <div class="info-row">
+                    <span class="info-label">Borough</span>
+                    <span class="info-value">{{ permit.borough }}</span>
+                </div>
+                {% endif %}
+                {% if permit.house_number or permit.street_name %}
+                <div class="info-row">
+                    <span class="info-label">Address</span>
+                    <span class="info-value">{{ permit.house_number }} {{ permit.street_name }}</span>
+                </div>
+                {% endif %}
+                {% if permit.zip_code %}
+                <div class="info-row">
+                    <span class="info-label">Zip Code</span>
+                    <span class="info-value">{{ permit.zip_code }}</span>
+                </div>
+                {% endif %}
+                {% if permit.community_board %}
+                <div class="info-row">
+                    <span class="info-label">Community Board</span>
+                    <span class="info-value">{{ permit.community_board }}</span>
+                </div>
+                {% endif %}
+                {% if permit.council_district %}
+                <div class="info-row">
+                    <span class="info-label">Council District</span>
+                    <span class="info-value">{{ permit.council_district }}</span>
+                </div>
+                {% endif %}
+                {% if permit.census_tract %}
+                <div class="info-row">
+                    <span class="info-label">Census Tract</span>
+                    <span class="info-value">{{ permit.census_tract }}</span>
+                </div>
+                {% endif %}
+                {% if permit.nta_name %}
+                <div class="info-row">
+                    <span class="info-label">Neighborhood</span>
+                    <span class="info-value">{{ permit.nta_name }}</span>
+                </div>
+                {% endif %}
+                {% if permit.latitude and permit.longitude %}
+                <div class="info-row">
+                    <span class="info-label">Coordinates</span>
+                    <span class="info-value">{{ "%.6f"|format(permit.latitude) }}, {{ "%.6f"|format(permit.longitude) }}</span>
                 </div>
                 {% endif %}
             </div>
