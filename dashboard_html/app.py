@@ -210,7 +210,7 @@ def get_stats():
 
 @app.route('/api/search-contact')
 def search_contact():
-    """Search for permits by contact name or phone"""
+    """Search for permits by contact name or phone (searches permits table columns)"""
     query = request.args.get('q', '').strip()
     
     if len(query) < 2:
@@ -223,6 +223,7 @@ def search_contact():
         conn = get_db_connection()
         cur = conn.cursor()
         
+        # Search permits table directly - all contacts now stored in permit columns
         search_query = """
             SELECT DISTINCT
                 p.id,
@@ -230,20 +231,26 @@ def search_contact():
                 p.address,
                 p.job_type,
                 p.issue_date,
-                c.name as contact_name,
-                c.phone as contact_phone
+                COALESCE(p.permittee_business_name, p.owner_business_name, p.superintendent_business_name, p.applicant) as contact_name,
+                COALESCE(p.permittee_phone, p.owner_phone) as contact_phone
             FROM permits p
-            INNER JOIN contacts c ON p.id = c.permit_id
             WHERE 
-                (LOWER(c.name) LIKE %s OR c.phone LIKE %s)
-                AND c.name IS NOT NULL 
-                AND c.name != ''
+                (
+                    LOWER(p.permittee_business_name) LIKE %s OR
+                    LOWER(p.owner_business_name) LIKE %s OR
+                    LOWER(p.superintendent_business_name) LIKE %s OR
+                    LOWER(p.site_safety_mgr_business_name) LIKE %s OR
+                    LOWER(p.applicant) LIKE %s OR
+                    p.permittee_phone LIKE %s OR
+                    p.owner_phone LIKE %s
+                )
             ORDER BY p.issue_date DESC
             LIMIT 50;
         """
         
         search_pattern = f'%{query.lower()}%'
-        cur.execute(search_query, (search_pattern, search_pattern))
+        # Need to pass search_pattern 7 times for the 7 fields being searched
+        cur.execute(search_query, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
         
         results = cur.fetchall()
         
