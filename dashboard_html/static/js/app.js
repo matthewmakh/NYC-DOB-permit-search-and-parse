@@ -262,9 +262,17 @@ function applyFilters() {
             const applicant = p.applicant?.toLowerCase().replace(/\s+/g, ' ') || '';
             const permitNo = p.permit_no?.toLowerCase().replace(/\s+/g, ' ') || '';
             
+            // NYC Open Data fields
+            const permitteeBusiness = p.permittee_business_name?.toLowerCase().replace(/\s+/g, ' ') || '';
+            const ownerBusiness = p.owner_business_name?.toLowerCase().replace(/\s+/g, ' ') || '';
+            const superintendent = p.superintendent_business_name?.toLowerCase().replace(/\s+/g, ' ') || '';
+            
             return address.includes(search) || 
                    applicant.includes(search) || 
-                   permitNo.includes(search);
+                   permitNo.includes(search) ||
+                   permitteeBusiness.includes(search) ||
+                   ownerBusiness.includes(search) ||
+                   superintendent.includes(search);
         });
     }
     
