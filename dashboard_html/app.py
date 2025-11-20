@@ -84,14 +84,28 @@ def get_permits():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Query with contact information and building intelligence
+        # Query with contact information from permits table and building intelligence
         query = """
             SELECT 
                 p.*,
-                COALESCE(contact_info.contact_count, 0) as contact_count,
-                COALESCE(contact_info.has_mobile, false) as has_mobile,
-                contact_info.contact_names,
-                contact_info.contact_phones,
+                -- Calculate contact count from permits table columns
+                (
+                    CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                    CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                ) as contact_count,
+                false as has_mobile,
+                -- Aggregate contact names
+                CONCAT_WS(' | ',
+                    NULLIF(COALESCE(p.permittee_business_name, p.applicant), ''),
+                    NULLIF(p.owner_business_name, ''),
+                    NULLIF(p.superintendent_business_name, ''),
+                    NULLIF(p.site_safety_mgr_business_name, '')
+                ) as contact_names,
+                -- Aggregate contact phones
+                CONCAT_WS(' | ',
+                    NULLIF(p.permittee_phone, ''),
+                    NULLIF(p.owner_phone, '')
+                ) as contact_phones,
                 b.id as building_id,
                 b.current_owner_name,
                 b.owner_name_rpad,
@@ -110,17 +124,6 @@ def get_permits():
                 b.purchase_price,
                 b.mortgage_amount
             FROM permits p
-            LEFT JOIN (
-                SELECT 
-                    permit_id,
-                    COUNT(*) as contact_count,
-                    BOOL_OR(COALESCE(is_mobile, false)) as has_mobile,
-                    STRING_AGG(name, '|' ORDER BY name) as contact_names,
-                    STRING_AGG(phone, '|' ORDER BY name) as contact_phones
-                FROM contacts
-                WHERE name IS NOT NULL AND name != ''
-                GROUP BY permit_id
-            ) contact_info ON p.id = contact_info.permit_id
             LEFT JOIN buildings b ON p.bbl = b.bbl
             ORDER BY p.issue_date DESC;
         """
@@ -160,13 +163,15 @@ def get_stats():
         cur.execute("SELECT COUNT(*) as total FROM permits;")
         total_permits = cur.fetchone()['total']
         
-        # Total contacts
-        cur.execute("SELECT COUNT(*) as total FROM contacts WHERE name IS NOT NULL AND name != '';")
+        # Total contacts (count permits with phone numbers)
+        cur.execute("""
+            SELECT COUNT(*) as total FROM permits 
+            WHERE permittee_phone IS NOT NULL OR owner_phone IS NOT NULL;
+        """)
         total_contacts = cur.fetchone()['total']
         
-        # Mobile contacts
-        cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile = TRUE;")
-        mobile_contacts = cur.fetchone()['total']
+        # Mobile contacts (deprecated - always 0 since we don't track mobile vs landline)
+        mobile_contacts = 0
         
         # Building intelligence stats
         cur.execute("SELECT COUNT(*) as total FROM buildings;")
@@ -462,16 +467,32 @@ def get_permit_details(permit_id):
                 'error': 'Permit not found'
             }), 404
         
-        # Get contacts
-        cur.execute("""
-            SELECT name, phone
-            FROM contacts 
-            WHERE permit_id = %s 
-                AND name IS NOT NULL 
-                AND name != ''
-            ORDER BY name;
-        """, (permit_id,))
-        contacts = cur.fetchall()
+        # Build contacts array from permits table columns
+        contacts = []
+        if permit.get('permittee_business_name') or permit.get('applicant'):
+            contacts.append({
+                'name': permit.get('permittee_business_name') or permit.get('applicant'),
+                'phone': permit.get('permittee_phone'),
+                'role': 'Permittee'
+            })
+        if permit.get('owner_business_name'):
+            contacts.append({
+                'name': permit.get('owner_business_name'),
+                'phone': permit.get('owner_phone'),
+                'role': 'Owner'
+            })
+        if permit.get('superintendent_business_name'):
+            contacts.append({
+                'name': permit.get('superintendent_business_name'),
+                'phone': None,
+                'role': 'Superintendent'
+            })
+        if permit.get('site_safety_mgr_business_name'):
+            contacts.append({
+                'name': permit.get('site_safety_mgr_business_name'),
+                'phone': None,
+                'role': 'Site Safety Manager'
+            })
         
         permit['contacts'] = contacts
         permit['lead_score'] = calculate_lead_score(permit)
@@ -528,8 +549,12 @@ def permit_detail(permit_id):
         query = """
             SELECT 
                 p.*,
-                COALESCE(contact_info.contact_count, 0) as contact_count,
-                COALESCE(contact_info.has_mobile, false) as has_mobile,
+                -- Calculate contact count from permits table columns
+                (
+                    CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                    CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                ) as contact_count,
+                false as has_mobile,
                 b.id as building_id,
                 b.bbl,
                 b.address as building_address,
@@ -551,15 +576,6 @@ def permit_detail(permit_id):
                 b.mortgage_amount,
                 b.bin
             FROM permits p
-            LEFT JOIN (
-                SELECT 
-                    permit_id,
-                    COUNT(*) as contact_count,
-                    BOOL_OR(COALESCE(is_mobile, false)) as has_mobile
-                FROM contacts
-                WHERE name IS NOT NULL AND name != ''
-                GROUP BY permit_id
-            ) contact_info ON p.id = contact_info.permit_id
             LEFT JOIN buildings b ON p.bbl = b.bbl
             WHERE p.id = %s;
         """
@@ -572,14 +588,32 @@ def permit_detail(permit_id):
             conn.close()
             return "Permit not found", 404
         
-        # Get all contacts for this permit
-        cur.execute("""
-            SELECT name, phone, is_mobile 
-            FROM contacts 
-            WHERE permit_id = %s AND name IS NOT NULL AND name != ''
-            ORDER BY name;
-        """, (permit_id,))
-        contacts = cur.fetchall()
+        # Build contacts array from permits table columns
+        contacts = []
+        if permit.get('permittee_business_name') or permit.get('applicant'):
+            contacts.append({
+                'name': permit.get('permittee_business_name') or permit.get('applicant'),
+                'phone': permit.get('permittee_phone'),
+                'is_mobile': False
+            })
+        if permit.get('owner_business_name'):
+            contacts.append({
+                'name': permit.get('owner_business_name'),
+                'phone': permit.get('owner_phone'),
+                'is_mobile': False
+            })
+        if permit.get('superintendent_business_name'):
+            contacts.append({
+                'name': permit.get('superintendent_business_name'),
+                'phone': None,
+                'is_mobile': False
+            })
+        if permit.get('site_safety_mgr_business_name'):
+            contacts.append({
+                'name': permit.get('site_safety_mgr_business_name'),
+                'phone': None,
+                'is_mobile': False
+            })
         
         # Get all permits for the same building (if BBL exists)
         related_permits = []
@@ -591,11 +625,12 @@ def permit_detail(permit_id):
                     p.job_type,
                     p.issue_date,
                     p.address,
-                    COUNT(c.id) as contact_count
+                    (
+                        CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                        CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                    ) as contact_count
                 FROM permits p
-                LEFT JOIN contacts c ON p.id = c.permit_id
                 WHERE p.bbl = %s AND p.id != %s
-                GROUP BY p.id
                 ORDER BY p.issue_date DESC
                 LIMIT 20;
             """, (permit['bbl'], permit_id))
@@ -676,23 +711,47 @@ def get_building_detail(building_id):
         # Get all permits for this building
         cur.execute("""
             SELECT p.*, 
-                   COUNT(c.id) as contact_count
+                   (
+                       CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                       CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                   ) as contact_count
             FROM permits p
-            LEFT JOIN contacts c ON p.id = c.permit_id
             WHERE p.bbl = %s
-            GROUP BY p.id
             ORDER BY p.issue_date DESC;
         """, (building['bbl'],))
         permits = cur.fetchall()
         
-        # Get all contacts from all permits
+        # Get all contacts from all permits (aggregate from permits table columns)
         cur.execute("""
-            SELECT DISTINCT c.*
-            FROM contacts c
-            INNER JOIN permits p ON c.permit_id = p.id
-            WHERE p.bbl = %s
-            ORDER BY c.name;
-        """, (building['bbl'],))
+            SELECT DISTINCT 
+                COALESCE(p.permittee_business_name, p.applicant) as name,
+                p.permittee_phone as phone,
+                'Permittee' as role
+            FROM permits p
+            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+            UNION
+            SELECT DISTINCT 
+                p.owner_business_name as name,
+                p.owner_phone as phone,
+                'Owner' as role
+            FROM permits p
+            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.superintendent_business_name as name,
+                NULL as phone,
+                'Superintendent' as role
+            FROM permits p
+            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.site_safety_mgr_business_name as name,
+                NULL as phone,
+                'Site Safety Manager' as role
+            FROM permits p
+            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
+            ORDER BY name;
+        """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
         contacts = cur.fetchall()
         
         cur.close()
@@ -727,20 +786,49 @@ def get_building_contacts(building_id):
         if not building:
             return jsonify([])
         
-        # Get all unique contacts from all permits for this BBL
+        # Get all unique contacts from all permits for this BBL (from permits table columns)
         cur.execute("""
             SELECT DISTINCT 
-                c.name,
-                c.role,
-                c.phone,
-                c.phone_type,
-                c.email,
-                p.permit_number
-            FROM contacts c
-            INNER JOIN permits p ON c.permit_id = p.id
-            WHERE p.bbl = %s
-            ORDER BY c.name, c.role;
-        """, (building['bbl'],))
+                COALESCE(p.permittee_business_name, p.applicant) as name,
+                'Permittee' as role,
+                p.permittee_phone as phone,
+                NULL as phone_type,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+            UNION
+            SELECT DISTINCT 
+                p.owner_business_name as name,
+                'Owner' as role,
+                p.owner_phone as phone,
+                NULL as phone_type,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.superintendent_business_name as name,
+                'Superintendent' as role,
+                NULL as phone,
+                NULL as phone_type,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.site_safety_mgr_business_name as name,
+                'Site Safety Manager' as role,
+                NULL as phone,
+                NULL as phone_type,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
+            ORDER BY name, role;
+        """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
         contacts = cur.fetchall()
         
         cur.close()
@@ -1038,26 +1126,29 @@ def get_permit_detail(permit_id):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Get permit with all details
+        # Get permit with all details including contact info from permits table
         query = """
             SELECT 
                 p.*,
-                COALESCE(contact_info.contact_count, 0) as contact_count,
-                COALESCE(contact_info.has_mobile, false) as has_mobile,
-                contact_info.contact_names,
-                contact_info.contact_phones
+                -- Calculate contact count from permits table columns
+                (
+                    CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                    CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                ) as contact_count,
+                false as has_mobile,
+                -- Aggregate contact names
+                CONCAT_WS(' | ',
+                    NULLIF(COALESCE(p.permittee_business_name, p.applicant), ''),
+                    NULLIF(p.owner_business_name, ''),
+                    NULLIF(p.superintendent_business_name, ''),
+                    NULLIF(p.site_safety_mgr_business_name, '')
+                ) as contact_names,
+                -- Aggregate contact phones
+                CONCAT_WS(' | ',
+                    NULLIF(p.permittee_phone, ''),
+                    NULLIF(p.owner_phone, '')
+                ) as contact_phones
             FROM permits p
-            LEFT JOIN (
-                SELECT 
-                    permit_id,
-                    COUNT(*) as contact_count,
-                    BOOL_OR(COALESCE(is_mobile, false)) as has_mobile,
-                    STRING_AGG(name, '|' ORDER BY name) as contact_names,
-                    STRING_AGG(phone, '|' ORDER BY name) as contact_phones
-                FROM contacts
-                WHERE name IS NOT NULL AND name != ''
-                GROUP BY permit_id
-            ) contact_info ON p.id = contact_info.permit_id
             WHERE p.id = %s;
         """
         
@@ -1161,7 +1252,9 @@ def api_search():
         bbl_clause = 'b.bbl::text LIKE %s'
 
         # contact / applicant matches will use LOWER(...) so use lowercased tokens
-        contact_clause = and_like_clause('LOWER(c.name)', tok_count)
+        # Updated to search permits table columns instead of contacts table
+        permittee_clause = and_like_clause('LOWER(p.permittee_business_name)', tok_count)
+        owner_business_clause = and_like_clause('LOWER(p.owner_business_name)', tok_count)
         applicant_clause = and_like_clause('LOWER(p.applicant)', tok_count)
 
         # params order must match placeholders in SQL below
@@ -1176,7 +1269,9 @@ def api_search():
         params += [f"%{t}%" for t in tokens]
         # bbl param (use full query)
         params.append(f"%{query}%")
-        # contact params (lowercase)
+        # permittee params (lowercase)
+        params += [f"%{t.lower()}%" for t in tokens]
+        # owner_business params (lowercase)
         params += [f"%{t.lower()}%" for t in tokens]
         # applicant params (lowercase)
         params += [f"%{t.lower()}%" for t in tokens]
@@ -1188,11 +1283,10 @@ def api_search():
         sql = f"""
             WITH contact_matches AS (
                 SELECT DISTINCT p.bbl,
-                    ARRAY_AGG(DISTINCT 'Contact: ' || c.name) as contact_reasons
+                    ARRAY_AGG(DISTINCT 'Contact: ' || COALESCE(p.permittee_business_name, p.owner_business_name, p.applicant)) as contact_reasons
                 FROM permits p
-                INNER JOIN contacts c ON p.id = c.permit_id
-                WHERE {contact_clause}
-                AND c.name IS NOT NULL AND c.name != ''
+                WHERE ({permittee_clause} OR {owner_business_clause})
+                AND (p.permittee_business_name IS NOT NULL OR p.owner_business_name IS NOT NULL)
                 GROUP BY p.bbl
             ),
             applicant_matches AS (
@@ -1310,8 +1404,8 @@ def api_suggest():
                 SELECT DISTINCT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Contact' as match_type, 3 as priority
                 FROM buildings b
                 LEFT JOIN permits p ON b.bbl = p.bbl
-                INNER JOIN contacts c ON p.id = c.permit_id
-                WHERE {contact_clause} AND c.name IS NOT NULL
+                WHERE (LOWER(p.permittee_business_name) LIKE %s OR LOWER(p.owner_business_name) LIKE %s OR LOWER(p.applicant) LIKE %s)
+                AND (p.permittee_business_name IS NOT NULL OR p.owner_business_name IS NOT NULL OR p.applicant IS NOT NULL)
                 AND b.bbl NOT IN (SELECT bbl FROM address_matches UNION SELECT bbl FROM owner_matches)
                 GROUP BY b.bbl, b.address, b.current_owner_name
                 ORDER BY permits DESC
@@ -1372,12 +1466,12 @@ def api_market_stats():
         cur.execute("SELECT COUNT(*) as count FROM buildings")
         total_properties = cur.fetchone()['count']
         
-        # Qualified leads (permits with mobile contacts)
+        # Qualified leads (permits with phone contacts)
         cur.execute("""
-            SELECT COUNT(DISTINCT c.permit_id) as count
-            FROM contacts c
-            WHERE c.is_mobile = TRUE
-            AND c.permit_id IN (SELECT job_number FROM permits)
+            SELECT COUNT(*) as count
+            FROM permits
+            WHERE (permittee_phone IS NOT NULL AND permittee_phone != '') 
+               OR (owner_phone IS NOT NULL AND owner_phone != '')
         """)
         qualified_leads = cur.fetchone()['count']
         
@@ -1447,13 +1541,45 @@ def api_property_detail(bbl):
         """, (bbl,))
         parties = cur.fetchall()
         
-        # Get contacts - join by permit database ID, not job_number
+        # Get contacts - aggregate from permits table columns
         cur.execute("""
-            SELECT c.*
-            FROM contacts c
-            JOIN permits p ON c.permit_id = p.id
-            WHERE p.bbl = %s
-        """, (bbl,))
+            SELECT DISTINCT 
+                COALESCE(p.permittee_business_name, p.applicant) as name,
+                p.permittee_phone as phone,
+                'Permittee' as role,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+            UNION
+            SELECT DISTINCT 
+                p.owner_business_name as name,
+                p.owner_phone as phone,
+                'Owner' as role,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.superintendent_business_name as name,
+                NULL as phone,
+                'Superintendent' as role,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
+            UNION
+            SELECT DISTINCT 
+                p.site_safety_mgr_business_name as name,
+                NULL as phone,
+                'Site Safety Manager' as role,
+                NULL as email,
+                p.permit_no as permit_number
+            FROM permits p
+            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
+            ORDER BY name;
+        """, (bbl, bbl, bbl, bbl))
         contacts = cur.fetchall()
         
         cur.close()
