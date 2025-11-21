@@ -420,6 +420,14 @@ function displayPermitsList(permits) {
 }
 
 function loadMapData() {
+    // Show loading overlay
+    const loadingOverlay = document.getElementById('mapLoadingOverlay');
+    const loadingCount = document.getElementById('loadingCount');
+    if (loadingOverlay) {
+        loadingOverlay.classList.remove('hidden');
+        loadingCount.textContent = 'Fetching permit data...';
+    }
+    
     const params = new URLSearchParams({ days: AppState.filters.days });
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
@@ -428,13 +436,27 @@ function loadMapData() {
         .then(r => r.json())
         .then(data => {
             if (data.success) {
+                if (loadingCount) {
+                    loadingCount.textContent = `Loading ${data.locations.length} markers...`;
+                }
                 displayMapMarkers(data.locations);
                 console.log(`✅ Loaded ${data.locations.length} map markers`);
+                
+                // Hide loading overlay after markers are displayed
+                setTimeout(() => {
+                    if (loadingOverlay) {
+                        loadingOverlay.classList.add('hidden');
+                    }
+                }, 300);
             }
         })
         .catch(err => {
             console.error('Map data error:', err);
             showToast('Failed to load map data', 'error');
+            // Hide loading overlay on error
+            if (loadingOverlay) {
+                loadingOverlay.classList.add('hidden');
+            }
         });
 }
 
