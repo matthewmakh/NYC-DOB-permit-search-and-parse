@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python update_phone_types.py",
+    "startCommand": "python permit_scraper_api.py",
     "restartPolicyType": "NEVER"
   }
 }

@@ -51,8 +51,6 @@ document.addEventListener('DOMContentLoaded', function() {
     setupEventListeners();
     setupKeyboardShortcuts();
     loadAllData();
-    
-    showToast('Dashboard loaded successfully', 'success');
 });
 
 function initializeMap() {

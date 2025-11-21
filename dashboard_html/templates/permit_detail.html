@@ -224,20 +224,42 @@
         </div>
         
         <!-- PRIMARY CONTACTS -->
-        {% if permit.permittee_phone or permit.owner_phone %}
+        {% if permit.applicant or permit.permittee_phone or permit.owner_phone %}
         <div class="section contacts-highlight">
             <div class="section-title">
                 <i class="fas fa-phone-alt"></i> Primary Contacts
             </div>
             
-            {% if permit.permittee_phone %}
+            <!-- Applicant Contact -->
+            {% if permit.applicant %}
+            <div class="contact" style="background: #1e3a5f; border: 2px solid #3b82f6;">
+                <div class="contact-type" style="color: #60a5fa;"><i class="fas fa-user-circle"></i> Applicant</div>
+                <div class="contact-name" style="font-size: 1.1em; color: #e0e7ff;">
+                    {{ permit.applicant }}
+                </div>
+                {% if permit.permittee_phone %}
+                <div class="contact-phone" style="font-size: 1.1em; margin-top: 8px;">
+                    <div style="color: #60a5fa; font-size: 0.9em; margin-bottom: 4px;">📞 Applicant Phone:</div>
+                    <a href="tel:{{ permit.permittee_phone }}" style="color: #10b981; font-weight: 700; font-size: 1.15em;">{{ permit.permittee_phone }}</a>
+                </div>
+                {% endif %}
+                {% if permit.permittee_business_name %}
+                <div class="contact-business">{{ permit.permittee_business_name }}</div>
+                {% endif %}
+                {% if permit.permittee_license_number %}
+                <div class="contact-meta">
+                    <i class="fas fa-id-card"></i> License: {{ permit.permittee_license_type or 'N/A' }} #{{ permit.permittee_license_number }}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+            
+            {% if permit.permittee_phone and not permit.applicant %}
             <div class="contact">
                 <div class="contact-type"><i class="fas fa-hard-hat"></i> Contractor / Permittee</div>
                 <div class="contact-name">
                     {% if permit.permittee_first_name or permit.permittee_last_name %}
                         {{ permit.permittee_first_name }} {{ permit.permittee_last_name }}
-                    {% elif permit.applicant %}
-                        {{ permit.applicant }}
                     {% else %}
                         Contractor
                     {% endif %}
@@ -278,8 +300,40 @@
                 </div>
                 {% if permit.owner_house_number or permit.owner_street_name %}
                 <div class="contact-meta">
-                    <i class="fas fa-map-marker-alt"></i> {{ permit.owner_house_number }} {{ permit.owner_street_name }}, {{ permit.owner_city }} {{ permit.owner_state }}
+                    <i class="fas fa-map-marker-alt"></i> {{ permit.owner_house_number }} {{ permit.owner_street_name }}, {{ permit.owner_city }} {{ permit.owner_state }} {{ permit.owner_zip_code }}
                 </div>
+                {% endif %}
+                {% if permit.owner_business_type %}
+                <div class="contact-meta">
+                    <i class="fas fa-briefcase"></i> {{ permit.owner_business_type }}
+                    {% if permit.non_profit == 'Y' %} | <span style="color: #10b981;">Non-Profit</span>{% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+            
+            <!-- Superintendent -->
+            {% if permit.superintendent_name or permit.superintendent_business_name %}
+            <div class="contact">
+                <div class="contact-type"><i class="fas fa-user-cog"></i> Superintendent</div>
+                {% if permit.superintendent_name %}
+                <div class="contact-name">{{ permit.superintendent_name }}</div>
+                {% endif %}
+                {% if permit.superintendent_business_name %}
+                <div class="contact-business">{{ permit.superintendent_business_name }}</div>
+                {% endif %}
+            </div>
+            {% endif %}
+            
+            <!-- Site Safety Manager -->
+            {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name or permit.site_safety_mgr_business_name %}
+            <div class="contact">
+                <div class="contact-type"><i class="fas fa-hard-hat"></i> Site Safety Manager</div>
+                {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name %}
+                <div class="contact-name">{{ permit.site_safety_mgr_first_name }} {{ permit.site_safety_mgr_last_name }}</div>
+                {% endif %}
+                {% if permit.site_safety_mgr_business_name %}
+                <div class="contact-business">{{ permit.site_safety_mgr_business_name }}</div>
                 {% endif %}
             </div>
             {% endif %}
@@ -373,6 +427,90 @@
                 <div class="info-item">
                     <span class="info-label">Doc Number</span>
                     <span class="info-value">{{ permit.job_doc_number }}</span>
+                </div>
+                {% endif %}
+                {% if permit.permit_type %}
+                <div class="info-item">
+                    <span class="info-label">Permit Type</span>
+                    <span class="info-value">{{ permit.permit_type }}</span>
+                </div>
+                {% endif %}
+                {% if permit.permit_subtype %}
+                <div class="info-item">
+                    <span class="info-label">Permit Subtype</span>
+                    <span class="info-value">{{ permit.permit_subtype }}</span>
+                </div>
+                {% endif %}
+                {% if permit.permit_sequence %}
+                <div class="info-item">
+                    <span class="info-label">Permit Sequence</span>
+                    <span class="info-value">{{ permit.permit_sequence }}</span>
+                </div>
+                {% endif %}
+                {% if permit.filing_status %}
+                <div class="info-item">
+                    <span class="info-label">Filing Status</span>
+                    <span class="info-value">{{ permit.filing_status }}</span>
+                </div>
+                {% endif %}
+                {% if permit.fee_type %}
+                <div class="info-item">
+                    <span class="info-label">Fee Type</span>
+                    <span class="info-value">{{ permit.fee_type }}</span>
+                </div>
+                {% endif %}
+                {% if permit.oil_gas %}
+                <div class="info-item">
+                    <span class="info-label">Oil/Gas</span>
+                    <span class="info-value">{{ permit.oil_gas }}</span>
+                </div>
+                {% endif %}
+                {% if permit.site_fill %}
+                <div class="info-item">
+                    <span class="info-label">Site Fill</span>
+                    <span class="info-value">{{ permit.site_fill }}</span>
+                </div>
+                {% endif %}
+                {% if permit.hic_license %}
+                <div class="info-item">
+                    <span class="info-label">HIC License</span>
+                    <span class="info-value">{{ permit.hic_license }}</span>
+                </div>
+                {% endif %}
+                {% if permit.act_as_superintendent %}
+                <div class="info-item">
+                    <span class="info-label">Act as Superintendent</span>
+                    <span class="info-value">{{ permit.act_as_superintendent }}</span>
+                </div>
+                {% endif %}
+                {% if permit.permittee_other_title %}
+                <div class="info-item">
+                    <span class="info-label">Permittee Title</span>
+                    <span class="info-value">{{ permit.permittee_other_title }}</span>
+                </div>
+                {% endif %}
+                {% if permit.dob_run_date %}
+                <div class="info-item">
+                    <span class="info-label">DOB Run Date</span>
+                    <span class="info-value">{{ permit.dob_run_date.strftime('%b %d, %Y') }}</span>
+                </div>
+                {% endif %}
+                {% if permit.permit_si_no %}
+                <div class="info-item">
+                    <span class="info-label">SI Number</span>
+                    <span class="info-value">{{ permit.permit_si_no }}</span>
+                </div>
+                {% endif %}
+                {% if permit.assigned_to %}
+                <div class="info-item">
+                    <span class="info-label">Assigned To</span>
+                    <span class="info-value">{{ permit.assigned_to }}</span>
+                </div>
+                {% endif %}
+                {% if permit.assigned_at %}
+                <div class="info-item">
+                    <span class="info-label">Assigned At</span>
+                    <span class="info-value">{{ permit.assigned_at.strftime('%b %d, %Y %I:%M %p') }}</span>
                 </div>
                 {% endif %}
             </div>
@@ -515,6 +653,30 @@
                 <div class="info-item">
                     <span class="info-label">Use Type</span>
                     <span class="info-value">{{ permit.use_type }}</span>
+                </div>
+                {% endif %}
+                {% if permit.special_district_1 %}
+                <div class="info-item">
+                    <span class="info-label">Special District 1</span>
+                    <span class="info-value">{{ permit.special_district_1 }}</span>
+                </div>
+                {% endif %}
+                {% if permit.special_district_2 %}
+                <div class="info-item">
+                    <span class="info-label">Special District 2</span>
+                    <span class="info-value">{{ permit.special_district_2 }}</span>
+                </div>
+                {% endif %}
+                {% if permit.total_units %}
+                <div class="info-item">
+                    <span class="info-label">Total Units (Permit)</span>
+                    <span class="info-value">{{ permit.total_units }}</span>
+                </div>
+                {% endif %}
+                {% if permit.occupied_units %}
+                <div class="info-item">
+                    <span class="info-label">Occupied Units (Permit)</span>
+                    <span class="info-value">{{ permit.occupied_units }}</span>
                 </div>
                 {% endif %}
             </div>

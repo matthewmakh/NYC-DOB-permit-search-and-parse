@@ -12,8 +12,67 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        .top-nav {
+            background: #1a1d29;
+            border-bottom: 1px solid #2d3142;
+            padding: 1rem 0;
+            margin-bottom: 2rem;
+        }
+        .nav-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 2rem;
+        }
+        .nav-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #e2e8f0;
+        }
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+        .nav-link {
+            color: #94a3b8;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+        }
+        .nav-link:hover {
+            color: #e2e8f0;
+            background: rgba(255,255,255,0.05);
+        }
+        .nav-link.active {
+            color: white;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-weight: 600;
+        }
+    </style>
 </head>
 <body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-content">
+            <div class="nav-title">
+                🏙️ NYC Real Estate Intel
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+            </div>
+        </div>
+    </nav>
+
     <div class="container">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">

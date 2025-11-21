@@ -559,9 +559,30 @@ function showPermitDetails(jobNumber) {
         return;
     }
     
-    // Filter contacts by permit database ID, not job_number
-    const contacts = propertyData.contacts.filter(c => c.permit_id === permit.id);
-    console.log('Found contacts:', contacts);
+    // Build contacts array from permits table data (not contacts table)
+    const contacts = [];
+    
+    // Add applicant/permittee if phone exists
+    if (permit.permittee_phone) {
+        contacts.push({
+            name: permit.applicant || permit.permittee_business_name || `${permit.permittee_first_name || ''} ${permit.permittee_last_name || ''}`.trim() || 'Permittee',
+            phone: permit.permittee_phone,
+            is_mobile: false,
+            is_checked: false
+        });
+    }
+    
+    // Add owner if phone exists and different from permittee
+    if (permit.owner_phone && permit.owner_phone !== permit.permittee_phone) {
+        contacts.push({
+            name: permit.owner_business_name || `${permit.owner_first_name || ''} ${permit.owner_last_name || ''}`.trim() || 'Property Owner',
+            phone: permit.owner_phone,
+            is_mobile: false,
+            is_checked: false
+        });
+    }
+    
+    console.log('Found contacts from permit data:', contacts);
     
     const jobTypeLabels = {
         'NB': 'New Building',
@@ -748,8 +769,15 @@ function showPermitDetails(jobNumber) {
                             {icon: '👤', label: 'Applicant', value: permit.applicant},
                             {icon: '📄', label: 'Permit Number', value: permit.permit_no},
                             {icon: '🏗️', label: 'Job Type', value: jobTypeLabels[permit.job_type] || permit.job_type},
-                            {icon: '🏢', label: 'Use Type', value: permit.use_type},
+                            {icon: '🏢', label: 'Building Type', value: permit.bldg_type},
+                            {icon: '🔧', label: 'Work Type', value: permit.work_type},
+                            {icon: '📋', label: 'Permit Type', value: permit.permit_type},
+                            {icon: '🔖', label: 'Permit Subtype', value: permit.permit_subtype},
+                            {icon: '🏘️', label: 'Use Type', value: permit.use_type},
                             {icon: '💳', label: 'Fee Type', value: permit.fee_type},
+                            {icon: '📊', label: 'Filing Status', value: permit.filing_status},
+                            {icon: '✅', label: 'Self Cert', value: permit.self_cert},
+                            {icon: '🏠', label: 'Residential', value: permit.residential},
                             {icon: '👷', label: 'Assigned To', value: permit.assigned_to},
                         ].filter(item => item.value).map(item => `
                             <div style="background: var(--bg-tertiary); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'">
@@ -796,16 +824,23 @@ function showPermitDetails(jobNumber) {
                         </h3>
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1.5rem;">
                             ${[
-                                {label: 'Stories', value: permit.stories ? permit.stories + ' floors' : null, icon: '📏'},
-                                {label: 'Total Units', value: permit.total_units, icon: '🏠'},
-                                {label: 'Occupied Units', value: permit.occupied_units, icon: '👥'},
-                                {label: 'Total Dwelling Units', value: permit.total_dwelling_units, icon: '�️'},
-                                {label: 'Dwelling Occupied', value: permit.dwelling_units_occupied, icon: '🏘️'},
-                                {label: 'Site Fill', value: permit.site_fill, icon: '🏗️'},
                                 {label: 'BIN', value: permit.bin, icon: '🔢'},
                                 {label: 'BBL', value: permit.bbl ? formatBBL(permit.bbl) : null, icon: '📍'},
                                 {label: 'Block', value: permit.block, icon: '🗺️'},
                                 {label: 'Lot', value: permit.lot, icon: '📐'},
+                                {label: 'Borough', value: permit.borough, icon: '🏙️'},
+                                {label: 'Zip Code', value: permit.zip_code, icon: '📮'},
+                                {label: 'Community Board', value: permit.community_board, icon: '🏛️'},
+                                {label: 'Council District', value: permit.council_district, icon: '🏢'},
+                                {label: 'Stories', value: permit.stories ? permit.stories + ' floors' : null, icon: '📏'},
+                                {label: 'Total Units', value: permit.total_units, icon: '🏠'},
+                                {label: 'Occupied Units', value: permit.occupied_units, icon: '👥'},
+                                {label: 'Total Dwelling Units', value: permit.total_dwelling_units, icon: '🏘️'},
+                                {label: 'Dwelling Occupied', value: permit.dwelling_units_occupied, icon: '🏘️'},
+                                {label: 'Site Fill', value: permit.site_fill, icon: '🏗️'},
+                                {label: 'Oil/Gas', value: permit.oil_gas, icon: '⚡'},
+                                {label: 'Special District 1', value: permit.special_district_1, icon: '🎯'},
+                                {label: 'Special District 2', value: permit.special_district_2, icon: '🎯'},
                             ].filter(item => item.value).map(item => `
                                 <div>
                                     <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
@@ -817,6 +852,74 @@ function showPermitDetails(jobNumber) {
                             `).join('')}
                         </div>
                     </div>
+                    
+                    <!-- Personnel Section -->
+                    ${(permit.superintendent_name || permit.site_safety_mgr_first_name || permit.site_safety_mgr_last_name || permit.permittee_license_number || permit.hic_license) ? `
+                        <div style="background: var(--bg-tertiary); padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 2rem; border: 1px solid var(--border-color);">
+                            <h3 style="color: var(--text-primary); margin: 0 0 1.5rem 0; display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 1.5rem;">👷</span>
+                                <span>Personnel & Licenses</span>
+                            </h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+                                ${permit.superintendent_name ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>👤</span>
+                                            <span>Superintendent</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.superintendent_name}</div>
+                                        ${permit.superintendent_business_name ? `<div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem;">${permit.superintendent_business_name}</div>` : ''}
+                                    </div>
+                                ` : ''}
+                                ${permit.site_safety_mgr_first_name || permit.site_safety_mgr_last_name ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>🦺</span>
+                                            <span>Site Safety Manager</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.site_safety_mgr_first_name} ${permit.site_safety_mgr_last_name}</div>
+                                        ${permit.site_safety_mgr_business_name ? `<div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem;">${permit.site_safety_mgr_business_name}</div>` : ''}
+                                    </div>
+                                ` : ''}
+                                ${permit.permittee_license_number ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>🎫</span>
+                                            <span>Permittee License</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.permittee_license_type || 'N/A'} #${permit.permittee_license_number}</div>
+                                    </div>
+                                ` : ''}
+                                ${permit.hic_license ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>🏗️</span>
+                                            <span>HIC License</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.hic_license}</div>
+                                    </div>
+                                ` : ''}
+                                ${permit.act_as_superintendent ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>⚙️</span>
+                                            <span>Act as Superintendent</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.act_as_superintendent}</div>
+                                    </div>
+                                ` : ''}
+                                ${permit.permittee_other_title ? `
+                                    <div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem;">
+                                            <span>👔</span>
+                                            <span>Permittee Title</span>
+                                        </div>
+                                        <div style="font-weight: 600; color: var(--text-primary);">${permit.permittee_other_title}</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
                     
                     <!-- Location Section -->
                     ${(permit.address || permit.latitude || permit.longitude) ? `

@@ -141,27 +141,27 @@ async function fetchSuggestions(query) {
             return;
         }
         
-        // Render suggestions
+        // Render suggestions - SANITIZED to prevent XSS
         suggestions.innerHTML = results.map(result => `
-            <div class="suggestion-item" onclick="selectSuggestion('${result.bbl}')">
+            <div class="suggestion-item" onclick="selectSuggestion('${escapeHtml(result.bbl)}')">
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <div style="font-weight: 600; color: var(--text-primary);">
-                            ${result.address}
+                            ${escapeHtml(result.address)}
                         </div>
                         <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>${result.owner || 'Owner unknown'}</span>
+                            <span>${escapeHtml(result.owner || 'Owner unknown')}</span>
                             <span style="color: var(--border-color);">•</span>
                             <span>BBL: ${formatBBL(result.bbl)}</span>
                             ${result.match_type ? `
                                 <span style="background: var(--primary-light); color: var(--primary); padding: 0.125rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.75rem; font-weight: 600;">
-                                    ${result.match_type}
+                                    ${escapeHtml(result.match_type)}
                                 </span>
                             ` : ''}
                         </div>
                     </div>
                     <div style="font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; margin-left: 1rem;">
-                        ${result.permits || 0} permits
+                        ${parseInt(result.permits) || 0} permits
                     </div>
                 </div>
             </div>
