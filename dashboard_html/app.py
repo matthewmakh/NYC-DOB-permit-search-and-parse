@@ -666,8 +666,16 @@ def permit_detail(permit_id):
                     p.id,
                     p.permit_no,
                     p.job_type,
+                    p.work_type,
+                    p.permit_status,
+                    p.permit_type,
                     p.issue_date,
+                    p.exp_date,
+                    p.filing_date,
                     p.address,
+                    p.applicant,
+                    p.permittee_business_name,
+                    p.owner_business_name,
                     (
                         CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
                         CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
@@ -675,7 +683,7 @@ def permit_detail(permit_id):
                 FROM permits p
                 WHERE p.bbl = %s AND p.id != %s
                 ORDER BY p.issue_date DESC
-                LIMIT 20;
+                LIMIT 50;
             """, (permit['bbl'], permit_id))
             related_permits = cur.fetchall()
         

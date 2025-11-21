@@ -348,7 +348,7 @@ function displayPermitsList(permits) {
             '<span style="background:#6b7280;color:white;padding:0.25rem 0.75rem;border-radius:12px;font-size:0.75rem;font-weight:600;">❄️ COLD</span>';
         
         return `
-            <div onclick="window.location.href='/permit/${p.id}'" style="cursor:pointer;background:white;border:1px solid #e5e7eb;border-left:4px solid ${getJobTypeColor(jobType)};border-radius:12px;padding:1.5rem;margin-bottom:1rem;transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 24px rgba(0,0,0,0.12)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='none'">
+            <div onclick="window.open('/permit/${p.id}', '_blank')" style="cursor:pointer;background:white;border:1px solid #e5e7eb;border-left:4px solid ${getJobTypeColor(jobType)};border-radius:12px;padding:1.5rem;margin-bottom:1rem;transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 24px rgba(0,0,0,0.12)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='none'">
                 <div style="display:flex;justify-content:space-between;margin-bottom:1rem;">
                     <div style="flex:1;">
                         <div style="font-size:1.125rem;font-weight:700;color:#111827;margin-bottom:0.25rem;">
@@ -465,7 +465,7 @@ function displayMapMarkers(locations) {
                             </div>
                         </div>
                     </div>
-                    <a href="/permit/${loc.id}" style="display:block;background:linear-gradient(135deg,#3b82f6,#2563eb);color:white;text-align:center;padding:0.75rem;border-radius:6px;text-decoration:none;font-weight:600;">
+                    <a href="/permit/${loc.id}" target="_blank" style="display:block;background:linear-gradient(135deg,#3b82f6,#2563eb);color:white;text-align:center;padding:0.75rem;border-radius:6px;text-decoration:none;font-weight:600;">
                         View Full Details →
                     </a>
                 </div>

@@ -132,19 +132,16 @@
         
         /* Related Permits */
         .related { 
-            display: flex; justify-content: space-between; 
-            align-items: center; padding: 0.75rem; 
-            background: #0f172a; border: 1px solid #334155; 
-            border-radius: 6px; margin-bottom: 0.5rem; 
-            text-decoration: none; color: #e2e8f0; transition: all 0.2s; 
+            display: block; margin-bottom: 10px; padding: 12px; 
+            border: 1px solid #ddd; border-radius: 6px; 
+            text-decoration: none; color: inherit; 
+            transition: all 0.2s; background: white;
         }
         .related:hover { 
-            border-color: #3b82f6; background: #1e3a5f; 
+            border-color: #2563eb; background: #f0f7ff; 
             transform: translateX(4px); 
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.1);
         }
-        .related-info { flex: 1; }
-        .related-title { font-weight: 700; color: #fff; margin-bottom: 0.25rem; }
-        .related-meta { font-size: 0.75rem; color: #64748b; }
         
         /* Responsive */
         @media (max-width: 768px) {
@@ -157,8 +154,8 @@
 </head>
 <body>
     <div class="container">
-        <a href="/" class="btn-back">
-            <i class="fas fa-arrow-left"></i> Back to Dashboard
+        <a href="javascript:void(0);" onclick="handleBackClick()" class="btn-back">
+            <i class="fas fa-arrow-left"></i> Back
         </a>
         
         <!-- Header -->
@@ -794,19 +791,73 @@
             <div id="map" class="map-container"></div>
         </div>
         
-        <!-- Related Permits -->
+        <!-- Related Permits at Same Property -->
         {% if related_permits %}
         <div class="section">
-            <div class="section-title"><i class="fas fa-sitemap"></i> Related Permits ({{ related_permits|length }})</div>
+            <div class="section-title"><i class="fas fa-building"></i> Other Permits at This Property ({{ related_permits|length }})</div>
+            <div style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+                All permits associated with BBL {{ permit.bbl }}
+            </div>
             {% for rp in related_permits %}
-            <a href="/permit/{{ rp.id }}" class="related">
-                <div class="related-info">
-                    <div class="related-title">{{ rp.permit_no }} - {{ rp.job_type or 'N/A' }}</div>
-                    <div class="related-meta">
-                        {{ rp.issue_date.strftime('%b %d, %Y') if rp.issue_date else 'No date' }} | {{ rp.contact_count or 0 }} contacts
+            <a href="/permit/{{ rp.id }}" target="_blank" class="related" style="display: block; margin-bottom: 10px; padding: 12px; border: 1px solid #ddd; border-radius: 6px; text-decoration: none; color: inherit; transition: all 0.2s;">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600; font-size: 1.05em; margin-bottom: 5px; color: #2563eb;">
+                            {{ rp.permit_no }}
+                            {% if rp.permit_status %}
+                            <span style="display: inline-block; padding: 2px 8px; font-size: 0.85em; border-radius: 4px; margin-left: 8px; 
+                                {% if rp.permit_status and 'ISSUED' in rp.permit_status.upper() %}
+                                    background-color: #dcfce7; color: #166534;
+                                {% elif rp.permit_status and 'EXPIRED' in rp.permit_status.upper() %}
+                                    background-color: #fee2e2; color: #991b1b;
+                                {% elif rp.permit_status and 'SUSPENDED' in rp.permit_status.upper() or 'REVOKED' in rp.permit_status.upper() %}
+                                    background-color: #fef3c7; color: #92400e;
+                                {% else %}
+                                    background-color: #e0e7ff; color: #3730a3;
+                                {% endif %}
+                            ">{{ rp.permit_status }}</span>
+                            {% endif %}
+                        </div>
+                        <div style="margin-bottom: 6px;">
+                            <span style="font-weight: 500; color: #333;">{{ rp.job_type or 'Unknown Job Type' }}</span>
+                            {% if rp.work_type %}
+                            <span style="color: #666;"> | {{ rp.work_type }}</span>
+                            {% endif %}
+                            {% if rp.permit_type %}
+                            <span style="color: #666;"> | {{ rp.permit_type }}</span>
+                            {% endif %}
+                        </div>
+                        <div style="font-size: 0.9em; color: #666; margin-bottom: 4px;">
+                            <i class="fas fa-calendar"></i>
+                            {% if rp.issue_date %}
+                                <strong>Issued:</strong> {{ rp.issue_date.strftime('%b %d, %Y') }}
+                            {% else %}
+                                <strong>Filed:</strong> {{ rp.filing_date.strftime('%b %d, %Y') if rp.filing_date else 'N/A' }}
+                            {% endif %}
+                            {% if rp.exp_date %}
+                                | <strong>Expires:</strong> {{ rp.exp_date.strftime('%b %d, %Y') }}
+                            {% endif %}
+                        </div>
+                        {% if rp.permittee_business_name or rp.owner_business_name %}
+                        <div style="font-size: 0.85em; color: #888; margin-top: 4px;">
+                            <i class="fas fa-user-tie"></i>
+                            {% if rp.permittee_business_name %}
+                                {{ rp.permittee_business_name }}
+                            {% elif rp.applicant %}
+                                {{ rp.applicant }}
+                            {% elif rp.owner_business_name %}
+                                {{ rp.owner_business_name }}
+                            {% endif %}
+                            {% if rp.contact_count and rp.contact_count > 0 %}
+                                <span style="margin-left: 10px; color: #059669;">
+                                    <i class="fas fa-phone"></i> {{ rp.contact_count }} contact{{ 's' if rp.contact_count != 1 else '' }}
+                                </span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
                     </div>
+                    <i class="fas fa-arrow-right" style="margin-left: 15px; color: #9ca3af;"></i>
                 </div>
-                <i class="fas fa-arrow-right"></i>
             </a>
             {% endfor %}
         </div>
@@ -814,6 +865,17 @@
     </div>
     
     <script>
+        // Handle back button - close tab if opened in new tab, otherwise go to construction page
+        function handleBackClick() {
+            // Check if this window was opened by another window (opened in new tab)
+            if (window.opener && !window.opener.closed) {
+                window.close();
+            } else {
+                // If window.close() doesn't work (not opened as popup), go to construction page
+                window.location.href = '/construction';
+            }
+        }
+        
         document.addEventListener('DOMContentLoaded', function() {
             {% if permit.latitude and permit.longitude %}
             const map = L.map('map').setView([{{ permit.latitude }}, {{ permit.longitude }}], 16);
