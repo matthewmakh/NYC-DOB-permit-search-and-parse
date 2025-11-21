@@ -4,7 +4,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python permit_scraper_api.py",
     "restartPolicyType": "NEVER"
   }
 }
