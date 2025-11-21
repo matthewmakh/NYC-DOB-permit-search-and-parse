@@ -59,8 +59,21 @@ def calculate_lead_score(permit):
     if contact_count > 0:
         score += min(contact_count * 15, 40)
     
-    # Has mobile phone
-    if permit.get('has_mobile'):
+    # Has mobile phone (check for mobile-typical area codes or from has_mobile flag)
+    has_mobile = permit.get('has_mobile', False)
+    if not has_mobile:
+        # Fallback: check phone numbers for mobile patterns
+        permittee_phone = str(permit.get('permittee_phone', ''))
+        owner_phone = str(permit.get('owner_phone', ''))
+        # Common mobile area codes in NYC region: 347, 646, 917, 929, 332, 718 (mixed), 212 (mixed)
+        # Conservative approach: 347, 646, 917, 929, 332 are primarily mobile
+        mobile_prefixes = ('347', '646', '917', '929', '332')
+        has_mobile = (
+            any(permittee_phone.replace('-', '').replace(' ', '').replace('(', '').replace(')', '').startswith(prefix) for prefix in mobile_prefixes) or
+            any(owner_phone.replace('-', '').replace(' ', '').replace('(', '').replace(')', '').startswith(prefix) for prefix in mobile_prefixes)
+        )
+    
+    if has_mobile:
         score += 20
     
     # Recent permit
@@ -1252,11 +1265,12 @@ def get_construction_permits():
         # Get filter parameters
         job_types = request.args.getlist('job_type')  # Can be multiple
         borough = request.args.get('borough')
-        days = request.args.get('days', 30, type=int)  # Default 30 days
+        days = request.args.get('days', '30')  # Can be 'all' or number
         min_lead_score = request.args.get('min_score', 0, type=int)
         has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
         sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
-        limit = request.args.get('limit', 100, type=int)
+        limit = request.args.get('limit', 200, type=int)
+        offset = request.args.get('offset', 0, type=int)  # For pagination
         
         # Build dynamic query
         query = """
@@ -1292,10 +1306,16 @@ def get_construction_permits():
                 b.current_owner_name
             FROM permits p
             LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            WHERE 1=1
         """
         
-        params = [days]
+        params = []
+        
+        # Handle time period filter
+        if days != 'all':
+            days_int = int(days)
+            query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+            params.append(days_int)
         
         # Apply filters
         if job_types:
@@ -1310,21 +1330,52 @@ def get_construction_permits():
         if has_contact == 'true':
             query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
         
-        # Sorting
-        if sort_by == 'date':
-            query += " ORDER BY p.issue_date DESC"
-        elif sort_by == 'score':
+        # Sorting - default to newest first
+        if sort_by == 'score':
             query += " ORDER BY contact_count DESC, p.issue_date DESC"
         elif sort_by == 'contacts':
             query += " ORDER BY contact_count DESC"
         elif sort_by == 'size':
             query += " ORDER BY b.total_units DESC NULLS LAST, b.building_sqft DESC NULLS LAST"
+        else:
+            # Default to date descending (newest first)
+            query += " ORDER BY p.issue_date DESC"
         
-        query += " LIMIT %s"
-        params.append(limit)
+        query += " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
         
         cur.execute(query, tuple(params))
         permits = cur.fetchall()
+        
+        # Get total count for pagination
+        count_query = """
+            SELECT COUNT(*) 
+            FROM permits p
+            LEFT JOIN buildings b ON p.bbl = b.bbl
+            WHERE 1=1
+        """
+        count_params = []
+        
+        # Apply same filters to count query
+        if days != 'all':
+            days_int = int(days)
+            count_query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+            count_params.append(days_int)
+        
+        if job_types:
+            placeholders = ','.join(['%s'] * len(job_types))
+            count_query += f" AND p.job_type IN ({placeholders})"
+            count_params.extend(job_types)
+        
+        if borough:
+            count_query += " AND p.borough = %s"
+            count_params.append(borough)
+        
+        if has_contact == 'true':
+            count_query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
+        
+        cur.execute(count_query, tuple(count_params))
+        total_count = cur.fetchone()['count']
         
         # Calculate lead scores
         results = []
@@ -1337,6 +1388,10 @@ def get_construction_permits():
                 permit_dict['lead_score'] = lead_score
                 results.append(permit_dict)
         
+        # Sort by lead score if requested (after calculating scores)
+        if sort_by == 'score':
+            results.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
+        
         cur.close()
         return_db_connection(conn)
         
@@ -1344,6 +1399,14 @@ def get_construction_permits():
             'success': True,
             'permits': results,
             'count': len(results),
+            'total_count': total_count,
+            'has_more': (offset + limit) < total_count,
+            'pagination': {
+                'limit': limit,
+                'offset': offset,
+                'page': (offset // limit) + 1,
+                'total_pages': (total_count + limit - 1) // limit
+            },
             'filters_applied': {
                 'job_types': job_types,
                 'borough': borough,
@@ -1369,65 +1432,79 @@ def get_construction_stats():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        days = request.args.get('days', 30, type=int)
+        days = request.args.get('days', '30')
+        
+        # Build WHERE clause based on time period
+        if days == 'all':
+            where_clause = "WHERE 1=1"
+            params = ()
+        else:
+            days_int = int(days)
+            where_clause = "WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+            params = (days_int,)
         
         # Total permits in time period
-        cur.execute("""
+        cur.execute(f"""
             SELECT COUNT(*) as total
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
-        """, (days,))
+            {where_clause}
+        """, params)
         total_permits = cur.fetchone()['total']
         
         # Permits with contacts
-        cur.execute("""
+        cur.execute(f"""
             SELECT COUNT(*) as total
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            {where_clause}
             AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL)
-        """, (days,))
+        """, params)
         with_contacts = cur.fetchone()['total']
         
         # Hot leads (estimated with contact count > 0 and recent)
-        cur.execute("""
+        if days == 'all':
+            hot_params = ()
+            hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
+        else:
+            hot_params = params
+            hot_where = f"{where_clause} AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
+            
+        cur.execute(f"""
             SELECT COUNT(*) as total
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
-            AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL)
-            AND issue_date >= CURRENT_DATE - INTERVAL '7 days'
-        """, (days,))
+            {hot_where}
+        """, hot_params)
         hot_leads = cur.fetchone()['total']
         
         # Total estimated value (from ACRIS purchase prices)
-        cur.execute("""
+        value_where = where_clause.replace('issue_date', 'p.issue_date') + " AND b.purchase_price IS NOT NULL"
+        cur.execute(f"""
             SELECT COALESCE(SUM(b.purchase_price), 0) as total_value
             FROM permits p
             LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
-            AND b.purchase_price IS NOT NULL
-        """, (days,))
+            {value_where}
+        """, params)
         total_value = cur.fetchone()['total_value']
         
         # Job type breakdown
-        cur.execute("""
+        cur.execute(f"""
             SELECT job_type, COUNT(*) as count
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            {where_clause}
             GROUP BY job_type
             ORDER BY count DESC
             LIMIT 10
-        """, (days,))
+        """, params)
         job_types = cur.fetchall()
         
         # Borough breakdown
-        cur.execute("""
+        cur.execute(f"""
             SELECT borough, COUNT(*) as count
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            {where_clause}
             AND borough IS NOT NULL
             GROUP BY borough
             ORDER BY count DESC
-        """, (days,))
+        """, params)
         boroughs = cur.fetchall()
         
         cur.close()
@@ -1460,7 +1537,7 @@ def get_construction_map_data():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        days = request.args.get('days', 30, type=int)
+        days = request.args.get('days', '30')
         job_types = request.args.getlist('job_type')
         borough = request.args.get('borough')
         
@@ -1479,16 +1556,22 @@ def get_construction_map_data():
                 (
                     CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
                     CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                ) as contact_count
+                ) as contact_count,
+                false as has_mobile
             FROM permits p
             WHERE p.latitude IS NOT NULL 
                 AND p.longitude IS NOT NULL
                 AND p.latitude BETWEEN 40.4 AND 41.0
                 AND p.longitude BETWEEN -74.3 AND -73.7
-                AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
         """
         
-        params = [days]
+        params = []
+        
+        # Handle time period
+        if days != 'all':
+            days_int = int(days)
+            query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+            params.append(days_int)
         
         if job_types:
             placeholders = ','.join(['%s'] * len(job_types))
@@ -1504,13 +1587,20 @@ def get_construction_map_data():
         cur.execute(query, tuple(params))
         locations = cur.fetchall()
         
+        # Add lead scores to map locations
+        locations_with_scores = []
+        for loc in locations:
+            loc_dict = dict(loc)
+            loc_dict['lead_score'] = calculate_lead_score(loc)
+            locations_with_scores.append(loc_dict)
+        
         cur.close()
         return_db_connection(conn)
         
         return jsonify({
             'success': True,
-            'locations': [dict(row) for row in locations],
-            'count': len(locations)
+            'locations': locations_with_scores,
+            'count': len(locations_with_scores)
         })
         
     except Exception as e:

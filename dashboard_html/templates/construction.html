@@ -11,52 +11,51 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <style>
         .top-nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-color);
-            padding: var(--spacing-md) 0;
-            margin-bottom: var(--spacing-lg);
+            background: #1a1d29;
+            border-bottom: 1px solid #2d3142;
+            padding: 1rem 0;
+            margin-bottom: 2rem;
         }
         
         .nav-content {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 0 var(--spacing-lg);
             display: flex;
-            align-items: center;
             justify-content: space-between;
+            align-items: center;
+            padding: 0 2rem;
+        }
+        
+        .nav-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #e2e8f0;
         }
         
         .nav-links {
             display: flex;
-            gap: var(--spacing-lg);
-            align-items: center;
+            gap: 1.5rem;
         }
         
         .nav-link {
-            color: var(--text-secondary);
+            color: #94a3b8;
             text-decoration: none;
-            font-size: 0.95rem;
             font-weight: 500;
+            font-size: 0.95rem;
             transition: all 0.2s;
             padding: 0.5rem 1rem;
             border-radius: 6px;
         }
         
         .nav-link:hover {
-            color: var(--text-primary);
-            background: var(--hover-bg);
+            color: #e2e8f0;
+            background: rgba(255,255,255,0.05);
         }
         
         .nav-link.active {
             color: white;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             font-weight: 600;
-        }
-        
-        .nav-title {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--text-primary);
         }
     
         .construction-container {
@@ -505,17 +504,54 @@
                                         <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0;" id="permitsListCount">Loading...</p>
                                     </div>
                                 </div>
-                                <div style="display: flex; gap: var(--spacing-sm);">
+                                <div style="display: flex; gap: var(--spacing-sm); align-items: center;">
                                     <select id="sortBy" class="filter-select" style="width: auto; padding: 0.5rem;" onchange="sortPermitsList()">
                                         <option value="date_desc">Newest First</option>
                                         <option value="date_asc">Oldest First</option>
+                                        <option value="score">🔥 Hottest to Coldest</option>
+                                        <option value="contacts">Most Contacts</option>
                                         <option value="address">Address A-Z</option>
                                         <option value="applicant">Applicant A-Z</option>
                                         <option value="type">Job Type</option>
                                     </select>
+                                    <select id="perPage" class="filter-select" style="width: auto; padding: 0.5rem;" onchange="changePerPage()">
+                                        <option value="20">20 per page</option>
+                                        <option value="50">50 per page</option>
+                                        <option value="100">100 per page</option>
+                                        <option value="200" selected>200 per page</option>
+                                        <option value="500">500 per page</option>
+                                        <option value="1000">1000 per page</option>
+                                    </select>
                                 </div>
                             </div>
                             <div id="permitsList"></div>
+                            
+                            <!-- Pagination Controls -->
+                            <div id="paginationControls" style="display: none; margin-top: 1.5rem; padding: 1rem; background: var(--bg-secondary); border-radius: var(--radius-md); text-align: center;">
+                                <div style="display: flex; justify-content: center; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                                    <button onclick="goToPage(1)" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-angle-double-left"></i> First
+                                    </button>
+                                    <button onclick="previousPage()" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-angle-left"></i> Previous
+                                    </button>
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: var(--bg-tertiary); border-radius: var(--radius-md);">
+                                        <span style="color: var(--text-secondary); font-size: 0.875rem;">Page</span>
+                                        <span id="currentPage" style="font-weight: 700; color: var(--primary); font-size: 1.125rem;">1</span>
+                                        <span style="color: var(--text-secondary); font-size: 0.875rem;">of</span>
+                                        <span id="totalPages" style="font-weight: 700; color: var(--text-primary);">1</span>
+                                    </div>
+                                    <button onclick="nextPage()" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+                                        Next <i class="fas fa-angle-right"></i>
+                                    </button>
+                                    <button onclick="goToLastPage()" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+                                        Last <i class="fas fa-angle-double-right"></i>
+                                    </button>
+                                </div>
+                                <div style="margin-top: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">
+                                    Showing <span id="showingRange" style="font-weight: 600; color: var(--text-primary);">1-200</span> of <span id="totalCount" style="font-weight: 600; color: var(--text-primary);">0</span> permits
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
@@ -582,10 +618,15 @@
                     <div class="filter-group">
                         <label class="filter-label">Time Period</label>
                         <select id="filterDays" class="filter-select">
+                            <option value="7">Last 7 Days</option>
+                            <option value="14">Last 14 Days</option>
                             <option value="30">Last 30 Days</option>
                             <option value="90" selected>Last 90 Days</option>
                             <option value="180">Last 6 Months</option>
                             <option value="365">Last Year</option>
+                            <option value="730">Last 2 Years</option>
+                            <option value="1825">Last 5 Years</option>
+                            <option value="all">All Time</option>
                         </select>
                     </div>
                     

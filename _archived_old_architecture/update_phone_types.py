@@ -1,6 +1,9 @@
 """
-Script to validate phone numbers in the database and update the is_mobile column.
+Script to validate phone numbers in the permits table and update mobile flags.
 Uses Twilio Lookup API to determine if phone numbers are mobile or landline.
+
+NOTE: This script is DEPRECATED - we now use area code detection in calculate_lead_score()
+for instant mobile detection without API costs. See app.py line 62-77.
 """
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -53,14 +56,20 @@ except Exception as err:
     exit(1)
 
 # === FETCH PHONE NUMBERS TO VALIDATE ===
-# Option 1: Get all phones (update all records)
-# cur.execute("SELECT DISTINCT phone FROM contacts WHERE phone IS NOT NULL AND phone != ''")
-
-# Option 2: Only get phones that haven't been validated yet (is_mobile is NULL)
-cur.execute("SELECT DISTINCT phone FROM contacts WHERE phone IS NOT NULL AND phone != '' AND is_mobile IS NULL")
+# Get unique phone numbers from permits table (permittee_phone and owner_phone columns)
+cur.execute("""
+    SELECT DISTINCT phone FROM (
+        SELECT permittee_phone as phone FROM permits WHERE permittee_phone IS NOT NULL AND permittee_phone != ''
+        UNION
+        SELECT owner_phone as phone FROM permits WHERE owner_phone IS NOT NULL AND owner_phone != ''
+    ) phones
+    ORDER BY phone
+""")
 
 phones = [row['phone'] for row in cur.fetchall()]
-print(f"📞 Found {len(phones)} unique phone numbers to validate.")
+print(f"📞 Found {len(phones)} unique phone numbers in permits table.")
+print(f"   (from permittee_phone and owner_phone columns)")
+
 
 if len(phones) == 0:
     print("✅ All phone numbers already validated!")
@@ -122,15 +131,17 @@ for index, phone in enumerate(phones, start=1):
         # Log progress
         print(f"{index}/{len(phones)} - {phone} → {status} ({carrier_name})")
 
-        # Update database
+        # Update database - update permits table with mobile flag
         if is_mobile is not None:
-            update_query = """
-                UPDATE contacts 
-                SET is_mobile = %s 
-                WHERE phone = %s
-            """
-            cur.execute(update_query, (is_mobile, phone))
-            conn.commit()
+            # Add is_mobile_permittee and is_mobile_owner columns if needed
+            # For now, just log the results (database schema would need updating)
+            print(f"   Would update: {phone} -> is_mobile = {is_mobile}")
+            # TODO: Add columns to permits table:
+            # ALTER TABLE permits ADD COLUMN IF NOT EXISTS is_mobile_permittee BOOLEAN;
+            # ALTER TABLE permits ADD COLUMN IF NOT EXISTS is_mobile_owner BOOLEAN;
+            # Then update:
+            # UPDATE permits SET is_mobile_permittee = %s WHERE permittee_phone = %s
+            # UPDATE permits SET is_mobile_owner = %s WHERE owner_phone = %s
             validated_count += 1
 
     except Exception as e:
@@ -139,9 +150,7 @@ for index, phone in enumerate(phones, start=1):
         # Handle invalid/non-existent numbers gracefully
         if 'invalid' in error_str.lower() or '20404' in error_str:
             print(f"{index}/{len(phones)} - {phone} → ❌ INVALID")
-            # Mark as invalid (non-mobile)
-            cur.execute("UPDATE contacts SET is_mobile = %s WHERE phone = %s", (False, phone))
-            conn.commit()
+            # Would mark as invalid (non-mobile) in permits table
             invalid_count += 1
         else:
             print(f"⚠️ Error checking {phone}: {e}")
@@ -163,13 +172,11 @@ print(f"⚠️  Errors: {error_count}")
 print("="*60)
 
 # === VERIFY UPDATE ===
-cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile IS NOT NULL")
-total_validated = cur.fetchone()['total']
-cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile = TRUE")
-total_mobile = cur.fetchone()['total']
-print(f"\n📊 Database status:")
-print(f"   Total validated contacts: {total_validated}")
-print(f"   Total mobile contacts: {total_mobile}")
+print(f"\n📊 Results logged (database schema needs updating to store results)")
+print(f"   Mobile numbers found: {mobile_count}")
+print(f"   Landline numbers found: {landline_count}")
+print(f"\n� RECOMMENDATION: Use area code detection instead (see app.py calculate_lead_score)")
+print(f"   No API costs, instant results, works with existing schema")
 
 # === CLOSE DB CONNECTION ===
 cur.close()

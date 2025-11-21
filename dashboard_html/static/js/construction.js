@@ -10,10 +10,17 @@ const AppState = {
     filters: {
         borough: '',
         jobType: '',
-        days: 90,
+        days: '90',  // String to support 'all' option
         searchText: '',
         hasContact: false,
-        minLeadScore: 0
+        minLeadScore: 0,
+        sortBy: 'date'  // Add sort parameter
+    },
+    pagination: {
+        currentPage: 1,
+        perPage: 200,
+        totalCount: 0,
+        totalPages: 1
     }
 };
 
@@ -82,7 +89,12 @@ function setupEventListeners() {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', function() {
-                AppState.filters[key] = key === 'days' ? parseInt(this.value) : this.value;
+                if (key === 'days') {
+                    // Handle both numeric and 'all' values
+                    AppState.filters[key] = this.value === 'all' ? 'all' : parseInt(this.value);
+                } else {
+                    AppState.filters[key] = this.value;
+                }
                 applyFilters();
             });
         }
@@ -110,7 +122,7 @@ function setupQuickFilters() {
             applyFiltersLocal();
         },
         'quickFilterRecent': () => {
-            AppState.filters.days = AppState.filters.days === 7 ? 90 : 7;
+            AppState.filters.days = AppState.filters.days === '7' || AppState.filters.days === 7 ? '90' : '7';
             document.getElementById('filterDays').value = AppState.filters.days;
             applyFilters();
         },
@@ -266,7 +278,13 @@ function displayBoroughsChart(boroughs) {
 }
 
 function loadPermits() {
-    const params = new URLSearchParams({ days: AppState.filters.days, limit: 200 });
+    const offset = (AppState.pagination.currentPage - 1) * AppState.pagination.perPage;
+    const params = new URLSearchParams({ 
+        days: AppState.filters.days, 
+        limit: AppState.pagination.perPage,
+        offset: offset,
+        sort: AppState.filters.sortBy
+    });
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
     
@@ -277,8 +295,11 @@ function loadPermits() {
         .then(data => {
             if (data.success) {
                 AppState.permits = data.permits;
-                applyFiltersLocal();
-                console.log(`✅ Loaded ${data.permits.length} permits`);
+                AppState.pagination.totalCount = data.total_count;
+                AppState.pagination.totalPages = data.pagination.total_pages;
+                displayPermitsList(AppState.permits);
+                updatePaginationUI();
+                console.log(`✅ Loaded ${data.permits.length} permits (Page ${AppState.pagination.currentPage}/${AppState.pagination.totalPages})`);
             }
         })
         .catch(err => {
@@ -288,6 +309,7 @@ function loadPermits() {
 }
 
 function applyFiltersLocal() {
+    // Client-side search filtering only (for already loaded permits)
     let filtered = [...AppState.permits];
     
     if (AppState.filters.searchText) {
@@ -309,10 +331,11 @@ function applyFiltersLocal() {
     }
     
     displayPermitsList(filtered);
-    setTextById('permitsListCount', `${filtered.length} permits found`);
+    setTextById('permitsListCount', `${filtered.length} of ${AppState.pagination.totalCount} permits`);
 }
 
 function applyFilters() {
+    AppState.pagination.currentPage = 1; // Reset to first page
     loadStats();
     loadPermits();
     loadMapData();
@@ -541,21 +564,20 @@ function sortPermitsList() {
     const sortBy = document.getElementById('sortBy')?.value;
     if (!sortBy) return;
     
-    let sorted = [...AppState.permits];
-    
-    const sortFns = {
-        'date_desc': (a, b) => new Date(b.issue_date) - new Date(a.issue_date),
-        'date_asc': (a, b) => new Date(a.issue_date) - new Date(b.issue_date),
-        'score_desc': (a, b) => (b.lead_score || 0) - (a.lead_score || 0),
-        'score_asc': (a, b) => (a.lead_score || 0) - (b.lead_score || 0),
-        'address': (a, b) => (a.address || '').localeCompare(b.address || ''),
-        'type': (a, b) => (a.job_type || '').localeCompare(b.job_type || '')
+    // Map frontend sort values to backend API values
+    const sortMap = {
+        'date_desc': 'date',
+        'date_asc': 'date',  // Will handle asc in backend if needed
+        'score': 'score',
+        'contacts': 'contacts',
+        'address': 'date',  // Fallback to date for now
+        'applicant': 'date',  // Fallback to date for now
+        'type': 'date'  // Fallback to date for now
     };
     
-    if (sortFns[sortBy]) {
-        sorted.sort(sortFns[sortBy]);
-        displayPermitsList(sorted);
-    }
+    AppState.filters.sortBy = sortMap[sortBy] || 'date';
+    AppState.pagination.currentPage = 1; // Reset to first page when sorting
+    loadPermits();
 }
 
 function clearFilters() {
@@ -632,5 +654,54 @@ function showLoadingSkeleton(containerId, count) {
 const style = document.createElement('style');
 style.textContent = '@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}';
 document.head.appendChild(style);
+
+// Pagination functions
+function updatePaginationUI() {
+    const start = (AppState.pagination.currentPage - 1) * AppState.pagination.perPage + 1;
+    const end = Math.min(AppState.pagination.currentPage * AppState.pagination.perPage, AppState.pagination.totalCount);
+    
+    setTextById('currentPage', AppState.pagination.currentPage);
+    setTextById('totalPages', AppState.pagination.totalPages);
+    setTextById('showingRange', `${start}-${end}`);
+    setTextById('totalCount', AppState.pagination.totalCount);
+    setTextById('permitsListCount', `${AppState.pagination.totalCount} permits total`);
+    
+    // Show/hide pagination controls
+    const paginationEl = document.getElementById('paginationControls');
+    if (paginationEl) {
+        paginationEl.style.display = AppState.pagination.totalPages > 1 ? 'block' : 'none';
+    }
+}
+
+function changePerPage() {
+    const perPageSelect = document.getElementById('perPage');
+    AppState.pagination.perPage = parseInt(perPageSelect.value);
+    AppState.pagination.currentPage = 1;
+    loadPermits();
+}
+
+function goToPage(page) {
+    if (page >= 1 && page <= AppState.pagination.totalPages) {
+        AppState.pagination.currentPage = page;
+        loadPermits();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+function previousPage() {
+    if (AppState.pagination.currentPage > 1) {
+        goToPage(AppState.pagination.currentPage - 1);
+    }
+}
+
+function nextPage() {
+    if (AppState.pagination.currentPage < AppState.pagination.totalPages) {
+        goToPage(AppState.pagination.currentPage + 1);
+    }
+}
+
+function goToLastPage() {
+    goToPage(AppState.pagination.totalPages);
+}
 
 console.log('🎨 Enhanced Construction Intelligence ready');
