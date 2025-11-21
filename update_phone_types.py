@@ -83,10 +83,29 @@ mobile_count = 0
 landline_count = 0
 invalid_count = 0
 error_count = 0
+skipped_count = 0
 
 # === PROCESS EACH PHONE NUMBER ===
 for index, phone in enumerate(phones, start=1):
     clean_phone = phone.strip().replace('-', '').replace('(', '').replace(')', '').replace(' ', '').replace('.', '')
+    
+    # VALIDATION: Skip obviously invalid numbers to save API costs
+    if not clean_phone or len(clean_phone) < 10:
+        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (too short)")
+        invalid_count += 1
+        continue
+    
+    # Skip fake/test numbers
+    if clean_phone in ['0', '0000', '00000000', '0000000000', '1111111111', '1234567890', '1234567891']:
+        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (fake number)")
+        invalid_count += 1
+        continue
+    
+    # Skip numbers that don't look like US phone numbers
+    if clean_phone.startswith('00') or (len(clean_phone) == 10 and not clean_phone[0] in '23456789'):
+        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (invalid format)")
+        invalid_count += 1
+        continue
     
     # Add country code if missing (assuming US numbers)
     if not clean_phone.startswith('+'):
@@ -94,6 +113,10 @@ for index, phone in enumerate(phones, start=1):
             clean_phone = '+1' + clean_phone
         elif len(clean_phone) == 11 and clean_phone.startswith('1'):
             clean_phone = '+' + clean_phone
+        else:
+            print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (wrong length: {len(clean_phone)})")
+            invalid_count += 1
+            continue
 
     try:
         # Use Twilio Lookup API with line type intelligence
@@ -167,8 +190,10 @@ print("="*60)
 print(f"✅ Total validated: {validated_count}")
 print(f"📱 Mobile numbers: {mobile_count}")
 print(f"☎️  Landline numbers: {landline_count}")
-print(f"❌ Invalid numbers: {invalid_count}")
-print(f"⚠️  Errors: {error_count}")
+print(f"⏭️  Skipped (invalid): {invalid_count}")
+print(f"❌ API errors: {error_count}")
+print(f"💰 API calls made: {validated_count + error_count}")
+print(f"💵 Estimated cost: ${(validated_count + error_count) * 0.005:.2f}")
 print("="*60)
 
 # === VERIFY UPDATE ===
