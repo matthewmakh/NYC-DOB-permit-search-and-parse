@@ -219,9 +219,8 @@ class PermitDatabase:
             if not permit_no:
                 permit_no = f"{permit_data.get('bin__', '')}_{permit_data.get('issuance_date', '')}"
             
-            # Skip if already exists
-            if self.permit_exists(permit_no):
-                return False
+            # NOTE: No longer checking for duplicates here - ON CONFLICT DO UPDATE handles this
+            # This allows the UPSERT to update existing permits when status changes
             
             # Parse dates
             def parse_date(date_str):
