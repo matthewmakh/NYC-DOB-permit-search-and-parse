@@ -372,6 +372,13 @@ class PermitDatabase:
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s
                 )
+                ON CONFLICT (permit_no) DO UPDATE SET
+                    permit_status = EXCLUDED.permit_status,
+                    exp_date = EXCLUDED.exp_date,
+                    filing_date = EXCLUDED.filing_date,
+                    job_start_date = EXCLUDED.job_start_date,
+                    filing_status = EXCLUDED.filing_status,
+                    api_last_updated = EXCLUDED.api_last_updated
             """, (
                 # Original fields
                 permit_no,
