@@ -140,13 +140,21 @@ def run_parallel_scraper(start_date: str, end_date: str, num_workers: int = 4):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python parallel_scraper.py START_DATE END_DATE [NUM_WORKERS]")
+    # Default to last 7 days if no dates provided
+    if len(sys.argv) < 2:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        num_workers = 1
+        print(f"📅 No dates specified, defaulting to last 7 days: {start_date} to {end_date}")
+    elif len(sys.argv) < 3:
+        print("Usage: python parallel_scraper.py [START_DATE END_DATE] [NUM_WORKERS]")
         print("Example: python parallel_scraper.py 2025-11-18 2025-11-21 8")
+        print("Or run without arguments to scrape last 7 days:")
+        print("  python parallel_scraper.py")
         sys.exit(1)
-    
-    start_date = sys.argv[1]
-    end_date = sys.argv[2]
-    num_workers = int(sys.argv[3]) if len(sys.argv) > 3 else 4
+    else:
+        start_date = sys.argv[1]
+        end_date = sys.argv[2]
+        num_workers = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     
     run_parallel_scraper(start_date, end_date, num_workers)
