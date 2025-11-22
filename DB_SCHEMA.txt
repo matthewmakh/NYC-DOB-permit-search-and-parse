@@ -1,409 +1,589 @@
-================================================================================
-DATABASE SCHEMA
-================================================================================
+====================================================================================================
+DATABASE SCHEMA - FULL DETAILS
+====================================================================================================
 
-TABLES (13):
-  - acris_parties
-  - acris_transactions
-  - assignment_log
-  - building_metrics
-  - buildings
-  - contact_scrape_jobs
-  - contacts
-  - investor_profiles
-  - lender_intelligence
-  - owner_contacts
-  - permit_search_config
-  - permits
-  - property_intelligence
-
-================================================================================
+====================================================================================================
 TABLE: acris_parties
-================================================================================
-Rows: 94,511
-Columns: 16
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('acris_parti
-transaction_id                           integer                   YES                            
-party_type                               character varying(20)     YES                            
-party_name                               character varying(255)    YES                            
-address_1                                character varying(255)    YES                            
-address_2                                character varying(255)    YES                            
-city                                     character varying(100)    YES                            
-state                                    character varying(2)      YES                            
-zip_code                                 character varying(10)     YES                            
-country                                  character varying(2)      YES                            
-is_lead                                  boolean                   YES        false               
-lead_contacted_date                      date                      YES                            
-lead_response_status                     character varying(50)     YES                            
-lead_notes                               text                      YES                            
-created_at                               timestamp without time zone YES        now()               
-building_id                              integer                   YES                            
+id                                       integer              NO         nextval('acris_parties_id...  
+transaction_id                           integer              YES                                      
+party_type                               character varying(20) YES                                      
+party_name                               character varying(255) YES                                      
+address_1                                character varying(255) YES                                      
+address_2                                character varying(255) YES                                      
+city                                     character varying(100) YES                                      
+state                                    character varying(2) YES                                      
+zip_code                                 character varying(10) YES                                      
+country                                  character varying(2) YES                                      
+is_lead                                  boolean              YES        false                         
+lead_contacted_date                      date                 YES                                      
+lead_response_status                     character varying(50) YES                                      
+lead_notes                               text                 YES                                      
+created_at                               timestamp without time zone YES        now()                         
+building_id                              integer              YES                                      
 
-================================================================================
+Row Count: 94,511
+
+Indexes:
+  - acris_parties_pkey
+    CREATE UNIQUE INDEX acris_parties_pkey ON public.acris_parties USING btree (id)
+  - idx_acris_parties_is_lead
+    CREATE INDEX idx_acris_parties_is_lead ON public.acris_parties USING btree (is_lead) WHERE (is_lead = true)
+  - idx_acris_parties_name
+    CREATE INDEX idx_acris_parties_name ON public.acris_parties USING btree (party_name)
+  - idx_acris_parties_trans
+    CREATE INDEX idx_acris_parties_trans ON public.acris_parties USING btree (transaction_id)
+  - idx_acris_parties_type
+    CREATE INDEX idx_acris_parties_type ON public.acris_parties USING btree (party_type)
+
+====================================================================================================
 TABLE: acris_transactions
-================================================================================
-Rows: 33,427
-Columns: 13
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('acris_trans
-building_id                              integer                   YES                            
-document_id                              character varying(50)     NO                             
-doc_type                                 character varying(20)     YES                            
-doc_amount                               numeric                   YES                            
-doc_date                                 date                      YES                            
-recorded_date                            date                      YES                            
-percent_transferred                      integer                   YES                            
-crfn                                     character varying(50)     YES                            
-is_primary_deed                          boolean                   YES        false               
-is_primary_mortgage                      boolean                   YES        false               
-created_at                               timestamp without time zone YES        now()               
-bbl                                      character varying(10)     YES                            
+id                                       integer              NO         nextval('acris_transactio...  
+building_id                              integer              YES                                      
+document_id                              character varying(50) NO                                       
+doc_type                                 character varying(20) YES                                      
+doc_amount                               numeric              YES                                      
+doc_date                                 date                 YES                                      
+recorded_date                            date                 YES                                      
+percent_transferred                      integer              YES                                      
+crfn                                     character varying(50) YES                                      
+is_primary_deed                          boolean              YES        false                         
+is_primary_mortgage                      boolean              YES        false                         
+created_at                               timestamp without time zone YES        now()                         
+bbl                                      character varying(10) YES                                      
 
-================================================================================
-TABLE: assignment_log
-================================================================================
-Rows: 433
-Columns: 5
+Row Count: 33,427
 
-Column Name                              Type                      Nullable   Default             
-----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('assignment_
-permit_id                                integer                   YES                            
-contact_id                               integer                   YES                            
-assigned_to                              character varying(255)    YES                            
-assigned_at                              timestamp without time zone YES                            
+Indexes:
+  - acris_transactions_pkey
+    CREATE UNIQUE INDEX acris_transactions_pkey ON public.acris_transactions USING btree (id)
+  - idx_acris_trans_building
+    CREATE INDEX idx_acris_trans_building ON public.acris_transactions USING btree (building_id)
+  - idx_acris_trans_date
+    CREATE INDEX idx_acris_trans_date ON public.acris_transactions USING btree (doc_date DESC)
+  - idx_acris_trans_primary_deed
+    CREATE INDEX idx_acris_trans_primary_deed ON public.acris_transactions USING btree (is_primary_deed) WHERE (is_primary_deed = true)
+  - idx_acris_trans_type
+    CREATE INDEX idx_acris_trans_type ON public.acris_transactions USING btree (doc_type)
+  - unique_doc_per_building
+    CREATE UNIQUE INDEX unique_doc_per_building ON public.acris_transactions USING btree (building_id, document_id)
 
-================================================================================
+====================================================================================================
 TABLE: building_metrics
-================================================================================
-Rows: 0
-Columns: 13
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('building_me
-bbl                                      character varying(10)     YES                            
-total_permits_3yr                        integer                   YES        0                   
-total_spend_3yr                          numeric                   YES        0                   
-last_permit_date                         date                      YES                            
-major_work_types                         text                      YES                            
-affordability_score                      integer                   YES                            
-renovation_need_score                    integer                   YES                            
-contact_quality_score                    integer                   YES                            
-overall_priority_score                   integer                   YES                            
-priority_tier                            character varying(20)     YES                            
-target_summary                           text                      YES                            
-last_calculated                          timestamp without time zone YES        CURRENT_TIMESTAMP   
+id                                       integer              NO         nextval('building_metrics...  
+bbl                                      character varying(10) YES                                      
+total_permits_3yr                        integer              YES        0                             
+total_spend_3yr                          numeric              YES        0                             
+last_permit_date                         date                 YES                                      
+major_work_types                         text                 YES                                      
+affordability_score                      integer              YES                                      
+renovation_need_score                    integer              YES                                      
+contact_quality_score                    integer              YES                                      
+overall_priority_score                   integer              YES                                      
+priority_tier                            character varying(20) YES                                      
+target_summary                           text                 YES                                      
+last_calculated                          timestamp without time zone YES        CURRENT_TIMESTAMP             
 
-================================================================================
+Row Count: 0
+
+Indexes:
+  - building_metrics_bbl_key
+    CREATE UNIQUE INDEX building_metrics_bbl_key ON public.building_metrics USING btree (bbl)
+  - building_metrics_pkey
+    CREATE UNIQUE INDEX building_metrics_pkey ON public.building_metrics USING btree (id)
+  - idx_building_metrics_bbl
+    CREATE INDEX idx_building_metrics_bbl ON public.building_metrics USING btree (bbl)
+  - idx_building_metrics_priority
+    CREATE INDEX idx_building_metrics_priority ON public.building_metrics USING btree (overall_priority_score DESC)
+  - idx_building_metrics_tier
+    CREATE INDEX idx_building_metrics_tier ON public.building_metrics USING btree (priority_tier)
+
+====================================================================================================
 TABLE: buildings
-================================================================================
-Rows: 1,418
-Columns: 53
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('buildings_i
-bbl                                      character varying(10)     NO                             
-address                                  text                      YES                            
-borough                                  character varying(20)     YES                            
-block                                    character varying(20)     YES                            
-lot                                      character varying(20)     YES                            
-bin                                      character varying(50)     YES                            
-building_class                           character varying(10)     YES                            
-land_use                                 character varying(50)     YES                            
-residential_units                        integer                   YES                            
-total_units                              integer                   YES                            
-year_built                               integer                   YES                            
-num_floors                               integer                   YES                            
-building_sqft                            integer                   YES                            
-lot_sqft                                 integer                   YES                            
-current_owner_name                       character varying(500)    YES                            
-purchase_date                            date                      YES                            
-purchase_price                           numeric                   YES                            
-mortgage_amount                          numeric                   YES                            
-estimated_value                          numeric                   YES                            
-value_source                             character varying(50)     YES                            
-estimated_rent_per_unit                  numeric                   YES                            
-estimated_annual_rent                    numeric                   YES                            
-estimated_equity                         numeric                   YES                            
-last_updated                             timestamp without time zone YES        CURRENT_TIMESTAMP   
-owner_name_rpad                          character varying(500)    YES                            
-assessed_land_value                      numeric                   YES                            
-assessed_total_value                     numeric                   YES                            
-year_altered                             integer                   YES                            
-owner_name_hpd                           character varying(500)    YES                            
-hpd_registration_id                      character varying(50)     YES                            
-hpd_open_violations                      integer                   YES        0                   
-hpd_total_violations                     integer                   YES        0                   
-hpd_open_complaints                      integer                   YES        0                   
-hpd_total_complaints                     integer                   YES        0                   
-sale_price                               numeric                   YES                            
-sale_date                                date                      YES                            
-sale_recorded_date                       date                      YES                            
-sale_buyer_primary                       character varying(255)    YES                            
-sale_seller_primary                      character varying(255)    YES                            
-sale_percent_transferred                 integer                   YES                            
-sale_crfn                                character varying(50)     YES                            
-mortgage_date                            date                      YES                            
-mortgage_lender_primary                  character varying(255)    YES                            
-mortgage_crfn                            character varying(50)     YES                            
-is_cash_purchase                         boolean                   YES                            
-financing_ratio                          numeric                   YES                            
-days_since_sale                          integer                   YES                            
-acris_total_transactions                 integer                   YES        0                   
-acris_deed_count                         integer                   YES        0                   
-acris_mortgage_count                     integer                   YES        0                   
-acris_satisfaction_count                 integer                   YES        0                   
-acris_last_enriched                      timestamp without time zone YES                            
+id                                       integer              NO         nextval('buildings_id_seq...  
+bbl                                      character varying(10) NO                                       
+address                                  text                 YES                                      
+borough                                  character varying(20) YES                                      
+block                                    character varying(20) YES                                      
+lot                                      character varying(20) YES                                      
+bin                                      character varying(50) YES                                      
+building_class                           character varying(10) YES                                      
+land_use                                 character varying(50) YES                                      
+residential_units                        integer              YES                                      
+total_units                              integer              YES                                      
+year_built                               integer              YES                                      
+num_floors                               integer              YES                                      
+building_sqft                            integer              YES                                      
+lot_sqft                                 integer              YES                                      
+current_owner_name                       character varying(500) YES                                      
+purchase_date                            date                 YES                                      
+purchase_price                           numeric              YES                                      
+mortgage_amount                          numeric              YES                                      
+estimated_value                          numeric              YES                                      
+value_source                             character varying(50) YES                                      
+estimated_rent_per_unit                  numeric              YES                                      
+estimated_annual_rent                    numeric              YES                                      
+estimated_equity                         numeric              YES                                      
+last_updated                             timestamp without time zone YES        CURRENT_TIMESTAMP             
+owner_name_rpad                          character varying(500) YES                                      
+assessed_land_value                      numeric              YES                                      
+assessed_total_value                     numeric              YES                                      
+year_altered                             integer              YES                                      
+owner_name_hpd                           character varying(500) YES                                      
+hpd_registration_id                      character varying(50) YES                                      
+hpd_open_violations                      integer              YES        0                             
+hpd_total_violations                     integer              YES        0                             
+hpd_open_complaints                      integer              YES        0                             
+hpd_total_complaints                     integer              YES        0                             
+sale_price                               numeric              YES                                      
+sale_date                                date                 YES                                      
+sale_recorded_date                       date                 YES                                      
+sale_buyer_primary                       character varying(255) YES                                      
+sale_seller_primary                      character varying(255) YES                                      
+sale_percent_transferred                 integer              YES                                      
+sale_crfn                                character varying(50) YES                                      
+mortgage_date                            date                 YES                                      
+mortgage_lender_primary                  character varying(255) YES                                      
+mortgage_crfn                            character varying(50) YES                                      
+is_cash_purchase                         boolean              YES                                      
+financing_ratio                          numeric              YES                                      
+days_since_sale                          integer              YES                                      
+acris_total_transactions                 integer              YES        0                             
+acris_deed_count                         integer              YES        0                             
+acris_mortgage_count                     integer              YES        0                             
+acris_satisfaction_count                 integer              YES        0                             
+acris_last_enriched                      timestamp without time zone YES                                      
 
-================================================================================
+Row Count: 1,418
+
+Indexes:
+  - buildings_bbl_key
+    CREATE UNIQUE INDEX buildings_bbl_key ON public.buildings USING btree (bbl)
+  - buildings_pkey
+    CREATE UNIQUE INDEX buildings_pkey ON public.buildings USING btree (id)
+  - idx_buildings_bbl
+    CREATE INDEX idx_buildings_bbl ON public.buildings USING btree (bbl)
+  - idx_buildings_borough
+    CREATE INDEX idx_buildings_borough ON public.buildings USING btree (borough)
+  - idx_buildings_financing_ratio
+    CREATE INDEX idx_buildings_financing_ratio ON public.buildings USING btree (financing_ratio)
+  - idx_buildings_is_cash
+    CREATE INDEX idx_buildings_is_cash ON public.buildings USING btree (is_cash_purchase)
+  - idx_buildings_owner
+    CREATE INDEX idx_buildings_owner ON public.buildings USING btree (current_owner_name)
+  - idx_buildings_sale_date
+    CREATE INDEX idx_buildings_sale_date ON public.buildings USING btree (sale_date DESC)
+
+====================================================================================================
 TABLE: contact_scrape_jobs
-================================================================================
-Rows: 23
-Columns: 9
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('contact_scr
-permit_type                              character varying(10)     NO                             
-start_month                              integer                   NO                             
-start_day                                integer                   NO                             
-start_year                               integer                   NO                             
-total_permits                            integer                   YES        0                   
-contacts_checked                         integer                   YES        0                   
-is_complete                              boolean                   YES        false               
-created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP   
+id                                       integer              NO         nextval('contact_scrape_j...  
+permit_type                              character varying(10) NO                                       
+start_month                              integer              NO                                       
+start_day                                integer              NO                                       
+start_year                               integer              NO                                       
+total_permits                            integer              YES        0                             
+contacts_checked                         integer              YES        0                             
+is_complete                              boolean              YES        false                         
+created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
 
-================================================================================
+Row Count: 23
+
+Indexes:
+  - contact_scrape_jobs_pkey
+    CREATE UNIQUE INDEX contact_scrape_jobs_pkey ON public.contact_scrape_jobs USING btree (id)
+  - idx_contact_scrape_jobs_dates
+    CREATE INDEX idx_contact_scrape_jobs_dates ON public.contact_scrape_jobs USING btree (start_year, start_month, start_day, permit_type)
+
+====================================================================================================
 TABLE: contacts
-================================================================================
-Rows: 1,547
-Columns: 9
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('contacts_id
-permit_id                                integer                   YES                            
-name                                     character varying(225)    YES                            
-phone                                    character varying(50)     YES                            
-is_checked                               boolean                   YES        false               
-is_mobile                                boolean                   YES                            
-assigned_to                              character varying(255)    YES                            
-assigned_at                              timestamp without time zone YES                            
-bbl                                      character varying(10)     YES                            
+id                                       integer              NO         nextval('contacts_id_seq1...  
+name                                     character varying(255) YES                                      
+phone                                    character varying(50) NO                                       
+role                                     character varying(100) YES                                      
+is_mobile                                boolean              YES                                      
+line_type                                character varying(50) YES                                      
+carrier_name                             character varying(255) YES                                      
+phone_validated_at                       timestamp without time zone YES                                      
+created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
+updated_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
 
-================================================================================
+Row Count: 52,666
+
+Indexes:
+  - contacts_phone_key
+    CREATE UNIQUE INDEX contacts_phone_key ON public.contacts USING btree (phone)
+  - contacts_pkey1
+    CREATE UNIQUE INDEX contacts_pkey1 ON public.contacts USING btree (id)
+  - idx_contacts_name
+    CREATE INDEX idx_contacts_name ON public.contacts USING btree (name)
+  - idx_contacts_phone
+    CREATE INDEX idx_contacts_phone ON public.contacts USING btree (phone)
+  - idx_contacts_phone_validated
+    CREATE INDEX idx_contacts_phone_validated ON public.contacts USING btree (phone_validated_at)
+
+====================================================================================================
+TABLE: contacts_old_backup
+====================================================================================================
+
+Column Name                              Type                 Nullable   Default                       
+----------------------------------------------------------------------------------------------------
+id                                       integer              NO         nextval('contacts_id_seq'...  
+permit_id                                integer              YES                                      
+name                                     character varying(225) YES                                      
+phone                                    character varying(50) YES                                      
+is_checked                               boolean              YES        false                         
+is_mobile                                boolean              YES                                      
+assigned_to                              character varying(255) YES                                      
+assigned_at                              timestamp without time zone YES                                      
+bbl                                      character varying(10) YES                                      
+
+Row Count: 1,547
+
+Indexes:
+  - contacts_pkey
+    CREATE UNIQUE INDEX contacts_pkey ON public.contacts_old_backup USING btree (id)
+  - idx_contacts_bbl
+    CREATE INDEX idx_contacts_bbl ON public.contacts_old_backup USING btree (bbl)
+  - idx_contacts_is_mobile
+    CREATE INDEX idx_contacts_is_mobile ON public.contacts_old_backup USING btree (is_mobile)
+  - idx_contacts_permit_id
+    CREATE INDEX idx_contacts_permit_id ON public.contacts_old_backup USING btree (permit_id)
+
+====================================================================================================
 TABLE: investor_profiles
-================================================================================
-Rows: 0
-Columns: 20
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('investor_pr
-investor_name                            character varying(255)    NO                             
-properties_bought                        integer                   YES        0                   
-properties_sold                          integer                   YES        0                   
-total_invested                           numeric                   YES        0                   
-total_liquidated                         numeric                   YES        0                   
-investor_type                            character varying(50)     YES                            
-avg_hold_period_months                   integer                   YES                            
-uses_financing                           boolean                   YES                            
-avg_financing_ratio                      numeric                   YES                            
-active_boroughs                          character varying(255)    YES                            
-target_neighborhoods                     character varying(500)    YES                            
-currently_active                         boolean                   YES        true                
-last_transaction_date                    date                      YES                            
-contact_address                          character varying(500)    YES                            
-is_lead                                  boolean                   YES        false               
-lead_status                              character varying(50)     YES                            
-preferred_lenders                        character varying(500)    YES                            
-created_at                               timestamp without time zone YES        now()               
-last_updated                             timestamp without time zone YES        now()               
+id                                       integer              NO         nextval('investor_profile...  
+investor_name                            character varying(255) NO                                       
+properties_bought                        integer              YES        0                             
+properties_sold                          integer              YES        0                             
+total_invested                           numeric              YES        0                             
+total_liquidated                         numeric              YES        0                             
+investor_type                            character varying(50) YES                                      
+avg_hold_period_months                   integer              YES                                      
+uses_financing                           boolean              YES                                      
+avg_financing_ratio                      numeric              YES                                      
+active_boroughs                          character varying(255) YES                                      
+target_neighborhoods                     character varying(500) YES                                      
+currently_active                         boolean              YES        true                          
+last_transaction_date                    date                 YES                                      
+contact_address                          character varying(500) YES                                      
+is_lead                                  boolean              YES        false                         
+lead_status                              character varying(50) YES                                      
+preferred_lenders                        character varying(500) YES                                      
+created_at                               timestamp without time zone YES        now()                         
+last_updated                             timestamp without time zone YES        now()                         
 
-================================================================================
+Row Count: 0
+
+Indexes:
+  - idx_investor_active
+    CREATE INDEX idx_investor_active ON public.investor_profiles USING btree (currently_active)
+  - idx_investor_last_trans
+    CREATE INDEX idx_investor_last_trans ON public.investor_profiles USING btree (last_transaction_date DESC)
+  - idx_investor_type
+    CREATE INDEX idx_investor_type ON public.investor_profiles USING btree (investor_type)
+  - investor_profiles_investor_name_key
+    CREATE UNIQUE INDEX investor_profiles_investor_name_key ON public.investor_profiles USING btree (investor_name)
+  - investor_profiles_pkey
+    CREATE UNIQUE INDEX investor_profiles_pkey ON public.investor_profiles USING btree (id)
+
+====================================================================================================
 TABLE: lender_intelligence
-================================================================================
-Rows: 0
-Columns: 18
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('lender_inte
-lender_name                              character varying(255)    NO                             
-total_loans_financed                     integer                   YES        0                   
-total_amount_financed                    numeric                   YES        0                   
-avg_loan_amount                          numeric                   YES                            
-borough_1_most_active                    integer                   YES                            
-borough_1_loan_count                     integer                   YES                            
-borough_2_most_active                    integer                   YES                            
-borough_2_loan_count                     integer                   YES                            
-avg_ltv_ratio                            numeric                   YES                            
-prefers_renovation                       boolean                   YES        false               
-prefers_new_construction                 boolean                   YES        false               
-repeat_borrower_count                    integer                   YES        0                   
-contact_name                             character varying(255)    YES                            
-contact_email                            character varying(255)    YES                            
-contact_phone                            character varying(20)     YES                            
-notes                                    text                      YES                            
-last_updated                             timestamp without time zone YES        now()               
+id                                       integer              NO         nextval('lender_intellige...  
+lender_name                              character varying(255) NO                                       
+total_loans_financed                     integer              YES        0                             
+total_amount_financed                    numeric              YES        0                             
+avg_loan_amount                          numeric              YES                                      
+borough_1_most_active                    integer              YES                                      
+borough_1_loan_count                     integer              YES                                      
+borough_2_most_active                    integer              YES                                      
+borough_2_loan_count                     integer              YES                                      
+avg_ltv_ratio                            numeric              YES                                      
+prefers_renovation                       boolean              YES        false                         
+prefers_new_construction                 boolean              YES        false                         
+repeat_borrower_count                    integer              YES        0                             
+contact_name                             character varying(255) YES                                      
+contact_email                            character varying(255) YES                                      
+contact_phone                            character varying(20) YES                                      
+notes                                    text                 YES                                      
+last_updated                             timestamp without time zone YES        now()                         
 
-================================================================================
+Row Count: 0
+
+Indexes:
+  - idx_lender_intel_amount
+    CREATE INDEX idx_lender_intel_amount ON public.lender_intelligence USING btree (total_amount_financed DESC)
+  - idx_lender_intel_total_loans
+    CREATE INDEX idx_lender_intel_total_loans ON public.lender_intelligence USING btree (total_loans_financed DESC)
+  - lender_intelligence_lender_name_key
+    CREATE UNIQUE INDEX lender_intelligence_lender_name_key ON public.lender_intelligence USING btree (lender_name)
+  - lender_intelligence_pkey
+    CREATE UNIQUE INDEX lender_intelligence_pkey ON public.lender_intelligence USING btree (id)
+
+====================================================================================================
 TABLE: owner_contacts
-================================================================================
-Rows: 0
-Columns: 10
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('owner_conta
-owner_name                               character varying(500)    YES                            
-phone                                    character varying(50)     YES                            
-phone_type                               character varying(20)     YES                            
-email                                    character varying(255)    YES                            
-is_verified                              boolean                   YES        false               
-confidence                               character varying(20)     YES                            
-source                                   character varying(100)    YES                            
-last_verified                            timestamp without time zone YES                            
-created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP   
+id                                       integer              NO         nextval('owner_contacts_i...  
+owner_name                               character varying(500) YES                                      
+phone                                    character varying(50) YES                                      
+phone_type                               character varying(20) YES                                      
+email                                    character varying(255) YES                                      
+is_verified                              boolean              YES        false                         
+confidence                               character varying(20) YES                                      
+source                                   character varying(100) YES                                      
+last_verified                            timestamp without time zone YES                                      
+created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
 
-================================================================================
+Row Count: 0
+
+Indexes:
+  - idx_owner_contacts_name
+    CREATE INDEX idx_owner_contacts_name ON public.owner_contacts USING btree (owner_name)
+  - idx_owner_contacts_phone
+    CREATE INDEX idx_owner_contacts_phone ON public.owner_contacts USING btree (phone)
+  - owner_contacts_pkey
+    CREATE UNIQUE INDEX owner_contacts_pkey ON public.owner_contacts USING btree (id)
+
+====================================================================================================
+TABLE: permit_contacts
+====================================================================================================
+
+Column Name                              Type                 Nullable   Default                       
+----------------------------------------------------------------------------------------------------
+id                                       integer              NO         nextval('permit_contacts_...  
+permit_id                                integer              YES                                      
+contact_id                               integer              YES                                      
+contact_role                             character varying(100) YES                                      
+created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
+
+Row Count: 142,766
+
+Indexes:
+  - idx_permit_contacts_contact
+    CREATE INDEX idx_permit_contacts_contact ON public.permit_contacts USING btree (contact_id)
+  - idx_permit_contacts_permit
+    CREATE INDEX idx_permit_contacts_permit ON public.permit_contacts USING btree (permit_id)
+  - permit_contacts_permit_id_contact_id_contact_role_key
+    CREATE UNIQUE INDEX permit_contacts_permit_id_contact_id_contact_role_key ON public.permit_contacts USING btree (permit_id, contact_id, contact_role)
+  - permit_contacts_pkey
+    CREATE UNIQUE INDEX permit_contacts_pkey ON public.permit_contacts USING btree (id)
+
+====================================================================================================
 TABLE: permit_search_config
-================================================================================
-Rows: 75
-Columns: 10
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('permit_sear
-start_month                              integer                   NO                             
-start_day                                integer                   NO                             
-start_year                               integer                   NO                             
-permit_type                              character varying(20)     NO                             
-end_month                                integer                   YES                            
-end_day                                  integer                   YES                            
-end_year                                 integer                   YES                            
-created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP   
-max_successful_links                     integer                   YES        7                   
+id                                       integer              NO         nextval('permit_search_co...  
+start_month                              integer              NO                                       
+start_day                                integer              NO                                       
+start_year                               integer              NO                                       
+permit_type                              character varying(20) NO                                       
+end_month                                integer              YES                                      
+end_day                                  integer              YES                                      
+end_year                                 integer              YES                                      
+created_at                               timestamp without time zone YES        CURRENT_TIMESTAMP             
+max_successful_links                     integer              YES        7                             
 
-================================================================================
+Row Count: 75
+
+Indexes:
+  - permit_search_config_pkey
+    CREATE UNIQUE INDEX permit_search_config_pkey ON public.permit_search_config USING btree (id)
+
+====================================================================================================
 TABLE: permits
-================================================================================
-Rows: 65,350
-Columns: 82
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-id                                       integer                   NO         nextval('permits_id_
-applicant                                character varying(225)    YES                            
-permit_no                                character varying(100)    YES                            
-job_type                                 character varying(500)    YES                            
-issue_date                               date                      YES                            
-exp_date                                 date                      YES                            
-bin                                      character varying(50)     YES                            
-address                                  text                      YES                            
-link                                     text                      YES                            
-use_type                                 character varying(100)    YES                            
-stories                                  character varying(20)     YES                            
-total_units                              character varying(20)     YES                            
-occupied_units                           character varying(20)     YES                            
-latitude                                 double precision          YES                            
-longitude                                double precision          YES                            
-job_id                                   integer                   YES                            
-assigned_to                              character varying(255)    YES                            
-assigned_at                              timestamp without time zone YES                            
-block                                    character varying(20)     YES                            
-lot                                      character varying(20)     YES                            
-site_fill                                character varying(100)    YES                            
-total_dwelling_units                     integer                   YES                            
-dwelling_units_occupied                  integer                   YES                            
-fee_type                                 character varying(50)     YES                            
-filing_date                              date                      YES                            
-status                                   character varying(50)     YES                            
-proposed_job_start                       date                      YES                            
-work_approved                            date                      YES                            
-work_description                         text                      YES                            
-job_number                               character varying(50)     YES                            
-bbl                                      character varying(10)     YES                            
-geocode_failed                           boolean                   YES        false               
-borough                                  character varying(20)     YES                            
-house_number                             character varying(50)     YES                            
-street_name                              character varying(255)    YES                            
-zip_code                                 character varying(15)     YES                            
-community_board                          character varying(3)      YES                            
-job_doc_number                           character varying(50)     YES                            
-self_cert                                character varying(20)     YES                            
-bldg_type                                character varying(50)     YES                            
-residential                              character varying(20)     YES                            
-special_district_1                       character varying(50)     YES                            
-special_district_2                       character varying(50)     YES                            
-work_type                                character varying(50)     YES                            
-permit_status                            character varying(50)     YES                            
-filing_status                            character varying(50)     YES                            
-permit_type                              character varying(50)     YES                            
-permit_sequence                          character varying(50)     YES                            
-permit_subtype                           character varying(50)     YES                            
-oil_gas                                  character varying(20)     YES                            
-permittee_first_name                     character varying(100)    YES                            
-permittee_last_name                      character varying(100)    YES                            
-permittee_business_name                  character varying(255)    YES                            
-permittee_phone                          character varying(50)     YES                            
-permittee_license_type                   character varying(50)     YES                            
-permittee_license_number                 character varying(50)     YES                            
-act_as_superintendent                    character varying(20)     YES                            
-permittee_other_title                    character varying(100)    YES                            
-hic_license                              character varying(50)     YES                            
-site_safety_mgr_first_name               character varying(100)    YES                            
-site_safety_mgr_last_name                character varying(100)    YES                            
-site_safety_mgr_business_name            character varying(255)    YES                            
-superintendent_name                      character varying(255)    YES                            
-superintendent_business_name             character varying(255)    YES                            
-owner_business_type                      character varying(100)    YES                            
-non_profit                               character varying(20)     YES                            
-owner_business_name                      character varying(255)    YES                            
-owner_first_name                         character varying(100)    YES                            
-owner_last_name                          character varying(100)    YES                            
-owner_house_number                       character varying(50)     YES                            
-owner_street_name                        character varying(255)    YES                            
-owner_city                               character varying(100)    YES                            
-owner_state                              character varying(20)     YES                            
-owner_zip_code                           character varying(15)     YES                            
-owner_phone                              character varying(50)     YES                            
-dob_run_date                             date                      YES                            
-permit_si_no                             character varying(50)     YES                            
-council_district                         character varying(20)     YES                            
-census_tract                             character varying(20)     YES                            
-nta_name                                 character varying(255)    YES                            
-api_source                               character varying(50)     YES                            
-api_last_updated                         timestamp without time zone YES                            
+id                                       integer              NO         nextval('permits_id_seq':...  
+applicant                                character varying(225) YES                                      
+permit_no                                character varying(100) YES                                      
+job_type                                 character varying(500) YES                                      
+issue_date                               date                 YES                                      
+exp_date                                 date                 YES                                      
+bin                                      character varying(50) YES                                      
+address                                  text                 YES                                      
+link                                     text                 YES                                      
+use_type                                 character varying(100) YES                                      
+stories                                  character varying(20) YES                                      
+total_units                              character varying(20) YES                                      
+occupied_units                           character varying(20) YES                                      
+latitude                                 double precision     YES                                      
+longitude                                double precision     YES                                      
+job_id                                   integer              YES                                      
+assigned_to                              character varying(255) YES                                      
+assigned_at                              timestamp without time zone YES                                      
+block                                    character varying(20) YES                                      
+lot                                      character varying(20) YES                                      
+site_fill                                character varying(100) YES                                      
+total_dwelling_units                     integer              YES                                      
+dwelling_units_occupied                  integer              YES                                      
+fee_type                                 character varying(50) YES                                      
+filing_date                              date                 YES                                      
+status                                   character varying(50) YES                                      
+proposed_job_start                       date                 YES                                      
+work_approved                            date                 YES                                      
+work_description                         text                 YES                                      
+job_number                               character varying(50) YES                                      
+bbl                                      character varying(10) YES                                      
+geocode_failed                           boolean              YES        false                         
+borough                                  character varying(20) YES                                      
+house_number                             character varying(50) YES                                      
+street_name                              character varying(255) YES                                      
+zip_code                                 character varying(15) YES                                      
+community_board                          character varying(3) YES                                      
+job_doc_number                           character varying(50) YES                                      
+self_cert                                character varying(20) YES                                      
+bldg_type                                character varying(50) YES                                      
+residential                              character varying(20) YES                                      
+special_district_1                       character varying(50) YES                                      
+special_district_2                       character varying(50) YES                                      
+work_type                                character varying(50) YES                                      
+permit_status                            character varying(50) YES                                      
+filing_status                            character varying(50) YES                                      
+permit_type                              character varying(50) YES                                      
+permit_sequence                          character varying(50) YES                                      
+permit_subtype                           character varying(50) YES                                      
+oil_gas                                  character varying(20) YES                                      
+permittee_first_name                     character varying(100) YES                                      
+permittee_last_name                      character varying(100) YES                                      
+permittee_business_name                  character varying(255) YES                                      
+permittee_phone                          character varying(50) YES                                      
+permittee_license_type                   character varying(50) YES                                      
+permittee_license_number                 character varying(50) YES                                      
+act_as_superintendent                    character varying(20) YES                                      
+permittee_other_title                    character varying(100) YES                                      
+hic_license                              character varying(50) YES                                      
+site_safety_mgr_first_name               character varying(100) YES                                      
+site_safety_mgr_last_name                character varying(100) YES                                      
+site_safety_mgr_business_name            character varying(255) YES                                      
+superintendent_name                      character varying(255) YES                                      
+superintendent_business_name             character varying(255) YES                                      
+owner_business_type                      character varying(100) YES                                      
+non_profit                               character varying(20) YES                                      
+owner_business_name                      character varying(255) YES                                      
+owner_first_name                         character varying(100) YES                                      
+owner_last_name                          character varying(100) YES                                      
+owner_house_number                       character varying(50) YES                                      
+owner_street_name                        character varying(255) YES                                      
+owner_city                               character varying(100) YES                                      
+owner_state                              character varying(20) YES                                      
+owner_zip_code                           character varying(15) YES                                      
+owner_phone                              character varying(50) YES                                      
+dob_run_date                             date                 YES                                      
+permit_si_no                             character varying(50) YES                                      
+council_district                         character varying(20) YES                                      
+census_tract                             character varying(20) YES                                      
+nta_name                                 character varying(255) YES                                      
+api_source                               character varying(50) YES                                      
+api_last_updated                         timestamp without time zone YES                                      
 
-================================================================================
+Row Count: 73,736
+
+Indexes:
+  - idx_permits_api_source
+    CREATE INDEX idx_permits_api_source ON public.permits USING btree (api_source)
+  - idx_permits_bbl
+    CREATE INDEX idx_permits_bbl ON public.permits USING btree (bbl)
+  - idx_permits_block
+    CREATE INDEX idx_permits_block ON public.permits USING btree (block)
+  - idx_permits_block_lot
+    CREATE INDEX idx_permits_block_lot ON public.permits USING btree (block, lot)
+  - idx_permits_borough
+    CREATE INDEX idx_permits_borough ON public.permits USING btree (borough)
+  - idx_permits_dob_run_date
+    CREATE INDEX idx_permits_dob_run_date ON public.permits USING btree (dob_run_date)
+  - idx_permits_job_id
+    CREATE INDEX idx_permits_job_id ON public.permits USING btree (job_id)
+  - idx_permits_job_number
+    CREATE INDEX idx_permits_job_number ON public.permits USING btree (job_number)
+  - idx_permits_lot
+    CREATE INDEX idx_permits_lot ON public.permits USING btree (lot)
+  - idx_permits_owner_business_name
+    CREATE INDEX idx_permits_owner_business_name ON public.permits USING btree (owner_business_name)
+  - idx_permits_permit_status_new
+    CREATE INDEX idx_permits_permit_status_new ON public.permits USING btree (permit_status)
+  - idx_permits_permit_type_new
+    CREATE INDEX idx_permits_permit_type_new ON public.permits USING btree (permit_type)
+  - idx_permits_permittee_business
+    CREATE INDEX idx_permits_permittee_business ON public.permits USING btree (permittee_business_name)
+  - idx_permits_status
+    CREATE INDEX idx_permits_status ON public.permits USING btree (status)
+  - idx_permits_work_type
+    CREATE INDEX idx_permits_work_type ON public.permits USING btree (work_type)
+  - idx_permits_zip_code
+    CREATE INDEX idx_permits_zip_code ON public.permits USING btree (zip_code)
+  - permits_pkey
+    CREATE UNIQUE INDEX permits_pkey ON public.permits USING btree (id)
+  - unique_permit_no
+    CREATE UNIQUE INDEX unique_permit_no ON public.permits USING btree (permit_no)
+
+====================================================================================================
 TABLE: property_intelligence
-================================================================================
-Rows: 11
-Columns: 16
+====================================================================================================
 
-Column Name                              Type                      Nullable   Default             
+Column Name                              Type                 Nullable   Default                       
 ----------------------------------------------------------------------------------------------------
-building_id                              integer                   NO                             
-is_likely_flipper                        boolean                   YES        false               
-flip_score                               integer                   YES        0                   
-sale_velocity_months                     numeric                   YES                            
-is_cash_investor                         boolean                   YES        false               
-is_heavy_leverage                        boolean                   YES        false               
-equity_percentage                        numeric                   YES                            
-appreciation_amount                      numeric                   YES                            
-appreciation_percent                     numeric                   YES                            
-price_per_sqft_at_sale                   numeric                   YES                            
-has_seller_address                       boolean                   YES        false               
-has_lender_info                          boolean                   YES        false               
-multi_property_owner                     boolean                   YES        false               
-lead_score                               integer                   YES        0                   
-lead_priority                            character varying(20)     YES                            
-calculated_at                            timestamp without time zone YES        now()  
+building_id                              integer              NO                                       
+is_likely_flipper                        boolean              YES        false                         
+flip_score                               integer              YES        0                             
+sale_velocity_months                     numeric              YES                                      
+is_cash_investor                         boolean              YES        false                         
+is_heavy_leverage                        boolean              YES        false                         
+equity_percentage                        numeric              YES                                      
+appreciation_amount                      numeric              YES                                      
+appreciation_percent                     numeric              YES                                      
+price_per_sqft_at_sale                   numeric              YES                                      
+has_seller_address                       boolean              YES        false                         
+has_lender_info                          boolean              YES        false                         
+multi_property_owner                     boolean              YES        false                         
+lead_score                               integer              YES        0                             
+lead_priority                            character varying(20) YES                                      
+calculated_at                            timestamp without time zone YES        now()                         
+
+Row Count: 11
+
+Indexes:
+  - idx_prop_intel_appreciation
+    CREATE INDEX idx_prop_intel_appreciation ON public.property_intelligence USING btree (appreciation_percent DESC)
+  - idx_prop_intel_flip_score
+    CREATE INDEX idx_prop_intel_flip_score ON public.property_intelligence USING btree (flip_score DESC)
+  - idx_prop_intel_lead_score
+    CREATE INDEX idx_prop_intel_lead_score ON public.property_intelligence USING btree (lead_score DESC)
+  - property_intelligence_pkey
+    CREATE UNIQUE INDEX property_intelligence_pkey ON public.property_intelligence USING btree (building_id)

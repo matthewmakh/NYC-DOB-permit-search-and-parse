@@ -1,9 +1,8 @@
 """
-Script to validate phone numbers in the permits table and update mobile flags.
-Uses Twilio Lookup API to determine if phone numbers are mobile or landline.
+Script to validate phone numbers using Twilio Lookup API.
+Stores validation results in contacts table for reuse across all linked permits.
 
-NOTE: This script is DEPRECATED - we now use area code detection in calculate_lead_score()
-for instant mobile detection without API costs. See app.py line 62-77.
+Uses contacts table with many-to-many relationships via permit_contacts junction table.
 """
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -55,23 +54,28 @@ except Exception as err:
     print(f"❌ Database connection failed: {err}")
     exit(1)
 
+print()
+print("=" * 80)
+print("PHONE VALIDATION USING CONTACTS TABLE")
+print("=" * 80)
+
 # === FETCH PHONE NUMBERS TO VALIDATE ===
-# Get unique phone numbers from permits table (permittee_phone and owner_phone columns)
+# Get phone numbers from contacts table that haven't been validated yet
 cur.execute("""
-    SELECT DISTINCT phone FROM (
-        SELECT permittee_phone as phone FROM permits WHERE permittee_phone IS NOT NULL AND permittee_phone != ''
-        UNION
-        SELECT owner_phone as phone FROM permits WHERE owner_phone IS NOT NULL AND owner_phone != ''
-    ) phones
+    SELECT phone, name, role
+    FROM contacts
+    WHERE phone_validated_at IS NULL
+    AND phone IS NOT NULL
+    AND phone ~ '^[0-9]{10}$'
     ORDER BY phone
 """)
 
-phones = [row['phone'] for row in cur.fetchall()]
-print(f"📞 Found {len(phones)} unique phone numbers in permits table.")
-print(f"   (from permittee_phone and owner_phone columns)")
+contacts_to_validate = cur.fetchall()
+print(f"📞 Found {len(contacts_to_validate)} contacts needing validation")
+print(f"   (excluding already validated phones)")
+print()
 
-
-if len(phones) == 0:
+if len(contacts_to_validate) == 0:
     print("✅ All phone numbers already validated!")
     cur.close()
     conn.close()
@@ -85,25 +89,28 @@ invalid_count = 0
 error_count = 0
 skipped_count = 0
 
-# === PROCESS EACH PHONE NUMBER ===
-for index, phone in enumerate(phones, start=1):
-    clean_phone = phone.strip().replace('-', '').replace('(', '').replace(')', '').replace(' ', '').replace('.', '')
+# === PROCESS EACH CONTACT ===
+for index, contact in enumerate(contacts_to_validate, start=1):
+    phone = contact['phone']
+    name = contact['name']
+    role = contact['role']
+    clean_phone = phone.strip()
     
     # VALIDATION: Skip obviously invalid numbers to save API costs
     if not clean_phone or len(clean_phone) < 10:
-        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (too short)")
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (too short)")
         invalid_count += 1
         continue
     
     # Skip fake/test numbers
     if clean_phone in ['0', '0000', '00000000', '0000000000', '1111111111', '1234567890', '1234567891']:
-        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (fake number)")
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (fake number)")
         invalid_count += 1
         continue
     
     # Skip numbers that don't look like US phone numbers
     if clean_phone.startswith('00') or (len(clean_phone) == 10 and not clean_phone[0] in '23456789'):
-        print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (invalid format)")
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (invalid format)")
         invalid_count += 1
         continue
     
@@ -114,7 +121,7 @@ for index, phone in enumerate(phones, start=1):
         elif len(clean_phone) == 11 and clean_phone.startswith('1'):
             clean_phone = '+' + clean_phone
         else:
-            print(f"{index}/{len(phones)} - {phone} → ⏭️  SKIP (wrong length: {len(clean_phone)})")
+            print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (wrong length: {len(clean_phone)})")
             invalid_count += 1
             continue
 
@@ -152,19 +159,19 @@ for index, phone in enumerate(phones, start=1):
             status = f"❓ {line_type.upper()}"
 
         # Log progress
-        print(f"{index}/{len(phones)} - {phone} → {status} ({carrier_name})")
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → {status} ({carrier_name})")
 
-        # Update database - update permits table with mobile flag
+        # UPDATE contact record with validation results
         if is_mobile is not None:
-            # Add is_mobile_permittee and is_mobile_owner columns if needed
-            # For now, just log the results (database schema would need updating)
-            print(f"   Would update: {phone} -> is_mobile = {is_mobile}")
-            # TODO: Add columns to permits table:
-            # ALTER TABLE permits ADD COLUMN IF NOT EXISTS is_mobile_permittee BOOLEAN;
-            # ALTER TABLE permits ADD COLUMN IF NOT EXISTS is_mobile_owner BOOLEAN;
-            # Then update:
-            # UPDATE permits SET is_mobile_permittee = %s WHERE permittee_phone = %s
-            # UPDATE permits SET is_mobile_owner = %s WHERE owner_phone = %s
+            cur.execute("""
+                UPDATE contacts
+                SET is_mobile = %s,
+                    line_type = %s,
+                    carrier_name = %s,
+                    phone_validated_at = CURRENT_TIMESTAMP
+                WHERE phone = %s
+            """, (is_mobile, line_type, carrier_name, phone))
+            conn.commit()
             validated_count += 1
 
     except Exception as e:
@@ -172,11 +179,20 @@ for index, phone in enumerate(phones, start=1):
         
         # Handle invalid/non-existent numbers gracefully
         if 'invalid' in error_str.lower() or '20404' in error_str:
-            print(f"{index}/{len(phones)} - {phone} → ❌ INVALID")
-            # Would mark as invalid (non-mobile) in permits table
+            print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ❌ INVALID")
+            # Mark as invalid in contacts table
+            cur.execute("""
+                UPDATE contacts
+                SET is_mobile = FALSE,
+                    line_type = 'invalid',
+                    carrier_name = 'Invalid Number',
+                    phone_validated_at = CURRENT_TIMESTAMP
+                WHERE phone = %s
+            """, (phone,))
+            conn.commit()
             invalid_count += 1
         else:
-            print(f"⚠️ Error checking {phone}: {e}")
+            print(f"⚠️ Error checking {name[:30]} ({phone}): {e}")
             error_count += 1
         continue
 
