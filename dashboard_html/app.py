@@ -2018,11 +2018,13 @@ def api_market_stats():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Active permits (issued in last 6 months)
+        # Active permits (all permits with valid dates)
         cur.execute("""
             SELECT COUNT(*) as count
             FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '6 months'
+            WHERE issue_date IS NOT NULL
+            AND issue_date <= CURRENT_DATE
+            AND issue_date >= '2000-01-01'
         """)
         active_permits = cur.fetchone()['count']
         
