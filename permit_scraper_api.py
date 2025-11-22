@@ -86,17 +86,21 @@ class NYCOpenDataClient:
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             
-            # Format for SoQL query (they use MM/DD/YYYY in the data)
+            # Format for SoQL query (dates stored as MM/DD/YYYY text)
             start_formatted = start_dt.strftime('%m/%d/%Y')
             end_formatted = end_dt.strftime('%m/%d/%Y')
+            
+            # Extract year for filtering (critical - prevents matching old years)
+            year = start_dt.year
         except:
             print(f"❌ Invalid date format. Use YYYY-MM-DD")
             return []
         
         # Build query using SoQL (Socrata Query Language)
-        # Note: filing_date might be more reliable than issuance_date
+        # IMPORTANT: Add year filter to prevent matching historical dates with same MM/DD
         where_clauses = [
-            f"filing_date >= '{start_formatted}' AND filing_date <= '{end_formatted}'"
+            f"filing_date >= '{start_formatted}' AND filing_date <= '{end_formatted}'",
+            f"filing_date like '%/{year}'"  # Filter by year to exclude historical data
         ]
         
         if permit_type:
@@ -201,44 +205,76 @@ class PermitDatabase:
         self.cursor.execute("SELECT 1 FROM permits WHERE permit_no = %s", (permit_no,))
         return self.cursor.fetchone() is not None
     
-    def insert_permit(self, permit_data: Dict) -> bool:
+    def insert_permit(self, permit_data: Dict, max_retries=3) -> bool:
         """
-        Insert permit into database
+        Insert permit into database with automatic deadlock retry
         
         Args:
             permit_data: Dictionary containing permit information from API
+            max_retries: Number of times to retry on deadlock (default 3)
         
         Returns:
-            True if inserted, False if skipped (duplicate)
+            True if inserted/updated, False if skipped or failed
         """
-        try:
-            # Map API fields to database columns
-            # The API returns many fields - we'll store the most useful ones
-            
-            permit_no = permit_data.get('job__')  # This appears to be the job number
-            if not permit_no:
-                permit_no = f"{permit_data.get('bin__', '')}_{permit_data.get('issuance_date', '')}"
-            
-            # NOTE: No longer checking for duplicates here - ON CONFLICT DO UPDATE handles this
-            # This allows the UPSERT to update existing permits when status changes
-            
-            # Parse dates
-            def parse_date(date_str):
-                if not date_str:
-                    return None
+        import time
+        import psycopg2.errors
+        import traceback
+        
+        permit_no = permit_data.get('job__', 'unknown')
+        
+        for attempt in range(max_retries):
+            try:
+                return self._insert_permit_inner(permit_data)
+            except psycopg2.errors.DeadlockDetected:
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s
+                    sleep_time = 0.1 * (2 ** attempt)
+                    time.sleep(sleep_time)
+                    self.conn.rollback()
+                    continue
+                else:
+                    # Final attempt failed
+                    print(f"❌ Deadlock failed after {max_retries} attempts for permit {permit_no}")
+                    self.conn.rollback()
+                    return False
+            except Exception as e:
+                # Non-deadlock errors - don't retry
+                print(f"❌ Error inserting permit {permit_no}: {e}")
+                print(f"   Traceback: {traceback.format_exc()}")
+                self.conn.rollback()
+                return False
+        
+        return False
+    
+    def _insert_permit_inner(self, permit_data: Dict) -> bool:
+        """Internal method that performs the actual insert"""
+        # Map API fields to database columns
+        # The API returns many fields - we'll store the most useful ones
+        
+        permit_no = permit_data.get('job__')  # This appears to be the job number
+        if not permit_no:
+            permit_no = f"{permit_data.get('bin__', '')}_{permit_data.get('issuance_date', '')}"
+        
+        # NOTE: No longer checking for duplicates here - ON CONFLICT DO UPDATE handles this
+        # This allows the UPSERT to update existing permits when status changes
+        
+        # Parse dates
+        def parse_date(date_str):
+            if not date_str:
+                return None
+            try:
+                # API returns MM/DD/YYYY format
+                return datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
+            except:
                 try:
-                    # API returns MM/DD/YYYY format
-                    return datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
+                    # Fallback: try ISO format
+                    return datetime.fromisoformat(date_str.replace('T', ' ').split('.')[0]).date()
                 except:
-                    try:
-                        # Fallback: try ISO format
-                        return datetime.fromisoformat(date_str.replace('T', ' ').split('.')[0]).date()
-                    except:
-                        return None
-            
-            # Build BBL from components  
-            bbl = None
-            if permit_data.get('borough') and permit_data.get('block') and permit_data.get('lot'):
+                    return None
+        
+        # Build BBL from components  
+        bbl = None
+        if permit_data.get('borough') and permit_data.get('block') and permit_data.get('lot'):
                 try:
                     # Map borough names to codes
                     borough_map = {
@@ -270,30 +306,30 @@ class PermitDatabase:
                 except Exception as e:
                     print(f"⚠️  BBL creation error: {e}")
                     bbl = None
-            
-            # Build full address
-            address = f"{permit_data.get('house__', '')} {permit_data.get('street_name', '')}".strip()
-            
-            # Get applicant name (prioritize business name, fall back to owner name)
-            applicant = (
+        
+        # Build full address
+        address = f"{permit_data.get('house__', '')} {permit_data.get('street_name', '')}".strip()
+        
+        # Get applicant name (prioritize business name, fall back to owner name)
+        applicant = (
                 permit_data.get('permittee_s_business_name') or 
                 permit_data.get('owner_s_business_name') or 
                 f"{permit_data.get('owner_s_first_name', '')} {permit_data.get('owner_s_last_name', '')}".strip() or
                 None
-            )
-            
-            # Build work description from multiple fields
-            work_desc_parts = []
-            if permit_data.get('job_type'):
+        )
+        
+        # Build work description from multiple fields
+        work_desc_parts = []
+        if permit_data.get('job_type'):
                 work_desc_parts.append(f"Type: {permit_data.get('job_type')}")
-            if permit_data.get('permit_subtype'):
+        if permit_data.get('permit_subtype'):
                 work_desc_parts.append(f"Subtype: {permit_data.get('permit_subtype')}")
-            if permit_data.get('bldg_type'):
+        if permit_data.get('bldg_type'):
                 work_desc_parts.append(f"Building Type: {permit_data.get('bldg_type')}")
-            work_description = ', '.join(work_desc_parts) if work_desc_parts else None
-            
-            # Insert with ALL new fields from NYC Open Data
-            self.cursor.execute("""
+        work_description = ', '.join(work_desc_parts) if work_desc_parts else None
+        
+        # Insert with ALL new fields from NYC Open Data
+        self.cursor.execute("""
                 INSERT INTO permits (
                     permit_no,
                     job_type,
@@ -375,10 +411,10 @@ class PermitDatabase:
                     permit_status = EXCLUDED.permit_status,
                     exp_date = EXCLUDED.exp_date,
                     filing_date = EXCLUDED.filing_date,
-                    job_start_date = EXCLUDED.job_start_date,
+                    proposed_job_start = EXCLUDED.proposed_job_start,
                     filing_status = EXCLUDED.filing_status,
                     api_last_updated = EXCLUDED.api_last_updated
-            """, (
+        """, (
                 # Original fields
                 permit_no,
                 permit_data.get('job_type'),
@@ -448,31 +484,230 @@ class PermitDatabase:
                 permit_data.get('gis_nta_name'),
                 'nyc_open_data',
                 datetime.now()
-            ))
-            
-            return True
+        ))
         
-        except Exception as e:
-            print(f"❌ Error inserting permit {permit_no}: {e}")
-            # Rollback this failed insert so we can continue
-            self.conn.rollback()
-            return False
+        return True
     
     def bulk_insert_permits(self, permits: List[Dict]) -> int:
         """
-        Insert multiple permits
+        Insert multiple permits using execute_values() for 10x speed improvement
+        Inserts 500 permits per statement, commits every 2500 permits
         
         Returns:
-            Number of permits inserted
+            Number of permits successfully processed
         """
-        inserted = 0
+        from psycopg2.extras import execute_values
+        
+        total = len(permits)
+        processed = 0
+        batch_size = 500  # Permits per SQL statement
+        commit_interval = 5  # Commit every N batches (2500 permits)
+        
+        print(f"   Processing {total:,} permits with bulk insert (batches of {batch_size})...")
+        
+        # Prepare all permit data first
+        permit_tuples = []
+        seen_permit_nos = set()  # Track duplicates within this batch
         
         for permit in permits:
-            if self.insert_permit(permit):
-                inserted += 1
+            try:
+                permit_tuple = self._prepare_permit_tuple(permit)
+                if permit_tuple:
+                    permit_no = permit_tuple[0]  # First element is permit_no
+                    # Skip if we've already seen this permit_no in this batch
+                    if permit_no in seen_permit_nos:
+                        continue
+                    seen_permit_nos.add(permit_no)
+                    permit_tuples.append(permit_tuple)
+            except Exception as e:
+                print(f"   ⚠️  Skipping permit {permit.get('job__')}: {e}")
+                continue
         
-        self.conn.commit()
-        return inserted
+        if not permit_tuples:
+            print("   ⚠️  No valid permits to insert")
+            return 0
+        
+        # Insert in batches using execute_values
+        total_tuples = len(permit_tuples)
+        total_batches = (total_tuples + batch_size - 1) // batch_size
+        
+        for i in range(0, total_tuples, batch_size):
+            batch = permit_tuples[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            
+            try:
+                # Use execute_values for bulk insert with ON CONFLICT
+                sql = """
+                    INSERT INTO permits (
+                        permit_no, job_type, issue_date, exp_date, bin, address, applicant,
+                        block, lot, status, filing_date, proposed_job_start, work_description,
+                        job_number, bbl, latitude, longitude, borough, house_number, street_name,
+                        zip_code, community_board, job_doc_number, self_cert, bldg_type, residential,
+                        special_district_1, special_district_2, work_type, permit_status, filing_status,
+                        permit_type, permit_sequence, permit_subtype, oil_gas, permittee_first_name,
+                        permittee_last_name, permittee_business_name, permittee_phone, permittee_license_type,
+                        permittee_license_number, act_as_superintendent, permittee_other_title, hic_license,
+                        site_safety_mgr_first_name, site_safety_mgr_last_name, site_safety_mgr_business_name,
+                        superintendent_name, superintendent_business_name, owner_business_type, non_profit,
+                        owner_business_name, owner_first_name, owner_last_name, owner_house_number,
+                        owner_street_name, owner_city, owner_state, owner_zip_code, owner_phone,
+                        dob_run_date, permit_si_no, council_district, census_tract, nta_name,
+                        api_source, api_last_updated
+                    ) VALUES %s
+                    ON CONFLICT (permit_no) DO UPDATE SET
+                        permit_status = EXCLUDED.permit_status,
+                        exp_date = EXCLUDED.exp_date,
+                        filing_date = EXCLUDED.filing_date,
+                        proposed_job_start = EXCLUDED.proposed_job_start,
+                        filing_status = EXCLUDED.filing_status,
+                        api_last_updated = EXCLUDED.api_last_updated
+                """
+                
+                execute_values(self.cursor, sql, batch, page_size=batch_size)
+                processed += len(batch)
+                
+                # Commit every N batches or at the end
+                if batch_num % commit_interval == 0 or i + batch_size >= total_tuples:
+                    self.conn.commit()
+                    print(f"   ✓ Batch {batch_num}/{total_batches} complete: {processed:,}/{total_tuples:,} permits ({processed/total_tuples*100:.1f}%)")
+                
+            except Exception as e:
+                print(f"   ✗ Error in batch {batch_num}: {e}")
+                self.conn.rollback()
+                continue
+        
+        return processed
+    
+    def _prepare_permit_tuple(self, permit_data: Dict) -> tuple:
+        """
+        Convert permit dict to tuple for bulk insert
+        Returns tuple of all permit fields in correct order
+        """
+        # Parse dates
+        def parse_date(date_str):
+            if not date_str:
+                return None
+            try:
+                return datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
+            except:
+                try:
+                    return datetime.fromisoformat(date_str.replace('T', ' ').split('.')[0]).date()
+                except:
+                    return None
+        
+        # Build BBL
+        bbl = None
+        if permit_data.get('borough') and permit_data.get('block') and permit_data.get('lot'):
+            try:
+                borough_map = {'MANHATTAN': '1', 'BRONX': '2', 'BROOKLYN': '3', 'QUEENS': '4', 'STATEN ISLAND': '5'}
+                borough_code = borough_map.get(permit_data.get('borough'), permit_data.get('borough'))
+                block_str = str(permit_data.get('block', '')).strip()
+                lot_str = str(permit_data.get('lot', '')).strip()
+                block_num = block_str.lstrip('0') or '0'
+                lot_num = lot_str.lstrip('0') or '0'
+                block_padded = block_num.zfill(5)
+                lot_padded = lot_num.zfill(4)
+                bbl = f"{borough_code}{block_padded}{lot_padded}"
+                if len(bbl) != 10 or not bbl.isdigit():
+                    bbl = None
+            except:
+                bbl = None
+        
+        # Build address
+        address = f"{permit_data.get('house__', '')} {permit_data.get('street_name', '')}".strip()
+        
+        # Get applicant
+        applicant = (
+            permit_data.get('permittee_s_business_name') or 
+            permit_data.get('owner_s_business_name') or 
+            f"{permit_data.get('owner_s_first_name', '')} {permit_data.get('owner_s_last_name', '')}".strip() or
+            None
+        )
+        
+        # Build work description
+        work_desc_parts = []
+        if permit_data.get('job_type'):
+            work_desc_parts.append(f"Type: {permit_data.get('job_type')}")
+        if permit_data.get('permit_subtype'):
+            work_desc_parts.append(f"Subtype: {permit_data.get('permit_subtype')}")
+        if permit_data.get('bldg_type'):
+            work_desc_parts.append(f"Building Type: {permit_data.get('bldg_type')}")
+        work_description = ', '.join(work_desc_parts) if work_desc_parts else None
+        
+        permit_no = permit_data.get('job__')
+        if not permit_no:
+            permit_no = f"{permit_data.get('bin__', '')}_{permit_data.get('issuance_date', '')}"
+        
+        # Return tuple in exact order matching SQL columns
+        return (
+            permit_no,
+            permit_data.get('job_type'),
+            parse_date(permit_data.get('job_start_date')),
+            parse_date(permit_data.get('expiration_date')),
+            permit_data.get('bin__'),
+            address,
+            applicant,
+            permit_data.get('block'),
+            permit_data.get('lot'),
+            permit_data.get('permit_status'),
+            parse_date(permit_data.get('filing_date')),
+            parse_date(permit_data.get('job_start_date')),
+            work_description,
+            permit_data.get('job__'),
+            bbl,
+            float(permit_data.get('gis_latitude')) if permit_data.get('gis_latitude') else None,
+            float(permit_data.get('gis_longitude')) if permit_data.get('gis_longitude') else None,
+            permit_data.get('borough'),
+            permit_data.get('house__'),
+            permit_data.get('street_name'),
+            permit_data.get('zip_code'),
+            permit_data.get('community_board'),
+            permit_data.get('job_doc___'),
+            permit_data.get('self_cert'),
+            permit_data.get('bldg_type'),
+            permit_data.get('residential'),
+            permit_data.get('special_district_1'),
+            permit_data.get('special_district_2'),
+            permit_data.get('work_type'),
+            permit_data.get('permit_status'),
+            permit_data.get('filing_status'),
+            permit_data.get('permit_type'),
+            permit_data.get('permit_sequence__'),
+            permit_data.get('permit_subtype'),
+            permit_data.get('oil_gas'),
+            permit_data.get('permittee_s_first_name'),
+            permit_data.get('permittee_s_last_name'),
+            permit_data.get('permittee_s_business_name'),
+            permit_data.get('permittee_s_phone__'),
+            permit_data.get('permittee_s_license_type'),
+            permit_data.get('permittee_s_license__'),
+            permit_data.get('act_as_superintendent'),
+            permit_data.get('permittee_s_other_title'),
+            permit_data.get('hic_license'),
+            permit_data.get('site_safety_mgr_s_first_name'),
+            permit_data.get('site_safety_mgr_s_last_name'),
+            permit_data.get('site_safety_mgr_business_name'),
+            permit_data.get('superintendent_first___last_name'),
+            permit_data.get('superintendent_business_name'),
+            permit_data.get('owner_s_business_type'),
+            permit_data.get('non_profit'),
+            permit_data.get('owner_s_business_name'),
+            permit_data.get('owner_s_first_name'),
+            permit_data.get('owner_s_last_name'),
+            permit_data.get('owner_s_house__'),
+            permit_data.get('owner_s_house_street_name'),
+            permit_data.get('city'),
+            permit_data.get('state'),
+            permit_data.get('owner_s_zip_code'),
+            permit_data.get('owner_s_phone__'),
+            parse_date(permit_data.get('dobrundate')),
+            permit_data.get('permit_si_no'),
+            permit_data.get('gis_council_district'),
+            permit_data.get('gis_census_tract'),
+            permit_data.get('gis_nta_name'),
+            'nyc_open_data',
+            datetime.now()
+        )
 
 
 def run_api_scraper(
