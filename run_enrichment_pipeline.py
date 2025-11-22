@@ -101,10 +101,10 @@ def main():
         sys.exit(1)
     
     # ===== STEP 2: Enrich from PLUTO + RPAD =====
-    print_step(2, "Enrich from PLUTO + RPAD (Dual-Source)")
+    print_step(2, "Enrich from PLUTO + RPAD (Parallel)")
     results['step2'] = run_script(
-        'step2_enrich_from_pluto.py',
-        'Add owner names, building characteristics, assessed values'
+        'step2_enrich_from_pluto_parallel.py',
+        'Add owner names, building characteristics, assessed values (3 parallel workers)'
     )
     
     if not results['step2']:
