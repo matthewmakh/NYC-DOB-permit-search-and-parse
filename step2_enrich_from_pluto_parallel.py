@@ -159,7 +159,7 @@ def get_hpd_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
         
         # 3. Get violations count
         r = requests.get(HPD_VIOLATIONS_API,
-                        params={'boroughid': boro, 'block': block, 'lot': lot,
+                        params={'boroid': boro, 'block': block, 'lot': lot,
                                '$select': 'currentstatus', '$limit': 1000},
                         timeout=10)
         r.raise_for_status()
@@ -170,10 +170,10 @@ def get_hpd_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
         result['hpd_open_violations'] = sum(1 for v in violations 
                                            if v.get('currentstatus') not in ['VIOLATION CLOSED', 'VIOLATION DISMISSED'])
         
-        # 4. Get complaints count (optional)
+        # 4. Get complaints count (optional) - NOTE: This API appears to be restricted (403)
         try:
             r = requests.get(HPD_COMPLAINTS_API,
-                            params={'boroughid': boro, 'block': block, 'lot': lot,
+                            params={'boroid': boro, 'block': block, 'lot': lot,
                                    '$select': 'status', '$limit': 1000},
                             timeout=10)
             r.raise_for_status()
