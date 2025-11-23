@@ -316,13 +316,20 @@ def enrich_buildings_parallel():
     4. Each worker processes DIFFERENT buildings (no lock contention)
     5. Commit after each batch (progress saved incrementally)
     """
+    print("🔌 Connecting to database...")
+    sys.stdout.flush()
+    
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
     
+    print("✅ Connected!")
     print("=" * 70)
     print("🏢 Step 2 (Parallel): Tri-Source Building Enrichment")
     print(f"   Workers: {NUM_WORKERS} | Batch Size: {BATCH_SIZE}")
     print("=" * 70)
+    sys.stdout.flush()
+    
+    print("\n🔍 Querying buildings that need enrichment...")
     sys.stdout.flush()
     
     # Get buildings that need enrichment (only NULL owner fields)
@@ -335,16 +342,25 @@ def enrich_buildings_parallel():
         ORDER BY id
     """)
     
+    print("📊 Fetching building records...")
+    sys.stdout.flush()
+    
     buildings = cur.fetchall()
     total = len(buildings)
     
-    print(f"\n📊 Found {total:,} buildings to enrich")
+    print(f"\n✅ Found {total:,} buildings to enrich")
+    sys.stdout.flush()
     
     if not buildings:
         print("   ✅ No buildings need enrichment. All done!")
         cur.close()
         conn.close()
         return
+    
+    print(f"\n🚀 Starting enrichment with {NUM_WORKERS} parallel workers...")
+    print(f"   Processing in batches of {BATCH_SIZE} buildings")
+    print(f"   Total batches: {(total + BATCH_SIZE - 1) // BATCH_SIZE}")
+    sys.stdout.flush()
     
     # Process in batches
     total_enriched = 0
