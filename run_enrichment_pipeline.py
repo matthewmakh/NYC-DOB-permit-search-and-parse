@@ -46,33 +46,46 @@ def print_warning(msg):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
 
 def run_script(script_name, description):
-    """Run a Python script and return success status"""
+    """Run a Python script and return success status with periodic progress updates"""
     print(f"\n🚀 Running: {script_name}")
     print(f"   Description: {description}")
+    sys.stdout.flush()
     
     start_time = time.time()
+    last_update = start_time
     
     try:
-        result = subprocess.run(
+        # Run without capturing output so we see it in real-time
+        process = subprocess.Popen(
             [sys.executable, script_name],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            check=False
+            bufsize=1,
+            universal_newlines=True
         )
         
+        # Read output line by line and print with periodic status updates
+        for line in process.stdout:
+            print(line, end='')
+            sys.stdout.flush()
+            
+            # Print elapsed time every 5 minutes
+            current_time = time.time()
+            if current_time - last_update >= 300:  # 300 seconds = 5 minutes
+                elapsed = current_time - start_time
+                print(f"\n⏱️  Still running... Elapsed: {elapsed/60:.1f} minutes")
+                sys.stdout.flush()
+                last_update = current_time
+        
+        process.wait()
         duration = time.time() - start_time
         
-        # Print script output
-        if result.stdout:
-            print(result.stdout)
-        
-        if result.returncode == 0:
+        if process.returncode == 0:
             print_success(f"Completed in {duration:.1f}s")
             return True
         else:
-            print_error(f"Failed with exit code {result.returncode}")
-            if result.stderr:
-                print(f"\nError output:\n{result.stderr}")
+            print_error(f"Failed with exit code {process.returncode}")
             return False
             
     except Exception as e:
