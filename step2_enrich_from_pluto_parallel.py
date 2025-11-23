@@ -52,6 +52,7 @@ HPD_COMPLAINTS_API = "https://data.cityofnewyork.us/resource/uwyv-629c.json"
 API_DELAY = 0.05  # Faster with parallel workers
 BATCH_SIZE = 100   # Process 100 buildings at a time (more visibility)
 NUM_WORKERS = 3    # Parallel API workers (optimal balance: speed + readability + API limits)
+VERBOSE_LOGGING = False  # Set to True for local debugging, False for Railway
 
 
 def get_pluto_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
@@ -199,26 +200,28 @@ def enrich_single_building(building: Dict, worker_id: int) -> Dict:
     building_id = building['id']
     address = building['address']
     
-    print(f"   [Worker {worker_id}] Fetching {address[:50]}...", flush=True)
+    if VERBOSE_LOGGING:
+        print(f"   [Worker {worker_id}] Fetching {address[:50]}...", flush=True)
     
     # Fetch data from all three sources in parallel (per building)
     pluto_data, pluto_error = get_pluto_data_for_bbl(bbl)
     rpad_data, rpad_error = get_rpad_data_for_bbl(bbl)
     hpd_data, hpd_error = get_hpd_data_for_bbl(bbl)
     
-    # Show what we found
-    sources_found = []
-    if pluto_data:
-        sources_found.append(f"PLUTO")
-    if rpad_data:
-        sources_found.append(f"RPAD")
-    if hpd_data and hpd_data.get('owner_name_hpd'):
-        sources_found.append(f"HPD")
-    
-    if sources_found:
-        print(f"   [Worker {worker_id}] ✅ Found: {' + '.join(sources_found)}", flush=True)
-    else:
-        print(f"   [Worker {worker_id}] ℹ️  No data", flush=True)
+    # Show what we found (only in verbose mode)
+    if VERBOSE_LOGGING:
+        sources_found = []
+        if pluto_data:
+            sources_found.append(f"PLUTO")
+        if rpad_data:
+            sources_found.append(f"RPAD")
+        if hpd_data and hpd_data.get('owner_name_hpd'):
+            sources_found.append(f"HPD")
+        
+        if sources_found:
+            print(f"   [Worker {worker_id}] ✅ Found: {' + '.join(sources_found)}", flush=True)
+        else:
+            print(f"   [Worker {worker_id}] ℹ️  No data", flush=True)
     
     return {
         'building_id': building_id,
@@ -390,26 +393,34 @@ def enrich_buildings_parallel():
         for idx, result in enumerate(results, 1):
             success = update_building_in_db(conn, result)
             
-            # Show what we found for each building
-            sources = []
+            # Show what we found for each building (only in verbose mode)
+            if VERBOSE_LOGGING:
+                sources = []
+                if result['pluto_data']:
+                    owner = result['pluto_data']['owner_name']
+                    sources.append(f"PLUTO: {owner[:30]}")
+                if result['rpad_data']:
+                    value = result['rpad_data']['assessed_total_value']
+                    sources.append(f"RPAD: ${value:,}")
+                if result['hpd_data'] and result['hpd_data'].get('owner_name_hpd'):
+                    owner = result['hpd_data']['owner_name_hpd']
+                    sources.append(f"HPD: {owner[:30]}")
+                
+                if sources:
+                    print(f"   [{idx}/{len(batch)}] ✅ {result['address'][:35]:35} | {' | '.join(sources)}", flush=True)
+                else:
+                    print(f"   [{idx}/{len(batch)}] ℹ️  {result['address'][:35]:35} | No data found", flush=True)
+            
+            # Count enriched buildings
             if result['pluto_data']:
-                owner = result['pluto_data']['owner_name']
-                sources.append(f"PLUTO: {owner[:30]}")
                 batch_pluto += 1
             if result['rpad_data']:
-                value = result['rpad_data']['assessed_total_value']
-                sources.append(f"RPAD: ${value:,}")
                 batch_rpad += 1
             if result['hpd_data'] and result['hpd_data'].get('owner_name_hpd'):
-                owner = result['hpd_data']['owner_name_hpd']
-                sources.append(f"HPD: {owner[:30]}")
                 batch_hpd += 1
             
-            if sources:
-                print(f"   [{idx}/{len(batch)}] ✅ {result['address'][:35]:35} | {' | '.join(sources)}", flush=True)
+            if result['pluto_data'] or result['rpad_data'] or (result['hpd_data'] and result['hpd_data'].get('owner_name_hpd')):
                 batch_enriched += 1
-            else:
-                print(f"   [{idx}/{len(batch)}] ℹ️  {result['address'][:35]:35} | No data found", flush=True)
         
         # Commit this batch
         conn.commit()
