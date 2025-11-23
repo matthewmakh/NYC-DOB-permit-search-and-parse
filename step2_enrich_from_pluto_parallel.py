@@ -89,7 +89,7 @@ def get_pluto_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
 def get_rpad_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
     """Query NYC RPAD (Property Tax) API for owner and assessed values"""
     try:
-        params = {"$where": f"parid='{bbl}'", "$limit": 1}
+        params = {"$where": f"bble='{bbl}'", "$limit": 1}
         response = requests.get(RPAD_API_BASE, params=params, timeout=10)
         response.raise_for_status()
         time.sleep(API_DELAY)
@@ -101,8 +101,8 @@ def get_rpad_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
         record = data[0]
         result = {
             'owner_name_rpad': record.get('owner'),
-            'assessed_land_value': int(float(record.get('av_land', 0) or 0)),
-            'assessed_total_value': int(float(record.get('av_tot', 0) or 0))
+            'assessed_land_value': int(float(record.get('avland', 0) or 0)),
+            'assessed_total_value': int(float(record.get('avtot', 0) or 0))
         }
         return result, None
     except Exception as e:
