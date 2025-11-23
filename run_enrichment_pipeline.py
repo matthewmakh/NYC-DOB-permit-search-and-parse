@@ -126,7 +126,7 @@ def main():
     # ===== STEP 3: Enrich from ACRIS =====
     print_step(3, "Enrich from ACRIS (Transaction History)")
     results['step3'] = run_script(
-        'step3_enrich_from_acris.py',
+        'step3_enrich_from_acris_parallel.py',
         'Add purchase dates, sale prices, mortgage amounts'
     )
     

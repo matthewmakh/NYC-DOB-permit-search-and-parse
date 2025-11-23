@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Step 3: Enhanced ACRIS Enrichment - Full Transaction History & Party Intelligence
+Step 3: Enhanced ACRIS Enrichment - PARALLEL VERSION
 - Queries ACRIS Real Property Legals, Master, and Parties APIs
 - Populates acris_transactions with full transaction history
 - Populates acris_parties with buyers, sellers, lenders (with addresses!)
 - Updates buildings table with primary sale/mortgage data and transaction counts
 - Includes 30-day refresh cycle to avoid re-processing recent data
+- PARALLEL: 3 workers processing buildings simultaneously
 """
 
 import psycopg2
@@ -15,8 +16,15 @@ import requests
 import time
 from datetime import datetime
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
 
 load_dotenv()
+
+# Parallel processing configuration
+NUM_WORKERS = 3
+BATCH_SIZE = 50  # Smaller batches since each building has many API calls
+VERBOSE_LOGGING = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
 
 # Support both DATABASE_URL and individual DB_* variables
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -140,13 +148,14 @@ def get_parties_for_document(document_id):
         return {'buyers': [], 'sellers': [], 'lenders': []}
 
 
-def get_acris_full_history(bbl):
+def get_acris_full_history(bbl, worker_id=None):
     """
     Query ACRIS for COMPLETE transaction history for a BBL
     Returns list of all transactions with parties
     """
     try:
         boro, block, lot = parse_bbl(bbl)
+        worker_prefix = f"[Worker {worker_id}] " if worker_id else ""
         
         # Step 1: Get all legal records for this property
         params = {
@@ -158,22 +167,22 @@ def get_acris_full_history(bbl):
         if SOCRATA_APP_TOKEN and not API_HEADERS:
             params['$$app_token'] = SOCRATA_APP_TOKEN
         
-        print(f"      Querying ACRIS legals (boro={boro}, block={block}, lot={lot})...")
+        print(f"      {worker_prefix}Querying ACRIS legals (boro={boro}, block={block}, lot={lot})...")
         response = requests.get(ACRIS_REAL_PROPERTY_LEGALS, params=params, headers=API_HEADERS, timeout=15)
         
         if response.status_code != 200:
-            print(f"      API returned status {response.status_code}")
+            print(f"      {worker_prefix}API returned status {response.status_code}")
             return []
         
         legals = response.json()
-        print(f"      Found {len(legals)} legal records")
+        print(f"      {worker_prefix}Found {len(legals)} legal records")
         
         if not legals:
             return []
         
         # Step 2: Get unique document IDs
         doc_ids = list(set([legal['document_id'] for legal in legals if 'document_id' in legal]))
-        print(f"      Processing {len(doc_ids)} unique documents...")
+        print(f"      {worker_prefix}Processing {len(doc_ids)} unique documents...")
         
         transactions = []
         
@@ -235,20 +244,20 @@ def get_acris_full_history(bbl):
                 
                 # Show progress every 10 documents
                 if i % 10 == 0:
-                    print(f"         ...processed {i}/{len(doc_ids)} documents")
+                    print(f"         {worker_prefix}...processed {i}/{len(doc_ids)} documents")
                 
                 # Small delay to avoid rate limiting
                 time.sleep(0.1)
                 
             except Exception as e:
-                print(f"        ⚠️ Error processing document {doc_id}: {e}")
+                print(f"        {worker_prefix}⚠️ Error processing document {doc_id}: {e}")
                 continue
         
-        print(f"      ✅ Retrieved {len(transactions)} complete transactions")
+        print(f"      {worker_prefix}✅ Retrieved {len(transactions)} complete transactions")
         return transactions
         
     except Exception as e:
-        print(f"      ⚠️ Error fetching ACRIS history: {e}")
+        print(f"      {worker_prefix}⚠️ Error fetching ACRIS history: {e}")
         return []
 
 
@@ -430,6 +439,153 @@ def update_buildings_table(cur, building_id, transactions, primary_deed, primary
     ))
 
 
+def enrich_single_building(building, worker_id):
+    """
+    Worker function to enrich a single building with ACRIS data
+    Returns: (status, building_id, result_dict)
+    """
+    bbl = building['bbl']
+    building_id = building['id']
+    address = building['address']
+    owner = building['current_owner_name'] or 'Unknown'
+    
+    print(f"   [Worker {worker_id}] 🏢 Starting: {address} (BBL {bbl})")
+    sys.stdout.flush()
+    
+    # Each worker gets its own database connection
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor()
+    
+    try:
+        # Check if ACRIS data has changed (optimization)
+        boro, block, lot = parse_bbl(bbl)
+        params = {
+            "$select": "document_id",
+            "$where": f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
+            "$limit": 500
+        }
+        
+        # Add app token if available
+        if SOCRATA_APP_TOKEN and not API_HEADERS:
+            params['$$app_token'] = SOCRATA_APP_TOKEN
+        
+        response = requests.get(ACRIS_REAL_PROPERTY_LEGALS, params=params, headers=API_HEADERS, timeout=15)
+        if response.status_code == 200:
+            legals = response.json()
+            api_doc_count = len(set([legal['document_id'] for legal in legals if 'document_id' in legal]))
+            
+            # Check existing transaction count in database
+            cur.execute("""
+                SELECT COUNT(DISTINCT document_id) as existing_count
+                FROM acris_transactions
+                WHERE building_id = %s
+            """, (building_id,))
+            
+            result = cur.fetchone()
+            existing_count = result['existing_count'] if result else 0
+            
+            # If counts match, data hasn't changed - skip expensive re-processing
+            if existing_count > 0 and api_doc_count == existing_count:
+                # Just update the timestamp
+                cur.execute("""
+                    UPDATE buildings
+                    SET acris_last_enriched = CURRENT_TIMESTAMP,
+                        last_updated = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (building_id,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                
+                print(f"   [Worker {worker_id}] ⏭️  Skipped: {address} (unchanged, {existing_count} docs)")
+                sys.stdout.flush()
+                
+                return ('skipped', building_id, {
+                    'address': address,
+                    'bbl': bbl,
+                    'doc_count': existing_count
+                })
+        
+        # Get full ACRIS transaction history
+        transactions = get_acris_full_history(bbl, worker_id)
+        
+        if transactions:
+            # Save transactions and parties to database
+            primary_deed, primary_mortgage = save_transactions_and_parties(
+                cur, building_id, bbl, transactions
+            )
+            
+            # Update buildings table
+            update_buildings_table(cur, building_id, transactions, primary_deed, primary_mortgage)
+            
+            conn.commit()
+            
+            # Build result summary
+            deed_count = len([t for t in transactions if 'DEED' in t['doc_type']])
+            mortgage_count = len([t for t in transactions if t['doc_type'] == 'MTGE'])
+            party_count = sum(len(t['buyers']) + len(t['sellers']) + len(t['lenders']) for t in transactions)
+            
+            result_data = {
+                'address': address,
+                'bbl': bbl,
+                'transaction_count': len(transactions),
+                'party_count': party_count,
+                'deed_count': deed_count,
+                'mortgage_count': mortgage_count,
+                'primary_deed': primary_deed,
+                'primary_mortgage': primary_mortgage
+            }
+            
+            cur.close()
+            conn.close()
+            
+            print(f"   [Worker {worker_id}] ✅ Complete: {address} - {len(transactions)} trans, {party_count} parties")
+            sys.stdout.flush()
+            
+            return ('enriched', building_id, result_data)
+        else:
+            # No transactions found, but mark as attempted
+            cur.execute("""
+                UPDATE buildings
+                SET acris_last_enriched = CURRENT_TIMESTAMP,
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (building_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            print(f"   [Worker {worker_id}] ℹ️  No data: {address}")
+            sys.stdout.flush()
+            
+            return ('no_data', building_id, {'address': address, 'bbl': bbl})
+    
+    except Exception as e:
+        # Mark as attempted even on error
+        try:
+            cur.execute("""
+                UPDATE buildings
+                SET acris_last_enriched = CURRENT_TIMESTAMP,
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (building_id,))
+            conn.commit()
+        except:
+            pass
+        
+        cur.close()
+        conn.close()
+        
+        print(f"   [Worker {worker_id}] ❌ Failed: {address} - {str(e)}")
+        sys.stdout.flush()
+        
+        return ('failed', building_id, {
+            'address': address,
+            'bbl': bbl,
+            'error': str(e)
+        })
+
+
 def enrich_buildings_from_acris():
     """
     Main process with 30-day refresh cycle:
@@ -455,7 +611,8 @@ def enrich_buildings_from_acris():
     """)
     
     buildings = cur.fetchall()
-    print(f"\n📊 Found {len(buildings)} buildings to enrich")
+    total_buildings = len(buildings)
+    print(f"\n📊 Found {total_buildings:,} buildings to enrich")
     
     if not buildings:
         print("   ✅ No buildings need enrichment. All up-to-date!")
@@ -463,140 +620,112 @@ def enrich_buildings_from_acris():
         conn.close()
         return
     
+    print(f"🚀 Starting ACRIS enrichment with {NUM_WORKERS} parallel workers...")
+    print(f"   Processing in batches of {BATCH_SIZE} buildings")
+    sys.stdout.flush()
+    
+    # Split into batches
+    batches = [buildings[i:i + BATCH_SIZE] for i in range(0, len(buildings), BATCH_SIZE)]
+    total_batches = len(batches)
+    
     enriched = 0
     no_data = 0
     failed = 0
     skipped_unchanged = 0
+    buildings_processed = 0
     
-    for i, building in enumerate(buildings, 1):
-        bbl = building['bbl']
-        building_id = building['id']
-        address = building['address']
-        owner = building['current_owner_name'] or 'Unknown'
+    # Process each batch with parallel workers
+    for batch_num, batch in enumerate(batches, 1):
+        print(f"\n{'='*70}")
+        print(f"📦 Batch {batch_num}/{total_batches}: Buildings {buildings_processed + 1}-{buildings_processed + len(batch)}")
+        print(f"   🔄 {NUM_WORKERS} workers processing in parallel...")
+        print(f"{'='*70}")
+        sys.stdout.flush()
         
-        print(f"\n🔍 [{i}/{len(buildings)}] BBL {bbl}")
-        print(f"   Address: {address}")
-        print(f"   Owner: {owner}")
-        
-        try:
-            # OPTIMIZATION: Check if ACRIS data has changed before doing full processing
-            # Query ACRIS Legals just to get document count (fast, single API call)
-            boro, block, lot = parse_bbl(bbl)
-            params = {
-                "$select": "document_id",
-                "$where": f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
-                "$limit": 500
+        # Process batch in parallel
+        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            # Submit all buildings in this batch to workers
+            future_to_building = {
+                executor.submit(enrich_single_building, building, worker_id): building 
+                for worker_id, building in enumerate(batch, 1)
             }
             
-            # Add app token if available
-            if SOCRATA_APP_TOKEN and not API_HEADERS:
-                params['$$app_token'] = SOCRATA_APP_TOKEN
-            
-            response = requests.get(ACRIS_REAL_PROPERTY_LEGALS, params=params, headers=API_HEADERS, timeout=15)
-            if response.status_code == 200:
-                legals = response.json()
-                api_doc_count = len(set([legal['document_id'] for legal in legals if 'document_id' in legal]))
-                
-                # Check existing transaction count in database
-                cur.execute("""
-                    SELECT COUNT(DISTINCT document_id) as existing_count
-                    FROM acris_transactions
-                    WHERE building_id = %s
-                """, (building_id,))
-                
-                result = cur.fetchone()
-                existing_count = result['existing_count'] if result else 0
-                
-                # If counts match, data hasn't changed - skip expensive re-processing
-                if existing_count > 0 and api_doc_count == existing_count:
-                    print(f"      ⏭️  Unchanged: {existing_count} documents (skipping re-processing)")
-                    # Just update the timestamp so it doesn't get re-checked for another 30 days
-                    cur.execute("""
-                        UPDATE buildings
-                        SET acris_last_enriched = CURRENT_TIMESTAMP,
-                            last_updated = CURRENT_TIMESTAMP
-                        WHERE id = %s
-                    """, (building_id,))
-                    conn.commit()
-                    skipped_unchanged += 1
-                    continue
-                elif existing_count > 0 and api_doc_count != existing_count:
-                    print(f"      🔄 Change detected: {existing_count} → {api_doc_count} documents (re-enriching)")
-            
-            # Get full ACRIS transaction history (only if changed or never processed)
-            transactions = get_acris_full_history(bbl)
-            
-            if transactions:
-                # Save transactions and parties to database
-                primary_deed, primary_mortgage = save_transactions_and_parties(
-                    cur, building_id, bbl, transactions
-                )
-                
-                # Update buildings table
-                update_buildings_table(cur, building_id, transactions, primary_deed, primary_mortgage)
-                
-                conn.commit()
-                
-                # Display summary
-                deed_count = len([t for t in transactions if 'DEED' in t['doc_type']])
-                mortgage_count = len([t for t in transactions if t['doc_type'] == 'MTGE'])
-                party_count = sum(len(t['buyers']) + len(t['sellers']) + len(t['lenders']) for t in transactions)
-                
-                print(f"   ✅ Enriched: {len(transactions)} transactions, {party_count} parties")
-                print(f"      • {deed_count} deeds, {mortgage_count} mortgages")
-                
-                if primary_deed and primary_deed['doc_amount'] > 0:
-                    print(f"      • Last sale: ${primary_deed['doc_amount']:,.0f} on {primary_deed['doc_date']}")
-                    if primary_deed['buyers']:
-                        print(f"        Buyer: {primary_deed['buyers'][0]['name']}")
-                    if primary_deed['sellers']:
-                        seller = primary_deed['sellers'][0]
-                        addr = f"{seller['address1']}, {seller['city']}, {seller['state']}" if seller['address1'] else "No address"
-                        print(f"        Seller: {seller['name']} ({addr})")
-                
-                enriched += 1
-            else:
-                # No transactions found, but mark as attempted
-                cur.execute("""
-                    UPDATE buildings
-                    SET acris_last_enriched = CURRENT_TIMESTAMP,
-                        last_updated = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (building_id,))
-                conn.commit()
-                
-                print(f"   ℹ️  No ACRIS transaction data found")
-                no_data += 1
+            # Collect results as they complete
+            batch_results = []
+            for future in as_completed(future_to_building):
+                try:
+                    status, building_id, result_data = future.result()
+                    batch_results.append((status, building_id, result_data))
+                    
+                    # Update counters
+                    if status == 'enriched':
+                        enriched += 1
+                    elif status == 'skipped':
+                        skipped_unchanged += 1
+                    elif status == 'no_data':
+                        no_data += 1
+                    elif status == 'failed':
+                        failed += 1
+                    
+                    buildings_processed += 1
+                    
+                except Exception as e:
+                    failed += 1
+                    buildings_processed += 1
         
-        except Exception as e:
-            print(f"   ❌ Error: {e}")
-            failed += 1
-            # Still mark as attempted to avoid infinite retries
-            cur.execute("""
-                UPDATE buildings
-                SET acris_last_enriched = CURRENT_TIMESTAMP,
-                    last_updated = CURRENT_TIMESTAMP
-                WHERE id = %s
-            """, (building_id,))
-            conn.commit()
+        # Show batch summary
+        batch_enriched = sum(1 for s, _, _ in batch_results if s == 'enriched')
+        batch_skipped = sum(1 for s, _, _ in batch_results if s == 'skipped')
+        batch_no_data = sum(1 for s, _, _ in batch_results if s == 'no_data')
+        batch_failed = sum(1 for s, _, _ in batch_results if s == 'failed')
         
-        # Rate limit: 1 second delay between buildings
-        if i < len(buildings):
-            time.sleep(1)
+        print(f"\n   ✅ Batch complete!")
+        print(f"      Enriched: {batch_enriched} | Skipped: {batch_skipped} | No data: {batch_no_data} | Failed: {batch_failed}")
+        print(f"      Progress: {buildings_processed}/{total_buildings} ({buildings_processed * 100 // total_buildings}%)")
+        sys.stdout.flush()
+        
+        # Show sample results from this batch if verbose
+        if VERBOSE_LOGGING or batch_num <= 3:  # Show first 3 batches always
+            for status, building_id, data in batch_results[:3]:  # Show first 3 results
+                if status == 'enriched':
+                    print(f"      ✅ {data['address']}: {data['transaction_count']} transactions, {data['party_count']} parties")
+                    if data['primary_deed'] and data['primary_deed']['doc_amount'] > 0:
+                        print(f"         Last sale: ${data['primary_deed']['doc_amount']:,.0f} on {data['primary_deed']['doc_date']}")
+                elif status == 'skipped':
+                    print(f"      ⏭️  {data['address']}: Unchanged ({data['doc_count']} docs)")
+                elif status == 'no_data':
+                    print(f"      ℹ️  {data['address']}: No ACRIS data")
+                elif status == 'failed':
+                    print(f"      ❌ {data['address']}: {data.get('error', 'Unknown error')}")
+        
+        # Small delay between batches
+        if batch_num < total_batches:
+            time.sleep(2)
     
-    print(f"\n" + "=" * 70)
-    print(f"✅ ACRIS Enrichment Complete!")
+    # Close the initial connection
+    cur.close()
+    conn.close()
+    
+    # Final summary
+    print(f"\n{'='*70}")
+    print(f"✅ ACRIS ENRICHMENT COMPLETE!")
+    print(f"{'='*70}")
     print(f"   Buildings enriched: {enriched}")
     print(f"   Skipped (unchanged): {skipped_unchanged}")
     print(f"   No data found: {no_data}")
     print(f"   Failed: {failed}")
+    print(f"   Total processed: {buildings_processed}/{total_buildings}")
     
     if skipped_unchanged > 0:
         print(f"\n💡 Optimization: Skipped {skipped_unchanged} buildings with unchanged ACRIS data")
         print(f"   (Saved ~{skipped_unchanged * 30} API calls and ~{skipped_unchanged * 0.5:.1f} minutes)")
     
+    # Get final statistics from database
+    conn_stats = psycopg2.connect(DATABASE_URL)
+    cur_stats = conn_stats.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
     # Show enrichment statistics
-    cur.execute("""
+    cur_stats.execute("""
         SELECT 
             COUNT(*) as total_buildings,
             COUNT(sale_date) as with_sales,
@@ -609,7 +738,7 @@ def enrich_buildings_from_acris():
         WHERE acris_last_enriched IS NOT NULL
     """)
     
-    stats = cur.fetchone()
+    stats = cur_stats.fetchone()
     if stats:
         print(f"\n📊 Overall ACRIS Statistics:")
         print(f"   Buildings enriched: {stats['total_buildings']}")
@@ -621,7 +750,7 @@ def enrich_buildings_from_acris():
         print(f"   Total mortgages: {stats['total_mortgages']}")
     
     # Show seller leads count
-    cur.execute("""
+    cur_stats.execute("""
         SELECT COUNT(*) as seller_leads
         FROM acris_parties
         WHERE party_type = 'seller'
@@ -629,13 +758,13 @@ def enrich_buildings_from_acris():
         AND address_1 IS NOT NULL
     """)
     
-    leads = cur.fetchone()
+    leads = cur_stats.fetchone()
     if leads and leads['seller_leads'] > 0:
         print(f"\n💰 Seller Leads (Previous Owners Campaign):")
         print(f"   {leads['seller_leads']} sellers with addresses available!")
     
     # Show sample enriched buildings
-    cur.execute("""
+    cur_stats.execute("""
         SELECT b.bbl, b.address, b.sale_date, b.sale_price, 
                b.sale_buyer_primary, b.sale_seller_primary,
                b.is_cash_purchase, b.acris_total_transactions
@@ -646,7 +775,7 @@ def enrich_buildings_from_acris():
         LIMIT 5
     """)
     
-    samples = cur.fetchall()
+    samples = cur_stats.fetchall()
     if samples:
         print(f"\n📋 Sample Enriched Buildings:")
         for s in samples:
@@ -660,8 +789,11 @@ def enrich_buildings_from_acris():
                 print(f"      Seller: {s['sale_seller_primary']}")
             print(f"      Total transactions: {s['acris_total_transactions']}")
     
-    cur.close()
-    conn.close()
+    cur_stats.close()
+    conn_stats.close()
+    print(f"\n{'='*70}")
+
+
 
 
 if __name__ == "__main__":
