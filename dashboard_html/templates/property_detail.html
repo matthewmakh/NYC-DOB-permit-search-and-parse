@@ -43,7 +43,7 @@
                             <span class="meta-separator">•</span>
                             <span class="meta-item" id="propertyBorough">Loading...</span>
                             <span class="meta-separator">•</span>
-                            <span class="meta-item" id="propertyZip">Loading...</span>
+                            <span class="meta-item" id="propertyBIN">BIN: Loading...</span>
                         </div>
                         <div class="property-owner" id="propertyOwner">Owner: Loading...</div>
                     </div>
@@ -110,6 +110,12 @@
                 </button>
                 <button class="tab" data-tab="owner">
                     <i class="fas fa-user"></i> Owner Intel
+                </button>
+                <button class="tab" data-tab="violations">
+                    <i class="fas fa-exclamation-triangle"></i> Violations <span class="tab-badge" id="tabBadgeViolations">0</span>
+                </button>
+                <button class="tab" data-tab="hpd-info">
+                    <i class="fas fa-gavel"></i> HPD Info
                 </button>
                 <button class="tab" data-tab="financials">
                     <i class="fas fa-chart-line"></i> Financials
@@ -281,6 +287,215 @@
                     <h3>Owner Intelligence</h3>
                     <div id="ownerIntel" class="owner-intel">
                         <div class="loading-state">Loading owner intelligence...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Violations Tab -->
+            <div class="tab-content" id="violations">
+                <div class="violations-container">
+                    <div class="violations-summary-cards">
+                        <div class="info-card violations-card" id="openViolationsCard" style="cursor: pointer;">
+                            <div class="card-header">
+                                <h3 class="card-title">⚠️ HPD Open Violations</h3>
+                                <div class="violation-count-badge" id="openViolationsCount">0</div>
+                            </div>
+                            <div class="violation-status" id="openViolationsStatus">
+                                <i class="fas fa-check-circle"></i> No open violations
+                            </div>
+                        </div>
+                        
+                        <div class="info-card violations-card" id="totalViolationsCard" style="cursor: pointer;">
+                            <div class="card-header">
+                                <h3 class="card-title">📊 Total Violations (All Time)</h3>
+                                <div class="violation-count-badge secondary" id="totalViolationsCount">0</div>
+                            </div>
+                            <div class="info-text">Historical violation count</div>
+                        </div>
+                        
+                        <div class="info-card violations-card">
+                            <div class="card-header">
+                                <h3 class="card-title">📞 Open Complaints</h3>
+                                <div class="violation-count-badge warning" id="openComplaintsCount">0</div>
+                            </div>
+                            <div class="info-text">Active tenant complaints</div>
+                        </div>
+                        
+                        <div class="info-card violations-card">
+                            <div class="card-header">
+                                <h3 class="card-title">📋 Total Complaints (All Time)</h3>
+                                <div class="violation-count-badge secondary" id="totalComplaintsCount">0</div>
+                            </div>
+                            <div class="info-text">Historical complaint count</div>
+                        </div>
+                    </div>
+
+                    <div class="violations-details">
+                        <div class="info-card">
+                            <h3 class="card-title">🔍 Violation Details & History</h3>
+                            <div class="info-grid">
+                                <div class="info-item">
+                                    <span class="info-label">HPD Registration ID</span>
+                                    <span class="info-value" id="hpdRegistrationId">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Building Status</span>
+                                    <span class="info-value" id="buildingStatus">-</span>
+                                </div>
+                                <div class="info-item full-width">
+                                    <span class="info-label">Violation Summary</span>
+                                    <span class="info-value" id="violationSummary">-</span>
+                                </div>
+                            </div>
+
+                            <div class="violations-metrics">
+                                <h4>Compliance Metrics</h4>
+                                <div class="metrics-grid">
+                                    <div class="metric-item">
+                                        <div class="metric-label">Violation Rate</div>
+                                        <div class="metric-value" id="violationRate">-</div>
+                                        <div class="metric-description">Open vs Total violations</div>
+                                    </div>
+                                    <div class="metric-item">
+                                        <div class="metric-label">Complaint Rate</div>
+                                        <div class="metric-value" id="complaintRate">-</div>
+                                        <div class="metric-description">Open vs Total complaints</div>
+                                    </div>
+                                    <div class="metric-item">
+                                        <div class="metric-label">Risk Assessment</div>
+                                        <div class="metric-value" id="riskAssessment">-</div>
+                                        <div class="metric-description">Based on violation history</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="external-links">
+                                <h4>External Resources</h4>
+                                <div class="link-buttons">
+                                    <a id="hpdBuildingLink" href="#" target="_blank" class="btn btn-secondary" style="display:none;">
+                                        <i class="fas fa-external-link-alt"></i> View on HPD
+                                    </a>
+                                    <a id="dobBuildingLink" href="#" target="_blank" class="btn btn-secondary">
+                                        <i class="fas fa-external-link-alt"></i> View on DOB BIS
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Actual Violations List -->
+                        <div class="info-card" id="detailedViolationsSection">
+                            <div class="card-header-row">
+                                <h3 class="card-title">📋 Detailed Violation Records</h3>
+                                <button class="btn btn-sm btn-secondary" id="loadViolationsBtn">
+                                    <i class="fas fa-sync"></i> Load Violations
+                                </button>
+                            </div>
+                            <div id="violationsList" class="violations-list">
+                                <div class="info-message">
+                                    <i class="fas fa-info-circle"></i>
+                                    <span>Click "Load Violations" to unlock detailed violation records.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="violations-note">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Violation data is sourced from NYC HPD (Housing Preservation & Development). 
+                        Open violations require landlord action. Total counts include historical violations that may have been resolved.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HPD Info Tab -->
+            <div class="tab-content" id="hpd-info">
+                <div class="hpd-info-container">
+                    <!-- Summary Cards -->
+                    <div class="hpd-summary-cards">
+                        <div class="info-card clickable-card" onclick="scrollToSection('litigation-section')">
+                            <div class="card-header">
+                                <h3 class="card-title">⚖️ Active Litigation</h3>
+                                <div class="count-badge" id="activeLitigationCount">0</div>
+                            </div>
+                            <div class="info-text">Open court cases</div>
+                        </div>
+                        
+                        <div class="info-card clickable-card" onclick="scrollToSection('work-orders-section')">
+                            <div class="card-header">
+                                <h3 class="card-title">🔨 Work Orders</h3>
+                                <div class="count-badge" id="workOrdersCount">0</div>
+                            </div>
+                            <div class="info-text">OMO & HWO combined</div>
+                        </div>
+                        
+                        <div class="info-card clickable-card" onclick="scrollToSection('work-orders-section')">
+                            <div class="card-header">
+                                <h3 class="card-title">💰 Total Charges</h3>
+                                <div class="count-badge" id="totalChargesAmount">$0</div>
+                            </div>
+                            <div class="info-text">All HPD charges</div>
+                        </div>
+                        
+                        <div class="info-card clickable-card" onclick="scrollToSection('fees-section')">
+                            <div class="card-header">
+                                <h3 class="card-title">📄 Fees</h3>
+                                <div class="count-badge" id="totalFeesCount">0</div>
+                            </div>
+                            <div class="info-text">HPD inspection fees</div>
+                        </div>
+                    </div>
+
+                    <!-- Litigation Section -->
+                    <div class="info-card" id="litigation-section">
+                        <div class="card-header-row">
+                            <h3 class="card-title">⚖️ Housing Litigations</h3>
+                            <button class="btn btn-sm btn-secondary" id="loadLitigationBtn">
+                                <i class="fas fa-sync"></i> Load Litigation
+                            </button>
+                        </div>
+                        <div id="litigationList" class="hpd-list">
+                            <div class="loading-placeholder">
+                                <div class="loading-spinner"></div>
+                                <span>Loading litigation data...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Work Orders Section -->
+                    <div class="info-card" id="work-orders-section">
+                        <div class="card-header-row">
+                            <h3 class="card-title">🔨 Work Orders (OMO & HWO)</h3>
+                            <button class="btn btn-sm btn-secondary" id="loadWorkOrdersBtn">
+                                <i class="fas fa-sync"></i> Load Work Orders
+                            </button>
+                        </div>
+                        <div id="workOrdersList" class="hpd-list">
+                            <div class="loading-placeholder">
+                                <div class="loading-spinner"></div>
+                                <span>Loading work orders...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fees Section -->
+                    <div class="info-card" id="fees-section">
+                        <div class="card-header-row">
+                            <h3 class="card-title">💰 HPD Fees & Charges</h3>
+                            <button class="btn btn-sm btn-secondary" id="loadFeesBtn">
+                                <i class="fas fa-sync"></i> Load Fees
+                            </button>
+                        </div>
+                        <div id="feesList" class="hpd-list">
+                            <div class="loading-placeholder">
+                                <div class="loading-spinner"></div>
+                                <span>Loading fees data...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="violations-note">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Data sourced from NYC Open Data HPD datasets. This includes litigation, work orders, and fees assessed by the Department of Housing Preservation and Development.</span>
                     </div>
                 </div>
             </div>

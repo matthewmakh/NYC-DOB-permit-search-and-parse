@@ -23,8 +23,11 @@ async function loadPropertyData() {
     showLoadingState();
     
     try {
+        console.log('Fetching property data for BBL:', BBL);
         const response = await fetch(`/api/property/${BBL}`);
         const data = await response.json();
+        
+        console.log('Property data received:', data.success);
         
         if (!data.success) {
             showError('Property not found');
@@ -35,13 +38,32 @@ async function loadPropertyData() {
         
         // Populate all sections with slight delay for animation
         hideLoadingState();
+        
+        console.log('Populating header...');
         populateHeader(data.building);
+        
+        console.log('Populating stats...');
         populateStats(data);
+        
+        console.log('Populating overview...');
         populateOverview(data.building);
+        
+        console.log('Populating permits...');
         populatePermits(data.permits, data.contacts || []);
+        
+        console.log('Populating sales...');
         populateSales(data.transactions, data.parties || []);
+        
+        console.log('Populating owner intel...');
         populateOwnerIntel(data.building);
+        
+        console.log('Populating violations...');
+        populateViolations(data.building);
+        
+        console.log('Populating recent activity...');
         populateRecentActivity(data);
+        
+        console.log('All data loaded successfully!');
         
     } catch (error) {
         console.error('Error loading property:', error);
@@ -105,8 +127,8 @@ function populateHeader(building) {
     const borough = boroughs[building.bbl?.toString()[0]] || 'Unknown';
     document.getElementById('propertyBorough').textContent = borough;
     
-    // Zip
-    document.getElementById('propertyZip').textContent = building.zipcode || 'No zip';
+    // BIN
+    document.getElementById('propertyBIN').textContent = `BIN: ${building.bin || 'N/A'}`;
     
     // Owner
     document.getElementById('propertyOwner').textContent = 
@@ -1383,6 +1405,639 @@ function populateOwnerIntel(building) {
 }
 
 // =========================
+// VIOLATIONS TAB
+// =========================
+
+function populateViolations(building) {
+    // Update tab badge
+    const violationCount = building.hpd_open_violations || 0;
+    document.getElementById('tabBadgeViolations').textContent = violationCount;
+    
+    // Update summary cards
+    const openViolations = building.hpd_open_violations || 0;
+    const totalViolations = building.hpd_total_violations || 0;
+    const openComplaints = building.hpd_open_complaints || 0;
+    const totalComplaints = building.hpd_total_complaints || 0;
+    
+    document.getElementById('openViolationsCount').textContent = openViolations;
+    document.getElementById('totalViolationsCount').textContent = totalViolations;
+    document.getElementById('openComplaintsCount').textContent = openComplaints;
+    document.getElementById('totalComplaintsCount').textContent = totalComplaints;
+    
+    // Update violation status
+    const statusElement = document.getElementById('openViolationsStatus');
+    if (openViolations === 0) {
+        statusElement.innerHTML = '<i class="fas fa-check-circle"></i> No open violations';
+        statusElement.className = 'violation-status success';
+        document.getElementById('openViolationsCount').parentElement.classList.add('success');
+        document.getElementById('openViolationsCount').parentElement.classList.remove('secondary');
+    } else if (openViolations < 5) {
+        statusElement.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${openViolations} open violation${openViolations > 1 ? 's' : ''}`;
+        statusElement.className = 'violation-status warning';
+    } else {
+        statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${openViolations} open violations - High risk`;
+        statusElement.className = 'violation-status danger';
+    }
+    
+    // Populate details
+    document.getElementById('hpdRegistrationId').textContent = building.hpd_registration_id || 'Not registered';
+    
+    // Building status
+    let buildingStatus = 'Good Standing';
+    if (openViolations > 10) buildingStatus = 'Critical - Multiple Violations';
+    else if (openViolations > 5) buildingStatus = 'Warning - Several Violations';
+    else if (openViolations > 0) buildingStatus = 'Minor Issues';
+    
+    const statusEl = document.getElementById('buildingStatus');
+    statusEl.textContent = buildingStatus;
+    statusEl.style.color = openViolations > 10 ? '#ff4757' : openViolations > 5 ? '#ffa502' : openViolations > 0 ? '#ffa502' : '#26de81';
+    
+    // Violation summary
+    let summary = '';
+    if (openViolations === 0 && totalViolations === 0) {
+        summary = 'No violation history on record. Building appears to be in good standing with HPD.';
+    } else if (openViolations === 0 && totalViolations > 0) {
+        summary = `All ${totalViolations} historical violation${totalViolations > 1 ? 's have' : ' has'} been resolved. Building is currently in compliance.`;
+    } else {
+        summary = `${openViolations} open violation${openViolations > 1 ? 's require' : ' requires'} attention. ${totalViolations - openViolations} historical violation${totalViolations - openViolations !== 1 ? 's have' : ' has'} been resolved.`;
+    }
+    document.getElementById('violationSummary').textContent = summary;
+    
+    // Calculate metrics
+    const violationRate = totalViolations > 0 ? `${Math.round((openViolations / totalViolations) * 100)}%` : 'N/A';
+    const complaintRate = totalComplaints > 0 ? `${Math.round((openComplaints / totalComplaints) * 100)}%` : 'N/A';
+    
+    document.getElementById('violationRate').textContent = violationRate;
+    document.getElementById('complaintRate').textContent = complaintRate;
+    
+    // Set metric colors
+    const violationRateEl = document.getElementById('violationRate');
+    if (totalViolations > 0) {
+        const rate = (openViolations / totalViolations) * 100;
+        violationRateEl.className = rate < 20 ? 'metric-value good' : rate < 50 ? 'metric-value warning' : 'metric-value danger';
+    }
+    
+    const complaintRateEl = document.getElementById('complaintRate');
+    if (totalComplaints > 0) {
+        const rate = (openComplaints / totalComplaints) * 100;
+        complaintRateEl.className = rate < 20 ? 'metric-value good' : rate < 50 ? 'metric-value warning' : 'metric-value danger';
+    }
+    
+    // Risk assessment
+    let riskLevel = 'Low Risk';
+    let riskColor = 'good';
+    
+    if (openViolations > 10 || (openViolations > 0 && openComplaints > 5)) {
+        riskLevel = 'High Risk';
+        riskColor = 'danger';
+    } else if (openViolations > 5 || openComplaints > 3) {
+        riskLevel = 'Medium Risk';
+        riskColor = 'warning';
+    }
+    
+    const riskEl = document.getElementById('riskAssessment');
+    riskEl.textContent = riskLevel;
+    riskEl.className = `metric-value ${riskColor}`;
+    
+    // Add click handlers to cards to scroll to detailed records
+    const openViolationsCard = document.getElementById('openViolationsCard');
+    const totalViolationsCard = document.getElementById('totalViolationsCard');
+    
+    if (openViolationsCard) {
+        openViolationsCard.onclick = function() {
+            document.getElementById('detailedViolationsSection').scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'start' 
+            });
+        };
+    }
+    
+    if (totalViolationsCard) {
+        totalViolationsCard.onclick = function() {
+            document.getElementById('detailedViolationsSection').scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'start' 
+            });
+        };
+    }
+    
+    // External links
+    if (building.hpd_registration_id) {
+        const hpdLink = document.getElementById('hpdBuildingLink');
+        hpdLink.href = `https://hpdonline.hpdnyc.org/HPDonline/provide_address.aspx?p1=${building.borough}&p2=${building.address}`;
+        hpdLink.style.display = 'inline-flex';
+    }
+    
+    const dobLink = document.getElementById('dobBuildingLink');
+    dobLink.href = `https://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=${building.bbl.substring(0, 1)}&block=${building.bbl.substring(1, 6)}&lot=${building.bbl.substring(6)}`;
+}
+
+async function loadDetailedViolations() {
+    const violationsList = document.getElementById('violationsList');
+    const loadBtn = document.getElementById('loadViolationsBtn');
+    
+    // Show loading state
+    loadBtn.disabled = true;
+    loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    
+    violationsList.innerHTML = `
+        <div class="violations-loading">
+            <div class="spinner spinner-lg"></div>
+            <div>Fetching violations from NYC Open Data...</div>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(`/api/property/${BBL}/violations`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to load violations');
+        }
+        
+        // Update button
+        loadBtn.innerHTML = '<i class="fas fa-check"></i> Loaded';
+        loadBtn.classList.add('btn-success');
+        
+        if (data.total_count === 0) {
+            violationsList.innerHTML = `
+                <div class="violations-empty">
+                    <i class="fas fa-check-circle"></i>
+                    <div style="font-size: 1.25rem; font-weight: 600;">No Violations Found</div>
+                    <div>This property has no violation records in the NYC HPD database</div>
+                </div>
+            `;
+            return;
+        }
+        
+        // Render violations
+        renderViolations(data);
+        
+    } catch (error) {
+        console.error('Error loading violations:', error);
+        violationsList.innerHTML = `
+            <div class="violations-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div>
+                    <strong>Error loading violations</strong><br>
+                    ${error.message}
+                </div>
+            </div>
+        `;
+        loadBtn.disabled = false;
+        loadBtn.innerHTML = '<i class="fas fa-sync"></i> Retry';
+    }
+}
+
+function renderViolations(data) {
+    const violationsList = document.getElementById('violationsList');
+    
+    let html = `
+        <div style="margin-bottom: var(--spacing-lg);">
+            <div style="display: flex; justify-content: between; align-items: center; margin-bottom: var(--spacing-md);">
+                <div>
+                    <strong>${data.total_count}</strong> total violations found
+                    (<span style="color: #ff4757; font-weight: 600;">${data.open_count} open</span>, 
+                    <span style="color: #26de81; font-weight: 600;">${data.closed_count} closed</span>)
+                </div>
+            </div>
+            
+            ${Object.keys(data.by_class).length > 0 ? `
+                <div class="violation-filters">
+                    <div class="filter-chip active" data-filter="all">
+                        All (${data.total_count})
+                    </div>
+                    <div class="filter-chip" data-filter="open">
+                        Open Only (${data.open_count})
+                    </div>
+                    <div class="filter-chip" data-filter="closed">
+                        Closed Only (${data.closed_count})
+                    </div>
+                    ${Object.entries(data.by_class).map(([vclass, counts]) => `
+                        <div class="filter-chip" data-filter="class-${vclass.toLowerCase()}">
+                            Class ${vclass} (${counts.count})
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+        </div>
+        
+        <div class="violations-list" id="violationsListItems">
+    `;
+    
+    // Render each violation
+    data.violations.forEach(violation => {
+        const isOpen = violation.is_open;
+        const vClass = violation.class || 'Unknown';
+        const classLower = vClass.toLowerCase();
+        
+        html += `
+            <div class="violation-item" data-status="${isOpen ? 'open' : 'closed'}" data-class="${classLower}">
+                <div class="violation-header">
+                    <div class="violation-title">
+                        <div class="violation-id">
+                            <a href="https://hpdonline.hpdnyc.org/HPDonline/Provide_address.aspx" 
+                               target="_blank" 
+                               rel="noopener noreferrer"
+                               style="color: inherit; text-decoration: none;"
+                               title="View on HPD Online">
+                                #${violation.violation_id || 'N/A'}
+                                <i class="fas fa-external-link-alt" style="font-size: 0.75rem; margin-left: 4px; opacity: 0.6;"></i>
+                            </a>
+                        </div>
+                        <div class="violation-class">Class ${vClass} Violation</div>
+                    </div>
+                    <div class="violation-badges">
+                        <span class="violation-badge ${isOpen ? 'open' : 'closed'}">
+                            ${isOpen ? 'OPEN' : 'CLOSED'}
+                        </span>
+                        <span class="violation-badge class-${classLower}">
+                            Class ${vClass}
+                        </span>
+                        ${violation.severity ? `
+                            <span class="violation-badge severity" style="background: #6c757d;">
+                                Severity: ${violation.severity}
+                            </span>
+                        ` : ''}
+                    </div>
+                </div>
+                
+                ${violation.description ? `
+                    <div class="violation-description">
+                        ${violation.description}
+                    </div>
+                ` : ''}
+                
+                <div class="violation-meta">
+                    ${violation.inspection_date ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Inspection Date</div>
+                            <div class="violation-meta-value">${formatDate(violation.inspection_date)}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.nov_issued_date ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">NOV Issued</div>
+                            <div class="violation-meta-value">${formatDate(violation.nov_issued_date)}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.original_certify_date ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Certify By Date</div>
+                            <div class="violation-meta-value">${formatDate(violation.original_certify_date)}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.approved_date ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Approved Date</div>
+                            <div class="violation-meta-value">${formatDate(violation.approved_date)}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.current_status ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Status</div>
+                            <div class="violation-meta-value">${violation.current_status}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.apartment && violation.apartment !== 'N/A' ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Apartment</div>
+                            <div class="violation-meta-value">${violation.apartment}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.story && violation.story !== 'N/A' ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Story</div>
+                            <div class="violation-meta-value">${violation.story}</div>
+                        </div>
+                    ` : ''}
+                    
+                    ${violation.order_number ? `
+                        <div class="violation-meta-item">
+                            <div class="violation-meta-label">Order Number</div>
+                            <div class="violation-meta-value">${violation.order_number}</div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `
+        </div>
+        ${data.has_more ? `
+            <div style="text-align: center; padding: var(--spacing-lg); color: var(--text-muted);">
+                <i class="fas fa-info-circle"></i>
+                Showing first 100 violations. ${data.total_count - 100} more violations exist for this property.
+            </div>
+        ` : ''}
+    `;
+    
+    violationsList.innerHTML = html;
+    
+    // Add filter functionality
+    setupViolationFilters();
+}
+
+function setupViolationFilters() {
+    const filters = document.querySelectorAll('.filter-chip');
+    
+    filters.forEach(filter => {
+        filter.addEventListener('click', () => {
+            // Update active state
+            filters.forEach(f => f.classList.remove('active'));
+            filter.classList.add('active');
+            
+            const filterValue = filter.getAttribute('data-filter');
+            const items = document.querySelectorAll('.violation-item');
+            
+            items.forEach(item => {
+                if (filterValue === 'all') {
+                    item.style.display = 'block';
+                } else if (filterValue === 'open') {
+                    item.style.display = item.getAttribute('data-status') === 'open' ? 'block' : 'none';
+                } else if (filterValue === 'closed') {
+                    item.style.display = item.getAttribute('data-status') === 'closed' ? 'block' : 'none';
+                } else if (filterValue.startsWith('class-')) {
+                    const vclass = filterValue.replace('class-', '');
+                    item.style.display = item.getAttribute('data-class') === vclass ? 'block' : 'none';
+                }
+            });
+        });
+    });
+}
+
+// =========================
+// HPD INFO TAB
+// =========================
+
+async function loadHPDInfo() {
+    console.log('loadHPDInfo called');
+    try {
+        const response = await fetch(`/api/property/${BBL}/hpd-info`);
+        const data = await response.json();
+        
+        console.log('HPD Info response:', data);
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to load HPD data');
+        }
+        
+        // Update summary cards
+        document.getElementById('activeLitigationCount').textContent = data.summary.active_litigation;
+        document.getElementById('workOrdersCount').textContent = data.summary.total_work_orders;
+        document.getElementById('totalChargesAmount').textContent = `$${formatCurrency(data.summary.total_charges_amount)}`;
+        document.getElementById('totalFeesCount').textContent = data.summary.total_fees;
+        
+        // Store data globally
+        window.hpdData = data;
+        
+        console.log('HPD Info loaded successfully');
+        return data;
+        
+    } catch (error) {
+        console.error('Error loading HPD info:', error);
+        throw error;
+    }
+}
+
+async function loadLitigation() {
+    console.log('loadLitigation called');
+    const litigationList = document.getElementById('litigationList');
+    const loadBtn = document.getElementById('loadLitigationBtn');
+    
+    loadBtn.disabled = true;
+    loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    
+    litigationList.innerHTML = '<div class="spinner"></div>';
+    
+    try {
+        if (!window.hpdData) {
+            console.log('HPD data not loaded, loading now...');
+            await loadHPDInfo();
+        }
+        
+        const litigation = window.hpdData.litigation;
+        console.log('Litigation count:', litigation.length);
+        
+        loadBtn.innerHTML = '<i class="fas fa-check"></i> Loaded';
+        loadBtn.classList.add('btn-success');
+        
+        if (litigation.length === 0) {
+            litigationList.innerHTML = '<div class="info-message"><i class="fas fa-check-circle"></i><span>No litigation records found</span></div>';
+            return;
+        }
+        
+        let html = `<div style="margin-bottom: 1.5rem; font-size: 1.1rem;"><strong>${litigation.length}</strong> litigation case(s) found</div>`;
+        
+        litigation.forEach(lit => {
+            const isOpen = lit.casestatus && lit.casestatus.toUpperCase() !== 'CLOSED';
+            const datasetUrl = `https://data.cityofnewyork.us/Housing-Development/Housing-Litigations/59kj-x8nc?litigationid=${lit.litigationid || ''}`;
+            
+            html += `
+                <div class="hpd-item">
+                    <div class="case-header">
+                        <div>
+                            <div class="case-title">
+                                ${lit.casetype || 'Unknown Case Type'}
+                                ${lit.litigationid ? `<a href="${datasetUrl}" target="_blank" style="margin-left: 0.5rem; color: var(--primary); text-decoration: none;" title="View in NYC Open Data"><i class="fas fa-external-link-alt"></i></a>` : ''}
+                            </div>
+                            <div class="case-id">Case ID: ${lit.litigationid || 'N/A'}</div>
+                        </div>
+                        <span class="violation-badge ${isOpen ? 'open' : 'closed'}">${lit.casestatus || 'Unknown'}</span>
+                    </div>
+                    <div class="metadata-grid">
+                        ${lit.caseopendate ? `<div class="metadata-item"><div class="metadata-label">Opened</div><div class="metadata-value">${formatDate(lit.caseopendate)}</div></div>` : ''}
+                        ${lit.casejudgement ? `<div class="metadata-item"><div class="metadata-label">Judgement</div><div class="metadata-value">${lit.casejudgement}</div></div>` : ''}
+                        ${lit.respondent ? `<div class="metadata-item"><div class="metadata-label">Respondent</div><div class="metadata-value">${lit.respondent}</div></div>` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        
+        litigationList.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading litigation:', error);
+        litigationList.innerHTML = '<div class="info-message error"><i class="fas fa-exclamation-triangle"></i><span>Error loading litigation data</span></div>';
+        loadBtn.disabled = false;
+        loadBtn.innerHTML = '<i class="fas fa-sync"></i> Retry';
+    }
+}
+
+async function loadWorkOrders() {
+    console.log('loadWorkOrders called');
+    const workOrdersList = document.getElementById('workOrdersList');
+    const loadBtn = document.getElementById('loadWorkOrdersBtn');
+    
+    loadBtn.disabled = true;
+    loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    
+    workOrdersList.innerHTML = '<div class="spinner"></div>';
+    
+    try {
+        if (!window.hpdData) {
+            console.log('HPD data not loaded, loading now...');
+            await loadHPDInfo();
+        }
+        
+        const omo = window.hpdData.omo_charges;
+        const hwo = window.hpdData.hwo_charges;
+        console.log('Work orders - OMO:', omo.length, 'HWO:', hwo.length);
+        
+        loadBtn.innerHTML = '<i class="fas fa-check"></i> Loaded';
+        loadBtn.classList.add('btn-success');
+        
+        if (omo.length === 0 && hwo.length === 0) {
+            workOrdersList.innerHTML = '<div class="info-message"><i class="fas fa-check-circle"></i><span>No work orders found</span></div>';
+            return;
+        }
+        
+        let html = `<div style="margin-bottom: 1rem;"><strong>${omo.length}</strong> OMO charge(s) and <strong>${hwo.length}</strong> HWO charge(s) found</div>`;
+        
+        // OMO Charges
+        if (omo.length > 0) {
+            html += '<h4 class="hpd-section-header">🏗️ Open Market Orders (OMO)</h4>';
+            omo.forEach(order => {
+                const omoUrl = `https://data.cityofnewyork.us/Housing-Development/Open-Market-Order-OMO-Charges/mdbu-nrqn?omonumber=${order.omonumber || ''}`;
+                html += `
+                    <div class="hpd-item">
+                        <div class="order-header">
+                            <div>
+                                <div class="order-number">
+                                    OMO ${order.omonumber || 'N/A'}
+                                    ${order.omonumber ? `<a href="${omoUrl}" target="_blank" style="margin-left: 0.5rem; color: var(--primary); text-decoration: none;" title="View in NYC Open Data"><i class="fas fa-external-link-alt"></i></a>` : ''}
+                                </div>
+                                <div class="order-type">${order.worktypegeneral || 'Work type not specified'}</div>
+                            </div>
+                            <div class="amount-display">
+                                <div class="amount-value">$${formatCurrency(order.omoawardamount || 0)}</div>
+                                <div class="amount-label">Award Amount</div>
+                            </div>
+                        </div>
+                        ${order.omodescription ? `<div class="description-box">${order.omodescription}</div>` : ''}
+                        <div class="metadata-grid">
+                            ${order.omocreatedate ? `<div class="metadata-item"><div class="metadata-label">Created</div><div class="metadata-value">${formatDate(order.omocreatedate)}</div></div>` : ''}
+                            ${order.omoawarddate ? `<div class="metadata-item"><div class="metadata-label">Awarded</div><div class="metadata-value">${formatDate(order.omoawarddate)}</div></div>` : ''}
+                            ${order.lifecycle ? `<div class="metadata-item"><div class="metadata-label">Status</div><div class="metadata-value">${order.lifecycle}</div></div>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        
+        // HWO Charges
+        if (hwo.length > 0) {
+            html += '<h4 class="hpd-section-header">🔧 Handyman Work Orders (HWO)</h4>';
+            hwo.forEach(order => {
+                const hwoUrl = `https://data.cityofnewyork.us/Housing-Development/Handyman-Work-Order-HWO-Charges/sbnd-xujn?hwonumber=${order.hwonumber || ''}`;
+                html += `
+                    <div class="hpd-item">
+                        <div class="order-header">
+                            <div>
+                                <div class="order-number">
+                                    HWO ${order.hwonumber || 'N/A'}
+                                    ${order.hwonumber ? `<a href="${hwoUrl}" target="_blank" style="margin-left: 0.5rem; color: var(--primary); text-decoration: none;" title="View in NYC Open Data"><i class="fas fa-external-link-alt"></i></a>` : ''}
+                                </div>
+                                <div class="order-type">${order.worktypegeneral || 'Work type not specified'}</div>
+                            </div>
+                            <div class="amount-display">
+                                <div class="amount-value">$${formatCurrency(order.chargeamount || 0)}</div>
+                                <div class="amount-label">Charge Amount</div>
+                            </div>
+                        </div>
+                        ${order.hwodescription ? `<div class="description-box">${order.hwodescription}</div>` : ''}
+                        <div class="metadata-grid">
+                            ${order.hwocreatedate ? `<div class="metadata-item"><div class="metadata-label">Created</div><div class="metadata-value">${formatDate(order.hwocreatedate)}</div></div>` : ''}
+                            ${order.lifecycle ? `<div class="metadata-item"><div class="metadata-label">Status</div><div class="metadata-value">${order.lifecycle}</div></div>` : ''}
+                            ${order.hwostatusreason ? `<div class="metadata-item"><div class="metadata-label">Reason</div><div class="metadata-value">${order.hwostatusreason}</div></div>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        
+        workOrdersList.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading work orders:', error);
+        workOrdersList.innerHTML = '<div class="info-message error"><i class="fas fa-exclamation-triangle"></i><span>Error loading work orders</span></div>';
+        loadBtn.disabled = false;
+        loadBtn.innerHTML = '<i class="fas fa-sync"></i> Retry';
+    }
+}
+
+async function loadFees() {
+    console.log('loadFees called');
+    const feesList = document.getElementById('feesList');
+    const loadBtn = document.getElementById('loadFeesBtn');
+    
+    loadBtn.disabled = true;
+    loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    
+    feesList.innerHTML = '<div class="spinner"></div>';
+    
+    try {
+        if (!window.hpdData) {
+            console.log('HPD data not loaded, loading now...');
+            await loadHPDInfo();
+        }
+        
+        const fees = window.hpdData.fees;
+        console.log('Fees count:', fees.length);
+        
+        loadBtn.innerHTML = '<i class="fas fa-check"></i> Loaded';
+        loadBtn.classList.add('btn-success');
+        
+        if (fees.length === 0) {
+            feesList.innerHTML = '<div class="info-message"><i class="fas fa-check-circle"></i><span>No fees found</span></div>';
+            return;
+        }
+        
+        let html = `<div style="margin-bottom: 1.5rem; font-size: 1.1rem;"><strong>${fees.length}</strong> fee(s) found totaling <strong>$${formatCurrency(window.hpdData.summary.total_fees_amount)}</strong></div>`;
+        
+        fees.forEach(fee => {
+            const feeUrl = `https://data.cityofnewyork.us/Housing-Development/Fee-Charges/cp6j-7bjj?feeid=${fee.feeid || ''}`;
+            html += `
+                <div class="hpd-item">
+                    <div class="order-header">
+                        <div>
+                            <div class="order-number">
+                                ${fee.feetype || 'Unknown Fee'}
+                                ${fee.feeid ? `<a href="${feeUrl}" target="_blank" style="margin-left: 0.5rem; color: var(--primary); text-decoration: none;" title="View in NYC Open Data"><i class="fas fa-external-link-alt"></i></a>` : ''}
+                            </div>
+                            <div class="order-type">${fee.feesourcetype || 'Fee'} #${fee.feeid || 'N/A'}</div>
+                        </div>
+                        <div class="amount-display">
+                            <div class="amount-value">$${formatCurrency(fee.feeamount || 0)}</div>
+                        </div>
+                    </div>
+                    <div class="metadata-grid">
+                        ${fee.feeissueddate ? `<div class="metadata-item"><div class="metadata-label">Issued</div><div class="metadata-value">${formatDate(fee.feeissueddate)}</div></div>` : ''}
+                        ${fee.lifecycle ? `<div class="metadata-item"><div class="metadata-label">Status</div><div class="metadata-value">${fee.lifecycle}</div></div>` : ''}
+                        ${fee.doftransferdate ? `<div class="metadata-item"><div class="metadata-label">DOF Transfer</div><div class="metadata-value">${formatDate(fee.doftransferdate)}</div></div>` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        
+        feesList.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading fees:', error);
+        feesList.innerHTML = '<div class="info-message error"><i class="fas fa-exclamation-triangle"></i><span>Error loading fees</span></div>';
+        loadBtn.disabled = false;
+        loadBtn.innerHTML = '<i class="fas fa-sync"></i> Retry';
+    }
+}
+
+// =========================
 // TAB MANAGEMENT
 // =========================
 
@@ -1411,6 +2066,44 @@ function switchTab(tabName) {
         populateFinancials();
     } else if (tabName === 'market') {
         populateMarket();
+    } else if (tabName === 'violations') {
+        // Auto-load violations when tab is opened (only once)
+        const loadBtn = document.getElementById('loadViolationsBtn');
+        const violationsList = document.getElementById('violationsList');
+        const hasInfoMessage = violationsList.querySelector('.info-message');
+        
+        // Only auto-load if violations haven't been loaded yet
+        if (hasInfoMessage && !loadBtn.disabled) {
+            loadDetailedViolations();
+        }
+    } else if (tabName === 'hpd-info') {
+        // Auto-load all HPD data when tab is opened (only once)
+        const litigationList = document.getElementById('litigationList');
+        const workOrdersList = document.getElementById('workOrdersList');
+        const feesList = document.getElementById('feesList');
+        
+        // Check if any section still has the loading placeholder (not loaded yet)
+        const litigationNotLoaded = litigationList.querySelector('.loading-placeholder');
+        const workOrdersNotLoaded = workOrdersList.querySelector('.loading-placeholder');
+        const feesNotLoaded = feesList.querySelector('.loading-placeholder');
+        
+        // If HPD data hasn't been fetched yet, load summary first
+        if (!window.hpdData) {
+            console.log('Loading HPD Info on tab click...');
+            loadHPDInfo().then(() => {
+                // Auto-load all three sections after summary loads
+                if (litigationNotLoaded) loadLitigation();
+                if (workOrdersNotLoaded) loadWorkOrders();
+                if (feesNotLoaded) loadFees();
+            }).catch(err => {
+                console.error('Failed to load HPD info:', err);
+            });
+        } else {
+            // Summary already loaded, just load unloaded sections
+            if (litigationNotLoaded) loadLitigation();
+            if (workOrdersNotLoaded) loadWorkOrders();
+            if (feesNotLoaded) loadFees();
+        }
     }
 }
 
@@ -1697,6 +2390,23 @@ function initializeButtons() {
     document.getElementById('exportSalesBtn')?.addEventListener('click', () => {
         exportSales();
     });
+    
+    document.getElementById('loadViolationsBtn')?.addEventListener('click', () => {
+        loadDetailedViolations();
+    });
+    
+    // HPD Info button listeners
+    document.getElementById('loadLitigationBtn')?.addEventListener('click', () => {
+        loadLitigation();
+    });
+    
+    document.getElementById('loadWorkOrdersBtn')?.addEventListener('click', () => {
+        loadWorkOrders();
+    });
+    
+    document.getElementById('loadFeesBtn')?.addEventListener('click', () => {
+        loadFees();
+    });
 }
 
 function exportPropertyReport() {
@@ -1780,4 +2490,14 @@ function downloadCSV(csv, filename) {
 
 function showError(message) {
     alert(message);
+}
+
+// Scroll to section smoothly with offset for header
+function scrollToSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (section) {
+        const yOffset = -150; // Offset to show section title in view
+        const y = section.getBoundingClientRect().top + window.pageYOffset + yOffset;
+        window.scrollTo({ top: y, behavior: 'smooth' });
+    }
 }
