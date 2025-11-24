@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Property Intelligence - NYC Real Estate Intel</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/properties.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link active">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+            </div>
+            <div class="nav-actions">
+                <button class="btn btn-primary" id="exportBtn">
+                    <i class="fas fa-download"></i> Export
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Sidebar Filters -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🔍 Advanced Filters</h2>
+                <button class="btn-clear" id="clearFiltersBtn">Clear All</button>
+            </div>
+
+            <!-- Universal Search -->
+            <div class="filter-section">
+                <h3>🔎 Universal Search</h3>
+                <input type="text" id="universalSearch" class="filter-input" 
+                    placeholder="Address, BBL, Owner, ZIP...">
+            </div>
+
+            <!-- Owner Search -->
+            <div class="filter-section">
+                <h3>👤 Owner Search</h3>
+                <input type="text" id="ownerSearch" class="filter-input" 
+                    placeholder="Search by owner name...">
+                <small class="filter-hint">Click property to see full portfolio</small>
+            </div>
+
+            <!-- Smart Filters -->
+            <div class="filter-section">
+                <h3>⚡ Smart Filters</h3>
+                <div class="smart-filters">
+                    <button class="smart-filter-btn" data-filter="hot_leads">
+                        🔥 Hot Leads
+                    </button>
+                    <button class="smart-filter-btn" data-filter="high_value">
+                        💰 High Value<br><small>(&gt;$1M)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="cash_buyers">
+                        💵 Cash Buyers
+                    </button>
+                    <button class="smart-filter-btn" data-filter="recent_sales">
+                        🆕 Recent Sales<br><small>(90 days)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="active_construction">
+                        🏗️ Active Construction
+                    </button>
+                    <button class="smart-filter-btn" data-filter="flippers">
+                        ⚡ Potential Flippers
+                    </button>
+                    <button class="smart-filter-btn" data-filter="leveraged">
+                        🏦 High Leverage<br><small>(&gt;80%)</small>
+                    </button>
+                    <button class="smart-filter-btn" data-filter="violations">
+                        ⚠️ Has Violations
+                    </button>
+                </div>
+            </div>
+
+            <!-- Value Range -->
+            <div class="filter-section">
+                <h3>💵 Assessed Value</h3>
+                <div class="range-inputs">
+                    <input type="number" id="minValue" class="filter-input" placeholder="Min ($)">
+                    <input type="number" id="maxValue" class="filter-input" placeholder="Max ($)">
+                </div>
+            </div>
+
+            <!-- Sale Price Range -->
+            <div class="filter-section">
+                <h3>🏷️ Sale Price</h3>
+                <div class="range-inputs">
+                    <input type="number" id="minSalePrice" class="filter-input" placeholder="Min ($)">
+                    <input type="number" id="maxSalePrice" class="filter-input" placeholder="Max ($)">
+                </div>
+            </div>
+
+            <!-- Sale Date Range -->
+            <div class="filter-section">
+                <h3>📅 Sale Date</h3>
+                <div class="range-inputs">
+                    <input type="date" id="saleDateFrom" class="filter-input">
+                    <input type="date" id="saleDateTo" class="filter-input">
+                </div>
+            </div>
+
+            <!-- Borough Filter -->
+            <div class="filter-section">
+                <h3>🗺️ Borough</h3>
+                <select id="boroughFilter" class="filter-select">
+                    <option value="">All Boroughs</option>
+                    <option value="1">Manhattan</option>
+                    <option value="2">Bronx</option>
+                    <option value="3">Brooklyn</option>
+                    <option value="4">Queens</option>
+                    <option value="5">Staten Island</option>
+                </select>
+            </div>
+
+            <!-- Building Class -->
+            <div class="filter-section">
+                <h3>🏢 Building Class</h3>
+                <input type="text" id="buildingClass" class="filter-input" 
+                    placeholder="e.g., A, B, C, D">
+                <small class="filter-hint">NYC building classification code</small>
+            </div>
+
+            <!-- Unit Range -->
+            <div class="filter-section">
+                <h3>🏠 Units</h3>
+                <div class="range-inputs">
+                    <input type="number" id="minUnits" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxUnits" class="filter-input" placeholder="Max">
+                </div>
+            </div>
+
+            <!-- Permit Activity -->
+            <div class="filter-section">
+                <h3>🏗️ Permit Activity</h3>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="withPermits">
+                    Only properties with permits
+                </label>
+                <input type="number" id="minPermits" class="filter-input" 
+                    placeholder="Min permit count">
+            </div>
+
+            <!-- Financing -->
+            <div class="filter-section">
+                <h3>🏦 Financing Ratio</h3>
+                <div class="range-inputs">
+                    <input type="number" id="financingMin" class="filter-input" 
+                        placeholder="Min (%)" min="0" max="100">
+                    <input type="number" id="financingMax" class="filter-input" 
+                        placeholder="Max (%)" min="0" max="100">
+                </div>
+            </div>
+
+            <!-- Cash Purchase Filter -->
+            <div class="filter-section">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="cashOnly">
+                    💵 Cash purchases only
+                </label>
+            </div>
+
+            <!-- HPD Violations -->
+            <div class="filter-section">
+                <h3>⚠️ HPD Violations</h3>
+                <select id="violationsFilter" class="filter-select">
+                    <option value="">Any</option>
+                    <option value="true">Has violations</option>
+                    <option value="false">No violations</option>
+                </select>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="content">
+            <!-- Stats Dashboard -->
+            <section class="stats-dashboard">
+                <div class="stat-card">
+                    <div class="stat-icon">🏢</div>
+                    <div class="stat-content">
+                        <div class="stat-label">Total Properties</div>
+                        <div class="stat-value" id="statTotal">0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">💰</div>
+                    <div class="stat-content">
+                        <div class="stat-label">Total Value</div>
+                        <div class="stat-value" id="statValue">$0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">💵</div>
+                    <div class="stat-content">
+                        <div class="stat-label">Cash Purchases</div>
+                        <div class="stat-value" id="statCash">0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🆕</div>
+                    <div class="stat-content">
+                        <div class="stat-label">Recent Sales (90d)</div>
+                        <div class="stat-value" id="statRecent">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Controls Bar -->
+            <div class="controls-bar">
+                <div class="results-info">
+                    <span id="resultsCount">0 properties</span>
+                </div>
+                <div class="controls-right">
+                    <label>Sort by:</label>
+                    <select id="sortBy" class="control-select">
+                        <option value="sale_date">Sale Date</option>
+                        <option value="value">Assessed Value</option>
+                        <option value="sale_price">Sale Price</option>
+                        <option value="address">Address</option>
+                        <option value="owner">Owner</option>
+                        <option value="permits">Permit Count</option>
+                        <option value="units">Units</option>
+                    </select>
+                    <select id="sortOrder" class="control-select">
+                        <option value="desc">High to Low</option>
+                        <option value="asc">Low to High</option>
+                    </select>
+                    <label>Per page:</label>
+                    <select id="perPage" class="control-select">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Properties Grid -->
+            <div id="propertiesContainer" class="properties-grid">
+                <!-- Property cards will be inserted here -->
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination" id="pagination">
+                <!-- Pagination controls will be inserted here -->
+            </div>
+
+            <!-- Loading State -->
+            <div id="loadingState" class="loading-state" style="display: none;">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Loading properties...</p>
+            </div>
+
+            <!-- No Results -->
+            <div id="noResults" class="no-results" style="display: none;">
+                <i class="fas fa-search"></i>
+                <p>No properties found matching your criteria</p>
+                <button class="btn btn-secondary" onclick="clearFilters()">Clear Filters</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Owner Portfolio Modal -->
+    <div id="portfolioModal" class="modal" style="display: none;">
+        <div class="modal-content portfolio-modal">
+            <div class="modal-header">
+                <h2 id="portfolioOwnerName">Owner Portfolio</h2>
+                <button class="modal-close" onclick="closePortfolioModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="portfolio-stats">
+                    <div class="portfolio-stat">
+                        <div class="portfolio-stat-label">Total Properties</div>
+                        <div class="portfolio-stat-value" id="portfolioCount">0</div>
+                    </div>
+                    <div class="portfolio-stat">
+                        <div class="portfolio-stat-label">Total Value</div>
+                        <div class="portfolio-stat-value" id="portfolioValue">$0</div>
+                    </div>
+                    <div class="portfolio-stat">
+                        <div class="portfolio-stat-label">Total Units</div>
+                        <div class="portfolio-stat-value" id="portfolioUnits">0</div>
+                    </div>
+                    <div class="portfolio-stat">
+                        <div class="portfolio-stat-label">Cash Purchases</div>
+                        <div class="portfolio-stat-value" id="portfolioCash">0</div>
+                    </div>
+                </div>
+                <div id="portfolioProperties" class="portfolio-list">
+                    <!-- Portfolio properties will be inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/properties.js"></script>
+</body>
+</html>
