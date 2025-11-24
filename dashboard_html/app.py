@@ -1792,6 +1792,210 @@ def property_detail(bbl):
     return render_template('property_detail.html', bbl=bbl)
 
 
+@app.route('/api/property/<bbl>/violations')
+def api_property_violations(bbl):
+    """Fetch HPD violations for a property from NYC Open Data"""
+    try:
+        import requests
+        from datetime import datetime
+        
+        # NYC Open Data HPD Violations API
+        # Dataset: HPD Violations
+        api_url = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
+        
+        # Query by BBL
+        params = {
+            '$where': f"boroid='{bbl[0]}' AND block='{int(bbl[1:6])}' AND lot='{int(bbl[6:])}'",
+            '$limit': 500,
+            '$order': 'inspectiondate DESC'
+        }
+        
+        response = requests.get(api_url, params=params, timeout=10)
+        
+        if response.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to fetch violations from NYC Open Data'
+            })
+        
+        violations_data = response.json()
+        
+        # Process and categorize violations
+        violations = []
+        for v in violations_data:
+            violation = {
+                'violation_id': v.get('violationid'),
+                'class': v.get('class'),
+                'inspection_date': v.get('inspectiondate'),
+                'approved_date': v.get('approveddate'),
+                'original_certify_date': v.get('originalcertifybydate'),
+                'current_status': v.get('violationstatus'),
+                'description': v.get('novdescription'),
+                'order_number': v.get('ordernumber'),
+                'nov_issued_date': v.get('novissueddate'),
+                'severity': v.get('currentstatusid'),
+                'apartment': v.get('apartment', 'N/A'),
+                'story': v.get('story', 'N/A'),
+                'is_open': v.get('violationstatus', '').upper() == 'OPEN'
+            }
+            violations.append(violation)
+        
+        # Categorize violations
+        open_violations = [v for v in violations if v['is_open']]
+        closed_violations = [v for v in violations if not v['is_open']]
+        
+        # Group by class
+        by_class = {}
+        for v in violations:
+            vclass = v['class'] or 'Unknown'
+            if vclass not in by_class:
+                by_class[vclass] = {'count': 0, 'open': 0}
+            by_class[vclass]['count'] += 1
+            if v['is_open']:
+                by_class[vclass]['open'] += 1
+        
+        return jsonify({
+            'success': True,
+            'total_count': len(violations),
+            'total_violations': len(violations),
+            'open_count': len(open_violations),
+            'open_violations': len(open_violations),
+            'closed_count': len(closed_violations),
+            'closed_violations': len(closed_violations),
+            'violations': violations[:100],  # Limit to first 100 for display
+            'all_items': violations[:100],  # Legacy compatibility
+            'by_class': by_class,
+            'has_more': len(violations) > 100,
+            # Include complaint data for compatibility
+            'complaints': [],
+            'open_complaints': 0,
+            'closed_complaints': 0,
+            'total_complaints': 0
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'success': False,
+            'error': 'Request timeout - NYC Open Data API is slow'
+        })
+    except Exception as e:
+        print(f"Error fetching violations: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
+@app.route('/api/property/<bbl>/hpd-info')
+def api_property_hpd_info(bbl):
+    """Fetch comprehensive HPD data: litigation, work orders, and fees"""
+    try:
+        import requests
+        
+        # Dataset IDs
+        datasets = {
+            'litigation': '59kj-x8nc',  # Housing Litigations
+            'omo': 'mdbu-nrqn',          # Open Market Order Charges
+            'hwo': 'sbnd-xujn',          # Handyman Work Order Charges
+            'fees': 'cp6j-7bjj'          # Fee Charges
+        }
+        
+        results = {
+            'success': True,
+            'litigation': [],
+            'omo_charges': [],
+            'hwo_charges': [],
+            'fees': [],
+            'summary': {
+                'total_litigation': 0,
+                'active_litigation': 0,
+                'total_work_orders': 0,
+                'total_charges_amount': 0,
+                'total_fees': 0,
+                'total_fees_amount': 0
+            }
+        }
+        
+        # Fetch Housing Litigations
+        try:
+            litigation_url = f"https://data.cityofnewyork.us/resource/{datasets['litigation']}.json"
+            litigation_params = {'bbl': bbl, '$limit': 1000, '$order': 'caseopendate DESC'}
+            litigation_response = requests.get(litigation_url, params=litigation_params, timeout=10)
+            
+            if litigation_response.status_code == 200:
+                litigation_data = litigation_response.json()
+                results['litigation'] = litigation_data
+                results['summary']['total_litigation'] = len(litigation_data)
+                results['summary']['active_litigation'] = sum(1 for lit in litigation_data 
+                                                             if lit.get('casestatus', '').upper() != 'CLOSED')
+        except Exception as e:
+            print(f"Error fetching litigation: {e}")
+        
+        # Fetch OMO Charges
+        try:
+            omo_url = f"https://data.cityofnewyork.us/resource/{datasets['omo']}.json"
+            omo_params = {'bbl': bbl, '$limit': 1000, '$order': 'omocreatedate DESC'}
+            omo_response = requests.get(omo_url, params=omo_params, timeout=10)
+            
+            if omo_response.status_code == 200:
+                omo_data = omo_response.json()
+                results['omo_charges'] = omo_data
+                
+                # Calculate total charges
+                for omo in omo_data:
+                    amount = float(omo.get('omoawardamount', 0) or 0)
+                    results['summary']['total_charges_amount'] += amount
+        except Exception as e:
+            print(f"Error fetching OMO charges: {e}")
+        
+        # Fetch HWO Charges
+        try:
+            hwo_url = f"https://data.cityofnewyork.us/resource/{datasets['hwo']}.json"
+            hwo_params = {'bbl': bbl, '$limit': 1000, '$order': 'hwocreatedate DESC'}
+            hwo_response = requests.get(hwo_url, params=hwo_params, timeout=10)
+            
+            if hwo_response.status_code == 200:
+                hwo_data = hwo_response.json()
+                results['hwo_charges'] = hwo_data
+                
+                # Calculate total charges
+                for hwo in hwo_data:
+                    amount = float(hwo.get('chargeamount', 0) or 0)
+                    results['summary']['total_charges_amount'] += amount
+        except Exception as e:
+            print(f"Error fetching HWO charges: {e}")
+        
+        # Fetch Fees
+        try:
+            fees_url = f"https://data.cityofnewyork.us/resource/{datasets['fees']}.json"
+            fees_params = {'bbl': bbl, '$limit': 1000, '$order': 'feeissueddate DESC'}
+            fees_response = requests.get(fees_url, params=fees_params, timeout=10)
+            
+            if fees_response.status_code == 200:
+                fees_data = fees_response.json()
+                results['fees'] = fees_data
+                results['summary']['total_fees'] = len(fees_data)
+                
+                # Calculate total fees
+                for fee in fees_data:
+                    amount = float(fee.get('feeamount', 0) or 0)
+                    results['summary']['total_fees_amount'] += amount
+        except Exception as e:
+            print(f"Error fetching fees: {e}")
+        
+        # Total work orders
+        results['summary']['total_work_orders'] = len(results['omo_charges']) + len(results['hwo_charges'])
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        print(f"Error fetching HPD info: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
 @app.route('/api/search')
 def api_search():
     """Enhanced universal search endpoint with match reasons"""
@@ -2171,6 +2375,382 @@ def api_property_detail(bbl):
         
     except Exception as e:
         print(f"Property detail error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# PROPERTIES PAGE ROUTES
+# ============================================================================
+
+@app.route('/properties')
+def properties_page():
+    """Render the properties search/browse page"""
+    return render_template('properties.html')
+
+
+@app.route('/api/properties')
+@cache.cached(timeout=300, query_string=True)
+def api_properties():
+    """
+    Advanced property search API with comprehensive filtering
+    
+    Query Parameters:
+    - search: Text search (address, BBL, owner name)
+    - owner: Owner name search
+    - min_value, max_value: Assessed value range
+    - min_sale_price, max_sale_price: Sale price range
+    - sale_date_from, sale_date_to: Sale date range
+    - cash_only: Filter to cash purchases (true/false)
+    - with_permits: Only properties with permits (true/false)
+    - min_permits: Minimum permit count
+    - borough: Borough filter (1-5)
+    - building_class: Building class code
+    - min_units, max_units: Unit count range
+    - has_violations: Has HPD violations (true/false)
+    - recent_sale_days: Sold within X days
+    - financing_min, financing_max: Financing ratio range
+    - sort_by: Field to sort (value, sale_date, address)
+    - sort_order: asc or desc
+    - page: Page number (default 1)
+    - per_page: Results per page (default 50, max 200)
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Parse query parameters
+        search = request.args.get('search', '').strip()
+        owner = request.args.get('owner', '').strip()
+        min_value = request.args.get('min_value', type=float)
+        max_value = request.args.get('max_value', type=float)
+        min_sale_price = request.args.get('min_sale_price', type=float)
+        max_sale_price = request.args.get('max_sale_price', type=float)
+        sale_date_from = request.args.get('sale_date_from')
+        sale_date_to = request.args.get('sale_date_to')
+        cash_only = request.args.get('cash_only', '').lower() == 'true'
+        with_permits = request.args.get('with_permits', '').lower() == 'true'
+        min_permits = request.args.get('min_permits', type=int)
+        borough = request.args.get('borough', type=int)
+        building_class = request.args.get('building_class', '').strip()
+        min_units = request.args.get('min_units', type=int)
+        max_units = request.args.get('max_units', type=int)
+        has_violations = request.args.get('has_violations')
+        recent_sale_days = request.args.get('recent_sale_days', type=int)
+        financing_min = request.args.get('financing_min', type=float)
+        financing_max = request.args.get('financing_max', type=float)
+        sort_by = request.args.get('sort_by', 'sale_date')
+        sort_order = request.args.get('sort_order', 'desc').lower()
+        page = max(1, request.args.get('page', 1, type=int))
+        per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+        
+        # Build WHERE clauses
+        where_clauses = []
+        params = []
+        
+        # Text search across multiple fields
+        if search:
+            where_clauses.append("""(
+                b.address ILIKE %s OR 
+                b.bbl LIKE %s OR 
+                b.current_owner_name ILIKE %s OR
+                b.owner_name_rpad ILIKE %s OR
+                b.owner_name_hpd ILIKE %s
+            )""")
+            search_term = f"%{search}%"
+            params.extend([search_term, search_term, search_term, search_term, search_term])
+        
+        # Owner search
+        if owner:
+            where_clauses.append("""(
+                b.current_owner_name ILIKE %s OR
+                b.owner_name_rpad ILIKE %s OR
+                b.owner_name_hpd ILIKE %s
+            )""")
+            owner_term = f"%{owner}%"
+            params.extend([owner_term, owner_term, owner_term])
+        
+        # Value range
+        if min_value is not None:
+            where_clauses.append("b.assessed_total_value >= %s")
+            params.append(min_value)
+        if max_value is not None:
+            where_clauses.append("b.assessed_total_value <= %s")
+            params.append(max_value)
+        
+        # Sale price range
+        if min_sale_price is not None:
+            where_clauses.append("b.sale_price >= %s")
+            params.append(min_sale_price)
+        if max_sale_price is not None:
+            where_clauses.append("b.sale_price <= %s")
+            params.append(max_sale_price)
+        
+        # Sale date range
+        if sale_date_from:
+            where_clauses.append("b.sale_date >= %s")
+            params.append(sale_date_from)
+        if sale_date_to:
+            where_clauses.append("b.sale_date <= %s")
+            params.append(sale_date_to)
+        
+        # Cash purchases only
+        if cash_only:
+            where_clauses.append("b.is_cash_purchase = true")
+        
+        # Recent sales filter
+        if recent_sale_days:
+            where_clauses.append("b.sale_date >= CURRENT_DATE - INTERVAL '%s days'")
+            params.append(recent_sale_days)
+        
+        # Financing ratio range
+        if financing_min is not None:
+            where_clauses.append("b.financing_ratio >= %s")
+            params.append(financing_min)
+        if financing_max is not None:
+            where_clauses.append("b.financing_ratio <= %s")
+            params.append(financing_max)
+        
+        # Borough filter
+        if borough:
+            where_clauses.append("b.borough = %s")
+            params.append(borough)
+        
+        # Building class
+        if building_class:
+            where_clauses.append("b.building_class LIKE %s")
+            params.append(f"{building_class}%")
+        
+        # Units range
+        if min_units is not None:
+            where_clauses.append("b.total_units >= %s")
+            params.append(min_units)
+        if max_units is not None:
+            where_clauses.append("b.total_units <= %s")
+            params.append(max_units)
+        
+        # HPD violations
+        if has_violations is not None:
+            if has_violations.lower() == 'true':
+                where_clauses.append("b.hpd_open_violations > 0")
+            else:
+                where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
+        
+        # Build WHERE clause
+        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        
+        # Get permit counts subquery using BBL
+        permit_count_sql = """
+            LEFT JOIN (
+                SELECT bbl, COUNT(*) as permit_count
+                FROM permits
+                WHERE bbl IS NOT NULL
+                GROUP BY bbl
+            ) pc ON b.bbl = pc.bbl
+        """
+        
+        # Apply permit filters
+        if with_permits:
+            where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
+        if min_permits is not None:
+            where_sql += (" AND " if where_clauses or with_permits else "WHERE ") + f"pc.permit_count >= {min_permits}"
+        
+        # Validate and sanitize sort column
+        valid_sort_columns = {
+            'address': 'b.address',
+            'value': 'b.assessed_total_value',
+            'sale_date': 'b.sale_date',
+            'sale_price': 'b.sale_price',
+            'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
+            'permits': 'pc.permit_count'
+        }
+        sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
+        sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+        
+        # Get total count
+        count_query = f"""
+            SELECT COUNT(DISTINCT b.id) as count
+            FROM buildings b
+            {permit_count_sql}
+            {where_sql}
+        """
+        cur.execute(count_query, params)
+        result = cur.fetchone()
+        total_count = result['count'] if result else 0
+        
+        # Calculate pagination
+        offset = (page - 1) * per_page
+        total_pages = (total_count + per_page - 1) // per_page
+        
+        # Get paginated results
+        query = f"""
+            SELECT 
+                b.id,
+                b.bbl,
+                b.address,
+                b.borough,
+                b.current_owner_name,
+                b.owner_name_rpad,
+                b.owner_name_hpd,
+                b.total_units,
+                b.residential_units,
+                b.building_sqft,
+                b.year_built,
+                b.year_altered,
+                b.building_class,
+                b.assessed_land_value,
+                b.assessed_total_value,
+                b.sale_price,
+                b.sale_date,
+                b.sale_buyer_primary,
+                b.sale_seller_primary,
+                b.mortgage_amount,
+                b.mortgage_lender_primary,
+                b.is_cash_purchase,
+                b.financing_ratio,
+                b.hpd_open_violations,
+                b.hpd_total_complaints,
+                b.acris_deed_count,
+                b.acris_mortgage_count,
+                b.acris_total_transactions,
+                COALESCE(pc.permit_count, 0) as permit_count,
+                b.last_updated
+            FROM buildings b
+            {permit_count_sql}
+            {where_sql}
+            ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
+            LIMIT %s OFFSET %s
+        """
+        
+        cur.execute(query, params + [per_page, offset])
+        properties = cur.fetchall()
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'properties': [dict(p) for p in properties],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        })
+        
+    except Exception as e:
+        print(f"Properties API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/owner/<path:owner_name>/portfolio')
+@cache.cached(timeout=300)
+def api_owner_portfolio(owner_name):
+    """Get all properties owned by a specific person/entity"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Search across all owner name fields
+        cur.execute("""
+            SELECT 
+                b.id,
+                b.bbl,
+                b.address,
+                b.borough,
+                b.current_owner_name,
+                b.owner_name_rpad,
+                b.assessed_total_value,
+                b.sale_price,
+                b.sale_date,
+                COALESCE(b.total_units, 0) as total_units,
+                b.building_class,
+                b.is_cash_purchase,
+                COALESCE(pc.permit_count, 0) as permit_count
+            FROM buildings b
+            LEFT JOIN (
+                SELECT bbl, COUNT(*) as permit_count
+                FROM permits
+                WHERE bbl IS NOT NULL
+                GROUP BY bbl
+            ) pc ON b.bbl = pc.bbl
+            WHERE 
+                b.current_owner_name ILIKE %s OR
+                b.owner_name_rpad ILIKE %s OR
+                b.owner_name_hpd ILIKE %s OR
+                b.sale_buyer_primary ILIKE %s
+            ORDER BY b.assessed_total_value DESC NULLS LAST
+        """, (f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%"))
+        
+        properties = cur.fetchall()
+        
+        # Calculate portfolio stats
+        total_value = sum(p['assessed_total_value'] or 0 for p in properties)
+        total_units = sum(p['total_units'] or 0 for p in properties)
+        cash_purchases = sum(1 for p in properties if p['is_cash_purchase'])
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'owner_name': owner_name,
+            'properties': [dict(p) for p in properties],
+            'stats': {
+                'total_properties': len(properties),
+                'total_assessed_value': total_value,
+                'total_units': total_units,
+                'cash_purchases': cash_purchases,
+                'avg_property_value': total_value / len(properties) if properties else 0
+            }
+        })
+        
+    except Exception as e:
+        print(f"Owner portfolio API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/properties/stats')
+@cache.cached(timeout=600)
+def api_properties_stats():
+    """Get aggregate statistics for properties"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_properties,
+                COUNT(CASE WHEN acris_last_enriched IS NOT NULL THEN 1 END) as with_acris,
+                COUNT(CASE WHEN is_cash_purchase = true THEN 1 END) as cash_purchases,
+                COALESCE(SUM(assessed_total_value), 0) as total_assessed_value,
+                COALESCE(AVG(assessed_total_value), 0) as avg_assessed_value,
+                COALESCE(AVG(sale_price), 0) as avg_sale_price,
+                COUNT(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as recent_sales_90d,
+                COALESCE(SUM(COALESCE(total_units, 0)), 0) as total_units
+            FROM buildings
+        """)
+        
+        stats = cur.fetchone()
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'stats': dict(stats)
+        })
+        
+    except Exception as e:
+        print(f"Properties stats API error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
