@@ -13,6 +13,7 @@ from psycopg2.extras import RealDictCursor
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -1767,12 +1768,6 @@ def investments():
     return render_template('investments.html')
 
 
-@app.route('/properties')
-def properties():
-    """Property database page"""
-    return render_template('properties.html')
-
-
 @app.route('/analytics')
 def analytics():
     """Market analytics page"""
@@ -1796,9 +1791,6 @@ def property_detail(bbl):
 def api_property_violations(bbl):
     """Fetch HPD violations for a property from NYC Open Data"""
     try:
-        import requests
-        from datetime import datetime
-        
         # NYC Open Data HPD Violations API
         # Dataset: HPD Violations
         api_url = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
@@ -1890,8 +1882,6 @@ def api_property_violations(bbl):
 def api_property_hpd_info(bbl):
     """Fetch comprehensive HPD data: litigation, work orders, and fees"""
     try:
-        import requests
-        
         # Dataset IDs
         datasets = {
             'litigation': '59kj-x8nc',  # Housing Litigations
