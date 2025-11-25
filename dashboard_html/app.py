@@ -2785,14 +2785,19 @@ def api_contractors_search():
         per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
         offset = (page - 1) * per_page
         
-        # Build WHERE clause
-        where_clause = "WHERE p.applicant IS NOT NULL AND p.applicant != ''"
-        params = []
+        # Build WHERE clause - exclude NULL, empty, and placeholder values
+        where_clause = """WHERE p.applicant IS NOT NULL 
+            AND p.applicant != '' 
+            AND p.applicant != 'N/A'
+            AND p.applicant != 'NA'
+            AND p.applicant != 'NONE'
+            AND p.applicant NOT ILIKE 'unknown%%'"""
+        search_params = []
         
         if search:
             where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
             search_term = f"%{search}%"
-            params.extend([search_term, search_term, search_term])
+            search_params = [search_term, search_term, search_term]
         
         # Determine sort column
         sort_column = {
@@ -2837,8 +2842,8 @@ def api_contractors_search():
             LIMIT %s OFFSET %s
         """
         
-        params.extend([per_page, offset])
-        cur.execute(query, params)
+        query_params = search_params + [per_page, offset]
+        cur.execute(query, query_params)
         contractors = cur.fetchall()
         
         # Get total count
@@ -2847,7 +2852,7 @@ def api_contractors_search():
             FROM permits p
             {where_clause}
         """
-        cur.execute(count_query, params[:-2] if params else [])
+        cur.execute(count_query, search_params)
         total = cur.fetchone()['count']
         
         cur.close()

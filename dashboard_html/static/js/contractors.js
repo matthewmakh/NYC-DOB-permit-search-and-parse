@@ -76,13 +76,24 @@ function initializeDirectoryPage() {
 async function loadContractors() {
     const grid = document.getElementById('contractorsGrid');
     
-    // Show loading
-    grid.innerHTML = `
-        <div class="loading-placeholder">
-            <div class="loading-spinner"></div>
-            <p>Loading contractors...</p>
+    // Show skeleton loading
+    grid.innerHTML = Array(6).fill(0).map(() => `
+        <div class="skeleton-card">
+            <div class="skeleton-header">
+                <div class="skeleton-avatar"></div>
+                <div class="skeleton-info">
+                    <div class="skeleton-line"></div>
+                    <div class="skeleton-line short"></div>
+                </div>
+            </div>
+            <div class="skeleton-stats">
+                <div class="skeleton-stat"></div>
+                <div class="skeleton-stat"></div>
+                <div class="skeleton-stat"></div>
+                <div class="skeleton-stat"></div>
+            </div>
         </div>
-    `;
+    `).join('');
     
     try {
         const params = new URLSearchParams({
@@ -215,6 +226,12 @@ if (typeof CONTRACTOR_NAME !== 'undefined') {
 }
 
 function initializeProfilePage() {
+    // Add loading class to all stat elements
+    document.querySelectorAll('.stat-card').forEach(card => card.classList.add('loading'));
+    document.querySelectorAll('.sidebar-card').forEach(card => card.classList.add('loading'));
+    document.querySelector('.profile-license')?.classList.add('loading');
+    document.querySelector('.profile-meta')?.classList.add('loading');
+    
     // Load contractor data
     loadContractorProfile();
     
@@ -268,6 +285,12 @@ async function loadContractorProfile() {
 }
 
 function displayContractorStats(contractor) {
+    // Remove loading class from all elements
+    document.querySelectorAll('.stat-card').forEach(card => card.classList.remove('loading'));
+    document.querySelectorAll('.sidebar-card').forEach(card => card.classList.remove('loading'));
+    document.querySelector('.profile-license')?.classList.remove('loading');
+    document.querySelector('.profile-meta')?.classList.remove('loading');
+    
     // Update header
     document.getElementById('contractorName').textContent = contractor.contractor_name;
     document.getElementById('contractorLicense').textContent = contractor.license ? 
@@ -327,7 +350,7 @@ function displayPermits(permits) {
     document.getElementById('permitsCount').textContent = permits.length;
     
     if (permits.length === 0) {
-        permitsList.innerHTML = '<p style="text-align: center; color: #999;">No permits found</p>';
+        permitsList.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">No permits found</p>';
         return;
     }
     
@@ -364,7 +387,7 @@ function displayBuildings(buildings) {
     document.getElementById('buildingsCount').textContent = buildings.length;
     
     if (buildings.length === 0) {
-        buildingsList.innerHTML = '<p style="text-align: center; color: #999;">No buildings found</p>';
+        buildingsList.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">No buildings found</p>';
         return;
     }
     

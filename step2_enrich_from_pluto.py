@@ -45,7 +45,8 @@ RPAD_API_BASE = "https://data.cityofnewyork.us/resource/yjxr-fw8i.json"
 HPD_REGISTRATION_API = "https://data.cityofnewyork.us/resource/tesw-yqqr.json"
 HPD_CONTACTS_API = "https://data.cityofnewyork.us/resource/feu5-w2e2.json"
 HPD_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
-HPD_COMPLAINTS_API = "https://data.cityofnewyork.us/resource/uwyv-629c.json"
+# Use public Housing Maintenance Code Complaints dataset (not the restricted one)
+HPD_COMPLAINTS_API = "https://data.cityofnewyork.us/resource/ygpa-z7cr.json"
 
 # Configuration
 API_DELAY = float(os.getenv('API_DELAY', '0.1'))
@@ -201,21 +202,23 @@ def get_hpd_data_for_bbl(bbl):
         result['hpd_open_violations'] = sum(1 for v in violations 
                                             if v.get('currentstatus') not in ['VIOLATION CLOSED', 'VIOLATION DISMISSED'])
         
-        # 4. Get complaints count (optional - may have access restrictions)
+        # 4. Get complaints count using public Housing Maintenance Code Complaints API
         try:
+            # This dataset uses BBL directly (10-digit format), which is more reliable
             r = requests.get(HPD_COMPLAINTS_API,
-                            params={'boroughid': boro, 'block': block, 'lot': lot,
-                                   '$select': 'status', '$limit': 1000},
+                            params={'bbl': bbl, '$select': 'complaint_status,problem_status', '$limit': 5000},
                             timeout=10)
             r.raise_for_status()
             time.sleep(API_DELAY)
             
             complaints = r.json()
             result['hpd_total_complaints'] = len(complaints)
+            # Count open complaints (either complaint_status or problem_status is OPEN)
             result['hpd_open_complaints'] = sum(1 for c in complaints 
-                                               if c.get('status') not in ['CLOSE', 'CLOSED'])
-        except:
-            # Complaints API may have access restrictions - not critical
+                                               if c.get('complaint_status') == 'OPEN' or c.get('problem_status') == 'OPEN')
+        except Exception as e:
+            # Log the error but don't fail the entire enrichment
+            print(f"      ⚠️  Complaints API error: {str(e)}")
             pass
         
         return result, None
