@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contractor Profile - NYC Real Estate Intel</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/contractors.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/contractors" class="nav-link active">👷 Contractors</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/contractors" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> Back to Directory
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Profile Header -->
+    <div class="profile-header">
+        <div class="profile-cover"></div>
+        <div class="profile-header-content">
+            <div class="profile-avatar-container">
+                <div class="profile-avatar">
+                    <i class="fas fa-hard-hat"></i>
+                </div>
+                <div class="profile-badge">
+                    <i class="fas fa-certificate"></i>
+                </div>
+            </div>
+            <div class="profile-info">
+                <h1 id="contractorName">{{ contractor_name }}</h1>
+                <p class="profile-license" id="contractorLicense">
+                    <i class="fas fa-id-card"></i> License: Loading...
+                </p>
+                <div class="profile-meta">
+                    <span id="mostRecentJob">
+                        <i class="fas fa-calendar-check"></i> Most Recent: -
+                    </span>
+                    <span id="jobTypes">
+                        <i class="fas fa-tools"></i> Specialties: -
+                    </span>
+                </div>
+            </div>
+            <div class="profile-actions">
+                <button class="btn btn-follow" id="followBtn" disabled>
+                    <i class="fas fa-star"></i> Follow
+                </button>
+                <button class="btn btn-message" disabled>
+                    <i class="fas fa-envelope"></i> Contact
+                </button>
+                <button class="btn btn-share">
+                    <i class="fas fa-share-alt"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Dashboard -->
+    <div class="profile-container">
+        <div class="profile-sidebar">
+            <!-- About Card -->
+            <div class="sidebar-card">
+                <h3><i class="fas fa-info-circle"></i> About</h3>
+                <div class="about-stats">
+                    <div class="about-stat">
+                        <i class="fas fa-calendar-plus"></i>
+                        <div>
+                            <strong id="firstJob">-</strong>
+                            <span>First Job</span>
+                        </div>
+                    </div>
+                    <div class="about-stat">
+                        <i class="fas fa-chart-line"></i>
+                        <div>
+                            <strong id="jobTypeVariety">-</strong>
+                            <span>Job Types</span>
+                        </div>
+                    </div>
+                    <div class="about-stat">
+                        <i class="fas fa-dollar-sign"></i>
+                        <div>
+                            <strong id="avgProjectValue">-</strong>
+                            <span>Avg Project</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Stats Card -->
+            <div class="sidebar-card">
+                <h3><i class="fas fa-trophy"></i> Highlights</h3>
+                <div class="quick-stats">
+                    <div class="quick-stat">
+                        <div class="quick-stat-icon">
+                            <i class="fas fa-fire"></i>
+                        </div>
+                        <div class="quick-stat-content">
+                            <strong id="sidebarActiveJobs">-</strong>
+                            <span>Active Jobs</span>
+                        </div>
+                    </div>
+                    <div class="quick-stat">
+                        <div class="quick-stat-icon">
+                            <i class="fas fa-crown"></i>
+                        </div>
+                        <div class="quick-stat-content">
+                            <strong id="sidebarLargestProject">-</strong>
+                            <span>Largest Project</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="profile-main">
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-card clickable" data-tab="permits">
+                    <div class="stat-card-header">
+                        <div class="stat-icon">
+                            <i class="fas fa-file-contract"></i>
+                        </div>
+                        <div class="stat-trend">
+                            <i class="fas fa-arrow-up"></i>
+                        </div>
+                    </div>
+                    <div class="stat-card-body">
+                        <h2 id="totalJobs">-</h2>
+                        <p>Total Jobs</p>
+                        <span class="stat-subtitle">All time permits</span>
+                    </div>
+                </div>
+
+                <div class="stat-card clickable active" data-tab="permits">
+                    <div class="stat-card-header">
+                        <div class="stat-icon stat-icon-active">
+                            <i class="fas fa-hammer"></i>
+                        </div>
+                        <div class="stat-trend stat-trend-active">
+                            <span id="jobsLastYearBadge">-</span>
+                        </div>
+                    </div>
+                    <div class="stat-card-body">
+                        <h2 id="activeJobs">-</h2>
+                        <p>Active Jobs</p>
+                        <span class="stat-subtitle">Last 90 days</span>
+                    </div>
+                </div>
+
+                <div class="stat-card clickable" data-tab="buildings">
+                    <div class="stat-card-header">
+                        <div class="stat-icon">
+                            <i class="fas fa-building"></i>
+                        </div>
+                    </div>
+                    <div class="stat-card-body">
+                        <h2 id="uniqueProperties">-</h2>
+                        <p>Properties</p>
+                        <span class="stat-subtitle">Unique buildings</span>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <div class="stat-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                    </div>
+                    <div class="stat-card-body">
+                        <h2 id="totalValue">-</h2>
+                        <p>Total Value</p>
+                        <span class="stat-subtitle">Portfolio value</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="content-tabs">
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="permits">
+                        <i class="fas fa-file-contract"></i>
+                        <span>Permits</span>
+                        <span class="tab-badge" id="permitsCount">0</span>
+                    </button>
+                    <button class="tab-btn" data-tab="buildings">
+                        <i class="fas fa-building"></i>
+                        <span>Buildings</span>
+                        <span class="tab-badge" id="buildingsCount">0</span>
+                    </button>
+                </div>
+                <div class="tab-search">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="permitsSearch" class="search-input" placeholder="Search permits..." />
+                </div>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="tab-content-container">
+                <!-- Permits Tab -->
+                <div id="permitsTab" class="tab-content active">
+                    <div id="permitsList" class="content-list">
+                        <div class="loading-placeholder">
+                            <div class="loading-spinner"></div>
+                            <p>Loading permits...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Buildings Tab -->
+                <div id="buildingsTab" class="tab-content">
+                    <div id="buildingsList" class="content-list">
+                        <div class="loading-placeholder">
+                            <div class="loading-spinner"></div>
+                            <p>Loading buildings...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Pass contractor name from Flask to JavaScript
+        const CONTRACTOR_NAME = "{{ contractor_name }}";
+    </script>
+    <script src="/static/js/contractors.js"></script>
+</body>
+</html>

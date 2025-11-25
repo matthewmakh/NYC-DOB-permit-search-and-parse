@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contractor Directory - NYC Real Estate Intel</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/contractors.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/contractors" class="nav-link active">👷 Contractors</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+            </div>
+            <div class="nav-actions">
+                <button class="btn btn-primary" id="exportBtn">
+                    <i class="fas fa-download"></i> Export
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="page-header">
+        <div class="header-content">
+            <div class="header-text">
+                <h1>👷 Contractor Directory</h1>
+                <p>Search and analyze NYC contractors by their work history and portfolio</p>
+            </div>
+            <div class="header-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalContractors">-</div>
+                    <div class="stat-label">Total Contractors</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="activeContractors">-</div>
+                    <div class="stat-label">Active (90 days)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Search and Filters -->
+        <div class="search-section">
+            <div class="search-bar">
+                <i class="fas fa-search"></i>
+                <input type="text" id="contractorSearch" placeholder="Search contractor name or license number..." />
+                <button class="btn-clear" id="clearSearch" style="display: none;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="filter-controls">
+                <div class="filter-group">
+                    <label for="sortBy">Sort By:</label>
+                    <select id="sortBy" class="filter-select">
+                        <option value="total_jobs">Total Jobs</option>
+                        <option value="active_jobs">Active Jobs</option>
+                        <option value="total_value">Total Project Value</option>
+                        <option value="largest_project">Largest Project</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="sortOrder">Order:</label>
+                    <select id="sortOrder" class="filter-select">
+                        <option value="desc">High to Low</option>
+                        <option value="asc">Low to High</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contractors Grid -->
+        <div id="contractorsGrid" class="contractors-grid">
+            <!-- Loading placeholder -->
+            <div class="loading-placeholder">
+                <div class="loading-spinner"></div>
+                <p>Loading contractors...</p>
+            </div>
+        </div>
+
+        <!-- Pagination -->
+        <div id="pagination" class="pagination" style="display: none;">
+            <button id="prevPage" class="btn-pagination">
+                <i class="fas fa-chevron-left"></i> Previous
+            </button>
+            <span id="pageInfo">Page 1 of 1</span>
+            <button id="nextPage" class="btn-pagination">
+                Next <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+    </div>
+
+    <script src="/static/js/contractors.js"></script>
+</body>
+</html>

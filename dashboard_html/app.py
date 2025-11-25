@@ -2744,6 +2744,239 @@ def api_properties_stats():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ============================================================================
+# CONTRACTOR PROFILE ROUTES
+# ============================================================================
+
+@app.route('/contractors')
+def contractors_page():
+    """Render the contractors search/browse page"""
+    return render_template('contractors.html')
+
+
+@app.route('/contractor/<contractor_name>')
+def contractor_profile(contractor_name):
+    """Render contractor profile page"""
+    return render_template('contractor_profile.html', contractor_name=contractor_name)
+
+
+@app.route('/api/contractors/search')
+@cache.cached(timeout=300, query_string=True)
+def api_contractors_search():
+    """
+    Search contractors with aggregated stats
+    
+    Query Parameters:
+    - search: Contractor name or license search
+    - sort_by: active_jobs, total_jobs, total_value (default: total_jobs)
+    - sort_order: asc or desc (default: desc)
+    - page: Page number (default 1)
+    - per_page: Results per page (default 50, max 200)
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Parse query parameters
+        search = request.args.get('search', '').strip()
+        sort_by = request.args.get('sort_by', 'total_jobs')
+        sort_order = request.args.get('sort_order', 'desc').lower()
+        page = max(1, request.args.get('page', 1, type=int))
+        per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+        offset = (page - 1) * per_page
+        
+        # Build WHERE clause
+        where_clause = "WHERE p.applicant IS NOT NULL AND p.applicant != ''"
+        params = []
+        
+        if search:
+            where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
+            search_term = f"%{search}%"
+            params.extend([search_term, search_term, search_term])
+        
+        # Determine sort column
+        sort_column = {
+            'active_jobs': 'active_jobs',
+            'total_jobs': 'total_jobs',
+            'total_value': 'total_value',
+            'largest_project': 'largest_project'
+        }.get(sort_by, 'total_jobs')
+        
+        sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+        
+        # Get contractors with aggregated stats
+        query = f"""
+            WITH contractor_stats AS (
+                SELECT 
+                    p.applicant as contractor_name,
+                    p.permittee_license_number as license,
+                    COUNT(*) as total_jobs,
+                    COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
+                    COALESCE(SUM(b.assessed_total_value), 0) as total_value,
+                    COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
+                    MAX(p.issue_date) as most_recent_job,
+                    COUNT(DISTINCT p.bbl) as unique_properties,
+                    string_agg(DISTINCT p.job_type, ', ') as job_types
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                {where_clause}
+                GROUP BY p.applicant, p.permittee_license_number
+            )
+            SELECT 
+                contractor_name,
+                license,
+                total_jobs,
+                active_jobs,
+                total_value,
+                largest_project,
+                most_recent_job,
+                unique_properties,
+                job_types
+            FROM contractor_stats
+            ORDER BY {sort_column} {sort_direction}
+            LIMIT %s OFFSET %s
+        """
+        
+        params.extend([per_page, offset])
+        cur.execute(query, params)
+        contractors = cur.fetchall()
+        
+        # Get total count
+        count_query = f"""
+            SELECT COUNT(DISTINCT p.applicant)
+            FROM permits p
+            {where_clause}
+        """
+        cur.execute(count_query, params[:-2] if params else [])
+        total = cur.fetchone()['count']
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'contractors': [dict(c) for c in contractors],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total,
+                'pages': (total + per_page - 1) // per_page
+            }
+        })
+        
+    except Exception as e:
+        print(f"Contractors search API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/contractor/<contractor_name>')
+@cache.cached(timeout=300)
+def api_contractor_profile(contractor_name):
+    """
+    Get detailed contractor profile with permits and buildings
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Get contractor stats
+        cur.execute("""
+            SELECT 
+                p.applicant as contractor_name,
+                p.permittee_license_number as license,
+                COUNT(*) as total_jobs,
+                COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
+                COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '365 days' THEN 1 END) as jobs_last_year,
+                COALESCE(SUM(b.assessed_total_value), 0) as total_value,
+                COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
+                COALESCE(AVG(b.assessed_total_value), 0) as avg_project_value,
+                MAX(p.issue_date) as most_recent_job,
+                MIN(p.issue_date) as first_job,
+                COUNT(DISTINCT p.bbl) as unique_properties,
+                COUNT(DISTINCT p.job_type) as job_type_variety,
+                string_agg(DISTINCT p.job_type, ', ') as job_types
+            FROM permits p
+            LEFT JOIN buildings b ON p.bbl = b.bbl
+            WHERE p.applicant = %s
+            GROUP BY p.applicant, p.permittee_license_number
+        """, (contractor_name,))
+        
+        stats = cur.fetchone()
+        
+        if not stats:
+            cur.close()
+            return_db_connection(conn)
+            return jsonify({'success': False, 'error': 'Contractor not found'}), 404
+        
+        # Get permits (most recent first)
+        cur.execute("""
+            SELECT 
+                p.id,
+                p.permit_no,
+                p.job_type,
+                p.address,
+                p.bbl,
+                p.issue_date,
+                p.stories,
+                p.total_units,
+                p.use_type,
+                p.link,
+                b.assessed_total_value,
+                b.current_owner_name
+            FROM permits p
+            LEFT JOIN buildings b ON p.bbl = b.bbl
+            WHERE p.applicant = %s
+            ORDER BY p.issue_date DESC NULLS LAST
+            LIMIT 500
+        """, (contractor_name,))
+        
+        permits = cur.fetchall()
+        
+        # Get unique buildings (most recent work first)
+        cur.execute("""
+            SELECT 
+                b.id,
+                b.bbl,
+                b.address,
+                b.borough,
+                b.current_owner_name,
+                b.assessed_total_value,
+                b.total_units,
+                b.building_class,
+                COUNT(p.id) as permit_count,
+                MAX(p.issue_date) as most_recent_work,
+                MIN(p.issue_date) as first_work,
+                string_agg(DISTINCT p.job_type, ', ') as job_types
+            FROM buildings b
+            INNER JOIN permits p ON p.bbl = b.bbl
+            WHERE p.applicant = %s
+            GROUP BY b.id, b.bbl, b.address, b.borough, b.current_owner_name, 
+                     b.assessed_total_value, b.total_units, b.building_class
+            ORDER BY most_recent_work DESC NULLS LAST
+            LIMIT 500
+        """, (contractor_name,))
+        
+        buildings = cur.fetchall()
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'contractor': dict(stats),
+            'permits': [dict(p) for p in permits],
+            'buildings': [dict(b) for b in buildings]
+        })
+        
+    except Exception as e:
+        print(f"Contractor profile API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     print("Starting DOB Permit Dashboard API...")
     print(f"Database: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
