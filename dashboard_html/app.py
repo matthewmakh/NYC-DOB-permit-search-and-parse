@@ -36,19 +36,66 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD', '')
 }
 
-# Connection pooling - reuse connections instead of creating new ones
-# Min 2, max 20 connections
-db_pool = pool.ThreadedConnectionPool(2, 20, **DB_CONFIG, cursor_factory=RealDictCursor)
+# Connection pooling - reduced for Railway free tier limits
+# Min 1, max 5 connections to avoid exhausting Railway connection limit
+db_pool = pool.ThreadedConnectionPool(1, 5, **DB_CONFIG, cursor_factory=RealDictCursor)
 
 
 def get_db_connection():
-    """Get database connection from pool"""
-    return db_pool.getconn()
+    """Get database connection from pool with validation"""
+    try:
+        conn = db_pool.getconn()
+        # Test if connection is alive
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close()
+        return conn
+    except Exception as e:
+        print(f"Connection validation failed, creating new connection: {e}")
+        # If connection is bad, close it and get a new one
+        try:
+            db_pool.putconn(conn, close=True)
+        except:
+            pass
+        return db_pool.getconn()
 
 
 def return_db_connection(conn):
     """Return connection to pool"""
-    db_pool.putconn(conn)
+    try:
+        db_pool.putconn(conn)
+    except Exception as e:
+        print(f"Error returning connection to pool: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+
+
+def cleanup_stale_connections():
+    """Periodically cleanup stale connections"""
+    try:
+        # Close all connections and recreate pool
+        global db_pool
+        db_pool.closeall()
+        db_pool = pool.ThreadedConnectionPool(1, 5, **DB_CONFIG, cursor_factory=RealDictCursor)
+        print("Database connection pool refreshed")
+    except Exception as e:
+        print(f"Error cleaning up connections: {e}")
+
+
+# Schedule connection cleanup every 30 minutes
+import threading
+import time
+
+def connection_cleanup_loop():
+    while True:
+        time.sleep(1800)  # 30 minutes
+        cleanup_stale_connections()
+
+cleanup_thread = threading.Thread(target=connection_cleanup_loop, daemon=True)
+cleanup_thread.start()
 
 
 def calculate_lead_score(permit):
@@ -1783,8 +1830,8 @@ def search_results():
 
 @app.route('/property/<bbl>')
 def property_detail(bbl):
-    """Universal property report page"""
-    return render_template('property_detail.html', bbl=bbl)
+    """Comprehensive building intelligence profile page"""
+    return render_template('building_profile.html', bbl=bbl)
 
 
 @app.route('/api/property/<bbl>/violations')
@@ -1802,15 +1849,20 @@ def api_property_violations(bbl):
             '$order': 'inspectiondate DESC'
         }
         
-        response = requests.get(api_url, params=params, timeout=10)
+        print(f"Fetching violations for BBL {bbl} with params: {params}")
+        
+        response = requests.get(api_url, params=params, timeout=15)
+        
+        print(f"NYC Open Data response status: {response.status_code}")
         
         if response.status_code != 200:
             return jsonify({
                 'success': False,
-                'error': 'Failed to fetch violations from NYC Open Data'
+                'error': f'NYC Open Data API returned status {response.status_code}'
             })
         
         violations_data = response.json()
+        print(f"Received {len(violations_data)} violations from NYC Open Data")
         
         # Process and categorize violations
         violations = []
@@ -2980,6 +3032,548 @@ def api_contractor_profile(contractor_name):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# BUILDING PROFILE - COMPREHENSIVE DATA API
+# ============================================================================
+
+@app.route('/api/building-profile/<bbl>')
+def api_building_profile(bbl):
+    """
+    Get complete building intelligence profile with ALL data sources
+    Returns everything needed for the social media-style building profile
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Set statement timeout to 30 seconds
+        cur.execute("SET statement_timeout = 30000")
+        
+        # ===== 1. BUILDING CORE DATA (70+ fields from all sources) =====
+        cur.execute("""
+            SELECT 
+                id, bbl, address, CAST(borough AS TEXT) as borough, block, lot,
+                -- PLUTO data
+                current_owner_name, total_units, building_sqft, year_built, year_altered, building_class,
+                -- RPAD data
+                owner_name_rpad, assessed_land_value, assessed_total_value,
+                -- HPD data
+                owner_name_hpd, hpd_total_violations, hpd_total_complaints,
+                -- ACRIS primary deed
+                sale_price, sale_date, sale_recorded_date, sale_buyer_primary, sale_seller_primary,
+                sale_percent_transferred, sale_crfn,
+                -- ACRIS primary mortgage
+                mortgage_amount, mortgage_date, mortgage_lender_primary, mortgage_crfn,
+                -- Calculated intelligence
+                is_cash_purchase, financing_ratio, days_since_sale,
+                -- Transaction counts
+                acris_total_transactions, acris_deed_count, acris_mortgage_count, acris_satisfaction_count,
+                acris_last_enriched,
+                -- Tax/Liens data (NEW)
+                has_tax_delinquency, tax_delinquency_count, tax_delinquency_water_only,
+                ecb_violation_count, ecb_total_balance, ecb_open_violations,
+                ecb_total_penalty, ecb_amount_paid, ecb_most_recent_hearing_date, ecb_most_recent_hearing_status,
+                ecb_respondent_name, ecb_respondent_address, ecb_respondent_city, ecb_respondent_zip,
+                dob_violation_count, dob_open_violations, tax_lien_last_checked,
+                -- Metadata
+                last_updated
+            FROM buildings
+            WHERE bbl = %s
+        """, (bbl,))
+        
+        building = cur.fetchone()
+        
+        if not building:
+            cur.close()
+            return_db_connection(conn)
+            return jsonify({'success': False, 'error': 'Property not found'}), 404
+        
+        building_id = building['id']
+        
+        # ===== 2. PERMITS (All construction activity) =====
+        cur.execute("""
+            SELECT 
+                permit_no, job_type, address, applicant,
+                stories, total_units, use_type, issue_date, link,
+                permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
+                owner_business_name, owner_phone,
+                superintendent_business_name, site_safety_mgr_business_name,
+                work_type, permit_status, filing_status
+            FROM permits
+            WHERE bbl = %s
+            ORDER BY issue_date DESC
+        """, (bbl,))
+        permits = cur.fetchall()
+        
+        # ===== 3. ACRIS TRANSACTIONS (Complete transaction history) =====
+        cur.execute("""
+            SELECT 
+                document_id, doc_type, doc_amount, doc_date, recorded_date,
+                percent_transferred, crfn, is_primary_deed, is_primary_mortgage
+            FROM acris_transactions
+            WHERE building_id = %s
+            ORDER BY recorded_date DESC
+        """, (building_id,))
+        transactions = cur.fetchall()
+        
+        # ===== 4. ACRIS PARTIES (Buyers, Sellers, Lenders with addresses) =====
+        cur.execute("""
+            SELECT 
+                ap.party_type, ap.party_name,
+                ap.address_1, ap.address_2, ap.city, ap.state, ap.zip_code, ap.country,
+                at.doc_type, at.doc_amount, at.recorded_date, at.document_id
+            FROM acris_parties ap
+            JOIN acris_transactions at ON ap.transaction_id = at.id
+            WHERE at.building_id = %s
+            ORDER BY at.recorded_date DESC, ap.party_type
+        """, (building_id,))
+        parties = cur.fetchall()
+        
+        # ===== 5. OWNER SOURCES (Deduplicate and organize) =====
+        owners = {
+            'pluto': building['current_owner_name'],
+            'rpad': building['owner_name_rpad'],
+            'hpd': building['owner_name_hpd'],
+            'ecb': building['ecb_respondent_name']
+        }
+        
+        # ===== 6. CALCULATE RISK SCORE =====
+        risk_factors = []
+        risk_score = 0
+        
+        # Tax delinquency (30 points)
+        if building['has_tax_delinquency']:
+            if building['tax_delinquency_water_only']:
+                risk_score += 10
+                risk_factors.append({'factor': 'Water Debt', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} water delinquency notices"})
+            else:
+                risk_score += 30
+                risk_factors.append({'factor': 'Property Tax Delinquency', 'severity': 'high', 'points': 30, 'details': f"{building['tax_delinquency_count']} tax delinquency notices"})
+        
+        # ECB violations with outstanding balance (40 points max)
+        if building['ecb_total_balance'] and building['ecb_total_balance'] > 0:
+            if building['ecb_total_balance'] > 100000:
+                points = 40
+                severity = 'critical'
+            elif building['ecb_total_balance'] > 50000:
+                points = 30
+                severity = 'high'
+            elif building['ecb_total_balance'] > 10000:
+                points = 20
+                severity = 'moderate'
+            else:
+                points = 10
+                severity = 'low'
+            risk_score += points
+            risk_factors.append({
+                'factor': 'ECB Outstanding Balance',
+                'severity': severity,
+                'points': points,
+                'details': f"${building['ecb_total_balance']:,.2f} due, {building['ecb_open_violations']} open violations"
+            })
+        
+        # Open DOB violations (15 points)
+        if building['dob_open_violations'] and building['dob_open_violations'] > 5:
+            points = 15
+            risk_score += points
+            risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
+        elif building['dob_open_violations'] and building['dob_open_violations'] > 0:
+            points = 5
+            risk_score += points
+            risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'low', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
+        
+        # HPD violations (15 points)
+        if building['hpd_total_violations'] and building['hpd_total_violations'] > 10:
+            points = 15
+            risk_score += points
+            risk_factors.append({'factor': 'HPD Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
+        elif building['hpd_total_violations'] and building['hpd_total_violations'] > 0:
+            points = 5
+            risk_score += points
+            risk_factors.append({'factor': 'HPD Violations', 'severity': 'low', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
+        
+        # Determine risk level
+        if risk_score >= 60:
+            risk_level = 'critical'
+            risk_label = 'CRITICAL RISK'
+            risk_color = 'red'
+        elif risk_score >= 40:
+            risk_level = 'high'
+            risk_label = 'HIGH RISK'
+            risk_color = 'red'
+        elif risk_score >= 20:
+            risk_level = 'moderate'
+            risk_label = 'MODERATE RISK'
+            risk_color = 'yellow'
+        elif risk_score > 0:
+            risk_level = 'low'
+            risk_label = 'LOW RISK'
+            risk_color = 'yellow'
+        else:
+            risk_level = 'minimal'
+            risk_label = 'MINIMAL RISK'
+            risk_color = 'green'
+        
+        # ===== 7. BUILDING CLASS TRANSLATION =====
+        building_class_desc = translate_building_class(building['building_class'])
+        
+        # ===== 8. ACTIVITY TIMELINE (Combine all events) =====
+        activity_timeline = []
+        
+        # Add permits to timeline
+        for permit in permits:
+            if permit['issue_date']:
+                activity_timeline.append({
+                    'date': permit['issue_date'],
+                    'type': 'permit',
+                    'icon': '🔨',
+                    'title': f"{permit['job_type']} Permit Filed",
+                    'description': f"{permit['work_type'] or 'Work'} - {permit['applicant']}",
+                    'permit_no': permit['permit_no']
+                })
+        
+        # Add transactions to timeline
+        for txn in transactions:
+            if txn['recorded_date']:
+                icon = '🏠' if txn['doc_type'] in ['DEED', 'DEEDO'] else '🏦' if txn['doc_type'] in ['MTGE', 'AGMT'] else '✅' if txn['doc_type'] in ['SAT', 'SATF'] else '📄'
+                activity_timeline.append({
+                    'date': txn['recorded_date'],
+                    'type': 'transaction',
+                    'icon': icon,
+                    'title': f"{txn['doc_type']} - ${txn['doc_amount']:,.0f}" if txn['doc_amount'] else txn['doc_type'],
+                    'description': f"Document ID: {txn['document_id']}",
+                    'crfn': txn['crfn']
+                })
+        
+        # Sort timeline by date descending
+        activity_timeline.sort(key=lambda x: x['date'], reverse=True)
+        
+        # ===== 9. CONTACT AGGREGATION =====
+        contacts = []
+        
+        # Option 1: Get from contacts table (if linked to permits)
+        cur.execute("""
+            SELECT DISTINCT c.name, c.phone, c.role, c.is_mobile, c.line_type, c.carrier_name
+            FROM contacts c
+            JOIN permit_contacts pc ON c.id = pc.contact_id
+            JOIN permits p ON pc.permit_id = p.id
+            WHERE p.bbl = %s AND c.phone IS NOT NULL
+        """, (bbl,))
+        
+        contacts_from_db = cur.fetchall()
+        for contact in contacts_from_db:
+            contacts.append({
+                'name': contact['name'],
+                'phone': contact['phone'],
+                'role': contact['role'] or 'Contact',
+                'is_mobile': contact['is_mobile'],
+                'line_type': contact['line_type'],
+                'carrier': contact['carrier_name']
+            })
+        
+        # Option 2: Get unique contractors from permits (with phone numbers)
+        contractor_contacts = {}
+        for permit in permits:
+            # Permittee with phone
+            if permit['permittee_business_name'] and permit['permittee_phone']:
+                key = permit['permittee_business_name']
+                if key not in contractor_contacts:
+                    contractor_contacts[key] = {
+                        'name': permit['permittee_business_name'],
+                        'phone': permit['permittee_phone'],
+                        'role': 'Contractor/Permittee',
+                        'license': permit['permittee_license_type'],
+                        'permit_count': 0
+                    }
+                contractor_contacts[key]['permit_count'] += 1
+            
+            # Owner with phone
+            if permit['owner_business_name'] and permit['owner_phone']:
+                key = f"owner_{permit['owner_business_name']}"
+                if key not in contractor_contacts:
+                    contractor_contacts[key] = {
+                        'name': permit['owner_business_name'],
+                        'phone': permit['owner_phone'],
+                        'role': 'Property Owner',
+                        'permit_count': 0
+                    }
+                contractor_contacts[key]['permit_count'] += 1
+        
+        contacts.extend(contractor_contacts.values())
+        
+        # Option 3: Contractors without phone numbers (fallback)
+        contractors_no_phone = {}
+        for permit in permits:
+            if permit['permittee_business_name'] and not permit['permittee_phone']:
+                key = permit['permittee_business_name']
+                if key not in contractor_contacts and key not in contractors_no_phone:
+                    contractors_no_phone[key] = {
+                        'name': permit['permittee_business_name'],
+                        'phone': None,
+                        'role': 'Contractor/Permittee',
+                        'license': permit['permittee_license_type'],
+                        'permit_count': 0
+                    }
+                if key in contractors_no_phone:
+                    contractors_no_phone[key]['permit_count'] += 1
+        
+        # Only add contractors without phones if we have very few contacts
+        if len(contacts) < 5:
+            contacts.extend(list(contractors_no_phone.values())[:10])
+        
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            'success': True,
+            'building': dict(building),
+            'building_class_description': building_class_desc,
+            'owners': owners,
+            'risk_assessment': {
+                'score': risk_score,
+                'level': risk_level,
+                'label': risk_label,
+                'color': risk_color,
+                'factors': risk_factors
+            },
+            'permits': [dict(p) for p in permits],
+            'transactions': [dict(t) for t in transactions],
+            'parties': [dict(p) for p in parties],
+            'activity_timeline': activity_timeline[:50],  # Last 50 events
+            'contacts': contacts,
+            'stats': {
+                'total_permits': len(permits),
+                'total_transactions': len(transactions),
+                'total_contacts': len(contacts),
+                'years_owned': round(building['days_since_sale'] / 365, 1) if building['days_since_sale'] else None
+            }
+        })
+        
+    except Exception as e:
+        print(f"Building profile API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def translate_building_class(code):
+    """
+    Translate NYC building classification codes to plain English
+    Returns: (code, plain english description)
+    """
+    if not code:
+        return "Unknown building type"
+    
+    # NYC building class codes - https://www1.nyc.gov/assets/finance/jump/hlpbldgcode.html
+    translations = {
+        # Residential
+        'A0': 'Cape Cod style single-family home',
+        'A1': 'Two-story detached single-family home',
+        'A2': 'One-story ranch or bungalow',
+        'A3': 'Large single-family mansion',
+        'A4': 'Single-family home in city',
+        'A5': 'Single-family attached or semi-detached',
+        'A6': 'Summer cottage or bungalow',
+        'A7': 'Mansion-type or town house',
+        'A8': 'Bungalow colony (multiple cottages)',
+        'A9': 'Miscellaneous single-family',
+        'B1': 'Two-family brick or stone building',
+        'B2': 'Two-family frame construction',
+        'B3': 'Two-family converted from single-family',
+        'B9': 'Miscellaneous two-family',
+        'C0': 'Three-family brick or stone',
+        'C1': 'Walk-up apartment (3-6 families) over stores',
+        'C2': 'Walk-up apartment (3-6 families) no stores',
+        'C3': 'Walk-up apartment converted from house',
+        'C4': 'Renovated walk-up apartment',
+        'C5': 'Converted dwelling to apartments',
+        'C6': 'Walk-up cooperative or condo',
+        'C7': 'Walk-up apartment with commercial',
+        'C8': 'Walk-up cooperative or condo conversion',
+        'C9': 'Garden-type apartment complex (1-2 stories)',
+        'D0': 'Elevator apartment (7+ stories)',
+        'D1': 'Semi-fireproof elevator apartment',
+        'D2': 'Fireproof elevator apartment (artists in residence)',
+        'D3': 'Fireproof elevator apartment',
+        'D4': 'Elevator cooperative or condo',
+        'D5': 'Elevator apartment converted',
+        'D6': 'Elevator cooperative or condo conversion',
+        'D7': 'Elevator apartment with stores',
+        'D8': 'Elevator apartment (luxury)',
+        'D9': 'Elevator apartment miscellaneous',
+        # Commercial
+        'E1': 'Warehouse (brick/concrete)',
+        'E2': 'Warehouse (metal)',
+        'E3': 'Warehouse (converted factory)',
+        'E4': 'Warehouse (self-storage)',
+        'E7': 'Warehouse (commercial storage)',
+        'E9': 'Warehouse miscellaneous',
+        'F1': 'Factory/industrial (heavy manufacturing)',
+        'F2': 'Factory/industrial (artist loft)',
+        'F4': 'Factory/industrial (light manufacturing)',
+        'F5': 'Factory/industrial (metalworking)',
+        'F8': 'Factory/industrial (commercial/printing)',
+        'F9': 'Factory/industrial miscellaneous',
+        'G0': 'Garage (residential, <4 cars)',
+        'G1': 'Garage (all parking garages)',
+        'G2': 'Garage (permitted parking lot)',
+        'G3': 'Gas station with convenience store',
+        'G4': 'Gas station only',
+        'G5': 'Garage (commercial vehicles)',
+        'G6': 'Licensed parking lot',
+        'G7': 'Unlicensed parking lot',
+        'G8': 'Marina/boat storage',
+        'G9': 'Garage/parking miscellaneous',
+        'H1': 'Hotel (luxury)',
+        'H2': 'Hotel (full service)',
+        'H3': 'Hotel (limited service)',
+        'H4': 'Hotel (motel)',
+        'H5': 'Hotel (apartment hotel)',
+        'H6': 'Hotel (boutique/bed & breakfast)',
+        'H7': 'Hotel (SRO - single room occupancy)',
+        'H8': 'Hotel (dormitory)',
+        'H9': 'Hotel miscellaneous',
+        'I1': 'Hospital (general care)',
+        'I2': 'Hospital (infirmary)',
+        'I3': 'Hospital (mental health)',
+        'I4': 'Hospital (special hospital)',
+        'I5': 'Clinic/medical office',
+        'I6': 'Nursing home',
+        'I7': 'Adult care facility',
+        'I9': 'Hospital/health facility miscellaneous',
+        'J1': 'Theater (live performance)',
+        'J2': 'Theater (movie)',
+        'J3': 'Theater (photography/TV studio)',
+        'J4': 'Theater (arts/dance studio)',
+        'J5': 'Theater (bowling alley)',
+        'J6': 'Theater (indoor sports arena)',
+        'J7': 'Theater (athletic club)',
+        'J8': 'Theater (swimming pool)',
+        'J9': 'Theater/recreation miscellaneous',
+        'K1': 'Store building (one story retail)',
+        'K2': 'Store building (multi-story retail)',
+        'K3': 'Store building (multi-story department store)',
+        'K4': 'Store building (bank)',
+        'K5': 'Store building (mixed retail/office)',
+        'K6': 'Store building (shopping center)',
+        'K7': 'Store building (retail building with parking)',
+        'K8': 'Store building (convenience store)',
+        'K9': 'Store building miscellaneous',
+        'L1': 'Loft building (over 8 stories)',
+        'L2': 'Loft building (brick/concrete)',
+        'L3': 'Loft building (lightweight)',
+        'L8': 'Loft building (luxury/artist)',
+        'L9': 'Loft building miscellaneous',
+        'M1': 'Church/religious facility',
+        'M2': 'Mission/religious residence',
+        'M3': 'Parsonage/clergy residence',
+        'M4': 'Convent/monastery',
+        'M9': 'Religious facility miscellaneous',
+        'N1': 'Asylum/home for aged',
+        'N2': 'Asylum/infirmary',
+        'N3': 'Asylum/orphanage',
+        'N4': 'Asylum/detention facility',
+        'N9': 'Asylum/institution miscellaneous',
+        'O1': 'Office building (1 story)',
+        'O2': 'Office building (2-6 stories)',
+        'O3': 'Office building (7-19 stories)',
+        'O4': 'Office building (20+ stories - skyscraper)',
+        'O5': 'Office building (mixed-use residential/office)',
+        'O6': 'Office building (mixed-use with stores)',
+        'O7': 'Professional building (doctors/dentists)',
+        'O8': 'Office building (artist studio)',
+        'O9': 'Office building miscellaneous',
+        'P1': 'Indoor public assembly',
+        'P2': 'Outdoor stadiums/arenas',
+        'P3': 'Amusement park',
+        'P4': 'Beach/pool club',
+        'P5': 'Museum',
+        'P6': 'Library',
+        'P7': 'Funeral home',
+        'P8': 'Observatory/landmark',
+        'P9': 'Public assembly miscellaneous',
+        'Q1': 'Parking lot',
+        'Q2': 'Tennis court/pool',
+        'Q3': 'Playground',
+        'Q4': 'Beach',
+        'Q5': 'Golf course',
+        'Q6': 'Marina',
+        'Q7': 'Race track',
+        'Q8': 'Park/recreation area',
+        'Q9': 'Recreation miscellaneous',
+        'R0': 'Condo common area',
+        'R1': 'Condo residential unit',
+        'R2': 'Condo residential unit (horizontal)',
+        'R3': 'Condo residential unit (conversion)',
+        'R4': 'Condo commercial unit',
+        'R5': 'Miscellaneous commercial condo',
+        'R6': 'Condo garage',
+        'R7': 'Condo warehouse',
+        'R8': 'Condo office',
+        'R9': 'Condo miscellaneous',
+        'S0': 'Multiple dwellings (other)',
+        'S1': 'Single-family (other)',
+        'S2': 'Two-family (other)',
+        'S3': 'Three-family (other)',
+        'S4': 'Multiple dwelling',
+        'S5': 'Mixed residential/commercial',
+        'S9': 'Multiple residence miscellaneous',
+        'T1': 'Airport',
+        'T2': 'Pier/dock',
+        'T9': 'Transportation facility miscellaneous',
+        'U0': 'Utility company property',
+        'U1': 'Gas/steam plant',
+        'U2': 'Telephone exchange',
+        'U3': 'Electric substation',
+        'U4': 'Pumping station',
+        'U5': 'Communication tower',
+        'U6': 'Water/sewage plant',
+        'U7': 'Heating plant',
+        'U8': 'Garbage dump',
+        'U9': 'Utility miscellaneous',
+        'V0': 'Zoning permit/variance',
+        'V1': 'Vacant land zoned residential',
+        'V2': 'Vacant land zoned commercial',
+        'V3': 'Vacant land zoned mixed use',
+        'V4': 'Vacant land (police/fire department)',
+        'V5': 'Vacant land (school)',
+        'V6': 'Vacant land (library)',
+        'V7': 'Vacant land (hospital)',
+        'V8': 'Vacant land (public authority)',
+        'V9': 'Vacant land miscellaneous',
+        'W1': 'Educational structure (public school)',
+        'W2': 'Educational structure (private school)',
+        'W3': 'Educational structure (parochial school)',
+        'W4': 'Educational structure (non-profit school)',
+        'W5': 'Educational structure (private university)',
+        'W6': 'Educational structure (public university)',
+        'W7': 'Educational structure (religious seminary)',
+        'W8': 'Educational structure (specialized education)',
+        'W9': 'Educational structure miscellaneous',
+        'Y1': 'Government building (fire/police)',
+        'Y2': 'Government building (government office)',
+        'Y3': 'Government building (school)',
+        'Y4': 'Government building (library)',
+        'Y5': 'Government building (park)',
+        'Y6': 'Government building (courts)',
+        'Y7': 'Government building (military)',
+        'Y8': 'Government building (Department of Sanitation)',
+        'Y9': 'Government building miscellaneous',
+        'Z0': 'Mixed-use building (retail/residential)',
+        'Z1': 'Primarily residential, some commercial',
+        'Z2': 'Mixed retail/office',
+        'Z3': 'Mixed residential/factory',
+        'Z4': 'Industrial/warehouse complex',
+        'Z5': 'Mixed-use commercial',
+        'Z6': 'Mixed-use government/commercial',
+        'Z7': 'Mixed-use cultural/commercial',
+        'Z8': 'Mixed-use parking/residential',
+        'Z9': 'Mixed-use miscellaneous'
+    }
+    
+    return translations.get(code, f"Building code {code}")
 
 
 if __name__ == '__main__':

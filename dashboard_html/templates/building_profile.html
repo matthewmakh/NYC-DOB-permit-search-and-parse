@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}{{ bbl }} - Building Intelligence Profile{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/building_profile.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="building-profile-container">
+    <!-- HERO SECTION - COMPACT -->
+    <div class="hero-section" id="hero-section">
+        <div class="hero-content">
+            <div class="hero-left">
+                <h1 class="building-address" id="building-address">Loading...</h1>
+                <div class="bbl-code">BBL: <span id="bbl-display">{{ bbl }}</span></div>
+            </div>
+            
+            <div class="hero-right">
+                <!-- RISK SCORE CARD -->
+                <div class="risk-score-card" id="risk-score-card">
+                    <div class="risk-score-value" id="risk-score-value">--</div>
+                    <div class="risk-score-label" id="risk-score-label">LOADING...</div>
+                    <button class="risk-explanation-btn" id="risk-explanation-btn">
+                        Why this score? ⓘ
+                    </button>
+                </div>
+                
+                <!-- ALL OWNER SOURCES -->
+                <div class="owners-card">
+                    <h3>Property Ownership</h3>
+                    <div class="owner-sources" id="owner-sources">
+                        <div class="owner-item skeleton">
+                            <span class="owner-source">Loading...</span>
+                            <span class="owner-name">...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- RISK EXPLANATION MODAL -->
+    <div class="modal" id="risk-explanation-modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <h2>Risk Score Breakdown</h2>
+            <div id="risk-factors-list"></div>
+            <div class="risk-total">
+                <strong>Total Risk Score:</strong> <span id="modal-risk-score">--</span>/100
+            </div>
+        </div>
+    </div>
+    
+    <!-- TAB NAVIGATION -->
+    <div class="tab-navigation">
+        <button class="tab-btn active" data-tab="overview">
+            <span class="tab-icon">📊</span>
+            <span class="tab-label">Overview</span>
+        </button>
+        <button class="tab-btn" data-tab="financials">
+            <span class="tab-icon">💰</span>
+            <span class="tab-label">Financials</span>
+        </button>
+        <button class="tab-btn" data-tab="owners">
+            <span class="tab-icon">👤</span>
+            <span class="tab-label">Owners</span>
+            <span class="tab-badge" id="owners-badge"></span>
+        </button>
+        <button class="tab-btn" data-tab="transactions">
+            <span class="tab-icon">📄</span>
+            <span class="tab-label">Transactions</span>
+            <span class="tab-badge" id="transactions-badge"></span>
+        </button>
+        <button class="tab-btn" data-tab="permits">
+            <span class="tab-icon">🔨</span>
+            <span class="tab-label">Permits</span>
+            <span class="tab-badge" id="permits-badge"></span>
+        </button>
+        <button class="tab-btn" data-tab="violations">
+            <span class="tab-icon">⚠️</span>
+            <span class="tab-label">Violations</span>
+            <span class="tab-badge" id="violations-badge"></span>
+        </button>
+        <button class="tab-btn" data-tab="activity">
+            <span class="tab-icon">📅</span>
+            <span class="tab-label">Activity</span>
+            <span class="tab-badge" id="activity-badge"></span>
+        </button>
+        <button class="tab-btn" data-tab="contacts">
+            <span class="tab-icon">📞</span>
+            <span class="tab-label">Contacts</span>
+            <span class="tab-badge" id="contacts-badge"></span>
+        </button>
+    </div>
+    
+    <!-- TAB CONTENT -->
+    <div class="tab-content-container">
+        <!-- OVERVIEW TAB -->
+        <div class="tab-content active" id="tab-overview">
+            <div class="cards-grid">
+                <!-- Building Basics Card -->
+                <div class="info-card">
+                    <h3>Building Information</h3>
+                    <div class="info-rows" id="building-basics">
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
+                    </div>
+                </div>
+                
+                <!-- Property Stats Card -->
+                <div class="info-card">
+                    <h3>Property Stats</h3>
+                    <div class="stats-grid" id="property-stats">
+                        <div class="stat-item skeleton">
+                            <div class="stat-value">--</div>
+                            <div class="stat-label">Loading</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Metrics Card -->
+                <div class="info-card">
+                    <h3>Quick Metrics</h3>
+                    <div class="metrics-list" id="quick-metrics">
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- FINANCIALS TAB -->
+        <div class="tab-content" id="tab-financials">
+            <div class="cards-grid">
+                <div class="info-card full-width">
+                    <h3>Financial Overview</h3>
+                    <div id="financials-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- OWNERS TAB -->
+        <div class="tab-content" id="tab-owners">
+            <div class="cards-grid">
+                <div class="info-card full-width">
+                    <h3>Ownership History</h3>
+                    <div id="owners-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- TRANSACTIONS TAB -->
+        <div class="tab-content" id="tab-transactions">
+            <div class="cards-grid">
+                <div class="info-card full-width">
+                    <h3>ACRIS Transaction History</h3>
+                    <div id="transactions-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- PERMITS TAB -->
+        <div class="tab-content" id="tab-permits">
+            <div class="cards-grid">
+                <div class="info-card full-width">
+                    <h3>Construction Permits</h3>
+                    <div id="permits-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- VIOLATIONS TAB -->
+        <div class="tab-content" id="tab-violations">
+            <div class="cards-grid">
+                <div class="info-card full-width">
+                    <h3>Violations Summary</h3>
+                    <div id="violations-content">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ACTIVITY TAB -->
+        <div class="tab-content" id="tab-activity">
+            <div class="activity-feed" id="activity-feed">
+                <div class="skeleton-text"></div>
+                <div class="skeleton-text"></div>
+                <div class="skeleton-text"></div>
+            </div>
+        </div>
+        
+        <!-- CONTACTS TAB -->
+        <div class="tab-content" id="tab-contacts">
+            <div class="contacts-directory" id="contacts-directory">
+                <div class="skeleton-text"></div>
+                <div class="skeleton-text"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Permit Detail Modal -->
+<div id="permit-modal" class="permit-modal" style="display: none;"></div>
+
+<!-- Data passed from Flask -->
+<script>
+    const BBL = "{{ bbl }}";
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/building_profile.js') }}"></script>
+{% endblock %}

@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
-Step 2: Multi-Source Building Enrichment (PLUTO + RPAD + HPD + Tax/Liens)
+Step 2: Tri-Source Building Enrichment (PLUTO + RPAD + HPD)
 
 Data Sources:
 1. NYC PLUTO (MapPLUTO) - Corporate ownership, building characteristics
 2. NYC RPAD (Property Tax) - Current taxpayer, assessed values
 3. NYC HPD (Housing Preservation) - Registered owner, violations, complaints
-4. NYC Tax Delinquency - Properties on delinquency notice lists
-5. NYC ECB Violations - Environmental Control Board violations with financial liens
-6. NYC DOB Violations - Building code violations count
 
 Populates:
 - Owner data: current_owner_name (PLUTO), owner_name_rpad (RPAD), owner_name_hpd (HPD)
 - Building data: units, sqft, year built/altered, building class
 - Financial data: assessed values
 - Quality indicators: HPD violations and complaints counts
-- Lien data: tax delinquency status, ECB violations with balance due, DOB violations
 """
 
 import psycopg2
@@ -51,11 +47,6 @@ HPD_CONTACTS_API = "https://data.cityofnewyork.us/resource/feu5-w2e2.json"
 HPD_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
 # Use public Housing Maintenance Code Complaints dataset (not the restricted one)
 HPD_COMPLAINTS_API = "https://data.cityofnewyork.us/resource/ygpa-z7cr.json"
-
-# Tax and Lien APIs
-TAX_DELINQUENCY_API = "https://data.cityofnewyork.us/resource/9rz4-mjek.json"
-ECB_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/6bgk-3dad.json"
-DOB_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/3h2n-5cm9.json"
 
 # Configuration
 API_DELAY = float(os.getenv('API_DELAY', '0.1'))
@@ -236,123 +227,10 @@ def get_hpd_data_for_bbl(bbl):
         return None, f"HPD API error: {str(e)}"
 
 
-def get_tax_lien_data_for_bbl(bbl):
-    """
-    Query NYC Tax Delinquency and ECB/DOB Violations APIs
-    Returns (data_dict, error_message) tuple
-    """
-    try:
-        boro = bbl[0]
-        block = str(int(bbl[1:6]))  # Remove leading zeros
-        lot = str(int(bbl[6:10]))   # Remove leading zeros
-        block_padded = bbl[1:6]  # Keep leading zeros for ECB API
-        lot_padded = bbl[6:10]   # Keep leading zeros for ECB API
-        
-        result = {
-            'has_tax_delinquency': False,
-            'tax_delinquency_notices': 0,
-            'tax_delinquency_water_only': False,
-            'ecb_total_violations': 0,
-            'ecb_open_violations': 0,
-            'ecb_total_balance_due': 0.0,
-            'ecb_total_penalty_imposed': 0.0,
-            'dob_violations_count': 0
-        }
-        
-        # 1. Check Tax Delinquency
-        try:
-            params = {
-                '$where': f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
-                '$limit': 100
-            }
-            r = requests.get(TAX_DELINQUENCY_API, params=params, timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            delinquencies = r.json()
-            if delinquencies:
-                result['has_tax_delinquency'] = True
-                result['tax_delinquency_notices'] = len(delinquencies)
-                # Check if ALL notices are water-only
-                result['tax_delinquency_water_only'] = all(
-                    d.get('water_debt_only', '').upper() == 'YES' 
-                    for d in delinquencies
-                )
-        except Exception as e:
-            print(f"      ⚠️  Tax delinquency API error: {str(e)}")
-        
-        # 2. Get ECB Violations with financial data
-        try:
-            params = {
-                '$where': f"boro='{boro}' AND block='{block_padded}' AND lot='{lot_padded}'",
-                '$select': 'ecb_violation_status,balance_due,penality_imposed',
-                '$limit': 500
-            }
-            r = requests.get(ECB_VIOLATIONS_API, params=params, timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            violations = r.json()
-            result['ecb_total_violations'] = len(violations)
-            
-            for v in violations:
-                # Count open violations
-                if v.get('ecb_violation_status') == 'ACTIVE':
-                    result['ecb_open_violations'] += 1
-                
-                # Sum financial amounts
-                balance = float(v.get('balance_due', 0) or 0)
-                penalty = float(v.get('penality_imposed', 0) or 0)
-                result['ecb_total_balance_due'] += balance
-                result['ecb_total_penalty_imposed'] += penalty
-                
-        except Exception as e:
-            print(f"      ⚠️  ECB violations API error: {str(e)}")
-        
-        # 3. Get DOB Violations count
-        try:
-            params = {
-                '$where': f"boro='{boro}' AND block='{block}' AND lot='{lot}'",
-                '$select': 'number',
-                '$limit': 500
-            }
-            r = requests.get(DOB_VIOLATIONS_API, params=params, timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            violations = r.json()
-            result['dob_violations_count'] = len(violations)
-            
-        except Exception as e:
-            print(f"      ⚠️  DOB violations API error: {str(e)}")
-        
-        return result, None
-        
-    except Exception as e:
-        return None, f"Tax/Lien API error: {str(e)}"
-
-
 def enrich_buildings_from_pluto():
     """
-    Main process - Multi-Source Enrichment:
+    Main process - Tri-Source Enrichment:
     1. Get buildings without owner data
-    2. Query PLUTO, RPAD, HPD, and Tax/Lien APIs for each BBL
-    3. Update building record with combined data from all sources
-    """
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    cur = conn.cursor()
-    
-    print("=" * 70)
-    print("🏢 Step 2: Multi-Source Building Enrichment")
-    print("   Sources: PLUTO + RPAD + HPD + Tax/Liens")
-    print("=" * 70)
-    
-    # Get buildings that need data from ANY source
-    # Only select buildings where:
-    # 1. At least one owner field is NULL (missing data), AND
-    # 2. Never attempted (last_updated IS NULL), OR last updated >30 days ago
-    # This ensures new buildings get enriched immediately and old data gets refreshed
-    cur.execute("""
     2. Query PLUTO, RPAD, and HPD APIs for each BBL
     3. Update building record with combined data from all sources
     """
