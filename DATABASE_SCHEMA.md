@@ -134,6 +134,24 @@ Last Updated: November 16, 2025
 | `acris_mortgage_count` | INT | Number of mortgages | ACRIS |
 | `acris_satisfaction_count` | INT | Paid-off loans | ACRIS |
 | `acris_last_enriched` | TIMESTAMP | When ACRIS data last updated | - |
+| **TAX DELINQUENCY & LIENS DATA** |
+| `has_tax_delinquency` | BOOLEAN | On DOF delinquency list | DOF |
+| `tax_delinquency_count` | INT | Number of delinquency notices | DOF |
+| `tax_delinquency_water_only` | BOOLEAN | Only water debt (not property tax) | DOF |
+| `ecb_violation_count` | INT | Total ECB violations | ECB |
+| `ecb_total_balance` | DECIMAL(12,2) | Outstanding ECB balance ($) | ECB |
+| `ecb_open_violations` | INT | Unresolved ECB violations | ECB |
+| `ecb_total_penalty` | DECIMAL(12,2) | Total penalties imposed ($) | ECB |
+| `ecb_amount_paid` | DECIMAL(12,2) | Total amount paid ($) | ECB |
+| `ecb_most_recent_hearing_date` | DATE | Latest hearing date | ECB |
+| `ecb_most_recent_hearing_status` | VARCHAR(100) | Latest hearing status | ECB |
+| `ecb_respondent_name` | VARCHAR(255) | Owner/manager from ECB records | ECB |
+| `ecb_respondent_address` | VARCHAR(500) | Respondent full address | ECB |
+| `ecb_respondent_city` | VARCHAR(100) | Respondent city | ECB |
+| `ecb_respondent_zip` | VARCHAR(10) | Respondent ZIP code | ECB |
+| `dob_violation_count` | INT | Total DOB violations | DOB |
+| `dob_open_violations` | INT | Open DOB violations | DOB |
+| `tax_lien_last_checked` | TIMESTAMP | When tax/lien data last updated | - |
 | **METADATA** |
 | `last_updated` | TIMESTAMP | Last enrichment timestamp | - |
 | `created_at` | TIMESTAMP | When record created | - |
@@ -143,6 +161,9 @@ Last Updated: November 16, 2025
 - `is_cash_purchase`
 - `sale_date DESC`
 - `financing_ratio`
+- `has_tax_delinquency` (filtered)
+- `ecb_total_balance` (where > 0)
+- `ecb_open_violations` (where > 0)
 
 ---
 
