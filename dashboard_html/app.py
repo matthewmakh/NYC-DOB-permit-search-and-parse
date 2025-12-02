@@ -1202,6 +1202,9 @@ def get_construction_permits():
     """Get filtered permits for construction page with advanced filtering"""
     try:
         with DatabaseConnection() as cur:
+            # Set statement timeout to prevent hanging queries
+            cur.execute("SET statement_timeout = 30000")  # 30 seconds
+            
             # Get filter parameters
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
@@ -1209,10 +1212,14 @@ def get_construction_permits():
             min_lead_score = request.args.get('min_score', 0, type=int)
             has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
             sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
-            limit = request.args.get('limit', 200, type=int)
+            limit = request.args.get('limit', 50, type=int)  # Reduced default from 200 to 50
+            limit = min(200, limit)  # Cap at 200
             offset = request.args.get('offset', 0, type=int)  # For pagination
             
-            # Build dynamic query
+            # Build dynamic query - optimized for performance
+            # Only join buildings table if sorting by size or if needed
+            needs_buildings_join = sort_by == 'size'
+            
             query = """
                 SELECT 
                     p.id,
@@ -1235,8 +1242,11 @@ def get_construction_permits():
                     (
                         CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
                         CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                    ) as contact_count,
-                    -- Building intelligence
+                    ) as contact_count"""
+            
+            if needs_buildings_join:
+                query += """,
+                    -- Building intelligence (only when needed)
                     b.residential_units,
                     b.total_units,
                     b.num_floors,
@@ -1245,7 +1255,12 @@ def get_construction_permits():
                     b.purchase_price,
                     b.current_owner_name
                 FROM permits p
-                LEFT JOIN buildings b ON p.bbl = b.bbl
+                LEFT JOIN buildings b ON p.bbl = b.bbl"""
+            else:
+                query += """
+                FROM permits p"""
+            
+            query += """
                 WHERE 1=1
             """
         
