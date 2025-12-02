@@ -316,14 +316,18 @@ function switchTab(tabName) {
     
     // Auto-load detailed violations when violations tab is opened
     if (tabName === 'violations') {
-        // Check if we have violations and haven't loaded details yet
-        const detailsContainer = document.getElementById('detailed-violations');
-        if (detailsContainer && detailsContainer.innerHTML === '') {
-            const { building } = buildingData;
-            const hasViolations = building.hpd_total_violations || building.ecb_violation_count || building.dob_violation_count;
-            if (hasViolations) {
-                loadHPDViolationDetails();
-            }
+        const { building } = buildingData;
+        
+        // Load ECB violations
+        const ecbContainer = document.getElementById('ecb-violations-container');
+        if (ecbContainer && ecbContainer.innerHTML === '' && building.ecb_violation_count > 0) {
+            loadECBViolationDetails();
+        }
+        
+        // Load HPD violations
+        const hpdContainer = document.getElementById('hpd-violations-container');
+        if (hpdContainer && hpdContainer.innerHTML === '' && building.hpd_total_violations > 0) {
+            loadHPDViolationDetails();
         }
     }
 }
@@ -1001,46 +1005,63 @@ function renderViolationsTab() {
         return;
     }
     
-    let html = '<div class="violations-grid">';
+    // Calculate total amounts owed
+    const ecbBalance = building.ecb_total_balance || 0;
+    const hpdBalance = 0; // HPD doesn't have financial penalties in our data
+    const totalOwed = ecbBalance + hpdBalance;
     
-    // ECB Violations
-    if (building.ecb_violation_count && building.ecb_violation_count > 0) {
+    let html = '';
+    
+    // Total violations owed banner (only show if there's money owed)
+    if (totalOwed > 0) {
         html += `
-        <div class="violation-card ${building.ecb_total_balance > 0 ? 'violation-alert' : ''}">
-            <h4>⚖️ ECB Violations</h4>
-            <div class="violation-stats">
-                <div class="viol-stat">
-                    <div class="viol-stat-value">${building.ecb_violation_count}</div>
-                    <div class="viol-stat-label">Total Violations</div>
-                </div>
-                <div class="viol-stat">
-                    <div class="viol-stat-value">${building.ecb_open_violations || 0}</div>
-                    <div class="viol-stat-label">Open</div>
-                </div>
+        <div class="total-violations-owed">
+            <div class="total-owed-icon">⚠️</div>
+            <div class="total-owed-content">
+                <div class="total-owed-label">Total Outstanding Violations</div>
+                <div class="total-owed-amount">$${formatNumber(totalOwed)}</div>
             </div>
-            ${building.ecb_total_balance ? `
-            <div class="violation-financial">
-                <div class="viol-fin-row">
-                    <span>Total Balance:</span>
-                    <span class="viol-amount-alert">$${formatNumber(building.ecb_total_balance)}</span>
-                </div>
-                ${building.ecb_total_penalty ? `<div class="viol-fin-row"><span>Total Penalty:</span><span>$${formatNumber(building.ecb_total_penalty)}</span></div>` : ''}
-                ${building.ecb_amount_paid ? `<div class="viol-fin-row"><span>Amount Paid:</span><span>$${formatNumber(building.ecb_amount_paid)}</span></div>` : ''}
-            </div>` : ''}
-            ${building.ecb_most_recent_hearing_date ? `
-            <div class="violation-hearing">
-                <div class="viol-hearing-label">Most Recent Hearing:</div>
-                <div class="viol-hearing-date">${formatDate(building.ecb_most_recent_hearing_date)}</div>
-                ${building.ecb_most_recent_hearing_status ? `<div class="viol-hearing-status">${building.ecb_most_recent_hearing_status}</div>` : ''}
-            </div>` : ''}
         </div>`;
     }
     
-    // DOB Violations
+    // Side-by-side layout for ECB and HPD violations
+    html += '<div class="violations-side-by-side">';
+    
+    // Left side: ECB Violations
+    html += '<div class="violations-column">';
+    html += '<h3>⚖️ ECB Violations';
+    if (ecbBalance > 0) {
+        html += ` <span class="violation-amount-header">$${formatNumber(ecbBalance)} owed</span>`;
+    }
+    html += '</h3>';
+    if (building.ecb_violation_count && building.ecb_violation_count > 0) {
+        html += '<div id="ecb-violations-container"></div>';
+    } else {
+        html += '<div class="no-data">No ECB violations on record</div>';
+    }
+    html += '</div>';
+    
+    // Right side: HPD Violations
+    html += '<div class="violations-column">';
+    html += '<h3>🏠 HPD Violations';
+    if (hpdBalance > 0) {
+        html += ` <span class="violation-amount-header">$${formatNumber(hpdBalance)} owed</span>`;
+    }
+    html += '</h3>';
+    if (building.hpd_total_violations && building.hpd_total_violations > 0) {
+        html += '<div id="hpd-violations-container"></div>';
+    } else {
+        html += '<div class="no-data">No HPD violations on record</div>';
+    }
+    html += '</div>';
+    
+    html += '</div>';
+    
+    // DOB Violations summary (below the side-by-side)
     if (building.dob_violation_count && building.dob_violation_count > 0) {
         html += `
-        <div class="violation-card">
-            <h4>🏗️ DOB Violations</h4>
+        <div class="dob-violations-summary">
+            <h4>🏗️ DOB Violations Summary</h4>
             <div class="violation-stats">
                 <div class="viol-stat">
                     <div class="viol-stat-value">${building.dob_violation_count}</div>
@@ -1054,30 +1075,144 @@ function renderViolationsTab() {
         </div>`;
     }
     
-    // HPD Violations
-    if (building.hpd_total_violations && building.hpd_total_violations > 0) {
+    container.innerHTML = html;
+}
+
+// ============================================================================
+// LOAD DETAILED ECB VIOLATIONS
+// ============================================================================
+
+async function loadECBViolationDetails() {
+    const { building } = buildingData;
+    const container = document.getElementById('ecb-violations-container');
+    container.innerHTML = '<div class="loading">Loading ECB violations...</div>';
+    
+    try {
+        const boro = building.bbl[0];
+        const block = building.bbl.substring(1, 6);
+        const lot = building.bbl.substring(6, 10);
+        
+        const apiUrl = `https://data.cityofnewyork.us/resource/6bgk-3dad.json?boro=${boro}&block=${block}&lot=${lot}&$order=issue_date DESC&$limit=500`;
+        
+        const response = await fetch(apiUrl);
+        const violations = await response.json();
+        
+        if (!violations || violations.length === 0) {
+            container.innerHTML = '<div class="no-data">No detailed ECB violations found</div>';
+            return;
+        }
+        
+        // Store violations for filtering
+        window.ecbViolationsData = violations;
+        
+        let html = `<div class="violation-summary">${violations.length} violation${violations.length > 1 ? 's' : ''} found</div>`;
+        
+        // Filters and sorting
         html += `
-        <div class="violation-card">
-            <h4>🏠 HPD Violations</h4>
-            <div class="violation-stats">
-                <div class="viol-stat">
-                    <div class="viol-stat-value">${building.hpd_total_violations}</div>
-                    <div class="viol-stat-label">Total Violations</div>
-                </div>
+        <div class="violations-controls">
+            <div class="filter-group">
+                <label>Status:</label>
+                <select id="filter-ecb-status" onchange="filterECBViolations()">
+                    <option value="all">All</option>
+                    <option value="open">Open/Active</option>
+                    <option value="closed">Closed</option>
+                </select>
             </div>
-            ${building.hpd_total_complaints ? `
-            <div class="violation-extra">
-                <span>Complaints:</span>
-                <span>${building.hpd_total_complaints}</span>
-            </div>` : ''}
+            <div class="filter-group">
+                <label>Sort by:</label>
+                <select id="sort-ecb" onchange="filterECBViolations()">
+                    <option value="date-desc">Date (Newest First)</option>
+                    <option value="date-asc">Date (Oldest First)</option>
+                    <option value="balance-desc">Balance (Highest)</option>
+                    <option value="balance-asc">Balance (Lowest)</option>
+                </select>
+            </div>
         </div>`;
+        
+        html += '<div class="violations-list" id="ecb-violations-list"></div>';
+        container.innerHTML = html;
+        
+        // Initial render
+        filterECBViolations();
+        
+    } catch (error) {
+        console.error('Error loading ECB violations:', error);
+        container.innerHTML = '<div class="error">Error loading ECB violations: ' + error.message + '</div>';
+    }
+}
+
+function filterECBViolations() {
+    if (!window.ecbViolationsData) return;
+    
+    const statusFilter = document.getElementById('filter-ecb-status')?.value || 'all';
+    const sortOption = document.getElementById('sort-ecb')?.value || 'date-desc';
+    
+    // Filter violations
+    let filtered = window.ecbViolationsData.filter(v => {
+        const balance = parseFloat(v.balance_due || 0);
+        const status = (v.ecb_violation_status || '').toUpperCase();
+        
+        if (statusFilter === 'open' && balance <= 0 && status !== 'ACTIVE') return false;
+        if (statusFilter === 'closed' && (balance > 0 || status === 'ACTIVE')) return false;
+        
+        return true;
+    });
+    
+    // Sort violations
+    filtered.sort((a, b) => {
+        switch(sortOption) {
+            case 'date-desc':
+                return (b.issue_date || '').localeCompare(a.issue_date || '');
+            case 'date-asc':
+                return (a.issue_date || '').localeCompare(b.issue_date || '');
+            case 'balance-desc':
+                return parseFloat(b.balance_due || 0) - parseFloat(a.balance_due || 0);
+            case 'balance-asc':
+                return parseFloat(a.balance_due || 0) - parseFloat(b.balance_due || 0);
+            default:
+                return 0;
+        }
+    });
+    
+    // Render filtered violations
+    const container = document.getElementById('ecb-violations-list');
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="no-data">No violations match the selected filters</div>';
+        return;
     }
     
-    html += '</div>';
-    
-    // Container for detailed violations (will auto-load when tab is clicked)
-    html += '<div id="detailed-violations" style="margin-top: 20px;"></div>';
-    
+    let html = '';
+    filtered.forEach(v => {
+        const balance = parseFloat(v.balance_due || 0);
+        const penalty = parseFloat(v.penality_imposed || 0);
+        const paid = parseFloat(v.amount_paid || 0);
+        const status = v.ecb_violation_status || 'Unknown';
+        const isOpen = balance > 0 || status.toUpperCase() === 'ACTIVE';
+        
+        html += `
+        <div class="violation-detail-card ${isOpen ? 'violation-open' : 'violation-closed'} ${balance > 0 ? 'violation-alert' : ''}">
+            <div class="viol-detail-header">
+                <span class="viol-id">ISN: ${v.isn_dob_bis_extract || 'N/A'}</span>
+                <span class="viol-status ${isOpen ? 'status-open' : 'status-closed'}">
+                    ${status}
+                </span>
+            </div>
+            <div class="viol-detail-description">
+                <strong>${v.violation_type || 'ECB Violation'}</strong>
+                ${v.section_law_description ? `<br>${v.section_law_description}` : ''}
+            </div>
+            <div class="viol-detail-info">
+                ${v.issue_date ? `<div><strong>Issue Date:</strong> ${formatDate(v.issue_date)}</div>` : ''}
+                ${v.hearing_date ? `<div><strong>Hearing Date:</strong> ${formatDate(v.hearing_date.substring(0, 8))}</div>` : ''}
+                ${v.hearing_status ? `<div><strong>Hearing Status:</strong> ${v.hearing_status}</div>` : ''}
+                ${penalty > 0 ? `<div><strong>Penalty:</strong> $${formatNumber(penalty)}</div>` : ''}
+                ${paid > 0 ? `<div><strong>Paid:</strong> $${formatNumber(paid)}</div>` : ''}
+                ${balance > 0 ? `<div><strong>Balance Due:</strong> <span class="viol-amount-alert">$${formatNumber(balance)}</span></div>` : ''}
+                ${v.respondent_name ? `<div><strong>Respondent:</strong> ${v.respondent_name}</div>` : ''}
+                ${v.respondent_house_number || v.respondent_street ? `<div><strong>Address:</strong> ${v.respondent_house_number || ''} ${v.respondent_street || ''}</div>` : ''}
+            </div>
+        </div>`;
+    });
     container.innerHTML = html;
 }
 
@@ -1086,8 +1221,8 @@ function renderViolationsTab() {
 // ============================================================================
 
 async function loadHPDViolationDetails() {
-    const detailsContainer = document.getElementById('detailed-violations');
-    detailsContainer.innerHTML = '<div class="loading">Loading detailed violations...</div>';
+    const container = document.getElementById('hpd-violations-container');
+    container.innerHTML = '<div class="loading">Loading HPD violations...</div>';
     
     try {
         const response = await fetch(`/api/property/${BBL}/violations`);
@@ -1096,27 +1231,26 @@ async function loadHPDViolationDetails() {
         console.log('Violations API response:', data);
         
         if (!data.success) {
-            detailsContainer.innerHTML = `<div class="error">Failed to load detailed violations: ${data.error || 'Unknown error'}</div>`;
+            container.innerHTML = `<div class="error">Failed to load HPD violations: ${data.error || 'Unknown error'}</div>`;
             return;
         }
         
         if (data.violations.length === 0) {
-            detailsContainer.innerHTML = '<div class="no-data">No detailed violations found</div>';
+            container.innerHTML = '<div class="no-data">No HPD violations found</div>';
             return;
         }
         
         // Store violations data globally for filtering
-        window.violationsData = data.violations;
+        window.hpdViolationsData = data.violations;
         
-        let html = '<div class="detailed-violations-container">';
-        html += `<h3>📋 Detailed HPD Violations (${data.total_count} total)</h3>`;
+        let html = `<div class="violation-summary">${data.total_count} violation${data.total_count > 1 ? 's' : ''} found</div>`;
         
         // Filters and sorting controls
         html += `
         <div class="violations-controls">
             <div class="filter-group">
                 <label>Status:</label>
-                <select id="filter-status" onchange="filterViolations()">
+                <select id="filter-hpd-status" onchange="filterHPDViolations()">
                     <option value="all">All</option>
                     <option value="open">Open Only</option>
                     <option value="closed">Closed Only</option>
@@ -1124,7 +1258,7 @@ async function loadHPDViolationDetails() {
             </div>
             <div class="filter-group">
                 <label>Class:</label>
-                <select id="filter-class" onchange="filterViolations()">
+                <select id="filter-hpd-class" onchange="filterHPDViolations()">
                     <option value="all">All</option>
                     <option value="A">Class A</option>
                     <option value="B">Class B</option>
@@ -1134,7 +1268,7 @@ async function loadHPDViolationDetails() {
             </div>
             <div class="filter-group">
                 <label>Sort by:</label>
-                <select id="sort-violations" onchange="filterViolations()">
+                <select id="sort-hpd" onchange="filterHPDViolations()">
                     <option value="date-desc">Date (Newest First)</option>
                     <option value="date-asc">Date (Oldest First)</option>
                     <option value="class-asc">Class (A-Z)</option>
@@ -1144,7 +1278,7 @@ async function loadHPDViolationDetails() {
         </div>`;
         
         // Individual violations
-        html += '<div class="violations-list" id="violations-list-container">';
+        html += '<div class="violations-list" id="hpd-violations-list">';
         data.violations.forEach(v => {
             const statusClass = v.is_open ? 'violation-open' : 'violation-closed';
             html += `
@@ -1174,23 +1308,23 @@ async function loadHPDViolationDetails() {
         }
         
         html += '</div>';
-        detailsContainer.innerHTML = html;
+        container.innerHTML = html;
         
     } catch (error) {
-        console.error('Error loading violations:', error);
-        detailsContainer.innerHTML = '<div class="error">Error loading violations: ' + error.message + '</div>';
+        console.error('Error loading HPD violations:', error);
+        container.innerHTML = '<div class="error">Error loading HPD violations: ' + error.message + '</div>';
     }
 }
 
-function filterViolations() {
-    if (!window.violationsData) return;
+function filterHPDViolations() {
+    if (!window.hpdViolationsData) return;
     
-    const statusFilter = document.getElementById('filter-status').value;
-    const classFilter = document.getElementById('filter-class').value;
-    const sortOption = document.getElementById('sort-violations').value;
+    const statusFilter = document.getElementById('filter-hpd-status').value;
+    const classFilter = document.getElementById('filter-hpd-class').value;
+    const sortOption = document.getElementById('sort-hpd').value;
     
     // Filter violations
-    let filtered = window.violationsData.filter(v => {
+    let filtered = window.hpdViolationsData.filter(v => {
         // Status filter
         if (statusFilter === 'open' && !v.is_open) return false;
         if (statusFilter === 'closed' && v.is_open) return false;
@@ -1218,7 +1352,7 @@ function filterViolations() {
     });
     
     // Render filtered violations
-    const container = document.getElementById('violations-list-container');
+    const container = document.getElementById('hpd-violations-list');
     if (filtered.length === 0) {
         container.innerHTML = '<div class="no-data">No violations match the selected filters</div>';
         return;

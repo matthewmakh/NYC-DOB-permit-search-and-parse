@@ -33,69 +33,60 @@ DB_CONFIG = {
     'port': os.getenv('DB_PORT', '5432'),
     'database': os.getenv('DB_NAME', 'permits_db'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', '')
+    'password': os.getenv('DB_PASSWORD', ''),
+    'connect_timeout': 10,
+    'options': '-c statement_timeout=30000'  # 30 second query timeout
 }
 
-# Connection pooling - reduced for Railway free tier limits
-# Min 1, max 5 connections to avoid exhausting Railway connection limit
-db_pool = pool.ThreadedConnectionPool(1, 5, **DB_CONFIG, cursor_factory=RealDictCursor)
+# Simple connection pool: 2-10 connections
+# Railway free tier supports up to 20 connections, we use max 10 to be safe
+db_pool = None
+
+def init_db_pool():
+    """Initialize the database connection pool"""
+    global db_pool
+    if db_pool is None:
+        db_pool = pool.SimpleConnectionPool(2, 10, **DB_CONFIG)
+    return db_pool
 
 
 def get_db_connection():
-    """Get database connection from pool with validation"""
-    try:
-        conn = db_pool.getconn()
-        # Test if connection is alive
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.fetchone()
-        cur.close()
-        return conn
-    except Exception as e:
-        print(f"Connection validation failed, creating new connection: {e}")
-        # If connection is bad, close it and get a new one
-        try:
-            db_pool.putconn(conn, close=True)
-        except:
-            pass
-        return db_pool.getconn()
+    """Get a connection from the pool"""
+    global db_pool
+    if db_pool is None:
+        init_db_pool()
+    return db_pool.getconn()
 
 
 def return_db_connection(conn):
-    """Return connection to pool"""
-    try:
+    """Return a connection to the pool"""
+    if conn and db_pool:
         db_pool.putconn(conn)
-    except Exception as e:
-        print(f"Error returning connection to pool: {e}")
-        try:
-            conn.close()
-        except:
-            pass
 
 
-def cleanup_stale_connections():
-    """Periodically cleanup stale connections"""
-    try:
-        # Close all connections and recreate pool
-        global db_pool
-        db_pool.closeall()
-        db_pool = pool.ThreadedConnectionPool(1, 5, **DB_CONFIG, cursor_factory=RealDictCursor)
-        print("Database connection pool refreshed")
-    except Exception as e:
-        print(f"Error cleaning up connections: {e}")
-
-
-# Schedule connection cleanup every 30 minutes
-import threading
-import time
-
-def connection_cleanup_loop():
-    while True:
-        time.sleep(1800)  # 30 minutes
-        cleanup_stale_connections()
-
-cleanup_thread = threading.Thread(target=connection_cleanup_loop, daemon=True)
-cleanup_thread.start()
+class DatabaseConnection:
+    """Context manager for database connections"""
+    def __init__(self):
+        self.conn = None
+        self.cursor = None
+    
+    def __enter__(self):
+        self.conn = get_db_connection()
+        self.cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+        return self.cursor
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.cursor:
+            self.cursor.close()
+        if self.conn:
+            if exc_type is not None:
+                # Rollback on error
+                try:
+                    self.conn.rollback()
+                except:
+                    pass
+            return_db_connection(self.conn)
+        return False  # Don't suppress exceptions
 
 
 def calculate_lead_score(permit):
@@ -159,62 +150,57 @@ def old_dashboard():
 def get_permits():
     """Get all permits with calculated scores, contact info, and building intelligence"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Query with contact information from permits table and building intelligence
-        query = """
-            SELECT 
-                p.*,
-                -- Calculate contact count from permits table columns
-                (
-                    CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                    CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                ) as contact_count,
-                false as has_mobile,
-                -- Aggregate contact names
-                CONCAT_WS(' | ',
-                    NULLIF(COALESCE(p.permittee_business_name, p.applicant), ''),
-                    NULLIF(p.owner_business_name, ''),
-                    NULLIF(p.superintendent_business_name, ''),
-                    NULLIF(p.site_safety_mgr_business_name, '')
-                ) as contact_names,
-                -- Aggregate contact phones
-                CONCAT_WS(' | ',
-                    NULLIF(p.permittee_phone, ''),
-                    NULLIF(p.owner_phone, '')
-                ) as contact_phones,
-                b.id as building_id,
-                b.current_owner_name,
-                b.owner_name_rpad,
-                b.building_class,
-                b.land_use,
-                b.residential_units,
-                b.total_units,
-                b.num_floors,
-                b.building_sqft,
-                b.lot_sqft,
-                b.year_built,
-                b.year_altered,
-                b.assessed_land_value,
-                b.assessed_total_value,
-                b.purchase_date,
-                b.purchase_price,
-                b.mortgage_amount
-            FROM permits p
-            LEFT JOIN buildings b ON p.bbl = b.bbl
-            ORDER BY p.issue_date DESC;
-        """
-        
-        cur.execute(query)
-        permits = cur.fetchall()
-        
-        # Add lead scores
-        for permit in permits:
-            permit['lead_score'] = calculate_lead_score(permit)
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            # Query with contact information from permits table and building intelligence
+            query = """
+                SELECT 
+                    p.*,
+                    -- Calculate contact count from permits table columns
+                    (
+                        CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                        CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                    ) as contact_count,
+                    false as has_mobile,
+                    -- Aggregate contact names
+                    CONCAT_WS(' | ',
+                        NULLIF(COALESCE(p.permittee_business_name, p.applicant), ''),
+                        NULLIF(p.owner_business_name, ''),
+                        NULLIF(p.superintendent_business_name, ''),
+                        NULLIF(p.site_safety_mgr_business_name, '')
+                    ) as contact_names,
+                    -- Aggregate contact phones
+                    CONCAT_WS(' | ',
+                        NULLIF(p.permittee_phone, ''),
+                        NULLIF(p.owner_phone, '')
+                    ) as contact_phones,
+                    b.id as building_id,
+                    b.current_owner_name,
+                    b.owner_name_rpad,
+                    b.building_class,
+                    b.land_use,
+                    b.residential_units,
+                    b.total_units,
+                    b.num_floors,
+                    b.building_sqft,
+                    b.lot_sqft,
+                    b.year_built,
+                    b.year_altered,
+                    b.assessed_land_value,
+                    b.assessed_total_value,
+                    b.purchase_date,
+                    b.purchase_price,
+                    b.mortgage_amount
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                ORDER BY p.issue_date DESC;
+            """
+            
+            cur.execute(query)
+            permits = cur.fetchall()
+            
+            # Add lead scores
+            for permit in permits:
+                permit['lead_score'] = calculate_lead_score(permit)
         
         return jsonify({
             'success': True,
@@ -235,38 +221,33 @@ def get_permits():
 def get_stats():
     """Get dashboard statistics including building intelligence"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Total permits
-        cur.execute("SELECT COUNT(*) as total FROM permits;")
-        total_permits = cur.fetchone()['total']
-        
-        # Total contacts (count permits with phone numbers)
-        cur.execute("""
-            SELECT COUNT(*) as total FROM permits 
-            WHERE permittee_phone IS NOT NULL OR owner_phone IS NOT NULL;
-        """)
-        total_contacts = cur.fetchone()['total']
-        
-        # Mobile contacts (deprecated - always 0 since we don't track mobile vs landline)
-        mobile_contacts = 0
-        
-        # Building intelligence stats
-        cur.execute("SELECT COUNT(*) as total FROM buildings;")
-        total_buildings = cur.fetchone()['total']
-        
-        cur.execute("SELECT COUNT(*) as total FROM buildings WHERE current_owner_name IS NOT NULL;")
-        buildings_with_owners = cur.fetchone()['total']
-        
-        cur.execute("SELECT COUNT(*) as total FROM buildings WHERE purchase_date IS NOT NULL;")
-        buildings_with_acris = cur.fetchone()['total']
-        
-        cur.execute("SELECT COUNT(*) as total FROM permits WHERE bbl IS NOT NULL;")
-        permits_with_bbl = cur.fetchone()['total']
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            # Total permits
+            cur.execute("SELECT COUNT(*) as total FROM permits;")
+            total_permits = cur.fetchone()['total']
+            
+            # Total contacts (count permits with phone numbers)
+            cur.execute("""
+                SELECT COUNT(*) as total FROM permits 
+                WHERE permittee_phone IS NOT NULL OR owner_phone IS NOT NULL;
+            """)
+            total_contacts = cur.fetchone()['total']
+            
+            # Mobile contacts (deprecated - always 0 since we don't track mobile vs landline)
+            mobile_contacts = 0
+            
+            # Building intelligence stats
+            cur.execute("SELECT COUNT(*) as total FROM buildings;")
+            total_buildings = cur.fetchone()['total']
+            
+            cur.execute("SELECT COUNT(*) as total FROM buildings WHERE current_owner_name IS NOT NULL;")
+            buildings_with_owners = cur.fetchone()['total']
+            
+            cur.execute("SELECT COUNT(*) as total FROM buildings WHERE purchase_date IS NOT NULL;")
+            buildings_with_acris = cur.fetchone()['total']
+            
+            cur.execute("SELECT COUNT(*) as total FROM permits WHERE bbl IS NOT NULL;")
+            permits_with_bbl = cur.fetchone()['total']
         
         enrichment_rate = (buildings_with_owners / total_buildings * 100) if total_buildings > 0 else 0
         
@@ -304,42 +285,37 @@ def search_contact():
         }), 400
     
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Search permits table directly - all contacts now stored in permit columns
-        search_query = """
-            SELECT DISTINCT
-                p.id,
-                p.permit_no,
-                p.address,
-                p.job_type,
-                p.issue_date,
-                COALESCE(p.permittee_business_name, p.owner_business_name, p.superintendent_business_name, p.applicant) as contact_name,
-                COALESCE(p.permittee_phone, p.owner_phone) as contact_phone
-            FROM permits p
-            WHERE 
-                (
-                    LOWER(p.permittee_business_name) LIKE %s OR
-                    LOWER(p.owner_business_name) LIKE %s OR
-                    LOWER(p.superintendent_business_name) LIKE %s OR
-                    LOWER(p.site_safety_mgr_business_name) LIKE %s OR
-                    LOWER(p.applicant) LIKE %s OR
-                    p.permittee_phone LIKE %s OR
-                    p.owner_phone LIKE %s
-                )
-            ORDER BY p.issue_date DESC
-            LIMIT 50;
-        """
-        
-        search_pattern = f'%{query.lower()}%'
-        # Need to pass search_pattern 7 times for the 7 fields being searched
-        cur.execute(search_query, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
-        
-        results = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            # Search permits table directly - all contacts now stored in permit columns
+            search_query = """
+                SELECT DISTINCT
+                    p.id,
+                    p.permit_no,
+                    p.address,
+                    p.job_type,
+                    p.issue_date,
+                    COALESCE(p.permittee_business_name, p.owner_business_name, p.superintendent_business_name, p.applicant) as contact_name,
+                    COALESCE(p.permittee_phone, p.owner_phone) as contact_phone
+                FROM permits p
+                WHERE 
+                    (
+                        LOWER(p.permittee_business_name) LIKE %s OR
+                        LOWER(p.owner_business_name) LIKE %s OR
+                        LOWER(p.superintendent_business_name) LIKE %s OR
+                        LOWER(p.site_safety_mgr_business_name) LIKE %s OR
+                        LOWER(p.applicant) LIKE %s OR
+                        p.permittee_phone LIKE %s OR
+                        p.owner_phone LIKE %s
+                    )
+                ORDER BY p.issue_date DESC
+                LIMIT 50;
+            """
+            
+            search_pattern = f'%{query.lower()}%'
+            # Need to pass search_pattern 7 times for the 7 fields being searched
+            cur.execute(search_query, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
+            
+            results = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -359,14 +335,9 @@ def search_contact():
 def get_permit_types():
     """Get all unique permit/job types"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("SELECT DISTINCT job_type FROM permits WHERE job_type IS NOT NULL ORDER BY job_type;")
-        types = [row['job_type'] for row in cur.fetchall()]
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("SELECT DISTINCT job_type FROM permits WHERE job_type IS NOT NULL ORDER BY job_type;")
+            types = [row['job_type'] for row in cur.fetchall()]
         
         return jsonify({
             'success': True,
@@ -385,22 +356,17 @@ def get_permit_types():
 def get_job_types_chart():
     """Get job type distribution data"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT job_type, COUNT(*) as count 
-            FROM permits 
-            WHERE job_type IS NOT NULL
-            GROUP BY job_type 
-            ORDER BY count DESC 
-            LIMIT 10;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT job_type, COUNT(*) as count 
+                FROM permits 
+                WHERE job_type IS NOT NULL
+                GROUP BY job_type 
+                ORDER BY count DESC 
+                LIMIT 10;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -420,23 +386,18 @@ def get_job_types_chart():
 def get_trends_chart():
     """Get permit trends over time"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT 
-                DATE_TRUNC('month', issue_date) as month,
-                COUNT(*) as count
-            FROM permits
-            WHERE issue_date >= NOW() - INTERVAL '12 months'
-            GROUP BY month
-            ORDER BY month;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT 
+                    DATE_TRUNC('month', issue_date) as month,
+                    COUNT(*) as count
+                FROM permits
+                WHERE issue_date >= NOW() - INTERVAL '12 months'
+                GROUP BY month
+                ORDER BY month;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -456,26 +417,21 @@ def get_trends_chart():
 def get_top_applicants_chart():
     """Get top applicants by permit count"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT applicant, COUNT(*) as count
-            FROM permits
-            WHERE applicant IS NOT NULL AND applicant != ''
-            GROUP BY applicant
-            ORDER BY count DESC
-            LIMIT 10;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT applicant, COUNT(*) as count
+                FROM permits
+                WHERE applicant IS NOT NULL AND applicant != ''
+                GROUP BY applicant
+                ORDER BY count DESC
+                LIMIT 10;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
-            'labels': [row['applicant'][:30] for row in data],  # Truncate long names
+            'labels': [row['applicant'][:30] for row in data],
             'data': [row['count'] for row in data]
         })
         
@@ -491,29 +447,24 @@ def get_top_applicants_chart():
 def get_map_data():
     """Get permit data with geocoded locations for map"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT 
-                permit_no,
-                address,
-                job_type,
-                issue_date,
-                latitude,
-                longitude
-            FROM permits
-            WHERE latitude IS NOT NULL 
-                AND longitude IS NOT NULL
-                AND latitude BETWEEN -90 AND 90
-                AND longitude BETWEEN -180 AND 180
-            LIMIT 1000;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT 
+                    permit_no,
+                    address,
+                    job_type,
+                    issue_date,
+                    latitude,
+                    longitude
+                FROM permits
+                WHERE latitude IS NOT NULL 
+                    AND longitude IS NOT NULL
+                    AND latitude BETWEEN -90 AND 90
+                    AND longitude BETWEEN -180 AND 180
+                LIMIT 1000;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -533,26 +484,24 @@ def get_map_data():
 def get_permit_details(permit_id):
     """Get detailed information for a single permit"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get permit details
-        cur.execute("SELECT * FROM permits WHERE permit_id = %s;", (permit_id,))
-        permit = cur.fetchone()
-        
-        if not permit:
-            return jsonify({
-                'success': False,
-                'error': 'Permit not found'
-            }), 404
-        
-        # Build contacts array from permits table columns
-        contacts = []
-        if permit.get('permittee_business_name') or permit.get('applicant'):
-            contacts.append({
-                'name': permit.get('permittee_business_name') or permit.get('applicant'),
-                'phone': permit.get('permittee_phone'),
-                'role': 'Permittee'
+        with DatabaseConnection() as cur:
+            # Get permit details
+            cur.execute("SELECT * FROM permits WHERE permit_id = %s;", (permit_id,))
+            permit = cur.fetchone()
+            
+            if not permit:
+                return jsonify({
+                    'success': False,
+                    'error': 'Permit not found'
+                }), 404
+            
+            # Build contacts array from permits table columns
+            contacts = []
+            if permit.get('permittee_business_name') or permit.get('applicant'):
+                contacts.append({
+                    'name': permit.get('permittee_business_name') or permit.get('applicant'),
+                    'phone': permit.get('permittee_phone'),
+                    'role': 'Permittee'
             })
         if permit.get('owner_business_name'):
             contacts.append({
@@ -576,9 +525,6 @@ def get_permit_details(permit_id):
         permit['contacts'] = contacts
         permit['lead_score'] = calculate_lead_score(permit)
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'permit': permit
@@ -596,11 +542,8 @@ def get_permit_details(permit_id):
 def health_check():
     """Health check endpoint"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT 1;")
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("SELECT 1;")
         
         return jsonify({
             'success': True,
@@ -621,11 +564,9 @@ def health_check():
 def permit_detail(permit_id):
     """Serve detailed permit view page with comprehensive building information"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get permit with all details including building info
-        query = """
+        with DatabaseConnection() as cur:
+            # Get permit with all details including building info
+            query = """
             SELECT 
                 p.*,
                 -- Calculate contact count from permits table columns
@@ -688,8 +629,6 @@ def permit_detail(permit_id):
         permit = cur.fetchone()
         
         if not permit:
-            cur.close()
-            return_db_connection(conn)
             return "Permit not found", 404
         
         # Build contacts array from permits table columns
@@ -751,9 +690,6 @@ def permit_detail(permit_id):
         # Calculate lead score
         permit['lead_score'] = calculate_lead_score(permit)
         
-        cur.close()
-        return_db_connection(conn)
-        
         return render_template('permit_detail.html', 
                              permit=permit, 
                              contacts=contacts,
@@ -768,26 +704,21 @@ def permit_detail(permit_id):
 def get_buildings():
     """Get all buildings with owner and enrichment data"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        query = """
-            SELECT 
-                b.*,
-                COUNT(DISTINCT p.id) as linked_permits,
-                MAX(p.issue_date) as last_permit_date,
-                STRING_AGG(DISTINCT p.permit_no, ', ' ORDER BY p.permit_no) as permit_numbers
-            FROM buildings b
-            LEFT JOIN permits p ON b.bbl = p.bbl
-            GROUP BY b.id
-            ORDER BY b.assessed_total_value DESC NULLS LAST, b.id DESC;
-        """
-        
-        cur.execute(query)
-        buildings = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            query = """
+                SELECT 
+                    b.*,
+                    COUNT(DISTINCT p.id) as linked_permits,
+                    MAX(p.issue_date) as last_permit_date,
+                    STRING_AGG(DISTINCT p.permit_no, ', ' ORDER BY p.permit_no) as permit_numbers
+                FROM buildings b
+                LEFT JOIN permits p ON b.bbl = p.bbl
+                GROUP BY b.id
+                ORDER BY b.assessed_total_value DESC NULLS LAST, b.id DESC;
+            """
+            
+            cur.execute(query)
+            buildings = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -807,12 +738,10 @@ def get_buildings():
 def get_building_detail(building_id):
     """Get detailed building information including all permits and contacts"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get building info
-        cur.execute("SELECT * FROM buildings WHERE id = %s;", (building_id,))
-        building = cur.fetchone()
+        with DatabaseConnection() as cur:
+            # Get building info
+            cur.execute("SELECT * FROM buildings WHERE id = %s;", (building_id,))
+            building = cur.fetchone()
         
         if not building:
             return jsonify({
@@ -866,9 +795,6 @@ def get_building_detail(building_id):
         """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
         contacts = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'building': building,
@@ -888,18 +814,16 @@ def get_building_detail(building_id):
 def get_building_contacts(building_id):
     """Get all contacts for a building"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get building BBL
-        cur.execute("SELECT bbl FROM buildings WHERE id = %s;", (building_id,))
-        building = cur.fetchone()
-        
-        if not building:
-            return jsonify([])
-        
-        # Get all unique contacts from all permits for this BBL (from permits table columns)
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Get building BBL
+            cur.execute("SELECT bbl FROM buildings WHERE id = %s;", (building_id,))
+            building = cur.fetchone()
+            
+            if not building:
+                return jsonify([])
+            
+            # Get all unique contacts from all permits for this BBL (from permits table columns)
+            cur.execute("""
             SELECT DISTINCT 
                 COALESCE(p.permittee_business_name, p.applicant) as name,
                 'Permittee' as role,
@@ -943,9 +867,6 @@ def get_building_contacts(building_id):
         """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
         contacts = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify(contacts)
         
     except Exception as e:
@@ -957,16 +878,14 @@ def get_building_contacts(building_id):
 def get_seller_leads():
     """Get previous property owners (sellers) with addresses for outreach campaign"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Filter parameters
-        min_sale_price = request.args.get('min_price', type=float)
-        state_filter = request.args.get('state', type=str)
-        limit = request.args.get('limit', 100, type=int)
-        
-        # Base query - exclude banks and financial institutions
-        query = """
+        with DatabaseConnection() as cur:
+            # Filter parameters
+            min_sale_price = request.args.get('min_price', type=float)
+            state_filter = request.args.get('state', type=str)
+            limit = request.args.get('limit', 100, type=int)
+            
+            # Base query - exclude banks and financial institutions
+            query = """
             SELECT 
                 b.id as building_id,
                 b.bbl,
@@ -1074,9 +993,6 @@ def get_seller_leads():
                 print(f"Error formatting lead: {lead_error}")
                 continue
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'leads': formatted_leads,
             'total': len(formatted_leads)
@@ -1093,28 +1009,23 @@ def get_seller_leads():
 def get_top_owners():
     """Get top property owners by permit activity"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT 
-                b.current_owner_name,
-                COUNT(DISTINCT p.id) as permit_count,
-                COUNT(DISTINCT b.id) as building_count,
-                SUM(COALESCE(b.total_permit_spend, 0)) as total_spend
-            FROM buildings b
-            INNER JOIN permits p ON b.bbl = p.bbl
-            WHERE b.current_owner_name IS NOT NULL
-            GROUP BY b.current_owner_name
-            HAVING COUNT(DISTINCT p.id) > 0
-            ORDER BY permit_count DESC
-            LIMIT 15;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT 
+                    b.current_owner_name,
+                    COUNT(DISTINCT p.id) as permit_count,
+                    COUNT(DISTINCT b.id) as building_count,
+                    SUM(COALESCE(b.total_permit_spend, 0)) as total_spend
+                FROM buildings b
+                INNER JOIN permits p ON b.bbl = p.bbl
+                WHERE b.current_owner_name IS NOT NULL
+                GROUP BY b.current_owner_name
+                HAVING COUNT(DISTINCT p.id) > 0
+                ORDER BY permit_count DESC
+                LIMIT 15;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -1136,10 +1047,8 @@ def get_top_owners():
 def get_building_age_distribution():
     """Get distribution of building ages"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            cur.execute("""
             SELECT 
                 CASE 
                     WHEN year_built >= 2020 THEN '2020+'
@@ -1162,9 +1071,6 @@ def get_building_age_distribution():
         
         data = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'labels': [row['age_range'] for row in data],
@@ -1183,40 +1089,35 @@ def get_building_age_distribution():
 def get_unit_distribution():
     """Get distribution of building sizes by unit count"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT 
-                CASE 
-                    WHEN residential_units = 1 THEN 'Single Family'
-                    WHEN residential_units BETWEEN 2 AND 4 THEN '2-4 Units'
-                    WHEN residential_units BETWEEN 5 AND 9 THEN '5-9 Units'
-                    WHEN residential_units BETWEEN 10 AND 19 THEN '10-19 Units'
-                    WHEN residential_units BETWEEN 20 AND 49 THEN '20-49 Units'
-                    WHEN residential_units >= 50 THEN '50+ Units'
-                    ELSE 'Unknown'
-                END as size_category,
-                COUNT(*) as count
-            FROM buildings
-            WHERE residential_units IS NOT NULL
-            GROUP BY size_category
-            ORDER BY 
-                CASE size_category
-                    WHEN 'Single Family' THEN 1
-                    WHEN '2-4 Units' THEN 2
-                    WHEN '5-9 Units' THEN 3
-                    WHEN '10-19 Units' THEN 4
-                    WHEN '20-49 Units' THEN 5
-                    WHEN '50+ Units' THEN 6
-                    ELSE 7
-                END;
-        """)
-        
-        data = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT 
+                    CASE 
+                        WHEN residential_units = 1 THEN 'Single Family'
+                        WHEN residential_units BETWEEN 2 AND 4 THEN '2-4 Units'
+                        WHEN residential_units BETWEEN 5 AND 9 THEN '5-9 Units'
+                        WHEN residential_units BETWEEN 10 AND 19 THEN '10-19 Units'
+                        WHEN residential_units BETWEEN 20 AND 49 THEN '20-49 Units'
+                        WHEN residential_units >= 50 THEN '50+ Units'
+                        ELSE 'Unknown'
+                    END as size_category,
+                    COUNT(*) as count
+                FROM buildings
+                WHERE residential_units IS NOT NULL
+                GROUP BY size_category
+                ORDER BY 
+                    CASE size_category
+                        WHEN 'Single Family' THEN 1
+                        WHEN '2-4 Units' THEN 2
+                        WHEN '5-9 Units' THEN 3
+                        WHEN '10-19 Units' THEN 4
+                        WHEN '20-49 Units' THEN 5
+                        WHEN '50+ Units' THEN 6
+                        ELSE 7
+                    END;
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -1236,11 +1137,9 @@ def get_unit_distribution():
 def get_permit_detail(permit_id):
     """API endpoint for getting single permit details (JSON)"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get permit with all details including contact info from permits table
-        query = """
+        with DatabaseConnection() as cur:
+            # Get permit with all details including contact info from permits table
+            query = """
             SELECT 
                 p.*,
                 -- Calculate contact count from permits table columns
@@ -1269,8 +1168,6 @@ def get_permit_detail(permit_id):
         permit = cur.fetchone()
         
         if not permit:
-            cur.close()
-            return_db_connection(conn)
             return jsonify({
                 'success': False,
                 'error': 'Permit not found'
@@ -1278,9 +1175,6 @@ def get_permit_detail(permit_id):
         
         # Calculate lead score
         permit['lead_score'] = calculate_lead_score(permit)
-        
-        cur.close()
-        return_db_connection(conn)
         
         return jsonify({
             'success': True,
@@ -1307,13 +1201,11 @@ def construction():
 def get_construction_permits():
     """Get filtered permits for construction page with advanced filtering"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get filter parameters
-        job_types = request.args.getlist('job_type')  # Can be multiple
-        borough = request.args.get('borough')
-        days = request.args.get('days', '30')  # Can be 'all' or number
+        with DatabaseConnection() as cur:
+            # Get filter parameters
+            job_types = request.args.getlist('job_type')
+            borough = request.args.get('borough')
+            days = request.args.get('days', '30')
         min_lead_score = request.args.get('min_score', 0, type=int)
         has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
         sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
@@ -1440,9 +1332,6 @@ def get_construction_permits():
         if sort_by == 'score':
             results.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'permits': results,
@@ -1477,43 +1366,41 @@ def get_construction_permits():
 def get_construction_stats():
     """Get quick stats for construction dashboard"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        days = request.args.get('days', '30')
-        
-        # Build WHERE clause based on time period
-        if days == 'all':
-            where_clause = "WHERE 1=1"
-            params = ()
-        else:
-            days_int = int(days)
-            where_clause = "WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-            params = (days_int,)
-        
-        # Total permits in time period
-        cur.execute(f"""
-            SELECT COUNT(*) as total
-            FROM permits
-            {where_clause}
-        """, params)
-        total_permits = cur.fetchone()['total']
-        
-        # Permits with contacts
-        cur.execute(f"""
-            SELECT COUNT(*) as total
-            FROM permits
-            {where_clause}
-            AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL)
-        """, params)
-        with_contacts = cur.fetchone()['total']
-        
-        # Hot leads (estimated with contact count > 0 and recent)
-        if days == 'all':
-            hot_params = ()
-            hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
-        else:
-            hot_params = params
+        with DatabaseConnection() as cur:
+            days = request.args.get('days', '30')
+            
+            # Build WHERE clause based on time period
+            if days == 'all':
+                where_clause = "WHERE 1=1"
+                params = ()
+            else:
+                days_int = int(days)
+                where_clause = "WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+                params = (days_int,)
+            
+            # Total permits in time period
+            cur.execute(f"""
+                SELECT COUNT(*) as total
+                FROM permits
+                {where_clause}
+            """, params)
+            total_permits = cur.fetchone()['total']
+            
+            # Permits with contacts
+            cur.execute(f"""
+                SELECT COUNT(*) as total
+                FROM permits
+                {where_clause}
+                AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL)
+            """, params)
+            with_contacts = cur.fetchone()['total']
+            
+            # Hot leads (estimated with contact count > 0 and recent)
+            if days == 'all':
+                hot_params = ()
+                hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
+            else:
+                hot_params = params
             hot_where = f"{where_clause} AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
             
         cur.execute(f"""
@@ -1555,9 +1442,6 @@ def get_construction_stats():
         """, params)
         boroughs = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'stats': {
@@ -1582,14 +1466,12 @@ def get_construction_stats():
 def get_construction_map_data():
     """Get geocoded permits for map visualization"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        days = request.args.get('days', '30')
-        job_types = request.args.getlist('job_type')
-        borough = request.args.get('borough')
-        
-        query = """
+        with DatabaseConnection() as cur:
+            days = request.args.get('days', '30')
+            job_types = request.args.getlist('job_type')
+            borough = request.args.get('borough')
+            
+            query = """
             SELECT 
                 p.id,
                 p.permit_no,
@@ -1642,9 +1524,6 @@ def get_construction_map_data():
             loc_dict['lead_score'] = calculate_lead_score(loc)
             locations_with_scores.append(loc_dict)
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'locations': locations_with_scores,
@@ -1663,11 +1542,9 @@ def get_construction_map_data():
 def get_top_contractors():
     """Get top contractors by permit activity"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        days = request.args.get('days', 90, type=int)
-        limit_count = request.args.get('limit', 20, type=int)
+        with DatabaseConnection() as cur:
+            days = request.args.get('days', 90, type=int)
+            limit_count = request.args.get('limit', 20, type=int)
         
         # Top contractors by permit count
         query = """
@@ -1688,9 +1565,6 @@ def get_top_contractors():
         
         cur.execute(query, (days, limit_count))
         contractors = cur.fetchall()
-        
-        cur.close()
-        return_db_connection(conn)
         
         return jsonify({
             'success': True,
@@ -1715,15 +1589,13 @@ def export_construction_permits():
         from io import StringIO
         from flask import make_response
         
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get same filters as main query
-        job_types = request.args.getlist('job_type')
-        borough = request.args.get('borough')
-        days = request.args.get('days', 30, type=int)
-        
-        query = """
+        with DatabaseConnection() as cur:
+            # Get same filters as main query
+            job_types = request.args.getlist('job_type')
+            borough = request.args.get('borough')
+            days = request.args.get('days', 30, type=int)
+            
+            query = """
             SELECT 
                 p.permit_no,
                 p.job_type,
@@ -1791,9 +1663,6 @@ def export_construction_permits():
                 permit['building_sqft'],
                 permit['current_owner_name']
             ])
-        
-        cur.close()
-        return_db_connection(conn)
         
         # Create response
         output = make_response(si.getvalue())
@@ -2053,15 +1922,13 @@ def api_search():
         return jsonify([])
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        with DatabaseConnection() as cur:
+            # helper to build AND-joined ILIKE clauses (field ILIKE %t1% AND field ILIKE %t2% ...)
+            def and_like_clause(field, tok_count):
+                return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
 
-        # helper to build AND-joined ILIKE clauses (field ILIKE %t1% AND field ILIKE %t2% ...)
-        def and_like_clause(field, tok_count):
-            return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
-
-        # Build clauses and params
-        tok_count = len(tokens)
+            # Build clauses and params
+            tok_count = len(tokens)
         addr_clause = and_like_clause('b.address', tok_count)
         owner_clause = and_like_clause('b.current_owner_name', tok_count)
         owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
@@ -2155,9 +2022,7 @@ def api_search():
 
         cur.execute(sql, tuple(exec_params))
         results = cur.fetchall()
-        cur.close()
-        return_db_connection(conn)
-
+        
         return jsonify([dict(r) for r in results])
 
     except Exception as e:
@@ -2177,20 +2042,19 @@ def api_suggest():
         return jsonify([])
     
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        # Tokenize query so multi-word input works regardless of order
-        tokens = [t.strip() for t in query.split() if t.strip()]
-        tok_count = len(tokens)
+        with DatabaseConnection() as cur:
+            # Tokenize query so multi-word input works regardless of order
+            tokens = [t.strip() for t in query.split() if t.strip()]
+            tok_count = len(tokens)
+            
+            def and_like_clause(field, tok_count):
+                return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
 
-        def and_like_clause(field, tok_count):
-            return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
-
-        addr_clause = and_like_clause('b.address', tok_count)
-        owner_clause = and_like_clause('b.current_owner_name', tok_count)
-        owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
-        owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
-        contact_clause = and_like_clause('LOWER(c.name)', tok_count)
+            addr_clause = and_like_clause('b.address', tok_count)
+            owner_clause = and_like_clause('b.current_owner_name', tok_count)
+            owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
+            owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
+            contact_clause = and_like_clause('LOWER(c.name)', tok_count)
 
         params = []
         params += [f"%{t}%" for t in tokens]         # addr
@@ -2245,9 +2109,7 @@ def api_suggest():
 
         cur.execute(sql, tuple(exec_params))
         results = cur.fetchall()
-        cur.close()
-        return_db_connection(conn)
-
+        
         return jsonify([dict(r) for r in results])
 
     except Exception as e:
@@ -2261,11 +2123,9 @@ def api_suggest():
 def api_market_stats():
     """Market statistics for homepage"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Active permits (all permits with valid dates)
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Active permits (all permits with valid dates)
+            cur.execute("""
             SELECT COUNT(*) as count
             FROM permits
             WHERE issue_date IS NOT NULL
@@ -2296,9 +2156,6 @@ def api_market_stats():
         """)
         qualified_leads = cur.fetchone()['count']
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'activePermits': active_permits,
             'recentSales': recent_sales,
@@ -2320,11 +2177,9 @@ def api_market_stats():
 def api_property_detail(bbl):
     """Get comprehensive property data"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get building data
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Get building data
+            cur.execute("""
             SELECT *
             FROM buildings
             WHERE bbl = %s
@@ -2403,9 +2258,6 @@ def api_property_detail(bbl):
         """, (bbl, bbl, bbl, bbl))
         contacts = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'building': dict(building),
@@ -2457,13 +2309,11 @@ def api_properties():
     - per_page: Results per page (default 50, max 200)
     """
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Parse query parameters
-        search = request.args.get('search', '').strip()
-        owner = request.args.get('owner', '').strip()
-        min_value = request.args.get('min_value', type=float)
+        with DatabaseConnection() as cur:
+            # Parse query parameters
+            search = request.args.get('search', '').strip()
+            owner = request.args.get('owner', '').strip()
+            min_value = request.args.get('min_value', type=float)
         max_value = request.args.get('max_value', type=float)
         min_sale_price = request.args.get('min_sale_price', type=float)
         max_sale_price = request.args.get('max_sale_price', type=float)
@@ -2666,9 +2516,6 @@ def api_properties():
         cur.execute(query, params + [per_page, offset])
         properties = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'properties': [dict(p) for p in properties],
@@ -2694,11 +2541,9 @@ def api_properties():
 def api_owner_portfolio(owner_name):
     """Get all properties owned by a specific person/entity"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Search across all owner name fields
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Search across all owner name fields
+            cur.execute("""
             SELECT 
                 b.id,
                 b.bbl,
@@ -2735,9 +2580,6 @@ def api_owner_portfolio(owner_name):
         total_units = sum(p['total_units'] or 0 for p in properties)
         cash_purchases = sum(1 for p in properties if p['is_cash_purchase'])
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'owner_name': owner_name,
@@ -2763,10 +2605,8 @@ def api_owner_portfolio(owner_name):
 def api_properties_stats():
     """Get aggregate statistics for properties"""
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            cur.execute("""
             SELECT 
                 COUNT(*) as total_properties,
                 COUNT(CASE WHEN acris_last_enriched IS NOT NULL THEN 1 END) as with_acris,
@@ -2780,9 +2620,6 @@ def api_properties_stats():
         """)
         
         stats = cur.fetchone()
-        
-        cur.close()
-        return_db_connection(conn)
         
         return jsonify({
             'success': True,
@@ -2826,12 +2663,10 @@ def api_contractors_search():
     - per_page: Results per page (default 50, max 200)
     """
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Parse query parameters
-        search = request.args.get('search', '').strip()
-        sort_by = request.args.get('sort_by', 'total_jobs')
+        with DatabaseConnection() as cur:
+            # Parse query parameters
+            search = request.args.get('search', '').strip()
+            sort_by = request.args.get('sort_by', 'total_jobs')
         sort_order = request.args.get('sort_order', 'desc').lower()
         page = max(1, request.args.get('page', 1, type=int))
         per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
@@ -2907,9 +2742,6 @@ def api_contractors_search():
         cur.execute(count_query, search_params)
         total = cur.fetchone()['count']
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'contractors': [dict(c) for c in contractors],
@@ -2935,11 +2767,9 @@ def api_contractor_profile(contractor_name):
     Get detailed contractor profile with permits and buildings
     """
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Get contractor stats
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Get contractor stats
+            cur.execute("""
             SELECT 
                 p.applicant as contractor_name,
                 p.permittee_license_number as license,
@@ -2963,8 +2793,6 @@ def api_contractor_profile(contractor_name):
         stats = cur.fetchone()
         
         if not stats:
-            cur.close()
-            return_db_connection(conn)
             return jsonify({'success': False, 'error': 'Contractor not found'}), 404
         
         # Get permits (most recent first)
@@ -3017,9 +2845,6 @@ def api_contractor_profile(contractor_name):
         
         buildings = cur.fetchall()
         
-        cur.close()
-        return_db_connection(conn)
-        
         return jsonify({
             'success': True,
             'contractor': dict(stats),
@@ -3045,14 +2870,12 @@ def api_building_profile(bbl):
     Returns everything needed for the social media-style building profile
     """
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Set statement timeout to 30 seconds
-        cur.execute("SET statement_timeout = 30000")
-        
-        # ===== 1. BUILDING CORE DATA (70+ fields from all sources) =====
-        cur.execute("""
+        with DatabaseConnection() as cur:
+            # Set statement timeout to 30 seconds
+            cur.execute("SET statement_timeout = 30000")
+            
+            # ===== 1. BUILDING CORE DATA (70+ fields from all sources) =====
+            cur.execute("""
             SELECT 
                 id, bbl, address, CAST(borough AS TEXT) as borough, block, lot,
                 -- PLUTO data
@@ -3086,8 +2909,6 @@ def api_building_profile(bbl):
         building = cur.fetchone()
         
         if not building:
-            cur.close()
-            return_db_connection(conn)
             return jsonify({'success': False, 'error': 'Property not found'}), 404
         
         building_id = building['id']
@@ -3322,9 +3143,6 @@ def api_building_profile(bbl):
         # Only add contractors without phones if we have very few contacts
         if len(contacts) < 5:
             contacts.extend(list(contractors_no_phone.values())[:10])
-        
-        cur.close()
-        return_db_connection(conn)
         
         return jsonify({
             'success': True,

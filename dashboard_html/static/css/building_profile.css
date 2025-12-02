@@ -955,6 +955,111 @@
    VIOLATIONS TAB
    ============================================================================ */
 
+/* Total violations owed banner */
+.total-violations-owed {
+    background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+    border-radius: 10px;
+    padding: 12px 20px;
+    margin-bottom: 25px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.3);
+    border: 2px solid #fca5a5;
+}
+
+.total-owed-icon {
+    font-size: 24px;
+    line-height: 1;
+}
+
+.total-owed-content {
+    text-align: center;
+}
+
+.total-owed-label {
+    color: #fef2f2;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+}
+
+.total-owed-amount {
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 800;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Side-by-side layout for ECB and HPD violations */
+.violations-side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    margin-bottom: 30px;
+}
+
+.violations-column {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 20px;
+    border: 2px solid #e2e8f0;
+}
+
+.violations-column h3 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0 0 20px 0;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.violation-amount-header {
+    font-size: 16px;
+    font-weight: 700;
+    color: #dc2626;
+    background: #fef2f2;
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 2px solid #fecaca;
+}
+
+.violation-summary {
+    background: #f1f5f9;
+    padding: 10px 15px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    font-size: 14px;
+    color: #475569;
+    font-weight: 600;
+}
+
+/* DOB Violations Summary (below side-by-side) */
+.dob-violations-summary {
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 20px;
+    border: 2px solid #e2e8f0;
+    margin-top: 20px;
+}
+
+.dob-violations-summary h4 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0 0 15px 0;
+}
+
+/* Old violations grid (kept for compatibility) */
 .violations-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
