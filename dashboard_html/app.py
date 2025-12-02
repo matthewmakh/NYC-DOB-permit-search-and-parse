@@ -1162,19 +1162,19 @@ def get_permit_detail(permit_id):
                 ) as contact_phones
             FROM permits p
             WHERE p.id = %s;
-        """
-        
-        cur.execute(query, (permit_id,))
-        permit = cur.fetchone()
-        
-        if not permit:
-            return jsonify({
-                'success': False,
-                'error': 'Permit not found'
-            }), 404
-        
-        # Calculate lead score
-        permit['lead_score'] = calculate_lead_score(permit)
+            """
+            
+            cur.execute(query, (permit_id,))
+            permit = cur.fetchone()
+            
+            if not permit:
+                return jsonify({
+                    'success': False,
+                    'error': 'Permit not found'
+                }), 404
+            
+            # Calculate lead score
+            permit['lead_score'] = calculate_lead_score(permit)
         
         return jsonify({
             'success': True,
@@ -2899,270 +2899,270 @@ def api_building_profile(bbl):
                 last_updated
             FROM buildings
             WHERE bbl = %s
-        """, (bbl,))
-        
-        building = cur.fetchone()
-        
-        if not building:
-            return jsonify({'success': False, 'error': 'Property not found'}), 404
-        
-        building_id = building['id']
-        
-        # ===== 2. PERMITS (All construction activity) =====
-        cur.execute("""
+            """, (bbl,))
+            
+            building = cur.fetchone()
+            
+            if not building:
+                return jsonify({'success': False, 'error': 'Property not found'}), 404
+            
+            building_id = building['id']
+            
+            # ===== 2. PERMITS (All construction activity) =====
+            cur.execute("""
             SELECT 
                 permit_no, job_type, address, applicant,
                 stories, total_units, use_type, issue_date, link,
-                permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
-                owner_business_name, owner_phone,
-                superintendent_business_name, site_safety_mgr_business_name,
-                work_type, permit_status, filing_status
-            FROM permits
-            WHERE bbl = %s
-            ORDER BY issue_date DESC
-        """, (bbl,))
-        permits = cur.fetchall()
+                    permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
+                    owner_business_name, owner_phone,
+                    superintendent_business_name, site_safety_mgr_business_name,
+                    work_type, permit_status, filing_status
+                FROM permits
+                WHERE bbl = %s
+                ORDER BY issue_date DESC
+            """, (bbl,))
+            permits = cur.fetchall()
         
-        # ===== 3. ACRIS TRANSACTIONS (Complete transaction history) =====
-        cur.execute("""
-            SELECT 
-                document_id, doc_type, doc_amount, doc_date, recorded_date,
-                percent_transferred, crfn, is_primary_deed, is_primary_mortgage
-            FROM acris_transactions
-            WHERE building_id = %s
-            ORDER BY recorded_date DESC
-        """, (building_id,))
-        transactions = cur.fetchall()
+            # ===== 3. ACRIS TRANSACTIONS (Complete transaction history) =====
+            cur.execute("""
+                SELECT 
+                    document_id, doc_type, doc_amount, doc_date, recorded_date,
+                    percent_transferred, crfn, is_primary_deed, is_primary_mortgage
+                FROM acris_transactions
+                WHERE building_id = %s
+                ORDER BY recorded_date DESC
+            """, (building_id,))
+            transactions = cur.fetchall()
         
-        # ===== 4. ACRIS PARTIES (Buyers, Sellers, Lenders with addresses) =====
-        cur.execute("""
-            SELECT 
-                ap.party_type, ap.party_name,
-                ap.address_1, ap.address_2, ap.city, ap.state, ap.zip_code, ap.country,
-                at.doc_type, at.doc_amount, at.recorded_date, at.document_id
-            FROM acris_parties ap
-            JOIN acris_transactions at ON ap.transaction_id = at.id
-            WHERE at.building_id = %s
-            ORDER BY at.recorded_date DESC, ap.party_type
-        """, (building_id,))
-        parties = cur.fetchall()
+            # ===== 4. ACRIS PARTIES (Buyers, Sellers, Lenders with addresses) =====
+            cur.execute("""
+                SELECT 
+                    ap.party_type, ap.party_name,
+                    ap.address_1, ap.address_2, ap.city, ap.state, ap.zip_code, ap.country,
+                    at.doc_type, at.doc_amount, at.recorded_date, at.document_id
+                FROM acris_parties ap
+                JOIN acris_transactions at ON ap.transaction_id = at.id
+                WHERE at.building_id = %s
+                ORDER BY at.recorded_date DESC, ap.party_type
+            """, (building_id,))
+            parties = cur.fetchall()
         
-        # ===== 5. OWNER SOURCES (Deduplicate and organize) =====
-        owners = {
-            'pluto': building['current_owner_name'],
-            'rpad': building['owner_name_rpad'],
-            'hpd': building['owner_name_hpd'],
-            'ecb': building['ecb_respondent_name']
-        }
-        
-        # ===== 6. CALCULATE RISK SCORE =====
-        risk_factors = []
-        risk_score = 0
-        
-        # Tax delinquency (30 points)
-        if building['has_tax_delinquency']:
-            if building['tax_delinquency_water_only']:
-                risk_score += 10
-                risk_factors.append({'factor': 'Water Debt', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} water delinquency notices"})
-            else:
-                risk_score += 30
-                risk_factors.append({'factor': 'Property Tax Delinquency', 'severity': 'high', 'points': 30, 'details': f"{building['tax_delinquency_count']} tax delinquency notices"})
-        
-        # ECB violations with outstanding balance (40 points max)
-        if building['ecb_total_balance'] and building['ecb_total_balance'] > 0:
-            if building['ecb_total_balance'] > 100000:
-                points = 40
-                severity = 'critical'
-            elif building['ecb_total_balance'] > 50000:
-                points = 30
-                severity = 'high'
-            elif building['ecb_total_balance'] > 10000:
-                points = 20
-                severity = 'moderate'
-            else:
-                points = 10
-                severity = 'low'
-            risk_score += points
-            risk_factors.append({
-                'factor': 'ECB Outstanding Balance',
-                'severity': severity,
-                'points': points,
-                'details': f"${building['ecb_total_balance']:,.2f} due, {building['ecb_open_violations']} open violations"
-            })
-        
-        # Open DOB violations (15 points)
-        if building['dob_open_violations'] and building['dob_open_violations'] > 5:
-            points = 15
-            risk_score += points
-            risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
-        elif building['dob_open_violations'] and building['dob_open_violations'] > 0:
-            points = 5
-            risk_score += points
-            risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'low', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
-        
-        # HPD violations (15 points)
-        if building['hpd_total_violations'] and building['hpd_total_violations'] > 10:
-            points = 15
-            risk_score += points
-            risk_factors.append({'factor': 'HPD Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
-        elif building['hpd_total_violations'] and building['hpd_total_violations'] > 0:
-            points = 5
-            risk_score += points
-            risk_factors.append({'factor': 'HPD Violations', 'severity': 'low', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
-        
-        # Determine risk level
-        if risk_score >= 60:
-            risk_level = 'critical'
-            risk_label = 'CRITICAL RISK'
-            risk_color = 'red'
-        elif risk_score >= 40:
-            risk_level = 'high'
-            risk_label = 'HIGH RISK'
-            risk_color = 'red'
-        elif risk_score >= 20:
-            risk_level = 'moderate'
-            risk_label = 'MODERATE RISK'
-            risk_color = 'yellow'
-        elif risk_score > 0:
-            risk_level = 'low'
-            risk_label = 'LOW RISK'
-            risk_color = 'yellow'
-        else:
-            risk_level = 'minimal'
-            risk_label = 'MINIMAL RISK'
-            risk_color = 'green'
-        
-        # ===== 7. BUILDING CLASS TRANSLATION =====
-        building_class_desc = translate_building_class(building['building_class'])
-        
-        # ===== 8. ACTIVITY TIMELINE (Combine all events) =====
-        activity_timeline = []
-        
-        # Add permits to timeline
-        for permit in permits:
-            if permit['issue_date']:
-                activity_timeline.append({
-                    'date': permit['issue_date'],
-                    'type': 'permit',
-                    'icon': '🔨',
-                    'title': f"{permit['job_type']} Permit Filed",
-                    'description': f"{permit['work_type'] or 'Work'} - {permit['applicant']}",
-                    'permit_no': permit['permit_no']
-                })
-        
-        # Add transactions to timeline
-        for txn in transactions:
-            if txn['recorded_date']:
-                icon = '🏠' if txn['doc_type'] in ['DEED', 'DEEDO'] else '🏦' if txn['doc_type'] in ['MTGE', 'AGMT'] else '✅' if txn['doc_type'] in ['SAT', 'SATF'] else '📄'
-                activity_timeline.append({
-                    'date': txn['recorded_date'],
-                    'type': 'transaction',
-                    'icon': icon,
-                    'title': f"{txn['doc_type']} - ${txn['doc_amount']:,.0f}" if txn['doc_amount'] else txn['doc_type'],
-                    'description': f"Document ID: {txn['document_id']}",
-                    'crfn': txn['crfn']
-                })
-        
-        # Sort timeline by date descending
-        activity_timeline.sort(key=lambda x: x['date'], reverse=True)
-        
-        # ===== 9. CONTACT AGGREGATION =====
-        contacts = []
-        
-        # Option 1: Get from contacts table (if linked to permits)
-        cur.execute("""
-            SELECT DISTINCT c.name, c.phone, c.role, c.is_mobile, c.line_type, c.carrier_name
-            FROM contacts c
-            JOIN permit_contacts pc ON c.id = pc.contact_id
-            JOIN permits p ON pc.permit_id = p.id
-            WHERE p.bbl = %s AND c.phone IS NOT NULL
-        """, (bbl,))
-        
-        contacts_from_db = cur.fetchall()
-        for contact in contacts_from_db:
-            contacts.append({
-                'name': contact['name'],
-                'phone': contact['phone'],
-                'role': contact['role'] or 'Contact',
-                'is_mobile': contact['is_mobile'],
-                'line_type': contact['line_type'],
-                'carrier': contact['carrier_name']
-            })
-        
-        # Option 2: Get unique contractors from permits (with phone numbers)
-        contractor_contacts = {}
-        for permit in permits:
-            # Permittee with phone
-            if permit['permittee_business_name'] and permit['permittee_phone']:
-                key = permit['permittee_business_name']
-                if key not in contractor_contacts:
-                    contractor_contacts[key] = {
-                        'name': permit['permittee_business_name'],
-                        'phone': permit['permittee_phone'],
-                        'role': 'Contractor/Permittee',
-                        'license': permit['permittee_license_type'],
-                        'permit_count': 0
-                    }
-                contractor_contacts[key]['permit_count'] += 1
-            
-            # Owner with phone
-            if permit['owner_business_name'] and permit['owner_phone']:
-                key = f"owner_{permit['owner_business_name']}"
-                if key not in contractor_contacts:
-                    contractor_contacts[key] = {
-                        'name': permit['owner_business_name'],
-                        'phone': permit['owner_phone'],
-                        'role': 'Property Owner',
-                        'permit_count': 0
-                    }
-                contractor_contacts[key]['permit_count'] += 1
-        
-        contacts.extend(contractor_contacts.values())
-        
-        # Option 3: Contractors without phone numbers (fallback)
-        contractors_no_phone = {}
-        for permit in permits:
-            if permit['permittee_business_name'] and not permit['permittee_phone']:
-                key = permit['permittee_business_name']
-                if key not in contractor_contacts and key not in contractors_no_phone:
-                    contractors_no_phone[key] = {
-                        'name': permit['permittee_business_name'],
-                        'phone': None,
-                        'role': 'Contractor/Permittee',
-                        'license': permit['permittee_license_type'],
-                        'permit_count': 0
-                    }
-                if key in contractors_no_phone:
-                    contractors_no_phone[key]['permit_count'] += 1
-        
-        # Only add contractors without phones if we have very few contacts
-        if len(contacts) < 5:
-            contacts.extend(list(contractors_no_phone.values())[:10])
-        
-        return jsonify({
-            'success': True,
-            'building': dict(building),
-            'building_class_description': building_class_desc,
-            'owners': owners,
-            'risk_assessment': {
-                'score': risk_score,
-                'level': risk_level,
-                'label': risk_label,
-                'color': risk_color,
-                'factors': risk_factors
-            },
-            'permits': [dict(p) for p in permits],
-            'transactions': [dict(t) for t in transactions],
-            'parties': [dict(p) for p in parties],
-            'activity_timeline': activity_timeline[:50],  # Last 50 events
-            'contacts': contacts,
-            'stats': {
-                'total_permits': len(permits),
-                'total_transactions': len(transactions),
-                'total_contacts': len(contacts),
-                'years_owned': round(building['days_since_sale'] / 365, 1) if building['days_since_sale'] else None
+            # ===== 5. OWNER SOURCES (Deduplicate and organize) =====
+            owners = {
+                'pluto': building['current_owner_name'],
+                'rpad': building['owner_name_rpad'],
+                'hpd': building['owner_name_hpd'],
+                'ecb': building['ecb_respondent_name']
             }
-        })
+        
+            # ===== 6. CALCULATE RISK SCORE =====
+            risk_factors = []
+            risk_score = 0
+        
+            # Tax delinquency (30 points)
+            if building['has_tax_delinquency']:
+                if building['tax_delinquency_water_only']:
+                    risk_score += 10
+                    risk_factors.append({'factor': 'Water Debt', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} water delinquency notices"})
+                else:
+                    risk_score += 30
+                    risk_factors.append({'factor': 'Property Tax Delinquency', 'severity': 'high', 'points': 30, 'details': f"{building['tax_delinquency_count']} tax delinquency notices"})
+        
+            # ECB violations with outstanding balance (40 points max)
+            if building['ecb_total_balance'] and building['ecb_total_balance'] > 0:
+                if building['ecb_total_balance'] > 100000:
+                    points = 40
+                    severity = 'critical'
+                elif building['ecb_total_balance'] > 50000:
+                    points = 30
+                    severity = 'high'
+                elif building['ecb_total_balance'] > 10000:
+                    points = 20
+                    severity = 'moderate'
+                else:
+                    points = 10
+                    severity = 'low'
+                risk_score += points
+                risk_factors.append({
+                    'factor': 'ECB Outstanding Balance',
+                    'severity': severity,
+                    'points': points,
+                    'details': f"${building['ecb_total_balance']:,.2f} due, {building['ecb_open_violations']} open violations"
+                })
+        
+            # Open DOB violations (15 points)
+            if building['dob_open_violations'] and building['dob_open_violations'] > 5:
+                points = 15
+                risk_score += points
+                risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
+            elif building['dob_open_violations'] and building['dob_open_violations'] > 0:
+                points = 5
+                risk_score += points
+                risk_factors.append({'factor': 'DOB Open Violations', 'severity': 'low', 'points': points, 'details': f"{building['dob_open_violations']} open building code violations"})
+        
+            # HPD violations (15 points)
+            if building['hpd_total_violations'] and building['hpd_total_violations'] > 10:
+                points = 15
+                risk_score += points
+                risk_factors.append({'factor': 'HPD Violations', 'severity': 'moderate', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
+            elif building['hpd_total_violations'] and building['hpd_total_violations'] > 0:
+                points = 5
+                risk_score += points
+                risk_factors.append({'factor': 'HPD Violations', 'severity': 'low', 'points': points, 'details': f"{building['hpd_total_violations']} housing violations"})
+        
+            # Determine risk level
+            if risk_score >= 60:
+                risk_level = 'critical'
+                risk_label = 'CRITICAL RISK'
+                risk_color = 'red'
+            elif risk_score >= 40:
+                risk_level = 'high'
+                risk_label = 'HIGH RISK'
+                risk_color = 'red'
+            elif risk_score >= 20:
+                risk_level = 'moderate'
+                risk_label = 'MODERATE RISK'
+                risk_color = 'yellow'
+            elif risk_score > 0:
+                risk_level = 'low'
+                risk_label = 'LOW RISK'
+                risk_color = 'yellow'
+            else:
+                risk_level = 'minimal'
+                risk_label = 'MINIMAL RISK'
+                risk_color = 'green'
+        
+            # ===== 7. BUILDING CLASS TRANSLATION =====
+            building_class_desc = translate_building_class(building['building_class'])
+        
+            # ===== 8. ACTIVITY TIMELINE (Combine all events) =====
+            activity_timeline = []
+        
+            # Add permits to timeline
+            for permit in permits:
+                if permit['issue_date']:
+                    activity_timeline.append({
+                        'date': permit['issue_date'],
+                        'type': 'permit',
+                        'icon': '🔨',
+                        'title': f"{permit['job_type']} Permit Filed",
+                        'description': f"{permit['work_type'] or 'Work'} - {permit['applicant']}",
+                        'permit_no': permit['permit_no']
+                    })
+        
+            # Add transactions to timeline
+            for txn in transactions:
+                if txn['recorded_date']:
+                    icon = '🏠' if txn['doc_type'] in ['DEED', 'DEEDO'] else '🏦' if txn['doc_type'] in ['MTGE', 'AGMT'] else '✅' if txn['doc_type'] in ['SAT', 'SATF'] else '📄'
+                    activity_timeline.append({
+                        'date': txn['recorded_date'],
+                        'type': 'transaction',
+                        'icon': icon,
+                        'title': f"{txn['doc_type']} - ${txn['doc_amount']:,.0f}" if txn['doc_amount'] else txn['doc_type'],
+                        'description': f"Document ID: {txn['document_id']}",
+                        'crfn': txn['crfn']
+                    })
+        
+            # Sort timeline by date descending
+            activity_timeline.sort(key=lambda x: x['date'], reverse=True)
+        
+            # ===== 9. CONTACT AGGREGATION =====
+            contacts = []
+        
+            # Option 1: Get from contacts table (if linked to permits)
+            cur.execute("""
+                SELECT DISTINCT c.name, c.phone, c.role, c.is_mobile, c.line_type, c.carrier_name
+                FROM contacts c
+                JOIN permit_contacts pc ON c.id = pc.contact_id
+                JOIN permits p ON pc.permit_id = p.id
+                WHERE p.bbl = %s AND c.phone IS NOT NULL
+            """, (bbl,))
+        
+            contacts_from_db = cur.fetchall()
+            for contact in contacts_from_db:
+                contacts.append({
+                    'name': contact['name'],
+                    'phone': contact['phone'],
+                    'role': contact['role'] or 'Contact',
+                    'is_mobile': contact['is_mobile'],
+                    'line_type': contact['line_type'],
+                    'carrier': contact['carrier_name']
+                })
+        
+            # Option 2: Get unique contractors from permits (with phone numbers)
+            contractor_contacts = {}
+            for permit in permits:
+                # Permittee with phone
+                if permit['permittee_business_name'] and permit['permittee_phone']:
+                    key = permit['permittee_business_name']
+                    if key not in contractor_contacts:
+                        contractor_contacts[key] = {
+                            'name': permit['permittee_business_name'],
+                            'phone': permit['permittee_phone'],
+                            'role': 'Contractor/Permittee',
+                            'license': permit['permittee_license_type'],
+                            'permit_count': 0
+                        }
+                    contractor_contacts[key]['permit_count'] += 1
+            
+                # Owner with phone
+                if permit['owner_business_name'] and permit['owner_phone']:
+                    key = f"owner_{permit['owner_business_name']}"
+                    if key not in contractor_contacts:
+                        contractor_contacts[key] = {
+                            'name': permit['owner_business_name'],
+                            'phone': permit['owner_phone'],
+                            'role': 'Property Owner',
+                            'permit_count': 0
+                        }
+                    contractor_contacts[key]['permit_count'] += 1
+        
+            contacts.extend(contractor_contacts.values())
+        
+            # Option 3: Contractors without phone numbers (fallback)
+            contractors_no_phone = {}
+            for permit in permits:
+                if permit['permittee_business_name'] and not permit['permittee_phone']:
+                    key = permit['permittee_business_name']
+                    if key not in contractor_contacts and key not in contractors_no_phone:
+                        contractors_no_phone[key] = {
+                            'name': permit['permittee_business_name'],
+                            'phone': None,
+                            'role': 'Contractor/Permittee',
+                            'license': permit['permittee_license_type'],
+                            'permit_count': 0
+                        }
+                    if key in contractors_no_phone:
+                        contractors_no_phone[key]['permit_count'] += 1
+        
+            # Only add contractors without phones if we have very few contacts
+            if len(contacts) < 5:
+                contacts.extend(list(contractors_no_phone.values())[:10])
+        
+            return jsonify({
+                'success': True,
+                'building': dict(building),
+                'building_class_description': building_class_desc,
+                'owners': owners,
+                'risk_assessment': {
+                    'score': risk_score,
+                    'level': risk_level,
+                    'label': risk_label,
+                    'color': risk_color,
+                    'factors': risk_factors
+                },
+                'permits': [dict(p) for p in permits],
+                'transactions': [dict(t) for t in transactions],
+                'parties': [dict(p) for p in parties],
+                'activity_timeline': activity_timeline[:50],  # Last 50 events
+                'contacts': contacts,
+                'stats': {
+                    'total_permits': len(permits),
+                    'total_transactions': len(transactions),
+                    'total_contacts': len(contacts),
+                    'years_owned': round(building['days_since_sale'] / 365, 1) if building['days_since_sale'] else None
+                }
+            })
         
     except Exception as e:
         print(f"Building profile API error: {e}")
