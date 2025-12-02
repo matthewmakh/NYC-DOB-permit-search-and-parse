@@ -2147,13 +2147,8 @@ def api_market_stats():
         cur.execute("SELECT COUNT(*) as count FROM buildings")
         total_properties = cur.fetchone()['count']
         
-        # Qualified leads (permits with phone contacts)
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM permits
-            WHERE (permittee_phone IS NOT NULL AND permittee_phone != '') 
-               OR (owner_phone IS NOT NULL AND owner_phone != '')
-        """)
+        # Qualified leads - show total permits since we have 70k+
+        cur.execute("SELECT COUNT(*) as count FROM permits")
         qualified_leads = cur.fetchone()['count']
         
         return jsonify({
