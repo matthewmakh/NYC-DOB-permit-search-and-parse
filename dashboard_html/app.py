@@ -34,8 +34,7 @@ DB_CONFIG = {
     'database': os.getenv('DB_NAME', 'permits_db'),
     'user': os.getenv('DB_USER', 'postgres'),
     'password': os.getenv('DB_PASSWORD', ''),
-    'connect_timeout': 10,
-    'options': '-c statement_timeout=30000'  # 30 second query timeout
+    'connect_timeout': 10
 }
 
 # Simple connection pool: 2-10 connections
@@ -1202,9 +1201,6 @@ def get_construction_permits():
     """Get filtered permits for construction page with advanced filtering"""
     try:
         with DatabaseConnection() as cur:
-            # Set statement timeout to prevent hanging queries
-            cur.execute("SET statement_timeout = 30000")  # 30 seconds
-            
             # Get filter parameters
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
