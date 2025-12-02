@@ -2788,62 +2788,62 @@ def api_contractor_profile(contractor_name):
             LEFT JOIN buildings b ON p.bbl = b.bbl
             WHERE p.applicant = %s
             GROUP BY p.applicant, p.permittee_license_number
-        """, (contractor_name,))
-        
-        stats = cur.fetchone()
-        
-        if not stats:
-            return jsonify({'success': False, 'error': 'Contractor not found'}), 404
-        
-        # Get permits (most recent first)
-        cur.execute("""
-            SELECT 
-                p.id,
-                p.permit_no,
-                p.job_type,
-                p.address,
-                p.bbl,
-                p.issue_date,
-                p.stories,
-                p.total_units,
-                p.use_type,
-                p.link,
-                b.assessed_total_value,
-                b.current_owner_name
-            FROM permits p
-            LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE p.applicant = %s
-            ORDER BY p.issue_date DESC NULLS LAST
-            LIMIT 500
-        """, (contractor_name,))
-        
-        permits = cur.fetchall()
-        
-        # Get unique buildings (most recent work first)
-        cur.execute("""
-            SELECT 
-                b.id,
-                b.bbl,
-                b.address,
-                b.borough,
-                b.current_owner_name,
-                b.assessed_total_value,
-                b.total_units,
-                b.building_class,
-                COUNT(p.id) as permit_count,
-                MAX(p.issue_date) as most_recent_work,
-                MIN(p.issue_date) as first_work,
-                string_agg(DISTINCT p.job_type, ', ') as job_types
-            FROM buildings b
-            INNER JOIN permits p ON p.bbl = b.bbl
-            WHERE p.applicant = %s
-            GROUP BY b.id, b.bbl, b.address, b.borough, b.current_owner_name, 
-                     b.assessed_total_value, b.total_units, b.building_class
-            ORDER BY most_recent_work DESC NULLS LAST
-            LIMIT 500
-        """, (contractor_name,))
-        
-        buildings = cur.fetchall()
+            """, (contractor_name,))
+            
+            stats = cur.fetchone()
+            
+            if not stats:
+                return jsonify({'success': False, 'error': 'Contractor not found'}), 404
+            
+            # Get permits (most recent first)
+            cur.execute("""
+                SELECT 
+                    p.id,
+                    p.permit_no,
+                    p.job_type,
+                    p.address,
+                    p.bbl,
+                    p.issue_date,
+                    p.stories,
+                    p.total_units,
+                    p.use_type,
+                    p.link,
+                    b.assessed_total_value,
+                    b.current_owner_name
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                WHERE p.applicant = %s
+                ORDER BY p.issue_date DESC NULLS LAST
+                LIMIT 500
+            """, (contractor_name,))
+            
+            permits = cur.fetchall()
+            
+            # Get unique buildings (most recent work first)
+            cur.execute("""
+                SELECT 
+                    b.id,
+                    b.bbl,
+                    b.address,
+                    b.borough,
+                    b.current_owner_name,
+                    b.assessed_total_value,
+                    b.total_units,
+                    b.building_class,
+                    COUNT(p.id) as permit_count,
+                    MAX(p.issue_date) as most_recent_work,
+                    MIN(p.issue_date) as first_work,
+                    string_agg(DISTINCT p.job_type, ', ') as job_types
+                FROM buildings b
+                INNER JOIN permits p ON p.bbl = b.bbl
+                WHERE p.applicant = %s
+                GROUP BY b.id, b.bbl, b.address, b.borough, b.current_owner_name, 
+                         b.assessed_total_value, b.total_units, b.building_class
+                ORDER BY most_recent_work DESC NULLS LAST
+                LIMIT 500
+            """, (contractor_name,))
+            
+            buildings = cur.fetchall()
         
         return jsonify({
             'success': True,
