@@ -2323,193 +2323,193 @@ def api_properties():
             max_units = request.args.get('max_units', type=int)
             has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
-        financing_min = request.args.get('financing_min', type=float)
-        financing_max = request.args.get('financing_max', type=float)
-        sort_by = request.args.get('sort_by', 'sale_date')
-        sort_order = request.args.get('sort_order', 'desc').lower()
-        page = max(1, request.args.get('page', 1, type=int))
-        per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+            financing_min = request.args.get('financing_min', type=float)
+            financing_max = request.args.get('financing_max', type=float)
+            sort_by = request.args.get('sort_by', 'sale_date')
+            sort_order = request.args.get('sort_order', 'desc').lower()
+            page = max(1, request.args.get('page', 1, type=int))
+            per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+            
+            # Build WHERE clauses
+            where_clauses = []
+            params = []
         
-        # Build WHERE clauses
-        where_clauses = []
-        params = []
+            # Text search across multiple fields
+            if search:
+                where_clauses.append("""(
+                    b.address ILIKE %s OR 
+                    b.bbl LIKE %s OR 
+                    b.current_owner_name ILIKE %s OR
+                    b.owner_name_rpad ILIKE %s OR
+                    b.owner_name_hpd ILIKE %s
+                )""")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term, search_term, search_term, search_term])
         
-        # Text search across multiple fields
-        if search:
-            where_clauses.append("""(
-                b.address ILIKE %s OR 
-                b.bbl LIKE %s OR 
-                b.current_owner_name ILIKE %s OR
-                b.owner_name_rpad ILIKE %s OR
-                b.owner_name_hpd ILIKE %s
-            )""")
-            search_term = f"%{search}%"
-            params.extend([search_term, search_term, search_term, search_term, search_term])
+            # Owner search
+            if owner:
+                where_clauses.append("""(
+                    b.current_owner_name ILIKE %s OR
+                    b.owner_name_rpad ILIKE %s OR
+                    b.owner_name_hpd ILIKE %s
+                )""")
+                owner_term = f"%{owner}%"
+                params.extend([owner_term, owner_term, owner_term])
         
-        # Owner search
-        if owner:
-            where_clauses.append("""(
-                b.current_owner_name ILIKE %s OR
-                b.owner_name_rpad ILIKE %s OR
-                b.owner_name_hpd ILIKE %s
-            )""")
-            owner_term = f"%{owner}%"
-            params.extend([owner_term, owner_term, owner_term])
+            # Value range
+            if min_value is not None:
+                where_clauses.append("b.assessed_total_value >= %s")
+                params.append(min_value)
+            if max_value is not None:
+                where_clauses.append("b.assessed_total_value <= %s")
+                params.append(max_value)
         
-        # Value range
-        if min_value is not None:
-            where_clauses.append("b.assessed_total_value >= %s")
-            params.append(min_value)
-        if max_value is not None:
-            where_clauses.append("b.assessed_total_value <= %s")
-            params.append(max_value)
+            # Sale price range
+            if min_sale_price is not None:
+                where_clauses.append("b.sale_price >= %s")
+                params.append(min_sale_price)
+            if max_sale_price is not None:
+                where_clauses.append("b.sale_price <= %s")
+                params.append(max_sale_price)
         
-        # Sale price range
-        if min_sale_price is not None:
-            where_clauses.append("b.sale_price >= %s")
-            params.append(min_sale_price)
-        if max_sale_price is not None:
-            where_clauses.append("b.sale_price <= %s")
-            params.append(max_sale_price)
+            # Sale date range
+            if sale_date_from:
+                where_clauses.append("b.sale_date >= %s")
+                params.append(sale_date_from)
+            if sale_date_to:
+                where_clauses.append("b.sale_date <= %s")
+                params.append(sale_date_to)
         
-        # Sale date range
-        if sale_date_from:
-            where_clauses.append("b.sale_date >= %s")
-            params.append(sale_date_from)
-        if sale_date_to:
-            where_clauses.append("b.sale_date <= %s")
-            params.append(sale_date_to)
+            # Cash purchases only
+            if cash_only:
+                where_clauses.append("b.is_cash_purchase = true")
         
-        # Cash purchases only
-        if cash_only:
-            where_clauses.append("b.is_cash_purchase = true")
+            # Recent sales filter
+            if recent_sale_days:
+                where_clauses.append("b.sale_date >= CURRENT_DATE - INTERVAL '%s days'")
+                params.append(recent_sale_days)
         
-        # Recent sales filter
-        if recent_sale_days:
-            where_clauses.append("b.sale_date >= CURRENT_DATE - INTERVAL '%s days'")
-            params.append(recent_sale_days)
+            # Financing ratio range
+            if financing_min is not None:
+                where_clauses.append("b.financing_ratio >= %s")
+                params.append(financing_min)
+            if financing_max is not None:
+                where_clauses.append("b.financing_ratio <= %s")
+                params.append(financing_max)
         
-        # Financing ratio range
-        if financing_min is not None:
-            where_clauses.append("b.financing_ratio >= %s")
-            params.append(financing_min)
-        if financing_max is not None:
-            where_clauses.append("b.financing_ratio <= %s")
-            params.append(financing_max)
+            # Borough filter
+            if borough:
+                where_clauses.append("b.borough = %s")
+                params.append(borough)
         
-        # Borough filter
-        if borough:
-            where_clauses.append("b.borough = %s")
-            params.append(borough)
+            # Building class
+            if building_class:
+                where_clauses.append("b.building_class LIKE %s")
+                params.append(f"{building_class}%")
         
-        # Building class
-        if building_class:
-            where_clauses.append("b.building_class LIKE %s")
-            params.append(f"{building_class}%")
+            # Units range
+            if min_units is not None:
+                where_clauses.append("b.total_units >= %s")
+                params.append(min_units)
+            if max_units is not None:
+                where_clauses.append("b.total_units <= %s")
+                params.append(max_units)
         
-        # Units range
-        if min_units is not None:
-            where_clauses.append("b.total_units >= %s")
-            params.append(min_units)
-        if max_units is not None:
-            where_clauses.append("b.total_units <= %s")
-            params.append(max_units)
+            # HPD violations
+            if has_violations is not None:
+                if has_violations.lower() == 'true':
+                    where_clauses.append("b.hpd_open_violations > 0")
+                else:
+                    where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
         
-        # HPD violations
-        if has_violations is not None:
-            if has_violations.lower() == 'true':
-                where_clauses.append("b.hpd_open_violations > 0")
-            else:
-                where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
+            # Build WHERE clause
+            where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         
-        # Build WHERE clause
-        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            # Get permit counts subquery using BBL
+            permit_count_sql = """
+                LEFT JOIN (
+                    SELECT bbl, COUNT(*) as permit_count
+                    FROM permits
+                    WHERE bbl IS NOT NULL
+                    GROUP BY bbl
+                ) pc ON b.bbl = pc.bbl
+            """
         
-        # Get permit counts subquery using BBL
-        permit_count_sql = """
-            LEFT JOIN (
-                SELECT bbl, COUNT(*) as permit_count
-                FROM permits
-                WHERE bbl IS NOT NULL
-                GROUP BY bbl
-            ) pc ON b.bbl = pc.bbl
-        """
+            # Apply permit filters
+            if with_permits:
+                where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
+            if min_permits is not None:
+                where_sql += (" AND " if where_clauses or with_permits else "WHERE ") + f"pc.permit_count >= {min_permits}"
         
-        # Apply permit filters
-        if with_permits:
-            where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
-        if min_permits is not None:
-            where_sql += (" AND " if where_clauses or with_permits else "WHERE ") + f"pc.permit_count >= {min_permits}"
+            # Validate and sanitize sort column
+            valid_sort_columns = {
+                'address': 'b.address',
+                'value': 'b.assessed_total_value',
+                'sale_date': 'b.sale_date',
+                'sale_price': 'b.sale_price',
+                'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
+                'permits': 'pc.permit_count'
+            }
+            sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
+            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
         
-        # Validate and sanitize sort column
-        valid_sort_columns = {
-            'address': 'b.address',
-            'value': 'b.assessed_total_value',
-            'sale_date': 'b.sale_date',
-            'sale_price': 'b.sale_price',
-            'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
-            'permits': 'pc.permit_count'
-        }
-        sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
-        sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(DISTINCT b.id) as count
+                FROM buildings b
+                {permit_count_sql}
+                {where_sql}
+            """
+            cur.execute(count_query, params)
+            result = cur.fetchone()
+            total_count = result['count'] if result else 0
         
-        # Get total count
-        count_query = f"""
-            SELECT COUNT(DISTINCT b.id) as count
-            FROM buildings b
-            {permit_count_sql}
-            {where_sql}
-        """
-        cur.execute(count_query, params)
-        result = cur.fetchone()
-        total_count = result['count'] if result else 0
+            # Calculate pagination
+            offset = (page - 1) * per_page
+            total_pages = (total_count + per_page - 1) // per_page
         
-        # Calculate pagination
-        offset = (page - 1) * per_page
-        total_pages = (total_count + per_page - 1) // per_page
+            # Get paginated results
+            query = f"""
+                SELECT 
+                    b.id,
+                    b.bbl,
+                    b.address,
+                    b.borough,
+                    b.current_owner_name,
+                    b.owner_name_rpad,
+                    b.owner_name_hpd,
+                    b.total_units,
+                    b.residential_units,
+                    b.building_sqft,
+                    b.year_built,
+                    b.year_altered,
+                    b.building_class,
+                    b.assessed_land_value,
+                    b.assessed_total_value,
+                    b.sale_price,
+                    b.sale_date,
+                    b.sale_buyer_primary,
+                    b.sale_seller_primary,
+                    b.mortgage_amount,
+                    b.mortgage_lender_primary,
+                    b.is_cash_purchase,
+                    b.financing_ratio,
+                    b.hpd_open_violations,
+                    b.hpd_total_complaints,
+                    b.acris_deed_count,
+                    b.acris_mortgage_count,
+                    b.acris_total_transactions,
+                    COALESCE(pc.permit_count, 0) as permit_count,
+                    b.last_updated
+                FROM buildings b
+                {permit_count_sql}
+                {where_sql}
+                ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
+                LIMIT %s OFFSET %s
+            """
         
-        # Get paginated results
-        query = f"""
-            SELECT 
-                b.id,
-                b.bbl,
-                b.address,
-                b.borough,
-                b.current_owner_name,
-                b.owner_name_rpad,
-                b.owner_name_hpd,
-                b.total_units,
-                b.residential_units,
-                b.building_sqft,
-                b.year_built,
-                b.year_altered,
-                b.building_class,
-                b.assessed_land_value,
-                b.assessed_total_value,
-                b.sale_price,
-                b.sale_date,
-                b.sale_buyer_primary,
-                b.sale_seller_primary,
-                b.mortgage_amount,
-                b.mortgage_lender_primary,
-                b.is_cash_purchase,
-                b.financing_ratio,
-                b.hpd_open_violations,
-                b.hpd_total_complaints,
-                b.acris_deed_count,
-                b.acris_mortgage_count,
-                b.acris_total_transactions,
-                COALESCE(pc.permit_count, 0) as permit_count,
-                b.last_updated
-            FROM buildings b
-            {permit_count_sql}
-            {where_sql}
-            ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
-            LIMIT %s OFFSET %s
-        """
-        
-        cur.execute(query, params + [per_page, offset])
-        properties = cur.fetchall()
+            cur.execute(query, params + [per_page, offset])
+            properties = cur.fetchall()
         
         return jsonify({
             'success': True,
