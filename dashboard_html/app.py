@@ -1522,7 +1522,8 @@ def get_construction_map_data():
             query += " AND p.borough = %s"
             params.append(borough)
         
-        query += " LIMIT 1000"
+        # Limit map markers for performance - prioritize recent/high-value permits
+        query += " ORDER BY p.issue_date DESC LIMIT 500"
         
         cur.execute(query, tuple(params))
         locations = cur.fetchall()
