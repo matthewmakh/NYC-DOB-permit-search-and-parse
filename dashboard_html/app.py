@@ -1211,147 +1211,147 @@ def get_construction_permits():
             sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
             limit = request.args.get('limit', 200, type=int)
             offset = request.args.get('offset', 0, type=int)  # For pagination
-        
-        # Build dynamic query
-        query = """
-            SELECT 
-                p.id,
-                p.permit_no,
-                p.job_type,
-                p.address,
-                p.borough,
-                p.issue_date,
-                p.bbl,
-                p.bin,
-                p.applicant,
-                p.permittee_business_name,
-                p.owner_business_name,
-                p.permittee_phone,
-                p.owner_phone,
-                p.latitude,
-                p.longitude,
-                p.work_type,
-                -- Calculate contact count
-                (
-                    CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                    CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                ) as contact_count,
-                -- Building intelligence
-                b.residential_units,
-                b.total_units,
-                b.num_floors,
-                b.building_sqft,
-                b.assessed_total_value,
-                b.purchase_price,
-                b.current_owner_name
-            FROM permits p
-            LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE 1=1
-        """
-        
-        params = []
-        
-        # Handle time period filter
-        if days != 'all':
-            days_int = int(days)
-            query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-            params.append(days_int)
-        
-        # Apply filters
-        if job_types:
-            placeholders = ','.join(['%s'] * len(job_types))
-            query += f" AND p.job_type IN ({placeholders})"
-            params.extend(job_types)
-        
-        if borough:
-            query += " AND p.borough = %s"
-            params.append(borough)
-        
-        if has_contact == 'true':
-            query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
-        
-        # Sorting - default to newest first
-        if sort_by == 'score':
-            query += " ORDER BY contact_count DESC, p.issue_date DESC"
-        elif sort_by == 'contacts':
-            query += " ORDER BY contact_count DESC"
-        elif sort_by == 'size':
-            query += " ORDER BY b.total_units DESC NULLS LAST, b.building_sqft DESC NULLS LAST"
-        else:
-            # Default to date descending (newest first)
-            query += " ORDER BY p.issue_date DESC"
-        
-        query += " LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-        
-        cur.execute(query, tuple(params))
-        permits = cur.fetchall()
-        
-        # Get total count for pagination
-        count_query = """
-            SELECT COUNT(*) 
-            FROM permits p
-            LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE 1=1
-        """
-        count_params = []
-        
-        # Apply same filters to count query
-        if days != 'all':
-            days_int = int(days)
-            count_query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-            count_params.append(days_int)
-        
-        if job_types:
-            placeholders = ','.join(['%s'] * len(job_types))
-            count_query += f" AND p.job_type IN ({placeholders})"
-            count_params.extend(job_types)
-        
-        if borough:
-            count_query += " AND p.borough = %s"
-            count_params.append(borough)
-        
-        if has_contact == 'true':
-            count_query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
-        
-        cur.execute(count_query, tuple(count_params))
-        total_count = cur.fetchone()['count']
-        
-        # Calculate lead scores
-        results = []
-        for permit in permits:
-            lead_score = calculate_lead_score(permit)
             
-            # Apply lead score filter
-            if lead_score >= min_lead_score:
-                permit_dict = dict(permit)
-                permit_dict['lead_score'] = lead_score
-                results.append(permit_dict)
+            # Build dynamic query
+            query = """
+                SELECT 
+                    p.id,
+                    p.permit_no,
+                    p.job_type,
+                    p.address,
+                    p.borough,
+                    p.issue_date,
+                    p.bbl,
+                    p.bin,
+                    p.applicant,
+                    p.permittee_business_name,
+                    p.owner_business_name,
+                    p.permittee_phone,
+                    p.owner_phone,
+                    p.latitude,
+                    p.longitude,
+                    p.work_type,
+                    -- Calculate contact count
+                    (
+                        CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                        CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                    ) as contact_count,
+                    -- Building intelligence
+                    b.residential_units,
+                    b.total_units,
+                    b.num_floors,
+                    b.building_sqft,
+                    b.assessed_total_value,
+                    b.purchase_price,
+                    b.current_owner_name
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                WHERE 1=1
+            """
         
-        # Sort by lead score if requested (after calculating scores)
-        if sort_by == 'score':
-            results.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
+            params = []
         
-        return jsonify({
-            'success': True,
-            'permits': results,
-            'count': len(results),
-            'total_count': total_count,
-            'has_more': (offset + limit) < total_count,
-            'pagination': {
-                'limit': limit,
-                'offset': offset,
-                'page': (offset // limit) + 1,
-                'total_pages': (total_count + limit - 1) // limit
-            },
-            'filters_applied': {
-                'job_types': job_types,
-                'borough': borough,
-                'days': days,
-                'min_score': min_lead_score,
-                'has_contact': has_contact
-            }
-        })
+            # Handle time period filter
+            if days != 'all':
+                days_int = int(days)
+                query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+                params.append(days_int)
+        
+            # Apply filters
+            if job_types:
+                placeholders = ','.join(['%s'] * len(job_types))
+                query += f" AND p.job_type IN ({placeholders})"
+                params.extend(job_types)
+        
+            if borough:
+                query += " AND p.borough = %s"
+                params.append(borough)
+        
+            if has_contact == 'true':
+                query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
+        
+            # Sorting - default to newest first
+            if sort_by == 'score':
+                query += " ORDER BY contact_count DESC, p.issue_date DESC"
+            elif sort_by == 'contacts':
+                query += " ORDER BY contact_count DESC"
+            elif sort_by == 'size':
+                query += " ORDER BY b.total_units DESC NULLS LAST, b.building_sqft DESC NULLS LAST"
+            else:
+                # Default to date descending (newest first)
+                query += " ORDER BY p.issue_date DESC"
+        
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+        
+            cur.execute(query, tuple(params))
+            permits = cur.fetchall()
+        
+            # Get total count for pagination
+            count_query = """
+                SELECT COUNT(*) 
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                WHERE 1=1
+            """
+            count_params = []
+        
+            # Apply same filters to count query
+            if days != 'all':
+                days_int = int(days)
+                count_query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+                count_params.append(days_int)
+        
+            if job_types:
+                placeholders = ','.join(['%s'] * len(job_types))
+                count_query += f" AND p.job_type IN ({placeholders})"
+                count_params.extend(job_types)
+        
+            if borough:
+                count_query += " AND p.borough = %s"
+                count_params.append(borough)
+        
+            if has_contact == 'true':
+                count_query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
+        
+            cur.execute(count_query, tuple(count_params))
+            total_count = cur.fetchone()['count']
+        
+            # Calculate lead scores
+            results = []
+            for permit in permits:
+                lead_score = calculate_lead_score(permit)
+            
+                # Apply lead score filter
+                if lead_score >= min_lead_score:
+                    permit_dict = dict(permit)
+                    permit_dict['lead_score'] = lead_score
+                    results.append(permit_dict)
+        
+            # Sort by lead score if requested (after calculating scores)
+            if sort_by == 'score':
+                results.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
+        
+            return jsonify({
+                'success': True,
+                'permits': results,
+                'count': len(results),
+                'total_count': total_count,
+                'has_more': (offset + limit) < total_count,
+                'pagination': {
+                    'limit': limit,
+                    'offset': offset,
+                    'page': (offset // limit) + 1,
+                    'total_pages': (total_count + limit - 1) // limit
+                },
+                'filters_applied': {
+                    'job_types': job_types,
+                    'borough': borough,
+                    'days': days,
+                    'min_score': min_lead_score,
+                    'has_contact': has_contact
+                }
+            })
         
     except Exception as e:
         print(f"Error fetching construction permits: {e}")
@@ -1401,46 +1401,46 @@ def get_construction_stats():
                 hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
             else:
                 hot_params = params
-            hot_where = f"{where_clause} AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
+                hot_where = f"{where_clause} AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
             
-        cur.execute(f"""
-            SELECT COUNT(*) as total
-            FROM permits
-            {hot_where}
-        """, hot_params)
-        hot_leads = cur.fetchone()['total']
-        
-        # Total estimated value (from ACRIS purchase prices)
-        value_where = where_clause.replace('issue_date', 'p.issue_date') + " AND b.purchase_price IS NOT NULL"
-        cur.execute(f"""
-            SELECT COALESCE(SUM(b.purchase_price), 0) as total_value
-            FROM permits p
-            LEFT JOIN buildings b ON p.bbl = b.bbl
-            {value_where}
-        """, params)
-        total_value = cur.fetchone()['total_value']
-        
-        # Job type breakdown
-        cur.execute(f"""
-            SELECT job_type, COUNT(*) as count
-            FROM permits
-            {where_clause}
-            GROUP BY job_type
-            ORDER BY count DESC
-            LIMIT 10
-        """, params)
-        job_types = cur.fetchall()
-        
-        # Borough breakdown
-        cur.execute(f"""
-            SELECT borough, COUNT(*) as count
-            FROM permits
-            {where_clause}
-            AND borough IS NOT NULL
-            GROUP BY borough
-            ORDER BY count DESC
-        """, params)
-        boroughs = cur.fetchall()
+            cur.execute(f"""
+                SELECT COUNT(*) as total
+                FROM permits
+                {hot_where}
+            """, hot_params)
+            hot_leads = cur.fetchone()['total']
+            
+            # Total estimated value (from ACRIS purchase prices)
+            value_where = where_clause.replace('issue_date', 'p.issue_date') + " AND b.purchase_price IS NOT NULL"
+            cur.execute(f"""
+                SELECT COALESCE(SUM(b.purchase_price), 0) as total_value
+                FROM permits p
+                LEFT JOIN buildings b ON p.bbl = b.bbl
+                {value_where}
+            """, params)
+            total_value = cur.fetchone()['total_value']
+            
+            # Job type breakdown
+            cur.execute(f"""
+                SELECT job_type, COUNT(*) as count
+                FROM permits
+                {where_clause}
+                GROUP BY job_type
+                ORDER BY count DESC
+                LIMIT 10
+            """, params)
+            job_types = cur.fetchall()
+            
+            # Borough breakdown
+            cur.execute(f"""
+                SELECT borough, COUNT(*) as count
+                FROM permits
+                {where_clause}
+                AND borough IS NOT NULL
+                GROUP BY borough
+                ORDER BY count DESC
+            """, params)
+            boroughs = cur.fetchall()
         
         return jsonify({
             'success': True,
