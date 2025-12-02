@@ -18,7 +18,7 @@ const AppState = {
     },
     pagination: {
         currentPage: 1,
-        perPage: 200,
+        perPage: 50,  // Reduced from 200 for faster load times
         totalCount: 0,
         totalPages: 1
     }
