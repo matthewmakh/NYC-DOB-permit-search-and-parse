@@ -742,65 +742,65 @@ def get_building_detail(building_id):
             # Get building info
             cur.execute("SELECT * FROM buildings WHERE id = %s;", (building_id,))
             building = cur.fetchone()
+            
+            if not building:
+                return jsonify({
+                    'success': False,
+                    'error': 'Building not found'
+                }), 404
+            
+            # Get all permits for this building
+                cur.execute("""
+                SELECT p.*, 
+                       (
+                           CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                           CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                       ) as contact_count
+                FROM permits p
+                WHERE p.bbl = %s
+                ORDER BY p.issue_date DESC;
+            """, (building['bbl'],))
+            permits = cur.fetchall()
         
-        if not building:
+            # Get all contacts from all permits (aggregate from permits table columns)
+            cur.execute("""
+                SELECT DISTINCT 
+                    COALESCE(p.permittee_business_name, p.applicant) as name,
+                    p.permittee_phone as phone,
+                    'Permittee' as role
+                FROM permits p
+                WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+                UNION
+                SELECT DISTINCT 
+                    p.owner_business_name as name,
+                    p.owner_phone as phone,
+                    'Owner' as role
+                FROM permits p
+                WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
+                UNION
+                SELECT DISTINCT 
+                    p.superintendent_business_name as name,
+                    NULL as phone,
+                    'Superintendent' as role
+                FROM permits p
+                WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
+                UNION
+                SELECT DISTINCT 
+                    p.site_safety_mgr_business_name as name,
+                    NULL as phone,
+                    'Site Safety Manager' as role
+                FROM permits p
+                WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
+                ORDER BY name;
+            """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
+            contacts = cur.fetchall()
+        
             return jsonify({
-                'success': False,
-                'error': 'Building not found'
-            }), 404
-        
-        # Get all permits for this building
-        cur.execute("""
-            SELECT p.*, 
-                   (
-                       CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                       CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                   ) as contact_count
-            FROM permits p
-            WHERE p.bbl = %s
-            ORDER BY p.issue_date DESC;
-        """, (building['bbl'],))
-        permits = cur.fetchall()
-        
-        # Get all contacts from all permits (aggregate from permits table columns)
-        cur.execute("""
-            SELECT DISTINCT 
-                COALESCE(p.permittee_business_name, p.applicant) as name,
-                p.permittee_phone as phone,
-                'Permittee' as role
-            FROM permits p
-            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-            UNION
-            SELECT DISTINCT 
-                p.owner_business_name as name,
-                p.owner_phone as phone,
-                'Owner' as role
-            FROM permits p
-            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.superintendent_business_name as name,
-                NULL as phone,
-                'Superintendent' as role
-            FROM permits p
-            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.site_safety_mgr_business_name as name,
-                NULL as phone,
-                'Site Safety Manager' as role
-            FROM permits p
-            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
-            ORDER BY name;
-        """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
-        contacts = cur.fetchall()
-        
-        return jsonify({
-            'success': True,
-            'building': building,
-            'permits': permits,
-            'contacts': contacts
-        })
+                'success': True,
+                'building': building,
+                'permits': permits,
+                'contacts': contacts
+            })
         
     except Exception as e:
         print(f"Error fetching building detail: {e}")
@@ -2175,92 +2175,92 @@ def api_property_detail(bbl):
         with DatabaseConnection() as cur:
             # Get building data
             cur.execute("""
-            SELECT *
-            FROM buildings
-            WHERE bbl = %s
-        """, (bbl,))
+                SELECT *
+                FROM buildings
+                WHERE bbl = %s
+            """, (bbl,))
+            
+            building = cur.fetchone()
+            
+            if not building:
+                return jsonify({'success': False, 'error': 'Property not found'}), 404
+            
+            # Get permits
+                cur.execute("""
+                SELECT *
+                FROM permits
+                WHERE bbl = %s
+                ORDER BY issue_date DESC
+            """, (bbl,))
+            permits = cur.fetchall()
         
-        building = cur.fetchone()
+            # Get ACRIS transactions
+            cur.execute("""
+                SELECT *
+                FROM acris_transactions
+                WHERE building_id = (SELECT id FROM buildings WHERE bbl = %s)
+                ORDER BY recorded_date DESC
+            """, (bbl,))
+            transactions = cur.fetchall()
         
-        if not building:
-            return jsonify({'success': False, 'error': 'Property not found'}), 404
+            # Get ACRIS parties (buyers, sellers, lenders)
+            cur.execute("""
+                SELECT p.*
+                FROM acris_parties p
+                WHERE p.building_id = (SELECT id FROM buildings WHERE bbl = %s)
+                ORDER BY p.party_type, p.party_name
+            """, (bbl,))
+            parties = cur.fetchall()
         
-        # Get permits
-        cur.execute("""
-            SELECT *
-            FROM permits
-            WHERE bbl = %s
-            ORDER BY issue_date DESC
-        """, (bbl,))
-        permits = cur.fetchall()
+            # Get contacts - aggregate from permits table columns
+            cur.execute("""
+                SELECT DISTINCT 
+                    COALESCE(p.permittee_business_name, p.applicant) as name,
+                    p.permittee_phone as phone,
+                    'Permittee' as role,
+                    NULL as email,
+                    p.permit_no as permit_number
+                FROM permits p
+                WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+                UNION
+                SELECT DISTINCT 
+                    p.owner_business_name as name,
+                    p.owner_phone as phone,
+                    'Owner' as role,
+                    NULL as email,
+                    p.permit_no as permit_number
+                FROM permits p
+                WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
+                UNION
+                SELECT DISTINCT 
+                    p.superintendent_business_name as name,
+                    NULL as phone,
+                    'Superintendent' as role,
+                    NULL as email,
+                    p.permit_no as permit_number
+                FROM permits p
+                WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
+                UNION
+                SELECT DISTINCT 
+                    p.site_safety_mgr_business_name as name,
+                    NULL as phone,
+                    'Site Safety Manager' as role,
+                    NULL as email,
+                    p.permit_no as permit_number
+                FROM permits p
+                WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
+                ORDER BY name;
+            """, (bbl, bbl, bbl, bbl))
+            contacts = cur.fetchall()
         
-        # Get ACRIS transactions
-        cur.execute("""
-            SELECT *
-            FROM acris_transactions
-            WHERE building_id = (SELECT id FROM buildings WHERE bbl = %s)
-            ORDER BY recorded_date DESC
-        """, (bbl,))
-        transactions = cur.fetchall()
-        
-        # Get ACRIS parties (buyers, sellers, lenders)
-        cur.execute("""
-            SELECT p.*
-            FROM acris_parties p
-            WHERE p.building_id = (SELECT id FROM buildings WHERE bbl = %s)
-            ORDER BY p.party_type, p.party_name
-        """, (bbl,))
-        parties = cur.fetchall()
-        
-        # Get contacts - aggregate from permits table columns
-        cur.execute("""
-            SELECT DISTINCT 
-                COALESCE(p.permittee_business_name, p.applicant) as name,
-                p.permittee_phone as phone,
-                'Permittee' as role,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-            UNION
-            SELECT DISTINCT 
-                p.owner_business_name as name,
-                p.owner_phone as phone,
-                'Owner' as role,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.superintendent_business_name as name,
-                NULL as phone,
-                'Superintendent' as role,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.site_safety_mgr_business_name as name,
-                NULL as phone,
-                'Site Safety Manager' as role,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
-            ORDER BY name;
-        """, (bbl, bbl, bbl, bbl))
-        contacts = cur.fetchall()
-        
-        return jsonify({
-            'success': True,
-            'building': dict(building),
-            'permits': [dict(p) for p in permits],
-            'transactions': [dict(t) for t in transactions],
-            'parties': [dict(p) for p in parties],
-            'contacts': [dict(c) for c in contacts]
-        })
+            return jsonify({
+                'success': True,
+                'building': dict(building),
+                'permits': [dict(p) for p in permits],
+                'transactions': [dict(t) for t in transactions],
+                'parties': [dict(p) for p in parties],
+                'contacts': [dict(c) for c in contacts]
+            })
         
     except Exception as e:
         print(f"Property detail error: {e}")
