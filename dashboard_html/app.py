@@ -623,72 +623,72 @@ def permit_detail(permit_id):
             FROM permits p
             LEFT JOIN buildings b ON p.bbl = b.bbl
             WHERE p.id = %s;
-        """
-        
-        cur.execute(query, (permit_id,))
-        permit = cur.fetchone()
-        
-        if not permit:
-            return "Permit not found", 404
-        
-        # Build contacts array from permits table columns
-        contacts = []
-        if permit.get('permittee_business_name') or permit.get('applicant'):
-            contacts.append({
-                'name': permit.get('permittee_business_name') or permit.get('applicant'),
-                'phone': permit.get('permittee_phone'),
-                'is_mobile': False
-            })
-        if permit.get('owner_business_name'):
-            contacts.append({
-                'name': permit.get('owner_business_name'),
-                'phone': permit.get('owner_phone'),
-                'is_mobile': False
-            })
-        if permit.get('superintendent_business_name'):
-            contacts.append({
-                'name': permit.get('superintendent_business_name'),
-                'phone': None,
-                'is_mobile': False
-            })
-        if permit.get('site_safety_mgr_business_name'):
-            contacts.append({
-                'name': permit.get('site_safety_mgr_business_name'),
-                'phone': None,
-                'is_mobile': False
-            })
-        
-        # Get all permits for the same building (if BBL exists)
-        related_permits = []
-        if permit['bbl']:
-            cur.execute("""
-                SELECT 
-                    p.id,
-                    p.permit_no,
-                    p.job_type,
-                    p.work_type,
-                    p.permit_status,
-                    p.permit_type,
-                    p.issue_date,
-                    p.exp_date,
-                    p.filing_date,
-                    p.address,
-                    p.applicant,
-                    p.permittee_business_name,
-                    p.owner_business_name,
-                    (
-                        CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                        CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                    ) as contact_count
-                FROM permits p
-                WHERE p.bbl = %s AND p.id != %s
-                ORDER BY p.issue_date DESC
-                LIMIT 50;
-            """, (permit['bbl'], permit_id))
-            related_permits = cur.fetchall()
-        
-        # Calculate lead score
-        permit['lead_score'] = calculate_lead_score(permit)
+            """
+            
+            cur.execute(query, (permit_id,))
+            permit = cur.fetchone()
+            
+            if not permit:
+                return "Permit not found", 404
+            
+            # Build contacts array from permits table columns
+            contacts = []
+            if permit.get('permittee_business_name') or permit.get('applicant'):
+                contacts.append({
+                    'name': permit.get('permittee_business_name') or permit.get('applicant'),
+                    'phone': permit.get('permittee_phone'),
+                    'is_mobile': False
+                })
+            if permit.get('owner_business_name'):
+                contacts.append({
+                    'name': permit.get('owner_business_name'),
+                    'phone': permit.get('owner_phone'),
+                    'is_mobile': False
+                })
+            if permit.get('superintendent_business_name'):
+                contacts.append({
+                    'name': permit.get('superintendent_business_name'),
+                    'phone': None,
+                    'is_mobile': False
+                })
+            if permit.get('site_safety_mgr_business_name'):
+                contacts.append({
+                    'name': permit.get('site_safety_mgr_business_name'),
+                    'phone': None,
+                    'is_mobile': False
+                })
+            
+            # Get all permits for the same building (if BBL exists)
+            related_permits = []
+            if permit['bbl']:
+                cur.execute("""
+                    SELECT 
+                        p.id,
+                        p.permit_no,
+                        p.job_type,
+                        p.work_type,
+                        p.permit_status,
+                        p.permit_type,
+                        p.issue_date,
+                        p.exp_date,
+                        p.filing_date,
+                        p.address,
+                        p.applicant,
+                        p.permittee_business_name,
+                        p.owner_business_name,
+                        (
+                            CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
+                            CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
+                        ) as contact_count
+                    FROM permits p
+                    WHERE p.bbl = %s AND p.id != %s
+                    ORDER BY p.issue_date DESC
+                    LIMIT 50;
+                """, (permit['bbl'], permit_id))
+                related_permits = cur.fetchall()
+            
+            # Calculate lead score
+            permit['lead_score'] = calculate_lead_score(permit)
         
         return render_template('permit_detail.html', 
                              permit=permit, 
@@ -1067,9 +1067,9 @@ def get_building_age_distribution():
             WHERE year_built IS NOT NULL
             GROUP BY age_range
             ORDER BY age_range DESC;
-        """)
-        
-        data = cur.fetchall()
+            """)
+            
+            data = cur.fetchall()
         
         return jsonify({
             'success': True,
@@ -1545,26 +1545,26 @@ def get_top_contractors():
         with DatabaseConnection() as cur:
             days = request.args.get('days', 90, type=int)
             limit_count = request.args.get('limit', 20, type=int)
-        
-        # Top contractors by permit count
-        query = """
-            SELECT 
-                COALESCE(permittee_business_name, applicant, 'Unknown') as contractor_name,
-                COUNT(*) as permit_count,
-                STRING_AGG(DISTINCT job_type, ', ') as job_types,
-                STRING_AGG(DISTINCT borough, ', ') as boroughs,
-                MAX(issue_date) as most_recent
-            FROM permits
-            WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
-            AND (permittee_business_name IS NOT NULL OR applicant IS NOT NULL)
-            GROUP BY COALESCE(permittee_business_name, applicant, 'Unknown')
-            HAVING COUNT(*) > 1
-            ORDER BY permit_count DESC
-            LIMIT %s
-        """
-        
-        cur.execute(query, (days, limit_count))
-        contractors = cur.fetchall()
+            
+            # Top contractors by permit count
+            query = """
+                SELECT 
+                    COALESCE(permittee_business_name, applicant, 'Unknown') as contractor_name,
+                    COUNT(*) as permit_count,
+                    STRING_AGG(DISTINCT job_type, ', ') as job_types,
+                    STRING_AGG(DISTINCT borough, ', ') as boroughs,
+                    MAX(issue_date) as most_recent
+                FROM permits
+                WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
+                AND (permittee_business_name IS NOT NULL OR applicant IS NOT NULL)
+                GROUP BY COALESCE(permittee_business_name, applicant, 'Unknown')
+                HAVING COUNT(*) > 1
+                ORDER BY permit_count DESC
+                LIMIT %s
+            """
+            
+            cur.execute(query, (days, limit_count))
+            contractors = cur.fetchall()
         
         return jsonify({
             'success': True,
