@@ -2602,19 +2602,19 @@ def api_properties_stats():
     try:
         with DatabaseConnection() as cur:
             cur.execute("""
-            SELECT 
-                COUNT(*) as total_properties,
-                COUNT(CASE WHEN acris_last_enriched IS NOT NULL THEN 1 END) as with_acris,
-                COUNT(CASE WHEN is_cash_purchase = true THEN 1 END) as cash_purchases,
-                COALESCE(SUM(assessed_total_value), 0) as total_assessed_value,
-                COALESCE(AVG(assessed_total_value), 0) as avg_assessed_value,
-                COALESCE(AVG(sale_price), 0) as avg_sale_price,
-                COUNT(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as recent_sales_90d,
-                COALESCE(SUM(COALESCE(total_units, 0)), 0) as total_units
-            FROM buildings
-        """)
-        
-        stats = cur.fetchone()
+                SELECT 
+                    COUNT(*) as total_properties,
+                    COUNT(CASE WHEN acris_last_enriched IS NOT NULL THEN 1 END) as with_acris,
+                    COUNT(CASE WHEN is_cash_purchase = true THEN 1 END) as cash_purchases,
+                    COALESCE(SUM(assessed_total_value), 0) as total_assessed_value,
+                    COALESCE(AVG(assessed_total_value), 0) as avg_assessed_value,
+                    COALESCE(AVG(sale_price), 0) as avg_sale_price,
+                    COUNT(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as recent_sales_90d,
+                    COALESCE(SUM(COALESCE(total_units, 0)), 0) as total_units
+                FROM buildings
+            """)
+            
+            stats = cur.fetchone()
         
         return jsonify({
             'success': True,
