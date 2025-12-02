@@ -1298,11 +1298,10 @@ def get_construction_permits():
             cur.execute(query, tuple(params))
             permits = cur.fetchall()
         
-            # Get total count for pagination
+            # Get total count for pagination - optimized without join
             count_query = """
                 SELECT COUNT(*) 
                 FROM permits p
-                LEFT JOIN buildings b ON p.bbl = b.bbl
                 WHERE 1=1
             """
             count_params = []
