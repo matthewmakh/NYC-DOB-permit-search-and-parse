@@ -1206,11 +1206,11 @@ def get_construction_permits():
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
             days = request.args.get('days', '30')
-        min_lead_score = request.args.get('min_score', 0, type=int)
-        has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
-        sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
-        limit = request.args.get('limit', 200, type=int)
-        offset = request.args.get('offset', 0, type=int)  # For pagination
+            min_lead_score = request.args.get('min_score', 0, type=int)
+            has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
+            sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
+            limit = request.args.get('limit', 200, type=int)
+            offset = request.args.get('offset', 0, type=int)  # For pagination
         
         # Build dynamic query
         query = """
@@ -2314,20 +2314,20 @@ def api_properties():
             search = request.args.get('search', '').strip()
             owner = request.args.get('owner', '').strip()
             min_value = request.args.get('min_value', type=float)
-        max_value = request.args.get('max_value', type=float)
-        min_sale_price = request.args.get('min_sale_price', type=float)
-        max_sale_price = request.args.get('max_sale_price', type=float)
-        sale_date_from = request.args.get('sale_date_from')
-        sale_date_to = request.args.get('sale_date_to')
-        cash_only = request.args.get('cash_only', '').lower() == 'true'
-        with_permits = request.args.get('with_permits', '').lower() == 'true'
-        min_permits = request.args.get('min_permits', type=int)
-        borough = request.args.get('borough', type=int)
-        building_class = request.args.get('building_class', '').strip()
-        min_units = request.args.get('min_units', type=int)
-        max_units = request.args.get('max_units', type=int)
-        has_violations = request.args.get('has_violations')
-        recent_sale_days = request.args.get('recent_sale_days', type=int)
+            max_value = request.args.get('max_value', type=float)
+            min_sale_price = request.args.get('min_sale_price', type=float)
+            max_sale_price = request.args.get('max_sale_price', type=float)
+            sale_date_from = request.args.get('sale_date_from')
+            sale_date_to = request.args.get('sale_date_to')
+            cash_only = request.args.get('cash_only', '').lower() == 'true'
+            with_permits = request.args.get('with_permits', '').lower() == 'true'
+            min_permits = request.args.get('min_permits', type=int)
+            borough = request.args.get('borough', type=int)
+            building_class = request.args.get('building_class', '').strip()
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            has_violations = request.args.get('has_violations')
+            recent_sale_days = request.args.get('recent_sale_days', type=int)
         financing_min = request.args.get('financing_min', type=float)
         financing_max = request.args.get('financing_max', type=float)
         sort_by = request.args.get('sort_by', 'sale_date')
@@ -2667,80 +2667,80 @@ def api_contractors_search():
             # Parse query parameters
             search = request.args.get('search', '').strip()
             sort_by = request.args.get('sort_by', 'total_jobs')
-        sort_order = request.args.get('sort_order', 'desc').lower()
-        page = max(1, request.args.get('page', 1, type=int))
-        per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
-        offset = (page - 1) * per_page
-        
-        # Build WHERE clause - exclude NULL, empty, and placeholder values
-        where_clause = """WHERE p.applicant IS NOT NULL 
-            AND p.applicant != '' 
-            AND p.applicant != 'N/A'
-            AND p.applicant != 'NA'
-            AND p.applicant != 'NONE'
-            AND p.applicant NOT ILIKE 'unknown%%'"""
-        search_params = []
-        
-        if search:
-            where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
-            search_term = f"%{search}%"
-            search_params = [search_term, search_term, search_term]
-        
-        # Determine sort column
-        sort_column = {
-            'active_jobs': 'active_jobs',
-            'total_jobs': 'total_jobs',
-            'total_value': 'total_value',
-            'largest_project': 'largest_project'
-        }.get(sort_by, 'total_jobs')
-        
-        sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
-        
-        # Get contractors with aggregated stats
-        query = f"""
-            WITH contractor_stats AS (
+            sort_order = request.args.get('sort_order', 'desc').lower()
+            page = max(1, request.args.get('page', 1, type=int))
+            per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+            offset = (page - 1) * per_page
+            
+            # Build WHERE clause - exclude NULL, empty, and placeholder values
+            where_clause = """WHERE p.applicant IS NOT NULL 
+                AND p.applicant != '' 
+                AND p.applicant != 'N/A'
+                AND p.applicant != 'NA'
+                AND p.applicant != 'NONE'
+                AND p.applicant NOT ILIKE 'unknown%%'"""
+            search_params = []
+            
+            if search:
+                where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
+                search_term = f"%{search}%"
+                search_params = [search_term, search_term, search_term]
+            
+            # Determine sort column
+            sort_column = {
+                'active_jobs': 'active_jobs',
+                'total_jobs': 'total_jobs',
+                'total_value': 'total_value',
+                'largest_project': 'largest_project'
+            }.get(sort_by, 'total_jobs')
+            
+            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+            
+            # Get contractors with aggregated stats
+            query = f"""
+                WITH contractor_stats AS (
+                    SELECT 
+                        p.applicant as contractor_name,
+                        p.permittee_license_number as license,
+                        COUNT(*) as total_jobs,
+                        COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
+                        COALESCE(SUM(b.assessed_total_value), 0) as total_value,
+                        COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
+                        MAX(p.issue_date) as most_recent_job,
+                        COUNT(DISTINCT p.bbl) as unique_properties,
+                        string_agg(DISTINCT p.job_type, ', ') as job_types
+                    FROM permits p
+                    LEFT JOIN buildings b ON p.bbl = b.bbl
+                    {where_clause}
+                    GROUP BY p.applicant, p.permittee_license_number
+                )
                 SELECT 
-                    p.applicant as contractor_name,
-                    p.permittee_license_number as license,
-                    COUNT(*) as total_jobs,
-                    COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
-                    COALESCE(SUM(b.assessed_total_value), 0) as total_value,
-                    COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
-                    MAX(p.issue_date) as most_recent_job,
-                    COUNT(DISTINCT p.bbl) as unique_properties,
-                    string_agg(DISTINCT p.job_type, ', ') as job_types
+                    contractor_name,
+                    license,
+                    total_jobs,
+                    active_jobs,
+                    total_value,
+                    largest_project,
+                    most_recent_job,
+                    unique_properties,
+                    job_types
+                FROM contractor_stats
+                ORDER BY {sort_column} {sort_direction}
+                LIMIT %s OFFSET %s
+            """
+            
+            query_params = search_params + [per_page, offset]
+            cur.execute(query, query_params)
+            contractors = cur.fetchall()
+            
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(DISTINCT p.applicant)
                 FROM permits p
-                LEFT JOIN buildings b ON p.bbl = b.bbl
                 {where_clause}
-                GROUP BY p.applicant, p.permittee_license_number
-            )
-            SELECT 
-                contractor_name,
-                license,
-                total_jobs,
-                active_jobs,
-                total_value,
-                largest_project,
-                most_recent_job,
-                unique_properties,
-                job_types
-            FROM contractor_stats
-            ORDER BY {sort_column} {sort_direction}
-            LIMIT %s OFFSET %s
-        """
-        
-        query_params = search_params + [per_page, offset]
-        cur.execute(query, query_params)
-        contractors = cur.fetchall()
-        
-        # Get total count
-        count_query = f"""
-            SELECT COUNT(DISTINCT p.applicant)
-            FROM permits p
-            {where_clause}
-        """
-        cur.execute(count_query, search_params)
-        total = cur.fetchone()['count']
+            """
+            cur.execute(count_query, search_params)
+            total = cur.fetchone()['count']
         
         return jsonify({
             'success': True,
