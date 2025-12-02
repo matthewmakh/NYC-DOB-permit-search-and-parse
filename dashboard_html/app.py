@@ -37,15 +37,19 @@ DB_CONFIG = {
     'connect_timeout': 10
 }
 
-# Simple connection pool: 2-10 connections
-# Railway free tier supports up to 20 connections, we use max 10 to be safe
+# Simple connection pool: 2-10 connections per worker
+# Railway free tier supports up to 20 connections total
+# With 2 workers, each gets max 5 connections (2-5 range)
 db_pool = None
 
 def init_db_pool():
-    """Initialize the database connection pool"""
+    """Initialize the database connection pool for this worker process"""
     global db_pool
     if db_pool is None:
-        db_pool = pool.SimpleConnectionPool(2, 10, **DB_CONFIG)
+        # Use smaller pool per worker to avoid exceeding connection limit
+        # 2 workers × 5 max connections = 10 total max
+        db_pool = pool.SimpleConnectionPool(1, 5, **DB_CONFIG)
+        print(f"✅ Initialized connection pool for worker PID {os.getpid()}")
     return db_pool
 
 
