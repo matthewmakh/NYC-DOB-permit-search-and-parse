@@ -2126,30 +2126,30 @@ def api_market_stats():
         with DatabaseConnection() as cur:
             # Active permits (all permits with valid dates)
             cur.execute("""
-            SELECT COUNT(*) as count
-            FROM permits
-            WHERE issue_date IS NOT NULL
-            AND issue_date <= CURRENT_DATE
-            AND issue_date >= '2000-01-01'
-        """)
-        active_permits = cur.fetchone()['count']
-        
-        # Recent sales (last 30 days)
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM acris_transactions
-            WHERE doc_type LIKE '%%DEED%%'
-            AND recorded_date >= CURRENT_DATE - INTERVAL '30 days'
-        """)
-        recent_sales = cur.fetchone()['count']
-        
-        # Total properties
-        cur.execute("SELECT COUNT(*) as count FROM buildings")
-        total_properties = cur.fetchone()['count']
-        
-        # Qualified leads - show total permits since we have 70k+
-        cur.execute("SELECT COUNT(*) as count FROM permits")
-        qualified_leads = cur.fetchone()['count']
+                SELECT COUNT(*) as count
+                FROM permits
+                WHERE issue_date IS NOT NULL
+                AND issue_date <= CURRENT_DATE
+                AND issue_date >= '2000-01-01'
+            """)
+            active_permits = cur.fetchone()['count']
+            
+            # Recent sales (last 30 days)
+            cur.execute("""
+                SELECT COUNT(*) as count
+                FROM acris_transactions
+                WHERE doc_type LIKE '%%DEED%%'
+                AND recorded_date >= CURRENT_DATE - INTERVAL '30 days'
+            """)
+            recent_sales = cur.fetchone()['count']
+            
+            # Total properties
+            cur.execute("SELECT COUNT(*) as count FROM buildings")
+            total_properties = cur.fetchone()['count']
+            
+            # Qualified leads - show total permits since we have 70k+
+            cur.execute("SELECT COUNT(*) as count FROM permits")
+            qualified_leads = cur.fetchone()['count']
         
         return jsonify({
             'activePermits': active_permits,
