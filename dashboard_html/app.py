@@ -60,14 +60,34 @@ def get_db_connection():
         init_db_pool()
     try:
         conn = db_pool.getconn()
+        # Test if connection is valid
         if conn.closed:
             # Connection is closed, try to get a new one
             db_pool.putconn(conn, close=True)
             conn = db_pool.getconn()
+        else:
+            # Test connection with a simple query
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+            except Exception:
+                # Connection is stale, close it and get a new one
+                try:
+                    db_pool.putconn(conn, close=True)
+                except:
+                    pass
+                conn = db_pool.getconn()
         return conn
     except Exception as e:
         print(f"Error getting connection from pool: {e}")
-        raise
+        # If pool is having issues, try to recreate it
+        try:
+            db_pool = None
+            init_db_pool()
+            return db_pool.getconn()
+        except Exception as e2:
+            print(f"Failed to recreate pool: {e2}")
+            raise
 
 
 def return_db_connection(conn):
