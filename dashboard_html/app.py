@@ -58,13 +58,29 @@ def get_db_connection():
     global db_pool
     if db_pool is None:
         init_db_pool()
-    return db_pool.getconn()
+    try:
+        conn = db_pool.getconn()
+        if conn.closed:
+            # Connection is closed, try to get a new one
+            db_pool.putconn(conn, close=True)
+            conn = db_pool.getconn()
+        return conn
+    except Exception as e:
+        print(f"Error getting connection from pool: {e}")
+        raise
 
 
 def return_db_connection(conn):
     """Return a connection to the pool"""
     if conn and db_pool:
-        db_pool.putconn(conn)
+        try:
+            # Only return if connection is still valid
+            if not conn.closed:
+                db_pool.putconn(conn)
+            else:
+                print("Connection was closed, not returning to pool")
+        except Exception as e:
+            print(f"Error returning connection to pool: {e}")
 
 
 class DatabaseConnection:
@@ -72,6 +88,7 @@ class DatabaseConnection:
     def __init__(self):
         self.conn = None
         self.cursor = None
+        self.conn_returned = False
     
     def __enter__(self):
         self.conn = get_db_connection()
@@ -79,16 +96,41 @@ class DatabaseConnection:
         return self.cursor
     
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # Close cursor first
         if self.cursor:
-            self.cursor.close()
-        if self.conn:
-            if exc_type is not None:
-                # Rollback on error
+            try:
+                self.cursor.close()
+            except Exception as e:
+                print(f"Error closing cursor: {e}")
+            finally:
+                self.cursor = None
+        
+        # Handle transaction and return connection
+        if self.conn and not self.conn_returned:
+            try:
+                if exc_type is not None:
+                    # Rollback on error
+                    try:
+                        self.conn.rollback()
+                    except Exception as e:
+                        print(f"Error rolling back: {e}")
+                else:
+                    # Commit on success for write operations
+                    # For read operations, this is a no-op
+                    try:
+                        self.conn.commit()
+                    except Exception as e:
+                        print(f"Error committing: {e}")
+            finally:
+                # Always try to return connection
                 try:
-                    self.conn.rollback()
-                except:
-                    pass
-            return_db_connection(self.conn)
+                    return_db_connection(self.conn)
+                    self.conn_returned = True
+                except Exception as e:
+                    print(f"Error in __exit__ returning connection: {e}")
+                finally:
+                    self.conn = None
+        
         return False  # Don't suppress exceptions
 
 
@@ -1509,35 +1551,37 @@ def get_construction_map_data():
                 AND p.longitude BETWEEN -74.3 AND -73.7
         """
         
-        params = []
+            params = []
+            
+            # Handle time period
+            if days != 'all':
+                days_int = int(days)
+                query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
+                params.append(days_int)
+            
+            if job_types:
+                placeholders = ','.join(['%s'] * len(job_types))
+                query += f" AND p.job_type IN ({placeholders})"
+                params.extend(job_types)
+            
+            if borough:
+                query += " AND p.borough = %s"
+                params.append(borough)
+            
+            # Limit map markers for performance - prioritize recent/high-value permits
+            query += " ORDER BY p.issue_date DESC LIMIT 500"
+            
+            cur.execute(query, tuple(params))
+            locations = cur.fetchall()
+            
+            # Convert to list of dicts while cursor is still open
+            locations_list = [dict(loc) for loc in locations]
         
-        # Handle time period
-        if days != 'all':
-            days_int = int(days)
-            query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-            params.append(days_int)
-        
-        if job_types:
-            placeholders = ','.join(['%s'] * len(job_types))
-            query += f" AND p.job_type IN ({placeholders})"
-            params.extend(job_types)
-        
-        if borough:
-            query += " AND p.borough = %s"
-            params.append(borough)
-        
-        # Limit map markers for performance - prioritize recent/high-value permits
-        query += " ORDER BY p.issue_date DESC LIMIT 500"
-        
-        cur.execute(query, tuple(params))
-        locations = cur.fetchall()
-        
-        # Add lead scores to map locations
+        # Add lead scores to map locations (outside the context manager)
         locations_with_scores = []
-        for loc in locations:
-            loc_dict = dict(loc)
-            loc_dict['lead_score'] = calculate_lead_score(loc)
-            locations_with_scores.append(loc_dict)
+        for loc in locations_list:
+            loc['lead_score'] = calculate_lead_score(loc)
+            locations_with_scores.append(loc)
         
         return jsonify({
             'success': True,
@@ -1547,6 +1591,8 @@ def get_construction_map_data():
         
     except Exception as e:
         print(f"Error fetching map data: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
