@@ -124,7 +124,7 @@ def geocode_with_nyc_geoclient(address, borough=None):
     # V2 API uses subscription key in header, not query params
     url = "https://api.nyc.gov/geoclient/v2/address"
     headers = {
-        'Ocp-Apim-Subscription-Key': NYC_APP_ID  # Primary key goes in header
+        'Ocp-Apim-Subscription-Key': NYC_APP_ID  # NYC Geoclient V2 uses Ocp-Apim-Subscription-Key header
     }
     params = {
         'houseNumber': house_number,
