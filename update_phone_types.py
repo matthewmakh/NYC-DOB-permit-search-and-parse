@@ -1,6 +1,8 @@
 """
-Script to validate phone numbers in the database and update the is_mobile column.
-Uses Twilio Lookup API to determine if phone numbers are mobile or landline.
+Script to validate phone numbers using Twilio Lookup API.
+Stores validation results in contacts table for reuse across all linked permits.
+
+Uses contacts table with many-to-many relationships via permit_contacts junction table.
 """
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -52,17 +54,28 @@ except Exception as err:
     print(f"❌ Database connection failed: {err}")
     exit(1)
 
+print()
+print("=" * 80)
+print("PHONE VALIDATION USING CONTACTS TABLE")
+print("=" * 80)
+
 # === FETCH PHONE NUMBERS TO VALIDATE ===
-# Option 1: Get all phones (update all records)
-# cur.execute("SELECT DISTINCT phone FROM contacts WHERE phone IS NOT NULL AND phone != ''")
+# Get phone numbers from contacts table that haven't been validated yet
+cur.execute("""
+    SELECT phone, name, role
+    FROM contacts
+    WHERE phone_validated_at IS NULL
+    AND phone IS NOT NULL
+    AND phone ~ '^[0-9]{10}$'
+    ORDER BY phone
+""")
 
-# Option 2: Only get phones that haven't been validated yet (is_mobile is NULL)
-cur.execute("SELECT DISTINCT phone FROM contacts WHERE phone IS NOT NULL AND phone != '' AND is_mobile IS NULL")
+contacts_to_validate = cur.fetchall()
+print(f"📞 Found {len(contacts_to_validate)} contacts needing validation")
+print(f"   (excluding already validated phones)")
+print()
 
-phones = [row['phone'] for row in cur.fetchall()]
-print(f"📞 Found {len(phones)} unique phone numbers to validate.")
-
-if len(phones) == 0:
+if len(contacts_to_validate) == 0:
     print("✅ All phone numbers already validated!")
     cur.close()
     conn.close()
@@ -74,10 +87,32 @@ mobile_count = 0
 landline_count = 0
 invalid_count = 0
 error_count = 0
+skipped_count = 0
 
-# === PROCESS EACH PHONE NUMBER ===
-for index, phone in enumerate(phones, start=1):
-    clean_phone = phone.strip().replace('-', '').replace('(', '').replace(')', '').replace(' ', '').replace('.', '')
+# === PROCESS EACH CONTACT ===
+for index, contact in enumerate(contacts_to_validate, start=1):
+    phone = contact['phone']
+    name = contact['name']
+    role = contact['role']
+    clean_phone = phone.strip()
+    
+    # VALIDATION: Skip obviously invalid numbers to save API costs
+    if not clean_phone or len(clean_phone) < 10:
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (too short)")
+        invalid_count += 1
+        continue
+    
+    # Skip fake/test numbers
+    if clean_phone in ['0', '0000', '00000000', '0000000000', '1111111111', '1234567890', '1234567891']:
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (fake number)")
+        invalid_count += 1
+        continue
+    
+    # Skip numbers that don't look like US phone numbers
+    if clean_phone.startswith('00') or (len(clean_phone) == 10 and not clean_phone[0] in '23456789'):
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (invalid format)")
+        invalid_count += 1
+        continue
     
     # Add country code if missing (assuming US numbers)
     if not clean_phone.startswith('+'):
@@ -85,6 +120,10 @@ for index, phone in enumerate(phones, start=1):
             clean_phone = '+1' + clean_phone
         elif len(clean_phone) == 11 and clean_phone.startswith('1'):
             clean_phone = '+' + clean_phone
+        else:
+            print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ⏭️  SKIP (wrong length: {len(clean_phone)})")
+            invalid_count += 1
+            continue
 
     try:
         # Use Twilio Lookup API with line type intelligence
@@ -120,16 +159,18 @@ for index, phone in enumerate(phones, start=1):
             status = f"❓ {line_type.upper()}"
 
         # Log progress
-        print(f"{index}/{len(phones)} - {phone} → {status} ({carrier_name})")
+        print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → {status} ({carrier_name})")
 
-        # Update database
+        # UPDATE contact record with validation results
         if is_mobile is not None:
-            update_query = """
-                UPDATE contacts 
-                SET is_mobile = %s 
+            cur.execute("""
+                UPDATE contacts
+                SET is_mobile = %s,
+                    line_type = %s,
+                    carrier_name = %s,
+                    phone_validated_at = CURRENT_TIMESTAMP
                 WHERE phone = %s
-            """
-            cur.execute(update_query, (is_mobile, phone))
+            """, (is_mobile, line_type, carrier_name, phone))
             conn.commit()
             validated_count += 1
 
@@ -138,13 +179,20 @@ for index, phone in enumerate(phones, start=1):
         
         # Handle invalid/non-existent numbers gracefully
         if 'invalid' in error_str.lower() or '20404' in error_str:
-            print(f"{index}/{len(phones)} - {phone} → ❌ INVALID")
-            # Mark as invalid (non-mobile)
-            cur.execute("UPDATE contacts SET is_mobile = %s WHERE phone = %s", (False, phone))
+            print(f"{index}/{len(contacts_to_validate)} - {name[:30]} ({phone}) → ❌ INVALID")
+            # Mark as invalid in contacts table
+            cur.execute("""
+                UPDATE contacts
+                SET is_mobile = FALSE,
+                    line_type = 'invalid',
+                    carrier_name = 'Invalid Number',
+                    phone_validated_at = CURRENT_TIMESTAMP
+                WHERE phone = %s
+            """, (phone,))
             conn.commit()
             invalid_count += 1
         else:
-            print(f"⚠️ Error checking {phone}: {e}")
+            print(f"⚠️ Error checking {name[:30]} ({phone}): {e}")
             error_count += 1
         continue
 
@@ -158,18 +206,18 @@ print("="*60)
 print(f"✅ Total validated: {validated_count}")
 print(f"📱 Mobile numbers: {mobile_count}")
 print(f"☎️  Landline numbers: {landline_count}")
-print(f"❌ Invalid numbers: {invalid_count}")
-print(f"⚠️  Errors: {error_count}")
+print(f"⏭️  Skipped (invalid): {invalid_count}")
+print(f"❌ API errors: {error_count}")
+print(f"💰 API calls made: {validated_count + error_count}")
+print(f"💵 Estimated cost: ${(validated_count + error_count) * 0.005:.2f}")
 print("="*60)
 
 # === VERIFY UPDATE ===
-cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile IS NOT NULL")
-total_validated = cur.fetchone()['total']
-cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile = TRUE")
-total_mobile = cur.fetchone()['total']
-print(f"\n📊 Database status:")
-print(f"   Total validated contacts: {total_validated}")
-print(f"   Total mobile contacts: {total_mobile}")
+print(f"\n📊 Results logged (database schema needs updating to store results)")
+print(f"   Mobile numbers found: {mobile_count}")
+print(f"   Landline numbers found: {landline_count}")
+print(f"\n� RECOMMENDATION: Use area code detection instead (see app.py calculate_lead_score)")
+print(f"   No API costs, instant results, works with existing schema")
 
 # === CLOSE DB CONNECTION ===
 cur.close()

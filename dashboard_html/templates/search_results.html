@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Results - NYC Real Estate Intel</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        .result-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-lg);
+            cursor: pointer;
+            transition: all var(--transition-base);
+        }
+        .result-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+            border-color: var(--primary);
+        }
+        .match-tag {
+            background: var(--bg-tertiary);
+            color: var(--primary);
+            padding: 0.25rem 0.625rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 600;
+            border: 1px solid var(--primary-light);
+            display: inline-block;
+            margin: 0.125rem;
+        }
+        .search-tip {
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-md);
+            margin-bottom: var(--spacing-lg);
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        .search-tip i {
+            color: var(--primary);
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/contractors" class="nav-link">👷 Contractors</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+            </div>
+            <div class="nav-actions">
+                <button class="btn btn-secondary" onclick="window.location.href='/'">
+                    <i class="fas fa-arrow-left"></i> Back
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Search Header -->
+    <section class="search-header" style="background: var(--bg-secondary); padding: var(--spacing-xl) 0; border-bottom: 1px solid var(--border-color);">
+        <div class="container">
+            <h1 style="font-size: 1.75rem; margin-bottom: var(--spacing-md);">Search Results</h1>
+            <div class="search-bar-large">
+                <i class="fas fa-search search-icon"></i>
+                <input 
+                    type="text" 
+                    id="searchInput" 
+                    class="search-input-large" 
+                    placeholder="Search addresses, owners, permits, BBLs..."
+                    value="{{ query }}"
+                >
+                <button class="btn btn-primary search-btn" onclick="performSearch()">Search</button>
+            </div>
+            <div id="resultsCount" style="margin-top: var(--spacing-md); color: var(--text-muted);"></div>
+        </div>
+    </section>
+
+    <!-- Results -->
+    <section style="padding: var(--spacing-2xl) 0;">
+        <div class="container">
+            <div class="search-tip">
+                <i class="fas fa-lightbulb"></i>
+                <strong>Tip:</strong> You can search by address (try both "Street" and "St"), owner name, BBL number, permit number, or contact name.
+            </div>
+            <div id="resultsContainer" style="display: flex; flex-direction: column; gap: var(--spacing-lg);">
+                <div class="loading-state">
+                    <div style="text-align: center; padding: var(--spacing-2xl);">
+                        <i class="fas fa-spinner fa-spin" style="font-size: 2rem; color: var(--primary); margin-bottom: var(--spacing-md);"></i>
+                        <p>Searching across all properties and permits...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const searchQuery = "{{ query }}";
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            loadResults();
+            
+            // Allow Enter key to search
+            document.getElementById('searchInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+        });
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        async function loadResults() {
+            const container = document.getElementById('resultsContainer');
+            const countEl = document.getElementById('resultsCount');
+            
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Search failed with status ${response.status}`);
+                }
+                
+                const results = await response.json();
+                
+                console.log('Loaded', results.length, 'results');
+                
+                countEl.textContent = `Found ${results.length} result${results.length !== 1 ? 's' : ''} for "${escapeHtml(searchQuery)}"`;
+                
+                if (results.length === 0) {
+                    container.innerHTML = `
+                        <div style="text-align: center; padding: var(--spacing-2xl); color: var(--text-muted);">
+                            <i class="fas fa-search" style="font-size: 3rem; opacity: 0.3; margin-bottom: var(--spacing-md);"></i>
+                            <p style="font-size: 1.125rem; margin-bottom: var(--spacing-sm);">No results found for "${escapeHtml(searchQuery)}"</p>
+                            <p style="margin-bottom: var(--spacing-lg);">Try a different search term or check your spelling</p>
+                            <div style="text-align: left; max-width: 400px; margin: 0 auto; background: var(--bg-tertiary); padding: var(--spacing-lg); border-radius: var(--radius-md);">
+                                <strong style="display: block; margin-bottom: var(--spacing-sm);">Search tips:</strong>
+                                <ul style="margin: 0; padding-left: 1.5rem; line-height: 1.8;">
+                                    <li>Try "123 Main St" instead of "123 Main Street"</li>
+                                    <li>Search by BBL: "1-00234-0056"</li>
+                                    <li>Search owner names: "Smith LLC"</li>
+                                    <li>Search permit numbers: "PW123456"</li>
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = results.map(result => `
+                    <div class="result-card" onclick="window.location.href='/property/${result.bbl}'">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: var(--spacing-sm); color: var(--text-primary);">
+                                    ${escapeHtml(result.address) || 'Address Unknown'}
+                                </h3>
+                                <div style="color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
+                                    <strong>Owner:</strong> ${escapeHtml(result.owner) || 'Unknown'}
+                                </div>
+                                
+                                <!-- Match Reasons -->
+                                ${result.match_reasons && result.match_reasons.length > 0 ? `
+                                    <div style="margin: var(--spacing-sm) 0;">
+                                        <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.25rem; font-weight: 600;">
+                                            Why this matched:
+                                        </div>
+                                        <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                                            ${result.match_reasons.slice(0, 5).map(reason => `
+                                                <span class="match-tag">${escapeHtml(reason)}</span>
+                                            `).join('')}
+                                            ${result.match_reasons.length > 5 ? `<span class="match-tag">+${result.match_reasons.length - 5} more</span>` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                
+                                <div style="display: flex; gap: var(--spacing-md); color: var(--text-muted); font-size: 0.875rem; margin-top: var(--spacing-sm);">
+                                    <span><i class="fas fa-building"></i> BBL: ${formatBBL(result.bbl)}</span>
+                                    <span><i class="fas fa-file-alt"></i> ${result.permits || 0} permit${result.permits != 1 ? 's' : ''}</span>
+                                    ${result.assessed_value ? `<span><i class="fas fa-dollar-sign"></i> $${formatNumber(result.assessed_value)}</span>` : ''}
+                                    ${result.sale_price ? `<span><i class="fas fa-tag"></i> Sale: $${formatNumber(result.sale_price)}</span>` : ''}
+                                </div>
+                            </div>
+                            <div style="color: var(--primary); font-size: 1.5rem;">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Error loading results:', error);
+                container.innerHTML = `
+                    <div style="text-align: center; padding: var(--spacing-2xl); color: var(--secondary);">
+                        <i class="fas fa-exclamation-circle" style="font-size: 3rem; margin-bottom: var(--spacing-md);"></i>
+                        <p style="margin-bottom: var(--spacing-md);">Error loading results. Please try again.</p>
+                        <button class="btn btn-primary" onclick="loadResults()">
+                            <i class="fas fa-redo"></i> Retry
+                        </button>
+                    </div>
+                `;
+            }
+        }
+        
+        function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (query) {
+                window.location.href = `/search-results?q=${encodeURIComponent(query)}`;
+            }
+        }
+        
+        function formatBBL(bbl) {
+            if (!bbl) return '';
+            const bblStr = bbl.toString();
+            if (bblStr.length === 10) {
+                return `${bblStr[0]}-${bblStr.substr(1, 5)}-${bblStr.substr(6, 4)}`;
+            }
+            return bblStr;
+        }
+        
+        function formatNumber(num) {
+            if (!num) return '0';
+            return Math.round(num).toLocaleString();
+        }
+    </script>
+</body>
+</html>

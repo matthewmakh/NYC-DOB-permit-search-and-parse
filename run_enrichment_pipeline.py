@@ -5,9 +5,10 @@ Runs all building enrichment steps in sequence with dependency checking
 
 Execution order:
 1. Step 1: Link permits to buildings (derive BBL)
-2. Step 2: Enrich from PLUTO + RPAD (owners, assessed values)
+2. Step 2: Enrich from PLUTO + RPAD + HPD (owners, assessed values, violations)
 3. Step 3: Enrich from ACRIS (transaction history)
-4. Geocode permits (lat/lng)
+4. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
+5. Geocode permits (lat/lng)
 
 Each step is self-contained and checks if work is needed before running.
 """
@@ -46,46 +47,33 @@ def print_warning(msg):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
 
 def run_script(script_name, description):
-    """Run a Python script and return success status with periodic progress updates"""
+    """Run a Python script and return success status"""
     print(f"\n🚀 Running: {script_name}")
     print(f"   Description: {description}")
-    sys.stdout.flush()
     
     start_time = time.time()
-    last_update = start_time
     
     try:
-        # Run without capturing output so we see it in real-time
-        process = subprocess.Popen(
+        result = subprocess.run(
             [sys.executable, script_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            capture_output=True,
             text=True,
-            bufsize=1,
-            universal_newlines=True
+            check=False
         )
         
-        # Read output line by line and print with periodic status updates
-        for line in process.stdout:
-            print(line, end='')
-            sys.stdout.flush()
-            
-            # Print elapsed time every 5 minutes
-            current_time = time.time()
-            if current_time - last_update >= 300:  # 300 seconds = 5 minutes
-                elapsed = current_time - start_time
-                print(f"\n⏱️  Still running... Elapsed: {elapsed/60:.1f} minutes")
-                sys.stdout.flush()
-                last_update = current_time
-        
-        process.wait()
         duration = time.time() - start_time
         
-        if process.returncode == 0:
+        # Print script output
+        if result.stdout:
+            print(result.stdout)
+        
+        if result.returncode == 0:
             print_success(f"Completed in {duration:.1f}s")
             return True
         else:
-            print_error(f"Failed with exit code {process.returncode}")
+            print_error(f"Failed with exit code {result.returncode}")
+            if result.stderr:
+                print(f"\nError output:\n{result.stderr}")
             return False
             
     except Exception as e:
@@ -113,11 +101,11 @@ def main():
         print_error("Step 1 failed - cannot continue pipeline")
         sys.exit(1)
     
-    # ===== STEP 2: Enrich from PLUTO + RPAD =====
-    print_step(2, "Enrich from PLUTO + RPAD (Parallel)")
+    # ===== STEP 2: Enrich from PLUTO + RPAD + HPD =====
+    print_step(2, "Enrich from PLUTO + RPAD + HPD (Tri-Source)")
     results['step2'] = run_script(
-        'step2_enrich_from_pluto_parallel.py',
-        'Add owner names, building characteristics, assessed values (3 parallel workers)'
+        'step2_enrich_from_pluto.py',
+        'Add owner names, building characteristics, assessed values, HPD data'
     )
     
     if not results['step2']:
@@ -126,15 +114,25 @@ def main():
     # ===== STEP 3: Enrich from ACRIS =====
     print_step(3, "Enrich from ACRIS (Transaction History)")
     results['step3'] = run_script(
-        'step3_enrich_from_acris_parallel.py',
+        'step3_enrich_from_acris.py',
         'Add purchase dates, sale prices, mortgage amounts'
     )
     
     if not results['step3']:
-        print_warning("Step 3 failed - continuing to geocoding")
+        print_warning("Step 3 failed - continuing to next steps")
     
-    # ===== STEP 4: Geocode Permits =====
-    print_step(4, "Geocode Permits (Latitude/Longitude)")
+    # ===== STEP 4: Enrich from Tax/Lien Data =====
+    print_step(4, "Enrich from Tax Delinquency & Liens")
+    results['step4'] = run_script(
+        'step4_enrich_from_tax_liens.py',
+        'Add tax delinquency status, ECB liens, DOB violations'
+    )
+    
+    if not results['step4']:
+        print_warning("Step 4 failed - continuing to geocoding")
+    
+    # ===== STEP 5: Geocode Permits =====
+    print_step(5, "Geocode Permits (Latitude/Longitude)")
     results['geocode'] = run_script(
         'geocode_permits.py',
         'Add geographic coordinates for mapping'
@@ -161,6 +159,12 @@ def main():
     # Overall status
     critical_steps = ['step1', 'step2']  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
+    
+    if critical_failed:
+        print_error("\n⚠️  Critical steps failed - enrichment incomplete")
+        sys.exit(1)
+    else:
+        print_success("\n✅ Pipeline completed successfully!")
     
     if critical_failed:
         print_error("\n❌ PIPELINE FAILED - Critical steps did not complete")

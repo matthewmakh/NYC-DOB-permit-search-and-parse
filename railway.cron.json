@@ -4,7 +4,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python update_phone_types.py",
     "restartPolicyType": "NEVER"
   }
 }

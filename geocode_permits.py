@@ -124,7 +124,7 @@ def geocode_with_nyc_geoclient(address, borough=None):
     # V2 API uses subscription key in header, not query params
     url = "https://api.nyc.gov/geoclient/v2/address"
     headers = {
-        'Ocp-Apim-Subscription-Key': NYC_APP_ID  # NYC Geoclient V2 uses Ocp-Apim-Subscription-Key header
+        'subscription-key': NYC_APP_ID  # NYC Geoclient V2 uses subscription-key header
     }
     params = {
         'houseNumber': house_number,
@@ -301,7 +301,7 @@ def geocode_permits():
         try:
             test_url = "https://api.nyc.gov/geoclient/v2/address"
             test_headers = {
-                'Ocp-Apim-Subscription-Key': NYC_APP_ID
+                'subscription-key': NYC_APP_ID
             }
             test_params = {
                 'houseNumber': '1',
@@ -425,9 +425,6 @@ def geocode_permits():
             else:
                 print(f"  ⚠️  No BBL/borough - using OpenStreetMap Nominatim...")
             lat, lon = geocode_with_nominatim(address)
-        if lat is None or lon is None:
-            print(f"  🌐 Trying OpenStreetMap Nominatim...")
-            lat, lon = geocode_with_nominatim(address)
         
         # Update database if we got coordinates
         if lat is not None and lon is not None:
@@ -441,8 +438,10 @@ def geocode_permits():
             print(f"  ❌ Could not geocode address")
             # Mark as failed so we don't retry it
             try:
-                cur.execute("UPDATE permits SET geocode_failed = TRUE WHERE id = %s", (permit_id,))
+                cur_fail = conn.cursor()
+                cur_fail.execute("UPDATE permits SET geocode_failed = TRUE WHERE id = %s", (permit_id,))
                 conn.commit()
+                cur_fail.close()
             except Exception as e:
                 print(f"  ⚠️  Could not mark as failed: {e}")
             fail_count += 1

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NYC Real Estate Intel{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    {% block extra_css %}{% endblock %}
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link {% if active_page == 'home' %}active{% endif %}">Home</a>
+                <a href="/construction" class="nav-link {% if active_page == 'construction' %}active{% endif %}">🏗️ Construction</a>
+                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">👷 Contractors</a>
+                <a href="/investments" class="nav-link {% if active_page == 'investments' %}active{% endif %}">💰 Investments</a>
+                <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">🏢 Properties</a>
+                <a href="/analytics" class="nav-link {% if active_page == 'analytics' %}active{% endif %}">📊 Analytics</a>
+            </div>
+            <div class="nav-actions">
+                {% block nav_actions %}
+                <button class="btn btn-primary" id="exportBtn">
+                    <i class="fas fa-download"></i> Export
+                </button>
+                {% endblock %}
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
