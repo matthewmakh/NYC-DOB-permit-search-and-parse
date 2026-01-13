@@ -1988,123 +1988,235 @@ def api_property_hpd_info(bbl):
         })
 
 
+import re
+
+# Pre-compiled regex patterns for address normalization (more efficient than compiling each time)
+ADDRESS_ABBREVIATIONS = {
+    'STREET': 'ST', 'AVENUE': 'AVE', 'BOULEVARD': 'BLVD', 'DRIVE': 'DR',
+    'LANE': 'LN', 'ROAD': 'RD', 'PLACE': 'PL', 'COURT': 'CT',
+    'TERRACE': 'TER', 'PARKWAY': 'PKWY', 'HIGHWAY': 'HWY', 'CIRCLE': 'CIR',
+    'SQUARE': 'SQ', 'NORTH': 'N', 'SOUTH': 'S', 'EAST': 'E', 'WEST': 'W'
+}
+
+# Build reverse mapping
+ADDRESS_EXPANSIONS = {v: k for k, v in ADDRESS_ABBREVIATIONS.items()}
+
+# Pre-compile patterns for both directions
+ABBREV_PATTERNS = {word: re.compile(r'\b' + word + r'\b', re.IGNORECASE) 
+                   for word in list(ADDRESS_ABBREVIATIONS.keys()) + list(ADDRESS_EXPANSIONS.keys())}
+
+
+def normalize_address_simple(address):
+    """
+    Simplified address normalization - converts to uppercase, removes punctuation,
+    and standardizes common abbreviations.
+    """
+    if not address:
+        return address
+    
+    # Uppercase and clean
+    addr = ' '.join(address.upper().replace(',', ' ').replace('.', ' ').split())
+    
+    # Apply abbreviations
+    for full, abbrev in ADDRESS_ABBREVIATIONS.items():
+        addr = ABBREV_PATTERNS[full].sub(abbrev, addr)
+    
+    return addr
+
+
+def get_search_variants(query):
+    """
+    Generate search variants for a query. Returns list of patterns.
+    Simplified version that only generates the most useful variants.
+    """
+    if not query:
+        return [query]
+    
+    variants = set()
+    q = query.upper().strip()
+    variants.add(q)
+    variants.add(normalize_address_simple(q))
+    
+    # Add expansion variants (ST -> STREET, etc.)
+    for abbrev, full in ADDRESS_EXPANSIONS.items():
+        if ABBREV_PATTERNS[abbrev].search(q):
+            variants.add(ABBREV_PATTERNS[abbrev].sub(full, q))
+    
+    return list(variants)
+
+
+def escape_like_pattern(s):
+    """Escape special characters for LIKE/ILIKE patterns"""
+    return s.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
+def build_token_search_clause(field, tokens, params_dict, param_prefix):
+    """
+    Build a SQL clause that matches all tokens in any order.
+    For "810 sterling" this creates: field ILIKE '%810%' AND field ILIKE '%sterling%'
+    Returns (sql_clause, updated_params_dict)
+    """
+    clauses = []
+    for i, token in enumerate(tokens):
+        param_name = f"{param_prefix}_{i}"
+        clauses.append(f"{field} ILIKE %({param_name})s")
+        params_dict[param_name] = f'%{escape_like_pattern(token)}%'
+    return ' AND '.join(clauses), params_dict
+
+
 @app.route('/api/search')
 def api_search():
-    """Enhanced universal search endpoint with match reasons"""
+    """
+    Universal search using PostgreSQL's pattern matching.
+    Searches buildings and permits, returns consolidated results.
+    Handles multi-word queries by matching each word independently.
+    """
     query = request.args.get('q', '').strip()
     
-    if not query:
-        return jsonify([])
-
-    # Split into tokens so multi-word queries like "810 sterling" or "haim levy"
-    # match records where tokens may appear in any order (not only as an exact phrase).
-    tokens = [t.strip() for t in query.split() if t.strip()]
-    if not tokens:
+    if not query or len(query) < 2:
         return jsonify([])
 
     try:
         with DatabaseConnection() as cur:
-            # helper to build AND-joined ILIKE clauses (field ILIKE %t1% AND field ILIKE %t2% ...)
-            def and_like_clause(field, tok_count):
-                return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
-
-            # Build clauses and params
-            tok_count = len(tokens)
-        addr_clause = and_like_clause('b.address', tok_count)
-        owner_clause = and_like_clause('b.current_owner_name', tok_count)
-        owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
-        owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
-
-        # bbl match will use full query as a contains
-        bbl_clause = 'b.bbl::text LIKE %s'
-
-        # contact / applicant matches will use LOWER(...) so use lowercased tokens
-        # Updated to search permits table columns instead of contacts table
-        permittee_clause = and_like_clause('LOWER(p.permittee_business_name)', tok_count)
-        owner_business_clause = and_like_clause('LOWER(p.owner_business_name)', tok_count)
-        applicant_clause = and_like_clause('LOWER(p.applicant)', tok_count)
-
-        # params order must match placeholders in SQL below
-        params = []
-        # address params
-        params += [f"%{t}%" for t in tokens]
-        # owner params
-        params += [f"%{t}%" for t in tokens]
-        # owner_rpad params
-        params += [f"%{t}%" for t in tokens]
-        # owner_hpd params
-        params += [f"%{t}%" for t in tokens]
-        # bbl param (use full query)
-        params.append(f"%{query}%")
-        # permittee params (lowercase)
-        params += [f"%{t.lower()}%" for t in tokens]
-        # owner_business params (lowercase)
-        params += [f"%{t.lower()}%" for t in tokens]
-        # applicant params (lowercase)
-        params += [f"%{t.lower()}%" for t in tokens]
-
-        # prefix and contains helpers for priority scoring
-        prefix_param = f"{query}%"
-        contains_param = f"%{query}%"
-
-        sql = f"""
-            WITH contact_matches AS (
-                SELECT DISTINCT p.bbl,
-                    ARRAY_AGG(DISTINCT 'Contact: ' || COALESCE(p.permittee_business_name, p.owner_business_name, p.applicant)) as contact_reasons
-                FROM permits p
-                WHERE ({permittee_clause} OR {owner_business_clause})
-                AND (p.permittee_business_name IS NOT NULL OR p.owner_business_name IS NOT NULL)
-                GROUP BY p.bbl
-            ),
-            applicant_matches AS (
-                SELECT DISTINCT p.bbl,
-                    ARRAY_AGG(DISTINCT 'Applicant: ' || p.applicant) as applicant_reasons
-                FROM permits p
-                WHERE {applicant_clause}
-                AND p.applicant IS NOT NULL AND p.applicant != ''
-                GROUP BY p.bbl
-            ),
-            property_matches AS (
-                SELECT b.bbl, b.address, b.current_owner_name as owner, b.assessed_total_value as assessed_value, b.sale_price,
-                    COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits,
-                    -- simple reasons
-                    ARRAY_REMOVE(ARRAY[
-                        CASE WHEN b.address ILIKE %s THEN 'Address prefix' END,
-                        CASE WHEN b.address ILIKE %s THEN 'Address contains' END,
-                        CASE WHEN b.current_owner_name ILIKE %s THEN 'Owner' END,
-                        CASE WHEN b.bbl::text LIKE %s THEN 'BBL' END
-                    ], NULL) as match_reasons,
-                    CASE
-                        WHEN b.address ILIKE %s THEN 1
-                        WHEN b.address ILIKE %s THEN 2
-                        WHEN b.current_owner_name ILIKE %s THEN 3
-                        WHEN b.bbl::text LIKE %s THEN 4
-                        ELSE 5
-                    END as match_priority
-                FROM buildings b
-                LEFT JOIN permits p ON b.bbl = p.bbl
-                WHERE ({addr_clause}) OR ({owner_clause}) OR ({owner_rpad_clause}) OR ({owner_hpd_clause}) OR ({bbl_clause})
-                GROUP BY b.bbl, b.address, b.current_owner_name, b.assessed_total_value, b.sale_price
-            )
-            SELECT pm.bbl, pm.address, pm.owner, pm.assessed_value, pm.sale_price, pm.permits,
-                pm.match_reasons || COALESCE(cm.contact_reasons, ARRAY[]::text[]) || COALESCE(am.applicant_reasons, ARRAY[]::text[]) as match_reasons,
-                pm.match_priority
-            FROM property_matches pm
-            LEFT JOIN contact_matches cm ON pm.bbl = cm.bbl
-            LEFT JOIN applicant_matches am ON pm.bbl = am.bbl
-            ORDER BY pm.match_priority, pm.permits DESC
-            LIMIT 50
-        """
-
-        # execute: need to provide the extra prefix/contains/owner/bbl params before the dynamic params
-        exec_params = [prefix_param, contains_param, contains_param, contains_param, prefix_param, contains_param, contains_param, contains_param]
-        # Then append the dynamic params constructed above: addr, owner, owner_rpad, owner_hpd, bbl, contact, applicant
-        exec_params += params
-
-        cur.execute(sql, tuple(exec_params))
-        results = cur.fetchall()
-        
-        return jsonify([dict(r) for r in results])
+            # Split query into tokens for multi-word matching
+            tokens = [t.strip() for t in query.split() if t.strip()]
+            
+            if not tokens:
+                return jsonify([])
+            
+            # For single token, use simple pattern; for multiple, use token matching
+            base_pattern = f'%{escape_like_pattern(query)}%'
+            
+            # Get address variants for broader matching
+            variants = get_search_variants(query)
+            variant_patterns = [f'%{escape_like_pattern(v)}%' for v in variants]
+            
+            # Also create token-based variant patterns (for "810 sterling" -> "%810%" AND "%sterling%")
+            token_variant_patterns = []
+            for variant in variants:
+                variant_tokens = variant.split()
+                if len(variant_tokens) > 1:
+                    token_variant_patterns.append([f'%{escape_like_pattern(t)}%' for t in variant_tokens])
+            
+            # Build dynamic WHERE clauses for token matching
+            params = {
+                'pattern': base_pattern,
+                'variants': variant_patterns,
+            }
+            
+            # For multi-word queries, build AND conditions for each token
+            token_conditions_building = []
+            token_conditions_permit = []
+            
+            if len(tokens) > 1:
+                # Add token patterns to params
+                for i, token in enumerate(tokens):
+                    params[f'tok_{i}'] = f'%{escape_like_pattern(token)}%'
+                
+                # Build token match clause: address ILIKE '%tok1%' AND address ILIKE '%tok2%' ...
+                token_clauses = ' AND '.join([f"b.address ILIKE %(tok_{i})s" for i in range(len(tokens))])
+                token_conditions_building.append(f"({token_clauses})")
+                
+                token_clauses_p = ' AND '.join([f"p.address ILIKE %(tok_{i})s" for i in range(len(tokens))])
+                token_conditions_permit.append(f"({token_clauses_p})")
+            
+            # Build the complete SQL with token matching
+            building_token_clause = " OR ".join(token_conditions_building) if token_conditions_building else "FALSE"
+            permit_token_clause = " OR ".join(token_conditions_permit) if token_conditions_permit else "FALSE"
+            
+            sql = f"""
+                WITH all_matches AS (
+                    -- Building matches
+                    SELECT DISTINCT
+                        b.bbl,
+                        b.address,
+                        b.current_owner_name as owner,
+                        b.assessed_total_value as assessed_value,
+                        b.sale_price,
+                        CASE 
+                            WHEN b.bbl::text ILIKE %(pattern)s THEN 'BBL'
+                            WHEN b.address ILIKE ANY(%(variants)s) THEN 'Address'
+                            WHEN {building_token_clause} THEN 'Address'
+                            WHEN b.current_owner_name ILIKE %(pattern)s THEN 'Owner'
+                            ELSE 'Building'
+                        END as match_type,
+                        CASE 
+                            WHEN b.bbl::text ILIKE %(pattern)s THEN 1
+                            WHEN b.address ILIKE ANY(%(variants)s) THEN 2
+                            WHEN {building_token_clause} THEN 2
+                            WHEN b.current_owner_name ILIKE %(pattern)s THEN 3
+                            ELSE 4
+                        END as priority
+                    FROM buildings b
+                    WHERE 
+                        b.bbl::text ILIKE %(pattern)s
+                        OR b.address ILIKE ANY(%(variants)s)
+                        OR ({building_token_clause})
+                        OR b.current_owner_name ILIKE %(pattern)s
+                        OR b.owner_name_rpad ILIKE %(pattern)s
+                        OR b.owner_name_hpd ILIKE %(pattern)s
+                    
+                    UNION ALL
+                    
+                    -- Permit matches
+                    SELECT DISTINCT
+                        p.bbl,
+                        p.address,
+                        COALESCE(p.owner_business_name, p.permittee_business_name) as owner,
+                        NULL::numeric as assessed_value,
+                        NULL::numeric as sale_price,
+                        CASE 
+                            WHEN p.permit_no ILIKE %(pattern)s THEN 'Permit #'
+                            WHEN p.job_number ILIKE %(pattern)s THEN 'Job #'
+                            WHEN p.address ILIKE ANY(%(variants)s) THEN 'Address'
+                            WHEN {permit_token_clause} THEN 'Address'
+                            WHEN p.permittee_business_name ILIKE %(pattern)s THEN 'Permittee'
+                            WHEN p.owner_business_name ILIKE %(pattern)s THEN 'Owner'
+                            WHEN p.applicant ILIKE %(pattern)s THEN 'Applicant'
+                            ELSE 'Permit'
+                        END as match_type,
+                        CASE 
+                            WHEN p.permit_no ILIKE %(pattern)s THEN 1
+                            WHEN p.job_number ILIKE %(pattern)s THEN 1
+                            WHEN p.address ILIKE ANY(%(variants)s) THEN 2
+                            WHEN {permit_token_clause} THEN 2
+                            ELSE 3
+                        END as priority
+                    FROM permits p
+                    WHERE 
+                        p.bbl IS NOT NULL
+                        AND (
+                            p.permit_no ILIKE %(pattern)s
+                            OR p.job_number ILIKE %(pattern)s
+                            OR p.address ILIKE ANY(%(variants)s)
+                            OR ({permit_token_clause})
+                            OR p.permittee_business_name ILIKE %(pattern)s
+                            OR p.owner_business_name ILIKE %(pattern)s
+                            OR p.applicant ILIKE %(pattern)s
+                            OR p.permittee_phone ILIKE %(pattern)s
+                            OR p.owner_phone ILIKE %(pattern)s
+                        )
+                )
+                SELECT 
+                    bbl,
+                    MAX(address) as address,
+                    MAX(owner) as owner,
+                    MAX(assessed_value) as assessed_value,
+                    MAX(sale_price) as sale_price,
+                    ARRAY_AGG(DISTINCT match_type) as match_reasons,
+                    MIN(priority) as priority,
+                    (SELECT COUNT(*) FROM permits WHERE permits.bbl = all_matches.bbl) as permits
+                FROM all_matches
+                WHERE bbl IS NOT NULL
+                GROUP BY bbl
+                ORDER BY MIN(priority), permits DESC
+                LIMIT 100
+            """
+            
+            cur.execute(sql, params)
+            results = cur.fetchall()
+            
+            return jsonify([dict(r) for r in results])
 
     except Exception as e:
         print(f"Search error: {e}")
@@ -2115,83 +2227,100 @@ def api_search():
 
 @app.route('/api/suggest')
 def api_suggest():
-    """Enhanced autocomplete suggestions with match types"""
+    """
+    Fast autocomplete suggestions - simplified query for speed.
+    """
     query = request.args.get('q', '').strip()
-    limit = request.args.get('limit', 5, type=int)
+    limit = request.args.get('limit', 8, type=int)
     
     if not query or len(query) < 2:
         return jsonify([])
     
     try:
         with DatabaseConnection() as cur:
-            # Tokenize query so multi-word input works regardless of order
-            tokens = [t.strip() for t in query.split() if t.strip()]
-            tok_count = len(tokens)
+            safe_query = escape_like_pattern(query)
+            base_pattern = f'%{safe_query}%'
+            variants = [f'%{escape_like_pattern(v)}%' for v in get_search_variants(query)]
             
-            def and_like_clause(field, tok_count):
-                return '(' + ' AND '.join([f"{field} ILIKE %s" for _ in range(tok_count)]) + ')'
-
-            addr_clause = and_like_clause('b.address', tok_count)
-            owner_clause = and_like_clause('b.current_owner_name', tok_count)
-            owner_rpad_clause = and_like_clause('b.owner_name_rpad', tok_count)
-            owner_hpd_clause = and_like_clause('b.owner_name_hpd', tok_count)
-            contact_clause = and_like_clause('LOWER(c.name)', tok_count)
-
-        params = []
-        params += [f"%{t}%" for t in tokens]         # addr
-        params += [f"%{t}%" for t in tokens]         # owner
-        params += [f"%{t}%" for t in tokens]         # owner_rpad
-        params += [f"%{t}%" for t in tokens]         # owner_hpd
-        params += [f"%{t.lower()}%" for t in tokens] # contact
-
-        sql = f"""
-            WITH address_matches AS (
-                SELECT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Address' as match_type, 1 as priority
-                FROM buildings b
-                LEFT JOIN permits p ON b.bbl = p.bbl
-                WHERE {addr_clause}
-                GROUP BY b.bbl, b.address, b.current_owner_name
-                ORDER BY permits DESC
-                LIMIT %s
-            ),
-            owner_matches AS (
-                SELECT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Owner' as match_type, 2 as priority
-                FROM buildings b
-                LEFT JOIN permits p ON b.bbl = p.bbl
-                WHERE ({owner_clause}) OR ({owner_rpad_clause}) OR ({owner_hpd_clause})
-                AND b.bbl NOT IN (SELECT bbl FROM address_matches)
-                GROUP BY b.bbl, b.address, b.current_owner_name
-                ORDER BY permits DESC
-                LIMIT %s
-            ),
-            contact_matches AS (
-                SELECT DISTINCT b.bbl, b.address, b.current_owner_name as owner, COUNT(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) as permits, 'Contact' as match_type, 3 as priority
-                FROM buildings b
-                LEFT JOIN permits p ON b.bbl = p.bbl
-                WHERE (LOWER(p.permittee_business_name) LIKE %s OR LOWER(p.owner_business_name) LIKE %s OR LOWER(p.applicant) LIKE %s)
-                AND (p.permittee_business_name IS NOT NULL OR p.owner_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-                AND b.bbl NOT IN (SELECT bbl FROM address_matches UNION SELECT bbl FROM owner_matches)
-                GROUP BY b.bbl, b.address, b.current_owner_name
-                ORDER BY permits DESC
-                LIMIT %s
-            )
-            SELECT * FROM address_matches
-            UNION ALL
-            SELECT * FROM owner_matches
-            UNION ALL
-            SELECT * FROM contact_matches
-            ORDER BY priority, permits DESC
-            LIMIT %s
-        """
-
-        exec_params = params[:tok_count] + params[tok_count:tok_count*2] + params[tok_count*2:tok_count*3] + params[tok_count*3:tok_count*4] + params[tok_count*4:tok_count*5]
-        # address limit, owner limit, contact limit, final limit
-        exec_params = exec_params + [limit, limit, limit, limit]
-
-        cur.execute(sql, tuple(exec_params))
-        results = cur.fetchall()
-        
-        return jsonify([dict(r) for r in results])
+            # Split query into tokens for multi-word matching
+            tokens = [t.strip() for t in query.split() if t.strip()]
+            
+            params = {
+                'pattern': base_pattern,
+                'variants': variants,
+                'limit': limit
+            }
+            
+            # Build token conditions for multi-word queries
+            token_clause_b = "FALSE"
+            token_clause_p = "FALSE"
+            
+            if len(tokens) > 1:
+                for i, token in enumerate(tokens):
+                    params[f'tok_{i}'] = f'%{escape_like_pattern(token)}%'
+                token_clause_b = ' AND '.join([f"b.address ILIKE %(tok_{i})s" for i in range(len(tokens))])
+                token_clause_p = ' AND '.join([f"p.address ILIKE %(tok_{i})s" for i in range(len(tokens))])
+            
+            # Simpler, faster suggestion query with token matching
+            sql = f"""
+                SELECT DISTINCT ON (bbl)
+                    bbl,
+                    address,
+                    owner,
+                    match_type,
+                    permits
+                FROM (
+                    SELECT 
+                        b.bbl,
+                        b.address,
+                        b.current_owner_name as owner,
+                        CASE 
+                            WHEN b.address ILIKE ANY(%(variants)s) THEN 'Address'
+                            WHEN ({token_clause_b}) THEN 'Address'
+                            WHEN b.current_owner_name ILIKE %(pattern)s THEN 'Owner'
+                            ELSE 'Building'
+                        END as match_type,
+                        1 as priority,
+                        (SELECT COUNT(*) FROM permits WHERE permits.bbl = b.bbl) as permits
+                    FROM buildings b
+                    WHERE 
+                        b.address ILIKE ANY(%(variants)s)
+                        OR ({token_clause_b})
+                        OR b.current_owner_name ILIKE %(pattern)s
+                        OR b.bbl::text ILIKE %(pattern)s
+                    
+                    UNION ALL
+                    
+                    SELECT 
+                        p.bbl,
+                        p.address,
+                        COALESCE(p.owner_business_name, p.permittee_business_name) as owner,
+                        CASE 
+                            WHEN p.permit_no ILIKE %(pattern)s THEN 'Permit'
+                            ELSE 'Address'
+                        END as match_type,
+                        2 as priority,
+                        1 as permits
+                    FROM permits p
+                    WHERE 
+                        p.bbl IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM buildings WHERE buildings.bbl = p.bbl)
+                        AND (
+                            p.address ILIKE ANY(%(variants)s)
+                            OR ({token_clause_p})
+                            OR p.permit_no ILIKE %(pattern)s
+                            OR p.permittee_business_name ILIKE %(pattern)s
+                        )
+                ) sub
+                WHERE bbl IS NOT NULL AND address IS NOT NULL
+                ORDER BY bbl, priority, permits DESC
+                LIMIT %(limit)s
+            """
+            
+            cur.execute(sql, params)
+            results = cur.fetchall()
+            
+            return jsonify([dict(r) for r in results])
 
     except Exception as e:
         print(f"Suggest error: {e}")
@@ -2478,10 +2607,10 @@ def api_properties():
                 where_clauses.append("b.financing_ratio <= %s")
                 params.append(financing_max)
         
-            # Borough filter
+            # Borough filter - extract from BBL (first digit is borough code)
             if borough:
-                where_clauses.append("b.borough = %s")
-                params.append(borough)
+                where_clauses.append("LEFT(b.bbl, 1) = %s")
+                params.append(str(borough))
         
             # Building class
             if building_class:

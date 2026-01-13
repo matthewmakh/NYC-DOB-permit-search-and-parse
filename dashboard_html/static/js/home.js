@@ -66,22 +66,47 @@ function initializeSearch() {
     });
 }
 
+/**
+ * Normalize address input for better searching
+ * Handles common abbreviations and formatting
+ */
+function normalizeAddressInput(query) {
+    if (!query) return query;
+    
+    let normalized = query.trim();
+    
+    // Remove extra whitespace
+    normalized = normalized.replace(/\s+/g, ' ');
+    
+    return normalized;
+}
+
 async function performSearch() {
     const searchInput = document.getElementById('universalSearch');
-    const query = searchInput.value.trim();
+    let query = searchInput.value.trim();
     
     if (!query) {
-        alert('Please enter a search term');
+        showNotification('Please enter a search term', 'warning');
         return;
     }
     
     console.log('Searching for:', query);
     
-    // Check if BBL format (e.g., 1-00234-0056)
-    const bblPattern = /^\d{1}-\d{5}-\d{4}$/;
-    if (bblPattern.test(query)) {
+    // Normalize the query for address searches
+    query = normalizeAddressInput(query);
+    
+    // Check if BBL format (e.g., 1-00234-0056 or 1002340056)
+    const bblPatternDash = /^\d{1}-\d{5}-\d{4}$/;
+    const bblPatternNoDash = /^\d{10}$/;
+    
+    if (bblPatternDash.test(query)) {
         const bbl = query.replace(/-/g, '');
         window.location.href = `/property/${bbl}`;
+        return;
+    }
+    
+    if (bblPatternNoDash.test(query)) {
+        window.location.href = `/property/${query}`;
         return;
     }
     
@@ -93,10 +118,17 @@ async function performSearch() {
     
     try {
         const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        
+        if (!response.ok) {
+            throw new Error(`Search failed with status ${response.status}`);
+        }
+        
         const results = await response.json();
         
+        console.log('Search returned', results.length, 'results');
+        
         if (results.length === 0) {
-            alert('No results found. Try a different search term.');
+            showNotification('No results found. Try a different search term or check your spelling.', 'info');
         } else if (results.length === 1) {
             // Single result - go directly to property page
             window.location.href = `/property/${results[0].bbl}`;
@@ -106,11 +138,64 @@ async function performSearch() {
         }
     } catch (error) {
         console.error('Search error:', error);
-        alert('Search failed. Please try again.');
+        showNotification('Search failed. Please try again.', 'error');
     } finally {
         searchBtn.innerHTML = originalText;
         searchBtn.disabled = false;
     }
+}
+
+/**
+ * Show a notification message to the user
+ */
+function showNotification(message, type = 'info') {
+    // Check if notification container exists, create if not
+    let container = document.getElementById('notificationContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'notificationContainer';
+        container.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px;';
+        document.body.appendChild(container);
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    
+    const colors = {
+        info: { bg: '#e3f2fd', border: '#2196f3', text: '#1565c0' },
+        warning: { bg: '#fff3e0', border: '#ff9800', text: '#e65100' },
+        error: { bg: '#ffebee', border: '#f44336', text: '#c62828' },
+        success: { bg: '#e8f5e9', border: '#4caf50', text: '#2e7d32' }
+    };
+    
+    const color = colors[type] || colors.info;
+    
+    notification.style.cssText = `
+        background: ${color.bg};
+        border: 1px solid ${color.border};
+        color: ${color.text};
+        padding: 12px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        font-size: 14px;
+        max-width: 350px;
+        animation: slideIn 0.3s ease;
+    `;
+    
+    notification.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <i class="fas fa-${type === 'error' ? 'exclamation-circle' : type === 'warning' ? 'exclamation-triangle' : type === 'success' ? 'check-circle' : 'info-circle'}"></i>
+            <span>${message}</span>
+        </div>
+    `;
+    
+    container.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        notification.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }, 5000);
 }
 
 async function fetchSuggestions(query) {
@@ -128,14 +213,19 @@ async function fetchSuggestions(query) {
     suggestions.classList.add('active');
     
     try {
-        const response = await fetch(`/api/suggest?q=${encodeURIComponent(query)}&limit=5`);
+        const response = await fetch(`/api/suggest?q=${encodeURIComponent(query)}&limit=8`);
+        
+        if (!response.ok) {
+            throw new Error('Suggestion fetch failed');
+        }
+        
         const results = await response.json();
         
         if (results.length === 0) {
             suggestions.innerHTML = `
                 <div class="suggestion-item" style="justify-content: center; padding: 1rem; color: var(--text-muted);">
                     <i class="fas fa-search" style="margin-right: 0.5rem;"></i>
-                    No results found
+                    No results found - press Enter to search all data
                 </div>
             `;
             return;
@@ -147,7 +237,7 @@ async function fetchSuggestions(query) {
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <div style="font-weight: 600; color: var(--text-primary);">
-                            ${escapeHtml(result.address)}
+                            ${escapeHtml(result.address || 'Address Unknown')}
                         </div>
                         <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem;">
                             <span>${escapeHtml(result.owner || 'Owner unknown')}</span>
@@ -293,6 +383,16 @@ function initializeNavigation() {
 // UTILITY FUNCTIONS
 // =========================
 
+/**
+ * Escape HTML to prevent XSS attacks
+ */
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function showLoading() {
     // Add loading overlay if needed
     console.log('Loading...');
@@ -304,12 +404,13 @@ function hideLoading() {
 }
 
 function showError(message) {
-    alert(message);
+    showNotification(message, 'error');
 }
 
 // Export for use in other scripts
 window.RealEstateIntel = {
     performSearch,
     selectSuggestion,
-    loadMarketStats
+    loadMarketStats,
+    escapeHtml
 };
