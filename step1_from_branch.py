@@ -34,7 +34,7 @@ def derive_bbl_from_permit(block, lot, permit_no=None):
     """
     Create BBL from block and lot
     BBL format: BBBBBLLLL where B is borough code (1-5), block is 5 digits, lot is 4 digits
-    Borough is extracted from the first digit of the permit number
+    Borough is extracted from the first character of the permit number
     """
     if not block or not lot:
         return None
@@ -48,13 +48,28 @@ def derive_bbl_from_permit(block, lot, permit_no=None):
         print(f"⚠️ Invalid block/lot (non-numeric): block={block}, lot={lot}")
         return None
     
-    # Extract borough code from permit number (first digit)
+    # Map letter codes to numeric codes (DOB NOW uses letters, BIS uses numbers)
+    letter_to_number = {
+        'M': '1',  # Manhattan
+        'X': '2',  # Bronx
+        'B': '3',  # Brooklyn
+        'Q': '4',  # Queens
+        'R': '5',  # Staten Island (Richmond)
+        'S': '5',  # Staten Island alternate
+    }
+    
+    # Extract borough code from permit number (first character)
     borough_code = "3"  # Default to Brooklyn
     if permit_no and len(permit_no) > 0:
-        borough_code = permit_no[0]
-        # Validate borough code is 1-5
-        if borough_code not in ['1', '2', '3', '4', '5']:
-            print(f"⚠️ Invalid borough code in permit {permit_no}: {borough_code}")
+        first_char = permit_no[0].upper()
+        # Check if it's already a numeric code (1-5)
+        if first_char in ['1', '2', '3', '4', '5']:
+            borough_code = first_char
+        # Check if it's a letter code (M, X, B, Q, R, S)
+        elif first_char in letter_to_number:
+            borough_code = letter_to_number[first_char]
+        else:
+            print(f"⚠️ Invalid borough code in permit {permit_no}: {first_char}")
             borough_code = "3"  # Fallback to Brooklyn
     
     # Pad block to 5 digits, lot to 4 digits
