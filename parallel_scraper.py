@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
 """
-Parallel permit scraper - fetches multiple date ranges simultaneously
+Parallel permit scraper - fetches from ALL 3 DOB sources simultaneously
+Sources: BIS (legacy), DOB NOW Filings, DOB NOW Approved
 Significantly faster than sequential scraping
 """
 
@@ -9,134 +11,238 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
 from dotenv import load_dotenv
+import threading
 
-load_dotenv('.env')
+# Load .env from dashboard_html if root .env doesn't exist
+if os.path.exists('.env'):
+    load_dotenv('.env')
+elif os.path.exists('dashboard_html/.env'):
+    load_dotenv('dashboard_html/.env')
 
-from permit_scraper_api import NYCOpenDataClient, PermitDatabase, DB_CONFIG
+from permit_scraper_api import (
+    NYCOpenDataClient,
+    DOBNowFilingsClient,
+    DOBNowApprovedClient,
+    PermitDatabase,
+    DB_CONFIG
+)
 
+# Thread-safe print
+print_lock = threading.Lock()
 
-def scrape_date_range(start_date: str, end_date: str, worker_id: int) -> Tuple[int, int, str, str]:
-    """
-    Scrape a single date range (runs in parallel thread)
-    
-    Returns:
-        (fetched_count, inserted_count, start_date, end_date)
-    """
-    try:
-        # Each thread gets its own API client and database connection
-        api_client = NYCOpenDataClient(app_token=None)
-        db = PermitDatabase(DB_CONFIG)
-        db.connect()
-        
-        print(f"[Worker {worker_id}] Fetching {start_date} to {end_date}...")
-        
-        # Fetch permits from API
-        permits = api_client.fetch_all_permits(
-            start_date=start_date,
-            end_date=end_date
-        )
-        
-        fetched = len(permits)
-        print(f"[Worker {worker_id}] ✅ Fetched {fetched:,} permits")
-        
-        # Insert into database
-        if permits:
-            print(f"[Worker {worker_id}] 💾 Inserting...")
-            inserted = db.bulk_insert_permits(permits)
-            print(f"[Worker {worker_id}] ✅ Inserted {inserted:,} permits")
-        else:
-            inserted = 0
-        
-        db.close()
-        return (fetched, inserted, start_date, end_date)
-        
-    except Exception as e:
-        print(f"[Worker {worker_id}] ❌ Error: {e}")
-        return (0, 0, start_date, end_date)
+def safe_print(msg):
+    with print_lock:
+        print(msg)
 
 
-def split_date_range(start_date: str, end_date: str, num_chunks: int) -> List[Tuple[str, str]]:
-    """
-    Split a date range into smaller chunks for parallel processing
+def scrape_bis_permits(start_date: str, end_date: str) -> Tuple[str, int, int]:
+    """Scrape BIS Permit Issuance (legacy system)"""
+    safe_print(f"\n📋 [BIS] Starting: {start_date} to {end_date}")
     
-    Args:
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        num_chunks: Number of chunks to split into
-        
-    Returns:
-        List of (start_date, end_date) tuples
-    """
-    start = datetime.strptime(start_date, '%Y-%m-%d')
-    end = datetime.strptime(end_date, '%Y-%m-%d')
+    db = PermitDatabase(DB_CONFIG)
+    db.connect()
+    client = NYCOpenDataClient(app_token=None)
     
-    total_days = (end - start).days + 1
-    days_per_chunk = max(1, total_days // num_chunks)
-    
-    chunks = []
-    current = start
-    
-    while current <= end:
-        chunk_end = min(current + timedelta(days=days_per_chunk - 1), end)
-        chunks.append((
-            current.strftime('%Y-%m-%d'),
-            chunk_end.strftime('%Y-%m-%d')
-        ))
-        current = chunk_end + timedelta(days=1)
-    
-    return chunks
-
-
-def run_parallel_scraper(start_date: str, end_date: str, num_workers: int = 4):
-    """
-    Run the scraper with parallel workers
-    
-    Args:
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        num_workers: Number of parallel workers (default: 4)
-    """
-    print("=" * 80)
-    print(f"NYC DOB Parallel Permit Scraper")
-    print(f"Workers: {num_workers}")
-    print("=" * 80)
-    
-    # Split date range into chunks
-    chunks = split_date_range(start_date, end_date, num_workers)
-    
-    print(f"\n📅 Date range split into {len(chunks)} chunks:")
-    for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-        print(f"   Chunk {i}: {chunk_start} to {chunk_end}")
-    
-    print(f"\n🚀 Starting {num_workers} parallel workers...\n")
-    
-    # Run workers in parallel
     total_fetched = 0
     total_inserted = 0
+    offset = 0
+    batch_size = 5000
     
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        # Submit all tasks
+    while True:
+        try:
+            permits = client.fetch_permits(
+                start_date=start_date,
+                end_date=end_date,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not permits:
+                break
+            
+            total_fetched += len(permits)
+            safe_print(f"   [BIS] Fetched {total_fetched:,} records...")
+            
+            for p in permits:
+                if db.insert_permit(p):
+                    total_inserted += 1
+            db.conn.commit()
+            
+            if len(permits) < batch_size:
+                break
+            offset += batch_size
+            
+        except Exception as e:
+            safe_print(f"   [BIS] ⚠️ Error: {e}")
+            break
+    
+    db.close()
+    safe_print(f"   [BIS] ✅ Done: {total_fetched:,} fetched, {total_inserted:,} inserted")
+    return ('bis', total_fetched, total_inserted)
+
+
+def scrape_dob_now_filings(start_date: str, end_date: str) -> Tuple[str, int, int]:
+    """Scrape DOB NOW Job Filings (new applications)"""
+    safe_print(f"\n⭐ [DOB NOW Filings] Starting: {start_date} to {end_date}")
+    
+    db = PermitDatabase(DB_CONFIG)
+    db.connect()
+    client = DOBNowFilingsClient(app_token=None)
+    
+    total_fetched = 0
+    total_inserted = 0
+    offset = 0
+    batch_size = 5000
+    
+    while True:
+        try:
+            filings = client.fetch_filings(
+                start_date=start_date,
+                end_date=end_date,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not filings:
+                break
+            
+            total_fetched += len(filings)
+            safe_print(f"   [Filings] Fetched {total_fetched:,} records...")
+            
+            for f in filings:
+                if db.insert_dob_now_filing(f):
+                    total_inserted += 1
+            db.conn.commit()
+            
+            if len(filings) < batch_size:
+                break
+            offset += batch_size
+            
+        except Exception as e:
+            safe_print(f"   [Filings] ⚠️ Error: {e}")
+            break
+    
+    db.close()
+    safe_print(f"   [Filings] ✅ Done: {total_fetched:,} fetched, {total_inserted:,} inserted")
+    return ('filings', total_fetched, total_inserted)
+
+
+def scrape_dob_now_approved(start_date: str, end_date: str) -> Tuple[str, int, int]:
+    """Scrape DOB NOW Approved Permits (issued permits)"""
+    safe_print(f"\n✅ [DOB NOW Approved] Starting: {start_date} to {end_date}")
+    
+    db = PermitDatabase(DB_CONFIG)
+    db.connect()
+    client = DOBNowApprovedClient(app_token=None)
+    
+    total_fetched = 0
+    total_inserted = 0
+    offset = 0
+    batch_size = 5000
+    
+    while True:
+        try:
+            permits = client.fetch_permits(
+                start_date=start_date,
+                end_date=end_date,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not permits:
+                break
+            
+            total_fetched += len(permits)
+            safe_print(f"   [Approved] Fetched {total_fetched:,} records...")
+            
+            for p in permits:
+                if db.insert_dob_now_approved(p):
+                    total_inserted += 1
+            db.conn.commit()
+            
+            if len(permits) < batch_size:
+                break
+            offset += batch_size
+            
+        except Exception as e:
+            safe_print(f"   [Approved] ⚠️ Error: {e}")
+            break
+    
+    db.close()
+    safe_print(f"   [Approved] ✅ Done: {total_fetched:,} fetched, {total_inserted:,} inserted")
+    return ('approved', total_fetched, total_inserted)
+
+
+def run_parallel_scraper(start_date: str, end_date: str):
+    """
+    Run the scraper with all 3 sources in parallel
+    
+    Args:
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+    """
+    print("=" * 80)
+    print("🚀 NYC DOB Parallel Permit Scraper - 3 SOURCE VERSION")
+    print("=" * 80)
+    print(f"📅 Date range: {start_date} to {end_date}")
+    print(f"📊 Sources: BIS + DOB NOW Filings + DOB NOW Approved")
+    print("=" * 80)
+    
+    start_time = datetime.now()
+    
+    # Track totals
+    totals = {
+        'bis_fetched': 0, 'bis_inserted': 0,
+        'filings_fetched': 0, 'filings_inserted': 0,
+        'approved_fetched': 0, 'approved_inserted': 0
+    }
+    
+    # Run all 3 sources in parallel
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
-            executor.submit(scrape_date_range, chunk_start, chunk_end, i): i 
-            for i, (chunk_start, chunk_end) in enumerate(chunks, 1)
+            executor.submit(scrape_bis_permits, start_date, end_date): 'bis',
+            executor.submit(scrape_dob_now_filings, start_date, end_date): 'filings',
+            executor.submit(scrape_dob_now_approved, start_date, end_date): 'approved'
         }
         
-        # Process results as they complete
         for future in as_completed(futures):
-            worker_id = futures[future]
             try:
-                fetched, inserted, chunk_start, chunk_end = future.result()
-                total_fetched += fetched
-                total_inserted += inserted
+                source, fetched, inserted = future.result()
+                totals[f'{source}_fetched'] = fetched
+                totals[f'{source}_inserted'] = inserted
             except Exception as e:
-                print(f"[Worker {worker_id}] ❌ Failed: {e}")
+                print(f"⚠️ Source failed: {e}")
     
+    elapsed = (datetime.now() - start_time).total_seconds()
+    
+    # Summary
     print("\n" + "=" * 80)
-    print("✅ Parallel scraping complete!")
-    print(f"   Total permits fetched: {total_fetched:,}")
-    print(f"   Total permits inserted: {total_inserted:,}")
-    print(f"   Duplicates skipped: {total_fetched - total_inserted:,}")
+    print("📊 SCRAPER SUMMARY")
     print("=" * 80)
+    print(f"\n⏱️  Completed in {elapsed:.1f} seconds")
+    
+    print(f"\n🏛️  BIS Permits (Legacy):")
+    print(f"    Fetched: {totals['bis_fetched']:,}")
+    print(f"    Inserted: {totals['bis_inserted']:,}")
+    
+    print(f"\n⭐ DOB NOW Filings:")
+    print(f"    Fetched: {totals['filings_fetched']:,}")
+    print(f"    Inserted: {totals['filings_inserted']:,}")
+    
+    print(f"\n✅ DOB NOW Approved:")
+    print(f"    Fetched: {totals['approved_fetched']:,}")
+    print(f"    Inserted: {totals['approved_inserted']:,}")
+    
+    total_fetched = totals['bis_fetched'] + totals['filings_fetched'] + totals['approved_fetched']
+    total_inserted = totals['bis_inserted'] + totals['filings_inserted'] + totals['approved_inserted']
+    
+    print(f"\n📈 GRAND TOTAL:")
+    print(f"    Total Fetched: {total_fetched:,}")
+    print(f"    Total Inserted: {total_inserted:,}")
+    print(f"    Duplicates Skipped: {total_fetched - total_inserted:,}")
+    print("=" * 80)
+    
+    return total_inserted
 
 
 if __name__ == "__main__":
@@ -144,17 +250,15 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        num_workers = 1
         print(f"📅 No dates specified, defaulting to last 7 days: {start_date} to {end_date}")
     elif len(sys.argv) < 3:
-        print("Usage: python parallel_scraper.py [START_DATE END_DATE] [NUM_WORKERS]")
-        print("Example: python parallel_scraper.py 2025-11-18 2025-11-21 8")
+        print("Usage: python parallel_scraper.py [START_DATE END_DATE]")
+        print("Example: python parallel_scraper.py 2025-11-18 2025-11-21")
         print("Or run without arguments to scrape last 7 days:")
         print("  python parallel_scraper.py")
         sys.exit(1)
     else:
         start_date = sys.argv[1]
         end_date = sys.argv[2]
-        num_workers = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     
-    run_parallel_scraper(start_date, end_date, num_workers)
+    run_parallel_scraper(start_date, end_date)
