@@ -448,6 +448,17 @@ class PermitDatabase:
         self.cursor.execute("SELECT 1 FROM permits WHERE permit_no = %s", (permit_no,))
         return self.cursor.fetchone() is not None
     
+    def get_existing_permit_nos(self, permit_nos: list) -> set:
+        """Check which permit numbers already exist in the database (bulk check)"""
+        if not permit_nos:
+            return set()
+        # Use ANY() for efficient bulk lookup
+        self.cursor.execute(
+            "SELECT permit_no FROM permits WHERE permit_no = ANY(%s)",
+            (permit_nos,)
+        )
+        return {row['permit_no'] for row in self.cursor.fetchall()}
+    
     def insert_permit(self, permit_data: Dict) -> bool:
         """
         Insert permit into database
@@ -472,8 +483,9 @@ class PermitDatabase:
             if not permit_no:
                 permit_no = f"{permit_data.get('bin__', '')}_{permit_data.get('issuance_date', '')}"
             
-            # NOTE: No longer checking for duplicates here - ON CONFLICT DO UPDATE handles this
-            # This allows the UPSERT to update existing permits when status changes
+            # Skip if already exists (faster than letting ON CONFLICT handle it)
+            if self.permit_exists(permit_no):
+                return False
 
             
             # Parse dates
@@ -728,13 +740,14 @@ class PermitDatabase:
         self.conn.commit()
         return inserted
     
-    def insert_dob_now_filing(self, filing_data: Dict) -> bool:
+    def insert_dob_now_filing(self, filing_data: Dict, skip_exists_check: bool = False) -> bool:
         """
         Insert DOB NOW job filing into database
         Maps DOB NOW Filings API fields to database columns
         
         Args:
             filing_data: Dictionary from DOB NOW Filings API
+            skip_exists_check: If True, skip the permit_exists check (for bulk operations)
         
         Returns:
             True if inserted/updated, False if failed
@@ -743,6 +756,11 @@ class PermitDatabase:
             # DOB NOW uses job_filing_number as the unique identifier
             permit_no = filing_data.get('job_filing_number')
             if not permit_no:
+                return False
+            
+            # Skip if already exists (faster than letting ON CONFLICT handle it)
+            # Can be bypassed if caller already did bulk check
+            if not skip_exists_check and self.permit_exists(permit_no):
                 return False
             
             def parse_date(date_str):
@@ -873,7 +891,7 @@ class PermitDatabase:
             self.conn.rollback()
             return False
     
-    def insert_dob_now_approved(self, permit_data: Dict) -> bool:
+    def insert_dob_now_approved(self, permit_data: Dict, skip_exists_check: bool = False) -> bool:
         """
         Insert DOB NOW approved permit into database
         Maps DOB NOW Approved Permits API fields to database columns
@@ -883,6 +901,7 @@ class PermitDatabase:
         
         Args:
             permit_data: Dictionary from DOB NOW Approved Permits API
+            skip_exists_check: If True, skip the permit_exists check (for bulk operations)
         
         Returns:
             True if inserted/updated, False if failed
@@ -901,6 +920,11 @@ class PermitDatabase:
                 # Fall back to work_permit if no job_filing_number
                 permit_no = permit_data.get('work_permit')
             if not permit_no or permit_no == 'Permit is not yet issued':
+                return False
+            
+            # Skip if already exists (faster than letting ON CONFLICT handle it)
+            # Can be bypassed if caller already did bulk check
+            if not skip_exists_check and self.permit_exists(permit_no):
                 return False
             
             def parse_date(date_str):
