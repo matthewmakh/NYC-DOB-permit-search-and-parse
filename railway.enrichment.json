@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python run_enrichment_pipeline.py",
+    "startCommand": "python -u run_enrichment_pipeline.py",
     "restartPolicyType": "NEVER"
   }
 }
