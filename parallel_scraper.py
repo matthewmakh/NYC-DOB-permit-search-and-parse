@@ -246,19 +246,25 @@ def run_parallel_scraper(start_date: str, end_date: str):
 
 
 if __name__ == "__main__":
-    # Default to last 7 days if no dates provided
-    if len(sys.argv) < 2:
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        print(f"📅 No dates specified, defaulting to last 7 days: {start_date} to {end_date}")
-    elif len(sys.argv) < 3:
-        print("Usage: python parallel_scraper.py [START_DATE END_DATE]")
-        print("Example: python parallel_scraper.py 2025-11-18 2025-11-21")
-        print("Or run without arguments to scrape last 7 days:")
-        print("  python parallel_scraper.py")
-        sys.exit(1)
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Parallel DOB Permit Scraper')
+    parser.add_argument('--days', '-d', type=int, default=7,
+                        help='Number of days to look back (default: 7)')
+    parser.add_argument('--start', type=str, help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end', type=str, help='End date (YYYY-MM-DD)')
+    
+    args = parser.parse_args()
+    
+    # If explicit dates provided, use them
+    if args.start and args.end:
+        start_date = args.start
+        end_date = args.end
+        print(f"📅 Using specified dates: {start_date} to {end_date}")
     else:
-        start_date = sys.argv[1]
-        end_date = sys.argv[2]
+        # Calculate from --days flag
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
+        print(f"📅 Scraping last {args.days} days: {start_date} to {end_date}")
     
     run_parallel_scraper(start_date, end_date)
