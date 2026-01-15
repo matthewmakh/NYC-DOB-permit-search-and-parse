@@ -133,8 +133,9 @@ for index, contact in enumerate(contacts_to_validate, start=1):
         
         # Extract line type information
         line_type_info = phone_number.line_type_intelligence
-        line_type = line_type_info.get('type', '').lower() if line_type_info else 'unknown'
-        carrier_name = line_type_info.get('carrier_name', 'Unknown') if line_type_info else 'Unknown'
+        line_type_raw = line_type_info.get('type') if line_type_info else None
+        line_type = line_type_raw.lower() if line_type_raw else 'unknown'
+        carrier_name = line_type_info.get('carrier_name') or 'Unknown' if line_type_info else 'Unknown'
         mobile_country_code = line_type_info.get('mobile_country_code') if line_type_info else None
         mobile_network_code = line_type_info.get('mobile_network_code') if line_type_info else None
 
