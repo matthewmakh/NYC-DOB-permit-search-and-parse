@@ -102,9 +102,10 @@ class NYCOpenDataClient:
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             
-            # Format for SoQL query (they use MM/DD/YYYY in the data)
-            start_formatted = start_dt.strftime('%m/%d/%Y')
-            end_formatted = end_dt.strftime('%m/%d/%Y')
+            # Use ISO format for proper date comparison (not string comparison)
+            # Format: YYYY-MM-DDTHH:MM:SS
+            start_formatted = start_dt.strftime('%Y-%m-%dT00:00:00')
+            end_formatted = end_dt.strftime('%Y-%m-%dT23:59:59')
         except:
             print(f"❌ Invalid date format. Use YYYY-MM-DD")
             return []

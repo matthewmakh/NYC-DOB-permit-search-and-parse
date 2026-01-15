@@ -32,7 +32,7 @@ print_lock = threading.Lock()
 
 def safe_print(msg):
     with print_lock:
-        print(msg)
+        print(msg, flush=True)
 
 
 def scrape_bis_permits(start_date: str, end_date: str) -> Tuple[str, int, int]:
@@ -61,12 +61,17 @@ def scrape_bis_permits(start_date: str, end_date: str) -> Tuple[str, int, int]:
                 break
             
             total_fetched += len(permits)
-            safe_print(f"   [BIS] Fetched {total_fetched:,} records...")
+            safe_print(f"   [BIS] Fetched {total_fetched:,} records, inserting...")
             
-            for p in permits:
+            batch_inserted = 0
+            for i, p in enumerate(permits):
                 if db.insert_permit(p):
                     total_inserted += 1
+                    batch_inserted += 1
+                if (i + 1) % 500 == 0:
+                    safe_print(f"   [BIS] Inserted {i+1}/{len(permits)} ({batch_inserted} new)...")
             db.conn.commit()
+            safe_print(f"   [BIS] Batch complete: {batch_inserted} new records")
             
             if len(permits) < batch_size:
                 break
@@ -107,12 +112,17 @@ def scrape_dob_now_filings(start_date: str, end_date: str) -> Tuple[str, int, in
                 break
             
             total_fetched += len(filings)
-            safe_print(f"   [Filings] Fetched {total_fetched:,} records...")
+            safe_print(f"   [Filings] Fetched {total_fetched:,} records, inserting...")
             
-            for f in filings:
+            batch_inserted = 0
+            for i, f in enumerate(filings):
                 if db.insert_dob_now_filing(f):
                     total_inserted += 1
+                    batch_inserted += 1
+                if (i + 1) % 500 == 0:
+                    safe_print(f"   [Filings] Inserted {i+1}/{len(filings)} ({batch_inserted} new)...")
             db.conn.commit()
+            safe_print(f"   [Filings] Batch complete: {batch_inserted} new records")
             
             if len(filings) < batch_size:
                 break
@@ -153,12 +163,17 @@ def scrape_dob_now_approved(start_date: str, end_date: str) -> Tuple[str, int, i
                 break
             
             total_fetched += len(permits)
-            safe_print(f"   [Approved] Fetched {total_fetched:,} records...")
+            safe_print(f"   [Approved] Fetched {total_fetched:,} records, inserting...")
             
-            for p in permits:
+            batch_inserted = 0
+            for i, p in enumerate(permits):
                 if db.insert_dob_now_approved(p):
                     total_inserted += 1
+                    batch_inserted += 1
+                if (i + 1) % 500 == 0:
+                    safe_print(f"   [Approved] Inserted {i+1}/{len(permits)} ({batch_inserted} new)...")
             db.conn.commit()
+            safe_print(f"   [Approved] Batch complete: {batch_inserted} new records")
             
             if len(permits) < batch_size:
                 break
