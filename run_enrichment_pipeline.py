@@ -129,10 +129,20 @@ def main():
     )
     
     if not results['step4']:
-        print_warning("Step 4 failed - continuing to geocoding")
+        print_warning("Step 4 failed - continuing to Step 5")
     
-    # ===== STEP 5: Geocode Permits =====
-    print_step(5, "Geocode Permits (Latitude/Longitude)")
+    # ===== STEP 5: Enrich from NY SOS =====
+    print_step(5, "Enrich from NY Secretary of State (LLC Owners)")
+    results['step5'] = run_script(
+        'step5_enrich_from_sos.py',
+        'Find real people (CEO, agents) behind LLC-owned properties'
+    )
+    
+    if not results['step5']:
+        print_warning("Step 5 failed - continuing to geocoding")
+    
+    # ===== STEP 6: Geocode Permits =====
+    print_step(6, "Geocode Permits (Latitude/Longitude)")
     results['geocode'] = run_script(
         'geocode_permits.py',
         'Add geographic coordinates for mapping'

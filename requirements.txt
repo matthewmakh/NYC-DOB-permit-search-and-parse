@@ -11,3 +11,4 @@ streamlit
 python-dateutil
 plotly
 twilio==9.3.7
+httpx
