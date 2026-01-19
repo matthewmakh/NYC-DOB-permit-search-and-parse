@@ -139,7 +139,8 @@ function updateTabBadges() {
         building.current_owner_name,
         building.owner_name_rpad,
         building.owner_name_hpd,
-        building.ecb_respondent_name
+        building.ecb_respondent_name,
+        building.sos_principal_name
     ].filter(o => o).length;
     if (ownerCount > 0) {
         setBadge('owners-badge', ownerCount);
@@ -188,10 +189,21 @@ function setBadge(badgeId, count) {
 // ============================================================================
 
 function renderHeroSection() {
-    const { building, building_class_description, owners, risk_assessment } = buildingData;
+    const { building, building_class_description, owners, sos_data, risk_assessment } = buildingData;
     
-    // Address
-    document.getElementById('building-address').textContent = building.address || 'Address Unknown';
+    // Full Address with Borough and Zip
+    const addressParts = [building.address || 'Address Unknown'];
+    if (building.borough_name) {
+        addressParts.push(building.borough_name);
+    }
+    if (building.zip_code) {
+        addressParts.push('NY ' + building.zip_code);
+    }
+    
+    document.getElementById('building-address').innerHTML = `
+        <span class="address-street">${building.address || 'Address Unknown'}</span>
+        ${building.borough_name || building.zip_code ? `<span class="address-city">${building.borough_name || ''}${building.borough_name && building.zip_code ? ', ' : ''}${building.zip_code ? 'NY ' + building.zip_code : ''}</span>` : ''}
+    `;
     document.getElementById('bbl-display').textContent = building.bbl;
     
     // Risk Score with color coding
@@ -203,7 +215,7 @@ function renderHeroSection() {
     riskLabel.textContent = risk_assessment.label;
     riskCard.className = `risk-score-card risk-${risk_assessment.color}`;
     
-    // Owner Sources (ALL 4 sources with attribution)
+    // Owner Sources (ALL sources with attribution)
     const ownerSourcesEl = document.getElementById('owner-sources');
     ownerSourcesEl.innerHTML = '';
     
@@ -214,6 +226,29 @@ function renderHeroSection() {
         'ecb': 'ECB Violation Respondent'
     };
     
+    // Show SOS data first if available (most valuable intel)
+    if (sos_data && sos_data.principal_name) {
+        const sosItem = document.createElement('div');
+        sosItem.className = 'owner-item sos-highlight';
+        
+        // Check if it's a real person (not LLC/agent)
+        const isRealPerson = !sos_data.principal_name.includes('LLC') && 
+                            !sos_data.principal_name.includes('C/O') &&
+                            !sos_data.principal_name.includes('ATTN') &&
+                            !sos_data.principal_name.includes('CORP');
+        
+        sosItem.innerHTML = `
+            <span class="owner-source sos-source">
+                🔍 NY Secretary of State
+                ${isRealPerson ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
+            </span>
+            <span class="owner-name sos-name">${sos_data.principal_name}</span>
+            ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
+            <span class="sos-entity">Behind: ${sos_data.entity_name || 'LLC'} (${sos_data.entity_status || 'Unknown'})</span>
+        `;
+        ownerSourcesEl.appendChild(sosItem);
+    }
+
     Object.entries(owners).forEach(([source, name]) => {
         if (name) {
             const ownerItem = document.createElement('div');
@@ -230,6 +265,253 @@ function renderHeroSection() {
     if (ownerSourcesEl.children.length === 0) {
         ownerSourcesEl.innerHTML = '<div class="no-data">No owner information available</div>';
     }
+    
+    // Add Enrich Owner button after owner list
+    addEnrichOwnerButton(ownerSourcesEl);
+}
+
+// ============================================================================
+// OWNER ENRICHMENT
+// ============================================================================
+
+function addEnrichOwnerButton(container) {
+    const building = buildingData.building;
+    const buildingId = building.id;
+    
+    // Use pre-loaded enrichment data from building profile API (no separate API call needed)
+    const enrichmentData = buildingData.enrichment;
+    
+    if (!enrichmentData) return;
+    
+    // Create enrichment section
+    const enrichSection = document.createElement('div');
+    enrichSection.className = 'enrich-owner-section';
+    
+    if (enrichmentData.already_enriched && enrichmentData.enrichment_data) {
+        // Show already unlocked data
+        enrichSection.innerHTML = `
+            <div class="enriched-data-box">
+                <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                ${renderEnrichedData(enrichmentData.enrichment_data)}
+            </div>
+        `;
+    } else if (enrichmentData.available_owners && enrichmentData.available_owners.length > 0) {
+        // User must be logged in to use enrichment
+        if (!enrichmentData.logged_in) {
+            enrichSection.innerHTML = `
+                <div class="enrich-prompt">
+                    <a href="/login?next=${encodeURIComponent(window.location.pathname)}" class="enrich-owner-btn login-required">
+                        📞 Get Owner Phone & Email
+                        <span class="enrich-cost">Login Required</span>
+                    </a>
+                    <p class="enrich-note">Sign in to unlock owner contact information</p>
+                </div>
+            `;
+        } else {
+            // Show enrich button for logged in users
+            const cost = enrichmentData.cost === 0 ? 'FREE' : `$${enrichmentData.cost.toFixed(2)}`;
+            enrichSection.innerHTML = `
+                <div class="enrich-prompt">
+                    <button class="enrich-owner-btn" onclick="showEnrichModal(${buildingId})">
+                        📞 Get Owner Phone & Email
+                        <span class="enrich-cost">${cost}</span>
+                    </button>
+                    <p class="enrich-note">Lookup owner contact information</p>
+                </div>
+            `;
+        }
+    }
+    
+    container.appendChild(enrichSection);
+}
+
+function renderEnrichedData(data) {
+    let html = '<div class="enriched-contacts">';
+    
+    if (data.phones && data.phones.length > 0) {
+        html += '<div class="enriched-phones">';
+        data.phones.forEach(phone => {
+            html += `
+                <a href="tel:${phone.number}" class="contact-link phone-link">
+                    📱 ${formatPhoneNumber(phone.number)}
+                    <span class="phone-type">${phone.type || ''}</span>
+                </a>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    if (data.emails && data.emails.length > 0) {
+        html += '<div class="enriched-emails">';
+        data.emails.forEach(email => {
+            html += `
+                <a href="mailto:${email.email}" class="contact-link email-link">
+                    ✉️ ${email.email}
+                </a>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+function formatPhoneNumber(phone) {
+    if (!phone) return '';
+    const cleaned = phone.replace(/\D/g, '');
+    if (cleaned.length === 10) {
+        return `(${cleaned.slice(0,3)}) ${cleaned.slice(3,6)}-${cleaned.slice(6)}`;
+    }
+    return phone;
+}
+
+function showEnrichModal(buildingId) {
+    // Use pre-loaded enrichment data
+    const enrichmentData = buildingData.enrichment;
+    const owners = enrichmentData?.available_owners || [];
+    
+    if (!owners || owners.length === 0) {
+        alert('No enrichable owners found for this property.');
+        return;
+    }
+    
+    // Create and show modal
+    const modal = document.createElement('div');
+    modal.className = 'modal enrich-modal';
+    modal.id = 'enrich-modal';
+    modal.style.display = 'block';
+    
+    const cost = enrichmentData.cost === 0 ? 'FREE (Admin)' : `$${enrichmentData.cost.toFixed(2)}`;
+    
+    modal.innerHTML = `
+        <div class="modal-content enrich-modal-content">
+            <span class="modal-close" onclick="closeEnrichModal()">&times;</span>
+            <h2>📞 Get Owner Contact Information</h2>
+            <p class="modal-subtitle">Select an owner to lookup their phone and email</p>
+            
+            <div class="owner-selection">
+                ${owners.map((owner, idx) => `
+                    <label class="owner-option ${owner.recommended ? 'recommended' : ''}">
+                        <input type="radio" name="owner" value="${idx}" ${owner.recommended ? 'checked' : ''}>
+                        <div class="owner-option-content">
+                            <span class="owner-option-name">${owner.name}</span>
+                            <span class="owner-option-source">${owner.source}</span>
+                            ${owner.recommended ? '<span class="recommended-badge">✨ Recommended</span>' : ''}
+                            ${owner.reason ? `<span class="owner-option-reason">${owner.reason}</span>` : ''}
+                        </div>
+                    </label>
+                `).join('')}
+            </div>
+            
+            <div class="enrich-footer">
+                <p class="enrich-cost-display">Cost: <strong>${cost}</strong></p>
+                <button class="btn btn-primary enrich-confirm-btn" onclick="confirmEnrich(${buildingId})">
+                    Unlock Contact Info
+                </button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Store owners data for later use
+    window.enrichOwners = owners;
+}
+
+function closeEnrichModal() {
+    const modal = document.getElementById('enrich-modal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+async function confirmEnrich(buildingId) {
+    const selectedRadio = document.querySelector('input[name="owner"]:checked');
+    if (!selectedRadio) {
+        alert('Please select an owner to enrich.');
+        return;
+    }
+    
+    const ownerIdx = parseInt(selectedRadio.value);
+    const owner = window.enrichOwners[ownerIdx];
+    
+    const btn = document.querySelector('.enrich-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+    
+    try {
+        // Build full address with borough/city info
+        const building = buildingData.building;
+        let fullAddress = building.address || '';
+        
+        // Append borough/city info if available
+        const borough = building.borough || '';
+        const zipCode = building.zip_code || building.zipcode || '';
+        if (borough || zipCode) {
+            fullAddress += `, ${borough || 'Brooklyn'}, NY ${zipCode}`.trim();
+        } else {
+            fullAddress += ', Brooklyn, NY';  // Default to Brooklyn
+        }
+        
+        const response = await fetch('/api/enrichment/enrich', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                building_id: buildingId,
+                owner_name: owner.name,
+                address: fullAddress
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            closeEnrichModal();
+            
+            // Show success and refresh the owner section
+            if (data.data) {
+                // Update the UI with the new data
+                const enrichSection = document.querySelector('.enrich-owner-section');
+                if (enrichSection) {
+                    enrichSection.innerHTML = `
+                        <div class="enriched-data-box success-flash">
+                            <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                            ${renderEnrichedData(data.data)}
+                        </div>
+                    `;
+                }
+            }
+            
+            if (data.charged) {
+                showNotification('Contact info unlocked! $0.35 charged.', 'success');
+            } else {
+                showNotification('Contact info retrieved!', 'success');
+            }
+        } else {
+            alert(data.error || 'Failed to enrich owner information.');
+            btn.disabled = false;
+            btn.textContent = 'Unlock Contact Info';
+        }
+        
+    } catch (error) {
+        console.error('Enrichment error:', error);
+        alert('An error occurred. Please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Unlock Contact Info';
+    }
+}
+
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
 }
 
 // ============================================================================
@@ -530,10 +812,55 @@ function renderFinancialsTab() {
 // ============================================================================
 
 function renderOwnersTab() {
-    const { owners, parties } = buildingData;
+    const { owners, parties, sos_data } = buildingData;
     const container = document.getElementById('owners-content');
     
     let html = '<div class="owners-list">';
+    
+    // SOS Data - Real Person Behind LLC (PREMIUM SECTION)
+    if (sos_data && sos_data.principal_name) {
+        const isRealPerson = !sos_data.principal_name.includes('LLC') && 
+                            !sos_data.principal_name.includes('C/O') &&
+                            !sos_data.principal_name.includes('ATTN') &&
+                            !sos_data.principal_name.includes('CORP');
+        
+        html += `
+        <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}">
+            <h4>🔍 Real Person Behind LLC</h4>
+            <div class="sos-card">
+                <div class="sos-main">
+                    <div class="sos-principal-name">${sos_data.principal_name}</div>
+                    ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
+                    ${isRealPerson ? '<span class="real-person-badge-large">✓ REAL PERSON IDENTIFIED</span>' : ''}
+                </div>
+                <div class="sos-details">
+                    <div class="sos-detail-row">
+                        <span class="sos-label">Entity Name:</span>
+                        <span class="sos-value">${sos_data.entity_name || 'N/A'}</span>
+                    </div>
+                    <div class="sos-detail-row">
+                        <span class="sos-label">Entity Status:</span>
+                        <span class="sos-value sos-status-${(sos_data.entity_status || '').toLowerCase()}">${sos_data.entity_status || 'N/A'}</span>
+                    </div>
+                    ${sos_data.dos_id ? `
+                    <div class="sos-detail-row">
+                        <span class="sos-label">DOS Filing ID:</span>
+                        <span class="sos-value">${sos_data.dos_id}</span>
+                    </div>` : ''}
+                    ${sos_data.formation_date ? `
+                    <div class="sos-detail-row">
+                        <span class="sos-label">Formation Date:</span>
+                        <span class="sos-value">${formatDate(sos_data.formation_date)}</span>
+                    </div>` : ''}
+                    ${sos_data.principal_address && sos_data.principal_address.street ? `
+                    <div class="sos-detail-row">
+                        <span class="sos-label">Principal Address:</span>
+                        <span class="sos-value">${sos_data.principal_address.street}, ${sos_data.principal_address.city}, ${sos_data.principal_address.state} ${sos_data.principal_address.zip}</span>
+                    </div>` : ''}
+                </div>
+            </div>
+        </div>`;
+    }
     
     // Current Owners (All Sources)
     html += '<h4>Current Owner Information</h4>';

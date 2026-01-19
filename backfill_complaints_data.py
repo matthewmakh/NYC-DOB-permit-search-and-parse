@@ -25,8 +25,7 @@ if not DATABASE_URL:
     DB_NAME = os.getenv('DB_NAME')
     
     if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
-        # Fallback to Railway connection
-        DATABASE_URL = "postgresql://postgres:rYOeFwAQciYdTdUVPxuCqNparvRNbUov@maglev.proxy.rlwy.net:26571/railway"
+        raise ValueError('DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME environment variables required')
     else:
         DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 

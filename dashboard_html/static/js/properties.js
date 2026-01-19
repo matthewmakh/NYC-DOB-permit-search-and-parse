@@ -18,6 +18,7 @@ const state = {
         cashOnly: false,
         withPermits: false,
         minPermits: null,
+        recentPermitDays: null,
         borough: null,
         buildingClass: '',
         minUnits: null,
@@ -84,6 +85,7 @@ async function loadProperties() {
         if (state.filters.cashOnly) params.append('cash_only', 'true');
         if (state.filters.withPermits) params.append('with_permits', 'true');
         if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
+        if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
         if (state.filters.borough) params.append('borough', state.filters.borough);
         if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
         if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
@@ -263,7 +265,7 @@ function updateStatsDisplay(stats) {
 }
 
 function updateResultsCount() {
-    const { totalCount } = state.pagination;
+    const totalCount = state.pagination.total_count || state.pagination.totalCount || 0;
     const text = totalCount === 1 ? '1 property' : `${formatNumber(totalCount)} properties`;
     document.getElementById('resultsCount').textContent = text;
 }
@@ -374,6 +376,28 @@ function initializeEventListeners() {
     
     document.getElementById('minPermits').addEventListener('change', (e) => {
         state.filters.minPermits = e.target.value ? parseInt(e.target.value) : null;
+        state.pagination.page = 1;
+        loadProperties();
+    });
+    
+    // Recent permit days filter
+    document.getElementById('recentPermitDays').addEventListener('change', (e) => {
+        const customInput = document.getElementById('recentPermitCustomDays');
+        if (e.target.value === 'custom') {
+            customInput.style.display = 'block';
+            customInput.focus();
+            // Don't trigger search yet - wait for custom input
+        } else {
+            customInput.style.display = 'none';
+            customInput.value = '';
+            state.filters.recentPermitDays = e.target.value ? parseInt(e.target.value) : null;
+            state.pagination.page = 1;
+            loadProperties();
+        }
+    });
+    
+    document.getElementById('recentPermitCustomDays').addEventListener('change', (e) => {
+        state.filters.recentPermitDays = e.target.value ? parseInt(e.target.value) : null;
         state.pagination.page = 1;
         loadProperties();
     });
@@ -607,6 +631,7 @@ function resetFilters() {
         cashOnly: false,
         withPermits: false,
         minPermits: null,
+        recentPermitDays: null,
         borough: null,
         buildingClass: '',
         minUnits: null,
@@ -636,6 +661,9 @@ function clearFilters() {
     document.getElementById('minUnits').value = '';
     document.getElementById('maxUnits').value = '';
     document.getElementById('minPermits').value = '';
+    document.getElementById('recentPermitDays').value = '';
+    document.getElementById('recentPermitCustomDays').value = '';
+    document.getElementById('recentPermitCustomDays').style.display = 'none';
     document.getElementById('financingMin').value = '';
     document.getElementById('financingMax').value = '';
     document.getElementById('cashOnly').checked = false;

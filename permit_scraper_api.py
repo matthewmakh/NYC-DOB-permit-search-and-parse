@@ -901,14 +901,17 @@ FILINGS_COLUMNS = [
     'api_source', 'api_last_updated'
 ]
 
-# Column order for DOB NOW approved (28 columns - subset)
+# Column order for DOB NOW approved (40 columns - includes contact fields)
 APPROVED_COLUMNS = [
     'permit_no', 'work_type', 'issue_date', 'exp_date', 'bin', 'address',
     'applicant', 'block', 'lot', 'permit_status', 'work_description', 'job_number',
     'bbl', 'latitude', 'longitude', 'borough', 'house_number', 'street_name',
-    'zip_code', 'community_board', 'owner_business_name', 'permittee_license_type',
-    'permittee_license_number', 'council_district', 'census_tract', 'nta_name',
-    'api_source', 'api_last_updated'
+    'zip_code', 'community_board', 'owner_business_name', 'owner_first_name',
+    'owner_last_name', 'owner_business_type', 'owner_house_number', 'owner_street_name',
+    'owner_city', 'owner_state', 'owner_zip_code', 'owner_phone',
+    'permittee_first_name', 'permittee_last_name', 'permittee_business_name',
+    'permittee_phone', 'permittee_license_type', 'permittee_license_number',
+    'council_district', 'census_tract', 'nta_name', 'api_source', 'api_last_updated'
 ]
 
 
@@ -1198,9 +1201,25 @@ def prepare_rows_dob_now_approved(permits: List[Dict]) -> Tuple[List[tuple], int
                 trunc(p.get('street_name'), 255),
                 trunc(p.get('zip_code'), 15),
                 trunc(p.get('community_board') or p.get('c_b_no'), 3),
+                # Owner fields
                 trunc(p.get('owner_business_name'), 255),
-                trunc(p.get('permittee_s_license_type'), 50),
-                trunc(p.get('applicant_license'), 50),
+                trunc(p.get('owner_first_name'), 100),
+                trunc(p.get('owner_last_name'), 100),
+                trunc(p.get('owner_business_type'), 100),
+                trunc(p.get('owner_house_number'), 50),
+                trunc(p.get('owner_street_name'), 255),
+                trunc(p.get('owner_city'), 100),
+                trunc(p.get('owner_state'), 20),
+                trunc(p.get('owner_zip_code'), 15),
+                trunc(p.get('owner_phone'), 50),
+                # Permittee fields
+                trunc(p.get('permittee_first_name'), 100),
+                trunc(p.get('permittee_last_name'), 100),
+                trunc(p.get('permittee_business_name'), 255),
+                trunc(p.get('permittee_phone'), 50),
+                trunc(p.get('permittee_license_type'), 50),
+                trunc(p.get('permittee_license_number') or p.get('applicant_license'), 50),
+                # Location fields
                 trunc(p.get('council_district'), 20),
                 trunc(p.get('census_tract'), 20),
                 trunc(p.get('nta'), 255),

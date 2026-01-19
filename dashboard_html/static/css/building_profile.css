@@ -63,6 +63,22 @@
     font-weight: 700;
     margin: 0 0 5px 0;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.address-street {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.address-city {
+    font-size: 15px;
+    font-weight: 500;
+    opacity: 0.85;
+    letter-spacing: 0.3px;
 }
 
 .bbl-code {
@@ -178,6 +194,145 @@
     font-size: 13px;
     font-weight: 500;
     color: #1e293b;
+}
+
+/* SOS Highlight Styles - Real Person Behind LLC */
+.owner-item.sos-highlight {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border: 2px solid #f59e0b;
+    position: relative;
+}
+
+.owner-source.sos-source {
+    color: #92400e;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.real-person-badge {
+    background: #16a34a;
+    color: white;
+    font-size: 8px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.owner-name.sos-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #78350f;
+}
+
+.sos-title {
+    font-size: 11px;
+    color: #92400e;
+    font-style: italic;
+}
+
+.sos-entity {
+    font-size: 10px;
+    color: #a16207;
+    margin-top: 4px;
+}
+
+/* SOS Section in Owners Tab */
+.sos-section {
+    background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%);
+    border: 2px solid #eab308;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.sos-section.real-person-found {
+    border-color: #16a34a;
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+}
+
+.sos-section h4 {
+    margin: 0 0 16px 0;
+    color: #78350f;
+    font-size: 16px;
+}
+
+.sos-section.real-person-found h4 {
+    color: #166534;
+}
+
+.sos-card {
+    background: white;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.sos-main {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.sos-principal-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 4px;
+}
+
+.sos-principal-title {
+    font-size: 14px;
+    color: #64748b;
+    font-style: italic;
+    margin-bottom: 8px;
+}
+
+.real-person-badge-large {
+    display: inline-block;
+    background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+    color: white;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-top: 8px;
+}
+
+.sos-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sos-detail-row {
+    display: flex;
+    gap: 12px;
+    font-size: 13px;
+}
+
+.sos-label {
+    color: #64748b;
+    min-width: 120px;
+    font-weight: 500;
+}
+
+.sos-value {
+    color: #1e293b;
+    font-weight: 500;
+}
+
+.sos-status-active {
+    color: #16a34a;
+    font-weight: 600;
+}
+
+.sos-status-inactive {
+    color: #dc2626;
+    font-weight: 600;
 }
 
 /* ============================================================================
@@ -1326,6 +1481,14 @@
         font-size: 24px;
     }
     
+    .address-street {
+        font-size: 20px;
+    }
+    
+    .address-city {
+        font-size: 13px;
+    }
+    
     .tab-navigation {
         flex-wrap: wrap;
     }
@@ -1600,4 +1763,331 @@
     color: #6b7280;
     font-size: 13px;
     margin-top: 4px;
+}
+
+/* Enrichment Section Styles */
+.enrich-section {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.enrich-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+}
+
+.enrich-btn:hover {
+    background: linear-gradient(135deg, #4338ca, #6d28d9);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
+}
+
+.enrich-btn:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.enrich-btn i {
+    font-size: 14px;
+}
+
+.enrich-price {
+    font-size: 12px;
+    opacity: 0.9;
+    margin-left: 4px;
+}
+
+.enriched-data {
+    background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
+    border: 1px solid #86efac;
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 12px;
+}
+
+.enriched-data h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #166534;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.enriched-data h4 i {
+    color: #22c55e;
+}
+
+.enriched-phones,
+.enriched-emails {
+    margin-bottom: 12px;
+}
+
+.enriched-phones:last-child,
+.enriched-emails:last-child {
+    margin-bottom: 0;
+}
+
+.enriched-phones h5,
+.enriched-emails h5 {
+    font-size: 12px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.phone-item,
+.email-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: white;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 14px;
+    color: #1f2937;
+}
+
+.phone-item:last-child,
+.email-item:last-child {
+    margin-bottom: 0;
+}
+
+.phone-item i,
+.email-item i {
+    color: #6b7280;
+    font-size: 12px;
+}
+
+.phone-item a,
+.email-item a {
+    color: #4f46e5;
+    text-decoration: none;
+}
+
+.phone-item a:hover,
+.email-item a:hover {
+    text-decoration: underline;
+}
+
+.phone-type,
+.email-type {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-left: auto;
+    text-transform: capitalize;
+}
+
+.no-enrichment-data {
+    color: #6b7280;
+    font-style: italic;
+    font-size: 13px;
+}
+
+/* Enriched Contacts Display (in Property Ownership section) */
+.enriched-contacts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.enriched-phones,
+.enriched-emails {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.contact-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #e0e0e0;
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.contact-link:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.phone-link .phone-type {
+    font-size: 11px;
+    color: #9ca3af;
+    text-transform: capitalize;
+}
+
+.email-link {
+    color: #93c5fd;
+}
+
+.email-link:hover {
+    color: #bfdbfe;
+}
+
+/* Enrichment Modal Styles */
+.enrich-modal .modal-content {
+    background: white;
+    color: #1f2937;
+    max-width: 500px;
+    margin: 100px auto;
+    padding: 24px;
+    border-radius: 12px;
+}
+
+.enrich-modal h2 {
+    color: #1f2937;
+    margin-bottom: 8px;
+}
+
+.enrich-modal .modal-subtitle {
+    color: #6b7280;
+    margin-bottom: 20px;
+}
+
+.enrich-modal .owner-selection {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.enrich-modal .owner-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.enrich-modal .owner-option:hover {
+    border-color: #8b5cf6;
+    background: #f9fafb;
+}
+
+.enrich-modal .owner-option.recommended {
+    border-color: #22c55e;
+    background: #f0fdf4;
+}
+
+.enrich-modal .owner-option input[type="radio"] {
+    margin-top: 4px;
+}
+
+.enrich-modal .owner-option-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.enrich-modal .owner-option-name {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.enrich-modal .owner-option-source {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.enrich-modal .recommended-badge {
+    font-size: 11px;
+    color: #22c55e;
+    font-weight: 600;
+}
+
+.enrich-modal .owner-option-reason {
+    font-size: 11px;
+    color: #9ca3af;
+    font-style: italic;
+}
+
+.enrich-modal .enrich-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.enrich-modal .enrich-cost-display {
+    color: #374151;
+    margin: 0;
+}
+
+.enrich-modal .enrich-confirm-btn {
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.enrich-modal .enrich-confirm-btn:hover {
+    background: linear-gradient(135deg, #4338ca, #6d28d9);
+}
+
+.enrich-modal .enrich-confirm-btn:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Enriched Data Box (unlocked contacts in dark section) */
+.enriched-data-box {
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+.enriched-data-box h4 {
+    color: #4ade80;
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.enriched-data-box .unlocked-badge {
+    background: linear-gradient(135deg, #4ade80, #22c55e);
+    color: white;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 600;
+    text-transform: uppercase;
 }

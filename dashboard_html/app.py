@@ -4,7 +4,7 @@ Flask API Backend for DOB Permit Dashboard
 Serves data from PostgreSQL database to HTML frontend
 """
 
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, redirect, url_for, session, g
 from flask_cors import CORS
 from flask_caching import Cache
 import psycopg2
@@ -20,6 +20,18 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
+
+# Session configuration for authentication
+app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=48)
+
+# Register auth blueprint
+from auth_routes import auth_bp
+from auth_service import login_required, validate_session
+app.register_blueprint(auth_bp)
 
 # Simple in-memory cache (can upgrade to Redis later)
 cache = Cache(app, config={
@@ -201,11 +213,13 @@ def calculate_lead_score(permit):
 
 
 @app.route('/')
+@login_required
 def index():
     """Serve the new homepage"""
-    return render_template('home.html')
+    return render_template('home.html', user=g.user)
 
 @app.route('/old-dashboard')
+@login_required
 def old_dashboard():
     """Serve the old dashboard (for reference)"""
     return render_template('index.html')
@@ -626,6 +640,7 @@ def health_check():
 
 
 @app.route('/permit/<int:permit_id>')
+@login_required
 def permit_detail(permit_id):
     """Serve detailed permit view page with comprehensive building information"""
     try:
@@ -1255,6 +1270,7 @@ def get_permit_detail(permit_id):
 
 
 @app.route('/construction')
+@login_required
 def construction():
     """Construction intelligence page"""
     return render_template('construction.html')
@@ -1760,18 +1776,21 @@ def export_construction_permits():
 
 
 @app.route('/investments')
+@login_required
 def investments():
     """Investment opportunities page"""
     return render_template('investments.html')
 
 
 @app.route('/analytics')
+@login_required
 def analytics():
     """Market analytics page"""
     return render_template('analytics.html')
 
 
 @app.route('/search-results')
+@login_required
 def search_results():
     """Search results page"""
     query = request.args.get('q', '')
@@ -1779,6 +1798,7 @@ def search_results():
 
 
 @app.route('/property/<bbl>')
+@login_required
 def property_detail(bbl):
     """Comprehensive building intelligence profile page"""
     return render_template('building_profile.html', bbl=bbl)
@@ -2101,6 +2121,7 @@ def api_search():
             # Build dynamic WHERE clauses for token matching
             params = {
                 'pattern': base_pattern,
+                'pattern_stripped': query.strip(),  # For exact zip code match
                 'variants': variant_patterns,
             }
             
@@ -2166,6 +2187,7 @@ def api_search():
                         NULL::numeric as assessed_value,
                         NULL::numeric as sale_price,
                         CASE 
+                            WHEN p.zip_code = %(pattern_stripped)s THEN 'Zip Code'
                             WHEN p.permit_no ILIKE %(pattern)s THEN 'Permit #'
                             WHEN p.job_number ILIKE %(pattern)s THEN 'Job #'
                             WHEN p.address ILIKE ANY(%(variants)s) THEN 'Address'
@@ -2176,6 +2198,7 @@ def api_search():
                             ELSE 'Permit'
                         END as match_type,
                         CASE 
+                            WHEN p.zip_code = %(pattern_stripped)s THEN 1
                             WHEN p.permit_no ILIKE %(pattern)s THEN 1
                             WHEN p.job_number ILIKE %(pattern)s THEN 1
                             WHEN p.address ILIKE ANY(%(variants)s) THEN 2
@@ -2186,7 +2209,8 @@ def api_search():
                     WHERE 
                         p.bbl IS NOT NULL
                         AND (
-                            p.permit_no ILIKE %(pattern)s
+                            p.zip_code = %(pattern_stripped)s
+                            OR p.permit_no ILIKE %(pattern)s
                             OR p.job_number ILIKE %(pattern)s
                             OR p.address ILIKE ANY(%(variants)s)
                             OR ({permit_token_clause})
@@ -2482,6 +2506,7 @@ def api_property_detail(bbl):
 # ============================================================================
 
 @app.route('/properties')
+@login_required
 def properties_page():
     """Render the properties search/browse page"""
     return render_template('properties.html')
@@ -2502,6 +2527,7 @@ def api_properties():
     - cash_only: Filter to cash purchases (true/false)
     - with_permits: Only properties with permits (true/false)
     - min_permits: Minimum permit count
+    - recent_permit_days: Only properties with permits filed/issued within X days
     - borough: Borough filter (1-5)
     - building_class: Building class code
     - min_units, max_units: Unit count range
@@ -2527,6 +2553,7 @@ def api_properties():
             cash_only = request.args.get('cash_only', '').lower() == 'true'
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
+            recent_permit_days = request.args.get('recent_permit_days', type=int)
             borough = request.args.get('borough', type=int)
             building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
@@ -2546,15 +2573,31 @@ def api_properties():
         
             # Text search across multiple fields
             if search:
-                where_clauses.append("""(
-                    b.address ILIKE %s OR 
-                    b.bbl LIKE %s OR 
-                    b.current_owner_name ILIKE %s OR
-                    b.owner_name_rpad ILIKE %s OR
-                    b.owner_name_hpd ILIKE %s
-                )""")
-                search_term = f"%{search}%"
-                params.extend([search_term, search_term, search_term, search_term, search_term])
+                # Check if search looks like a zip code (5 digits starting with 1)
+                is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
+                
+                if is_zip_search:
+                    # Search by zip code - join with permits table
+                    where_clauses.append("""(
+                        b.address ILIKE %s OR 
+                        b.bbl LIKE %s OR 
+                        b.current_owner_name ILIKE %s OR
+                        b.owner_name_rpad ILIKE %s OR
+                        b.owner_name_hpd ILIKE %s OR
+                        EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.zip_code = %s)
+                    )""")
+                    search_term = f"%{search}%"
+                    params.extend([search_term, search_term, search_term, search_term, search_term, search])
+                else:
+                    where_clauses.append("""(
+                        b.address ILIKE %s OR 
+                        b.bbl LIKE %s OR 
+                        b.current_owner_name ILIKE %s OR
+                        b.owner_name_rpad ILIKE %s OR
+                        b.owner_name_hpd ILIKE %s
+                    )""")
+                    search_term = f"%{search}%"
+                    params.extend([search_term, search_term, search_term, search_term, search_term])
         
             # Owner search
             if owner:
@@ -2644,12 +2687,28 @@ def api_properties():
                     GROUP BY bbl
                 ) pc ON b.bbl = pc.bbl
             """
+            
+            # Add recent permits subquery if filtering by permit recency
+            recent_permit_sql = ""
+            if recent_permit_days is not None:
+                recent_permit_sql = f"""
+                    LEFT JOIN (
+                        SELECT DISTINCT bbl
+                        FROM permits
+                        WHERE bbl IS NOT NULL
+                          AND (filing_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days'
+                               OR issue_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days')
+                    ) rp ON b.bbl = rp.bbl
+                """
         
             # Apply permit filters
             if with_permits:
                 where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
             if min_permits is not None:
                 where_sql += (" AND " if where_clauses or with_permits else "WHERE ") + f"pc.permit_count >= {min_permits}"
+            if recent_permit_days is not None:
+                has_prior_conditions = where_clauses or with_permits or min_permits is not None
+                where_sql += (" AND " if has_prior_conditions else "WHERE ") + "rp.bbl IS NOT NULL"
         
             # Validate and sanitize sort column
             valid_sort_columns = {
@@ -2668,6 +2727,7 @@ def api_properties():
                 SELECT COUNT(DISTINCT b.id) as count
                 FROM buildings b
                 {permit_count_sql}
+                {recent_permit_sql}
                 {where_sql}
             """
             cur.execute(count_query, params)
@@ -2713,6 +2773,7 @@ def api_properties():
                     b.last_updated
                 FROM buildings b
                 {permit_count_sql}
+                {recent_permit_sql}
                 {where_sql}
                 ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
                 LIMIT %s OFFSET %s
@@ -2843,12 +2904,14 @@ def api_properties_stats():
 # ============================================================================
 
 @app.route('/contractors')
+@login_required
 def contractors_page():
     """Render the contractors search/browse page"""
     return render_template('contractors.html')
 
 
 @app.route('/contractor/<contractor_name>')
+@login_required
 def contractor_profile(contractor_name):
     """Render contractor profile page"""
     return render_template('contractor_profile.html', contractor_name=contractor_name)
@@ -3105,6 +3168,10 @@ def api_building_profile(bbl):
                 ecb_total_penalty, ecb_amount_paid, ecb_most_recent_hearing_date, ecb_most_recent_hearing_status,
                 ecb_respondent_name, ecb_respondent_address, ecb_respondent_city, ecb_respondent_zip,
                 dob_violation_count, dob_open_violations, tax_lien_last_checked,
+                -- NY SOS LLC data (Real person behind LLC)
+                sos_principal_name, sos_principal_title, sos_principal_street, sos_principal_city,
+                sos_principal_state, sos_principal_zip, sos_entity_name, sos_entity_status,
+                sos_dos_id, sos_formation_date, sos_last_enriched,
                 -- Metadata
                 last_updated
             FROM buildings
@@ -3117,6 +3184,15 @@ def api_building_profile(bbl):
                 return jsonify({'success': False, 'error': 'Property not found'}), 404
             
             building_id = building['id']
+            
+            # ===== 1b. GET ZIP CODE FROM PERMITS =====
+            cur.execute("""
+                SELECT zip_code FROM permits 
+                WHERE bbl = %s AND zip_code IS NOT NULL 
+                LIMIT 1
+            """, (bbl,))
+            zip_result = cur.fetchone()
+            property_zip = zip_result['zip_code'] if zip_result else None
             
             # ===== 2. PERMITS (All construction activity) =====
             cur.execute("""
@@ -3164,6 +3240,25 @@ def api_building_profile(bbl):
                 'hpd': building['owner_name_hpd'],
                 'ecb': building['ecb_respondent_name']
             }
+            
+            # ===== 5b. SOS DATA (Real person behind LLC) =====
+            sos_data = None
+            if building['sos_principal_name']:
+                sos_data = {
+                    'principal_name': building['sos_principal_name'],
+                    'principal_title': building['sos_principal_title'],
+                    'principal_address': {
+                        'street': building['sos_principal_street'],
+                        'city': building['sos_principal_city'],
+                        'state': building['sos_principal_state'],
+                        'zip': building['sos_principal_zip']
+                    },
+                    'entity_name': building['sos_entity_name'],
+                    'entity_status': building['sos_entity_status'],
+                    'dos_id': building['sos_dos_id'],
+                    'formation_date': building['sos_formation_date'].isoformat() if building['sos_formation_date'] else None,
+                    'last_enriched': building['sos_last_enriched'].isoformat() if building['sos_last_enriched'] else None
+                }
         
             # ===== 6. CALCULATE RISK SCORE =====
             risk_factors = []
@@ -3348,12 +3443,84 @@ def api_building_profile(bbl):
             # Only add contractors without phones if we have very few contacts
             if len(contacts) < 5:
                 contacts.extend(list(contractors_no_phone.values())[:10])
+            
+            # Map borough number to name
+            borough_names = {
+                '1': 'Manhattan',
+                '2': 'Bronx',
+                '3': 'Brooklyn',
+                '4': 'Queens',
+                '5': 'Staten Island'
+            }
+            borough_name = borough_names.get(str(building['borough']), building['borough'])
+            
+            # Create enhanced building dict with full address info
+            building_dict = dict(building)
+            building_dict['zip_code'] = property_zip
+            building_dict['borough_name'] = borough_name
+            
+            # ===== ENRICHMENT DATA (include to speed up button load) =====
+            enrichment_info = {'available_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.35, 'logged_in': False}
+            try:
+                from enrichment_service import parse_owner_name, check_user_enrichment_access
+                from auth_service import validate_session
+                
+                # Build available owners list inline (faster than separate API call)
+                available_owners = []
+                
+                # SOS Principal is recommended (real person behind LLC)
+                if building['sos_principal_name']:
+                    first, middle, last = parse_owner_name(building['sos_principal_name'])
+                    if first and last:
+                        available_owners.append({
+                            'name': building['sos_principal_name'],
+                            'source': 'NY Secretary of State',
+                            'recommended': True,
+                            'reason': 'Real person behind LLC'
+                        })
+                
+                # Check other owner sources
+                owner_sources = [
+                    ('current_owner_name', 'NYC PLUTO Database'),
+                    ('owner_name_rpad', 'Tax Records (RPAD)'),
+                    ('owner_name_hpd', 'HPD Registration'),
+                    ('ecb_respondent_name', 'ECB Violations')
+                ]
+                
+                for field, source in owner_sources:
+                    name = building_dict.get(field)
+                    if name:
+                        first, middle, last = parse_owner_name(name)
+                        if first and last:
+                            if not any(o['name'].upper() == name.upper() for o in available_owners):
+                                available_owners.append({
+                                    'name': name,
+                                    'source': source,
+                                    'recommended': False
+                                })
+                
+                enrichment_info['available_owners'] = available_owners
+                
+                # Check if user is logged in (try to get user from session without requiring it)
+                session_token = session.get('session_token')
+                current_user = validate_session(session_token) if session_token else None
+                
+                if current_user:
+                    enrichment_info['logged_in'] = True
+                    has_access, enrichment_data = check_user_enrichment_access(current_user['id'], building_id)
+                    enrichment_info['already_enriched'] = has_access
+                    enrichment_info['enrichment_data'] = enrichment_data
+                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.35
+            except Exception as e:
+                print(f"Error getting enrichment info: {e}")
         
             return jsonify({
                 'success': True,
-                'building': dict(building),
+                'building': building_dict,
                 'building_class_description': building_class_desc,
                 'owners': owners,
+                'sos_data': sos_data,
+                'enrichment': enrichment_info,
                 'risk_assessment': {
                     'score': risk_score,
                     'level': risk_level,
@@ -3378,6 +3545,130 @@ def api_building_profile(bbl):
         print(f"Building profile API error: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# OWNER ENRICHMENT API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/enrichment/available-owners/<int:building_id>')
+@login_required
+def api_available_owners(building_id):
+    """
+    Get list of owner names available for enrichment on a building
+    Returns owners that are actual people (not LLCs) with recommendation
+    """
+    try:
+        from enrichment_service import get_available_owners_for_enrichment, check_user_enrichment_access
+        
+        # Get available owners
+        owners = get_available_owners_for_enrichment(building_id)
+        
+        # Check if user already has access to enriched data
+        has_access, enrichment_data = check_user_enrichment_access(g.user['id'], building_id)
+        
+        return jsonify({
+            'success': True,
+            'owners': owners,
+            'already_enriched': has_access,
+            'enrichment_data': enrichment_data if has_access else None,
+            'cost': 0 if g.user.get('is_admin') else 0.35
+        })
+        
+    except Exception as e:
+        print(f"Available owners API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/enrich', methods=['POST'])
+@login_required
+def api_enrich_owner():
+    """
+    Enrich owner contact information
+    Charges $0.35 and returns phone/email data
+    
+    POST body: {
+        building_id: int,
+        owner_name: string,
+        address: string
+    }
+    """
+    try:
+        from enrichment_service import enrich_owner, check_user_enrichment_access
+        from stripe_service import charge_enrichment_fee
+        
+        data = request.get_json()
+        print(f"Enrichment request data: {data}")
+        
+        building_id = data.get('building_id')
+        owner_name = data.get('owner_name')
+        address = data.get('address', '')
+        
+        print(f"Building ID: {building_id}, Owner: {owner_name}, Address: {address}")
+        
+        if not building_id or not owner_name:
+            return jsonify({'success': False, 'error': 'Building ID and owner name required'}), 400
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        
+        # Check if user already has access
+        has_access, existing_data = check_user_enrichment_access(user_id, building_id)
+        if has_access and existing_data:
+            return jsonify({
+                'success': True,
+                'data': existing_data,
+                'charged': False,
+                'message': 'You already have access to this data'
+            })
+        
+        # Charge the fee (admin is free)
+        if not is_admin:
+            success, message, charge_id = charge_enrichment_fee(user_id, building_id, owner_name)
+            if not success:
+                return jsonify({'success': False, 'error': message}), 402
+        else:
+            charge_id = 'admin_free'
+        
+        # Perform enrichment
+        success, data, message = enrich_owner(building_id, owner_name, address, user_id)
+        print(f"Enrichment result: success={success}, message={message}")
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'data': data,
+                'charged': not is_admin,
+                'charge_id': charge_id,
+                'message': message
+            })
+        else:
+            # Refund would happen here if needed
+            return jsonify({'success': False, 'error': message}), 400
+            
+    except Exception as e:
+        print(f"Enrichment API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/history')
+@login_required
+def api_enrichment_history():
+    """Get user's enrichment transaction history"""
+    try:
+        from stripe_service import get_user_transactions
+        
+        transactions = get_user_transactions(g.user['id'])
+        
+        return jsonify({
+            'success': True,
+            'transactions': transactions
+        })
+        
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

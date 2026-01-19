@@ -20,6 +20,7 @@ from permit_scraper_api import (
     NYCOpenDataClient,
     DOBNowFilingsClient,
     DOBNowApprovedClient,
+    DOBJobApplicationsClient,
     PermitDatabase,
     DB_CONFIG
 )
@@ -318,6 +319,121 @@ def scrape_dob_now_approved(db, start_date: str, end_date: str):
     return total_fetched, total_inserted
 
 
+def scrape_job_applications(db, start_date: str, end_date: str):
+    """Scrape DOB Job Applications (HAS PHONE NUMBERS!)"""
+    print("\n" + "=" * 70)
+    print("📞 SOURCE 4: DOB JOB APPLICATIONS (WITH PHONE NUMBERS!)")
+    print("=" * 70)
+    print(f"   Date range: {start_date} to {end_date}")
+    print(f"   This dataset includes owner_sphone__ - actual phone numbers!")
+    print("-" * 70)
+    
+    client = DOBJobApplicationsClient(app_token=None)
+    
+    total_fetched = 0
+    total_inserted = 0
+    total_skipped = 0
+    total_with_phone = 0
+    offset = 0
+    batch_size = 5000
+    batch_num = 0
+    
+    while True:
+        batch_num += 1
+        print(f"\n   [JobApps] Batch {batch_num}: Fetching from offset {offset}...")
+        
+        try:
+            apps = client.fetch_applications(
+                start_date=start_date,
+                end_date=end_date,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not apps:
+                print(f"   [JobApps] No more records to fetch")
+                break
+            
+            total_fetched += len(apps)
+            
+            # Count how many have phone numbers
+            with_phone = sum(1 for a in apps if a.get('owner_sphone__'))
+            total_with_phone += with_phone
+            print(f"   [JobApps] Fetched {len(apps)} records ({with_phone} with phone numbers)")
+            
+            # Show sample record
+            if batch_num == 1 and apps:
+                sample = apps[0]
+                print(f"   [JobApps] Sample record:")
+                print(f"             - Job #: {sample.get('job__')}")
+                print(f"             - Date: {sample.get('pre__filing_date', 'N/A')}")
+                print(f"             - Borough: {sample.get('borough')}")
+                print(f"             - Owner: {sample.get('owner_s_first_name')} {sample.get('owner_s_last_name')}")
+                print(f"             - Owner Phone: {sample.get('owner_sphone__', 'N/A')} ⭐")
+            
+            # FAST: Bulk check which permits already exist
+            print(f"   [JobApps] Checking for existing permits (bulk query)...")
+            permit_nos = [a.get('job__') for a in apps if a.get('job__')]
+            existing = db.get_existing_permit_nos(permit_nos)
+            print(f"   [JobApps] Found {len(existing)} already in database, {len(apps) - len(existing)} are new")
+            
+            # Filter to only new records
+            new_apps = [a for a in apps if a.get('job__') not in existing]
+            batch_skipped = len(apps) - len(new_apps)
+            total_skipped += batch_skipped
+            
+            if new_apps:
+                print(f"   [JobApps] Inserting {len(new_apps)} new records...")
+                batch_inserted = 0
+                for i, a in enumerate(new_apps):
+                    job_no = a.get('job__', 'N/A')
+                    filing_date = a.get('pre__filing_date', 'N/A')[:10] if a.get('pre__filing_date') else 'N/A'
+                    borough = a.get('borough', 'N/A')
+                    has_phone = "📞" if a.get('owner_sphone__') else "  "
+                    
+                    # Insert without checking (we already filtered)
+                    db.cursor.execute("SAVEPOINT insert_app")
+                    try:
+                        if db.insert_job_application(a, skip_exists_check=True):
+                            batch_inserted += 1
+                            total_inserted += 1
+                            status = "✅ INSERTED"
+                        else:
+                            status = "⚠️  FAILED"
+                    except Exception as e:
+                        db.cursor.execute("ROLLBACK TO SAVEPOINT insert_app")
+                        status = f"❌ ERROR: {str(e)[:30]}"
+                    
+                    # Show progress every 50 records or for first 10
+                    if i < 10 or (i + 1) % 50 == 0 or i == len(new_apps) - 1:
+                        print(f"   [{i+1:4}/{len(new_apps)}] {has_phone} {job_no} | {filing_date} | {borough:13} | {status}")
+                
+                db.conn.commit()
+                print(f"\n   [JobApps] Batch {batch_num} complete: {batch_inserted} inserted, {batch_skipped} skipped (duplicates)")
+            else:
+                print(f"   [JobApps] Batch {batch_num}: All {batch_skipped} records already exist, skipping")
+            
+            if len(apps) < batch_size:
+                break
+            offset += batch_size
+            
+        except Exception as e:
+            print(f"   [JobApps] ⚠️ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            break
+    
+    print("-" * 70)
+    print(f"   [JobApps] ✅ COMPLETE")
+    print(f"   [JobApps] Total fetched: {total_fetched}")
+    print(f"   [JobApps] Total with phone numbers: {total_with_phone} 📞")
+    print(f"   [JobApps] Total inserted: {total_inserted}")
+    print(f"   [JobApps] Total skipped (duplicates): {total_skipped}")
+    print("=" * 70)
+    
+    return total_fetched, total_inserted
+
+
 def run_sequential_scraper(start_date: str, end_date: str, skip_bis: bool = True):
     """Run the scraper with sources running one at a time"""
     
@@ -327,7 +443,7 @@ def run_sequential_scraper(start_date: str, end_date: str, skip_bis: bool = True
     print("#" + " " * 68 + "#")
     print("#" * 70)
     print(f"\n📅 Date range: {start_date} to {end_date}")
-    print(f"📊 Sources: {'Skipping BIS (no recent data) | ' if skip_bis else 'BIS | '}DOB NOW Filings | DOB NOW Approved")
+    print(f"📊 Sources: {'Skipping BIS | ' if skip_bis else 'BIS | '}DOB NOW Filings | DOB NOW Approved | Job Applications (📞)")
     
     # Connect to database
     print("\n🔌 Connecting to database...")
@@ -357,6 +473,10 @@ def run_sequential_scraper(start_date: str, end_date: str, skip_bis: bool = True
         fetched, inserted = scrape_dob_now_approved(db, start_date, end_date)
         results['approved'] = {'fetched': fetched, 'inserted': inserted}
         
+        # Source 4: Job Applications (HAS PHONE NUMBERS!)
+        fetched, inserted = scrape_job_applications(db, start_date, end_date)
+        results['job_apps'] = {'fetched': fetched, 'inserted': inserted}
+        
     finally:
         db.close()
         print("\n🔌 Database connection closed")
@@ -372,13 +492,14 @@ def run_sequential_scraper(start_date: str, end_date: str, skip_bis: bool = True
     total_inserted = sum(r['inserted'] for r in results.values())
     
     print(f"""
-   Source              Fetched    Inserted
-   ──────────────────  ─────────  ─────────
-   BIS (Legacy)        {results['bis']['fetched']:>9,}  {results['bis']['inserted']:>9,}
-   DOB NOW Filings     {results['filings']['fetched']:>9,}  {results['filings']['inserted']:>9,}
-   DOB NOW Approved    {results['approved']['fetched']:>9,}  {results['approved']['inserted']:>9,}
-   ──────────────────  ─────────  ─────────
-   TOTAL               {total_fetched:>9,}  {total_inserted:>9,}
+   Source                 Fetched    Inserted
+   ─────────────────────  ─────────  ─────────
+   BIS (Legacy)           {results['bis']['fetched']:>9,}  {results['bis']['inserted']:>9,}
+   DOB NOW Filings        {results['filings']['fetched']:>9,}  {results['filings']['inserted']:>9,}
+   DOB NOW Approved       {results['approved']['fetched']:>9,}  {results['approved']['inserted']:>9,}
+   Job Applications 📞    {results['job_apps']['fetched']:>9,}  {results['job_apps']['inserted']:>9,}
+   ─────────────────────  ─────────  ─────────
+   TOTAL                  {total_fetched:>9,}  {total_inserted:>9,}
 """)
     print("#" * 70)
     print("✅ SCRAPING COMPLETE!")

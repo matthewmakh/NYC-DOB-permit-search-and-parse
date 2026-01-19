@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up - NYC Building Intelligence</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+    <script src="https://js.stripe.com/v3/"></script>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <h1>🏢 NYC Building Intelligence</h1>
+                <p>Create your account</p>
+            </div>
+            
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            <div class="signup-steps">
+                <div class="step active" id="step1-indicator">
+                    <span class="step-number">1</span>
+                    <span class="step-label">Account</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step" id="step2-indicator">
+                    <span class="step-number">2</span>
+                    <span class="step-label">Subscribe</span>
+                </div>
+            </div>
+            
+            <!-- Step 1: Account Creation -->
+            <form id="signup-form" class="auth-form">
+                <div class="form-group">
+                    <label for="email">Email Address</label>
+                    <input type="email" id="email" name="email" required 
+                           placeholder="you@example.com" autocomplete="email">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required 
+                           placeholder="Minimum 8 characters" minlength="8" autocomplete="new-password">
+                </div>
+                
+                <div class="form-group">
+                    <label for="confirm_password">Confirm Password</label>
+                    <input type="password" id="confirm_password" name="confirm_password" required 
+                           placeholder="Repeat your password" autocomplete="new-password">
+                </div>
+                
+                <button type="submit" class="btn btn-primary btn-block" id="create-btn">
+                    Create Account & Subscribe
+                </button>
+                
+                <p class="terms-text">
+                    By creating an account, you agree to our Terms of Service and Privacy Policy.
+                    Your subscription will be $250/month, billed monthly.
+                </p>
+            </form>
+            
+            <div class="auth-footer">
+                <p>Already have an account? <a href="{{ url_for('auth.login') }}">Sign in</a></p>
+            </div>
+        </div>
+        
+        <div class="auth-info">
+            <h2>What You Get</h2>
+            <ul>
+                <li>✅ <strong>Full Access</strong> to 90,000+ NYC properties</li>
+                <li>✅ <strong>Owner Intelligence</strong> from PLUTO, RPAD, HPD, SOS</li>
+                <li>✅ <strong>Permit History</strong> and construction activity</li>
+                <li>✅ <strong>Transaction Data</strong> from ACRIS</li>
+                <li>✅ <strong>Risk Scoring</strong> with violations & liens</li>
+                <li>✅ <strong>Smart Filters</strong> for finding opportunities</li>
+            </ul>
+            
+            <div class="pricing-box">
+                <div class="price">$250<span>/month</span></div>
+                <p>Cancel anytime by contacting support</p>
+            </div>
+            
+            <div class="enrichment-note">
+                <h3>📞 Owner Contact Enrichment</h3>
+                <p>Get phone numbers and emails for property owners for an additional <strong>$0.35 per lookup</strong>.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const form = document.getElementById('signup-form');
+        const createBtn = document.getElementById('create-btn');
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirm_password').value;
+            
+            // Validate passwords match
+            if (password !== confirmPassword) {
+                alert('Passwords do not match');
+                return;
+            }
+            
+            if (password.length < 8) {
+                alert('Password must be at least 8 characters');
+                return;
+            }
+            
+            createBtn.disabled = true;
+            createBtn.textContent = 'Creating account...';
+            
+            try {
+                // Create account
+                const response = await fetch('/auth/signup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (data.checkout_url) {
+                        // Redirect to Stripe Checkout
+                        window.location.href = data.checkout_url;
+                    } else if (data.is_admin) {
+                        // Admin - go straight to dashboard
+                        window.location.href = '/';
+                    }
+                } else {
+                    alert(data.error || 'Failed to create account');
+                    createBtn.disabled = false;
+                    createBtn.textContent = 'Create Account & Subscribe';
+                }
+            } catch (error) {
+                console.error('Signup error:', error);
+                alert('An error occurred. Please try again.');
+                createBtn.disabled = false;
+                createBtn.textContent = 'Create Account & Subscribe';
+            }
+        });
+    </script>
+</body>
+</html>
