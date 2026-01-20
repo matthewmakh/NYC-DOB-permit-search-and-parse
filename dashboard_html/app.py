@@ -3131,15 +3131,24 @@ def api_contractor_profile(contractor_name):
 @cache.cached(timeout=300)
 def api_license_permits(license_number):
     """
-    Get all permits associated with a license number
+    Get all permits associated with a license number with work type analysis
     """
     try:
         with DatabaseConnection() as cur:
-            # Get permits by this license number
+            # Get total permit count
+            cur.execute("""
+                SELECT COUNT(*) as total_count
+                FROM permits
+                WHERE permittee_license_number = %s
+            """, (license_number,))
+            total_count = cur.fetchone()['total_count']
+            
+            # Get permits by this license number (recent 100)
             cur.execute("""
                 SELECT 
                     permit_no, bbl, address, job_type, work_type,
-                    issue_date, filing_date, permittee_business_name, permittee_license_type
+                    issue_date, filing_date, permittee_business_name, permittee_license_type,
+                    applicant
                 FROM permits
                 WHERE permittee_license_number = %s
                 ORDER BY issue_date DESC NULLS LAST
@@ -3167,13 +3176,99 @@ def api_license_permits(license_number):
             """, (license_number,))
             contractor_row = cur.fetchone()
             contractor_name = contractor_row['permittee_business_name'] if contractor_row else None
+            
+            # Get applicant name (the actual licensed professional)
+            cur.execute("""
+                SELECT applicant, COUNT(*) as cnt
+                FROM permits
+                WHERE permittee_license_number = %s AND applicant IS NOT NULL
+                GROUP BY applicant
+                ORDER BY cnt DESC
+                LIMIT 1
+            """, (license_number,))
+            applicant_row = cur.fetchone()
+            applicant_name = applicant_row['applicant'] if applicant_row else None
+            
+            # Get license type
+            cur.execute("""
+                SELECT permittee_license_type, COUNT(*) as cnt
+                FROM permits
+                WHERE permittee_license_number = %s AND permittee_license_type IS NOT NULL
+                GROUP BY permittee_license_type
+                ORDER BY cnt DESC
+                LIMIT 1
+            """, (license_number,))
+            license_type_row = cur.fetchone()
+            license_type = license_type_row['permittee_license_type'] if license_type_row else None
+            
+            # Get work type breakdown
+            cur.execute("""
+                SELECT work_type, COUNT(*) as cnt
+                FROM permits
+                WHERE permittee_license_number = %s AND work_type IS NOT NULL
+                GROUP BY work_type
+                ORDER BY cnt DESC
+                LIMIT 10
+            """, (license_number,))
+            work_types = [{'work_type': r['work_type'], 'count': r['cnt']} for r in cur.fetchall()]
+            
+            # Get job type breakdown
+            cur.execute("""
+                SELECT job_type, COUNT(*) as cnt
+                FROM permits
+                WHERE permittee_license_number = %s AND job_type IS NOT NULL
+                GROUP BY job_type
+                ORDER BY cnt DESC
+                LIMIT 5
+            """, (license_number,))
+            job_types = [{'job_type': r['job_type'], 'count': r['cnt']} for r in cur.fetchall()]
+            
+            # Determine primary specialty based on work types
+            specialty = None
+            if work_types:
+                top_work = work_types[0]['work_type'].lower()
+                if 'scaffold' in top_work or 'sidewalk shed' in top_work:
+                    specialty = 'Scaffolding & Sidewalk Sheds'
+                elif 'plumbing' in top_work:
+                    specialty = 'Plumbing'
+                elif 'electrical' in top_work:
+                    specialty = 'Electrical'
+                elif 'sprinkler' in top_work:
+                    specialty = 'Fire Protection / Sprinklers'
+                elif 'hvac' in top_work or 'mechanical' in top_work:
+                    specialty = 'HVAC / Mechanical'
+                elif 'demolition' in top_work:
+                    specialty = 'Demolition'
+                elif 'construction fence' in top_work:
+                    specialty = 'Site Safety / Fencing'
+                else:
+                    specialty = work_types[0]['work_type']
+        
+        # Map license types to full names
+        license_type_names = {
+            'GC': 'General Contractor',
+            'MP': 'Master Plumber',
+            'PE': 'Professional Engineer',
+            'RA': 'Registered Architect',
+            'ME': 'Master Electrician',
+            'FP': 'Fire Protection',
+            'SS': 'Site Safety',
+            'RG': 'Rigger'
+        }
+        license_type_full = license_type_names.get(license_type, license_type)
         
         return jsonify({
             'success': True,
             'license_number': license_number,
-            'total_permits': len(permits),
-            'unique_buildings': unique_buildings,
+            'license_type': license_type,
+            'license_type_full': license_type_full,
+            'applicant_name': applicant_name,
             'contractor_name': contractor_name,
+            'total_permits': total_count,
+            'unique_buildings': unique_buildings,
+            'specialty': specialty,
+            'work_types': work_types,
+            'job_types': job_types,
             'permits': [dict(p) for p in permits]
         })
         
