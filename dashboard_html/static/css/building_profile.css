@@ -1353,6 +1353,64 @@
     margin: 20px 0;
 }
 
+/* NYC Open Data License Info */
+.nyc-license-info {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 15px 0;
+}
+
+.nyc-license-info h4 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    color: #166534;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.license-details-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.lic-row {
+    display: flex;
+    gap: 10px;
+    font-size: 14px;
+}
+
+.lic-row span:first-child {
+    flex: 0 0 80px;
+    color: #64748b;
+    font-weight: 500;
+}
+
+.lic-row span:last-child {
+    color: #1e293b;
+}
+
+.lic-row a {
+    color: #8b5cf6;
+    text-decoration: none;
+}
+
+.lic-row a:hover {
+    text-decoration: underline;
+}
+
+.status-active {
+    color: #16a34a;
+    font-weight: 600;
+}
+
+.status-expired {
+    color: #dc2626;
+    font-weight: 600;
+}
+
 /* ============================================================================
    VIOLATIONS TAB
    ============================================================================ */

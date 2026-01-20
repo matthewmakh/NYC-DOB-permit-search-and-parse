@@ -1487,6 +1487,26 @@ async function showLicenseInfo(licenseNumber, licenseType) {
             permitsHtml += '</div>';
         }
         
+        // Build NYC Open Data enrichment section if available
+        let nycLicenseHtml = '';
+        if (data.nyc_license_info) {
+            const lic = data.nyc_license_info;
+            const statusClass = lic.license_status === 'ACTIVE' ? 'status-active' : 'status-expired';
+            nycLicenseHtml = `
+                <div class="nyc-license-info">
+                    <h4>NYC DOB License Record</h4>
+                    <div class="license-details-grid">
+                        ${lic.first_name || lic.last_name ? `<div class="lic-row"><span>Name:</span><span>${lic.first_name || ''} ${lic.last_name || ''}</span></div>` : ''}
+                        ${lic.business_name ? `<div class="lic-row"><span>Business:</span><span>${lic.business_name}</span></div>` : ''}
+                        ${lic.license_type ? `<div class="lic-row"><span>Type:</span><span>${lic.license_type}</span></div>` : ''}
+                        ${lic.license_status ? `<div class="lic-row"><span>Status:</span><span class="${statusClass}">${lic.license_status}</span></div>` : ''}
+                        ${lic.business_phone_number ? `<div class="lic-row"><span>Phone:</span><span><a href="tel:${lic.business_phone_number}">${formatPhoneNumber(lic.business_phone_number)}</a></span></div>` : ''}
+                        ${lic.business_email ? `<div class="lic-row"><span>Email:</span><span><a href="mailto:${lic.business_email}">${lic.business_email.toLowerCase()}</a></span></div>` : ''}
+                        ${lic.business_house_number || lic.business_street_name ? `<div class="lic-row"><span>Address:</span><span>${lic.business_house_number || ''} ${lic.business_street_name || ''}, ${lic.license_business_city || ''} ${lic.business_state || ''} ${lic.business_zip_code || ''}</span></div>` : ''}
+                    </div>
+                </div>`;
+        }
+        
         modal.innerHTML = \`
             <div class="permit-modal-content license-modal">
                 <button class="modal-close" onclick="closePermitModal()">×</button>
@@ -1501,8 +1521,7 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                 
                 \${data.specialty ? \`<div class="specialty-badge">Specialty: \${data.specialty}</div>\` : ''}
                 
-                <div class="license-summary">
-                    <div class="license-stat">
+                \${nycLicenseHtml}
                         <span class="stat-value">\${data.total_permits}</span>
                         <span class="stat-label">Total Permits</span>
                     </div>

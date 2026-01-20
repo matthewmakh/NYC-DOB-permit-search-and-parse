@@ -3257,6 +3257,22 @@ def api_license_permits(license_number):
         }
         license_type_full = license_type_names.get(license_type, license_type)
         
+        # Try to get additional info from NYC Open Data DOB License Info
+        nyc_license_info = None
+        try:
+            import requests
+            # Try with and without leading zeros
+            for lic_num in [license_number, license_number.lstrip('0')]:
+                nyc_url = f"https://data.cityofnewyork.us/resource/t8hj-ruu2.json?license_number={lic_num}"
+                resp = requests.get(nyc_url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data:
+                        nyc_license_info = data[0]
+                        break
+        except Exception as e:
+            print(f"NYC Open Data license lookup failed: {e}")
+        
         return jsonify({
             'success': True,
             'license_number': license_number,
@@ -3269,7 +3285,9 @@ def api_license_permits(license_number):
             'specialty': specialty,
             'work_types': work_types,
             'job_types': job_types,
-            'permits': [dict(p) for p in permits]
+            'permits': [dict(p) for p in permits],
+            # NYC Open Data enrichment
+            'nyc_license_info': nyc_license_info
         })
         
     except Exception as e:
