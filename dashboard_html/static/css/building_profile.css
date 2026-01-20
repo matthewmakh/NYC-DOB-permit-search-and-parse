@@ -1106,6 +1106,120 @@
     background: #cbd5e1;
 }
 
+/* License link styling */
+.license-link {
+    color: #8b5cf6;
+    text-decoration: underline;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.license-link:hover {
+    color: #7c3aed;
+}
+
+/* License modal specific styles */
+.license-modal .permit-modal-content {
+    max-width: 600px;
+}
+
+.license-summary {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f8fafc;
+    border-radius: 8px;
+}
+
+.license-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+}
+
+.license-stat .stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.license-stat .stat-label {
+    font-size: 12px;
+    color: #64748b;
+    text-transform: uppercase;
+}
+
+.license-permits-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.license-permit-item {
+    padding: 12px;
+    background: #f8fafc;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+}
+
+.permit-item-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.permit-address {
+    color: #8b5cf6;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.permit-address:hover {
+    text-decoration: underline;
+}
+
+.permit-date-small {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.permit-item-details {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.permit-type-badge {
+    background: #e0e7ff;
+    color: #4338ca;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.permit-no-small {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.more-permits {
+    text-align: center;
+    padding: 10px;
+    color: #64748b;
+    font-style: italic;
+}
+
+.license-loading {
+    text-align: center;
+    padding: 40px;
+    color: #64748b;
+}
+
 /* ============================================================================
    VIOLATIONS TAB
    ============================================================================ */

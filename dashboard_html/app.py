@@ -3127,6 +3127,63 @@ def api_contractor_profile(contractor_name):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/license/<license_number>/permits')
+@cache.cached(timeout=300)
+def api_license_permits(license_number):
+    """
+    Get all permits associated with a license number
+    """
+    try:
+        with DatabaseConnection() as cur:
+            # Get permits by this license number
+            cur.execute("""
+                SELECT 
+                    permit_no, bbl, address, job_type, work_type,
+                    issue_date, filing_date, permittee_business_name, permittee_license_type
+                FROM permits
+                WHERE permittee_license_number = %s
+                ORDER BY issue_date DESC NULLS LAST
+                LIMIT 100
+            """, (license_number,))
+            
+            permits = cur.fetchall()
+            
+            # Get unique buildings count
+            cur.execute("""
+                SELECT COUNT(DISTINCT bbl) as unique_buildings
+                FROM permits
+                WHERE permittee_license_number = %s
+            """, (license_number,))
+            unique_buildings = cur.fetchone()['unique_buildings']
+            
+            # Get the contractor name (most common one for this license)
+            cur.execute("""
+                SELECT permittee_business_name, COUNT(*) as cnt
+                FROM permits
+                WHERE permittee_license_number = %s AND permittee_business_name IS NOT NULL
+                GROUP BY permittee_business_name
+                ORDER BY cnt DESC
+                LIMIT 1
+            """, (license_number,))
+            contractor_row = cur.fetchone()
+            contractor_name = contractor_row['permittee_business_name'] if contractor_row else None
+        
+        return jsonify({
+            'success': True,
+            'license_number': license_number,
+            'total_permits': len(permits),
+            'unique_buildings': unique_buildings,
+            'contractor_name': contractor_name,
+            'permits': [dict(p) for p in permits]
+        })
+        
+    except Exception as e:
+        print(f"License lookup API error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ============================================================================
 # BUILDING PROFILE - COMPREHENSIVE DATA API
 # ============================================================================
@@ -3145,7 +3202,7 @@ def api_building_profile(bbl):
             # ===== 1. BUILDING CORE DATA (70+ fields from all sources) =====
             cur.execute("""
             SELECT 
-                id, bbl, address, CAST(borough AS TEXT) as borough, block, lot,
+                id, bbl, bin, address, CAST(borough AS TEXT) as borough, block, lot,
                 -- PLUTO data
                 current_owner_name, total_units, building_sqft, year_built, year_altered, building_class,
                 -- RPAD data

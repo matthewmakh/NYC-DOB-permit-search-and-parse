@@ -73,6 +73,75 @@ function formatPhoneNumber(phone) {
     return phone; // Return original if can't format
 }
 
+// Show license info popup with other permits from same license
+async function showLicenseInfo(licenseNumber, licenseType) {
+    // Close existing permit modal if open
+    const existingModal = document.querySelector('.permit-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Create loading modal
+    const modal = document.createElement('div');
+    modal.className = 'permit-modal license-modal';
+    modal.innerHTML = `
+        <div class="permit-modal-content">
+            <button class="modal-close" onclick="this.closest('.permit-modal').remove()">&times;</button>
+            <h2>License #${licenseNumber}${licenseType ? ` (${licenseType})` : ''}</h2>
+            <div class="license-loading">Loading permits by this licensee...</div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    
+    try {
+        const response = await fetch(`/api/license/${licenseNumber}/permits`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            modal.querySelector('.license-loading').innerHTML = `<div class="error">Error: ${data.error}</div>`;
+            return;
+        }
+        
+        let html = `
+            <div class="license-summary">
+                <div class="license-stat"><span class="stat-value">${data.total_permits}</span><span class="stat-label">Total Permits</span></div>
+                <div class="license-stat"><span class="stat-value">${data.unique_buildings}</span><span class="stat-label">Buildings</span></div>
+                ${data.contractor_name ? `<div class="license-stat"><span class="stat-value">${data.contractor_name}</span><span class="stat-label">Contractor</span></div>` : ''}
+            </div>
+            <h3>Recent Permits</h3>
+            <div class="license-permits-list">
+        `;
+        
+        for (const permit of data.permits.slice(0, 10)) {
+            html += `
+                <div class="license-permit-item">
+                    <div class="permit-item-header">
+                        <a href="/property/${permit.bbl}" class="permit-address">${permit.address || 'Unknown Address'}</a>
+                        <span class="permit-date-small">${permit.issue_date ? new Date(permit.issue_date).toLocaleDateString() : 'No date'}</span>
+                    </div>
+                    <div class="permit-item-details">
+                        <span class="permit-type-badge">${permit.job_type || 'Permit'}</span>
+                        <span class="permit-no-small">#${permit.permit_no}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        if (data.permits.length > 10) {
+            html += `<div class="more-permits">+ ${data.permits.length - 10} more permits</div>`;
+        }
+        
+        html += '</div>';
+        modal.querySelector('.permit-modal-content').innerHTML = `
+            <button class="modal-close" onclick="this.closest('.permit-modal').remove()">&times;</button>
+            <h2>License #${licenseNumber}${licenseType ? ` (${licenseType})` : ''}</h2>
+            ${html}
+        `;
+    } catch (error) {
+        modal.querySelector('.license-loading').innerHTML = `<div class="error">Failed to load license data</div>`;
+    }
+}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -205,6 +274,14 @@ function renderHeroSection() {
         ${building.borough_name || building.zip_code ? `<span class="address-city">${building.borough_name || ''}${building.borough_name && building.zip_code ? ', ' : ''}${building.zip_code ? 'NY ' + building.zip_code : ''}</span>` : ''}
     `;
     document.getElementById('bbl-display').textContent = building.bbl;
+    
+    // Show BIN if available
+    const binDisplay = document.getElementById('bin-display');
+    if (building.bin) {
+        binDisplay.textContent = '| BIN: ' + building.bin;
+    } else {
+        binDisplay.textContent = '';
+    }
     
     // Risk Score with color coding
     const riskCard = document.getElementById('risk-score-card');
@@ -1269,12 +1346,18 @@ function showPermitDetails(index) {
     const hasPermitteeData = permit.permittee_business_name || permit.permittee_license_type || 
                              permit.permittee_license_number || permit.permittee_phone;
     if (hasPermitteeData) {
+        // Make license number clickable
+        let licenseDisplay = permit.permittee_license_number;
+        if (permit.permittee_license_number) {
+            const licenseType = permit.permittee_license_type || '';
+            licenseDisplay = `<a href="#" onclick="showLicenseInfo('${permit.permittee_license_number}', '${licenseType}'); return false;" class="license-link">${permit.permittee_license_number}</a>`;
+        }
         html += `
             <div class="detail-section">
                 <h3>Permittee</h3>
                 ${addRow('Business Name', permit.permittee_business_name)}
                 ${addRow('License Type', permit.permittee_license_type)}
-                ${addRow('License #', permit.permittee_license_number)}
+                ${permit.permittee_license_number ? `<div class="detail-row"><span>License #</span><span>${licenseDisplay}</span></div>` : ''}
                 ${addRow('Phone', permit.permittee_phone ? formatPhoneNumber(permit.permittee_phone) : null)}
             </div>`;
     }
