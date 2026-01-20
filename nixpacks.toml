@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["python312", "python312Packages.pip"]
-
-[phases.install]
-cmds = ["python -m pip install -r dashboard_html/requirements.txt"]
-
-[start]
-cmd = "cd dashboard_html && python -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
