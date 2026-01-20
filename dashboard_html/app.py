@@ -620,23 +620,23 @@ def get_permit_details(permit_id):
 @app.route('/api/health')
 def health_check():
     """Health check endpoint"""
+    # Basic health check without database
+    health_status = {
+        'success': True,
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Try database connection
     try:
         with DatabaseConnection() as cur:
             cur.execute("SELECT 1;")
-        
-        return jsonify({
-            'success': True,
-            'status': 'healthy',
-            'database': 'connected'
-        })
-        
+        health_status['database'] = 'connected'
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'status': 'unhealthy',
-            'database': 'disconnected',
-            'error': str(e)
-        }), 500
+        health_status['database'] = 'disconnected'
+        health_status['db_error'] = str(e)
+    
+    return jsonify(health_status)
 
 
 @app.route('/permit/<int:permit_id>')
