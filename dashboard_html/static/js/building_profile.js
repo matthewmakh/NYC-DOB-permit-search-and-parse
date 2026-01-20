@@ -1441,20 +1441,21 @@ async function showLicenseInfo(licenseNumber, licenseType) {
             throw new Error(data.error || 'Failed to load license data');
         }
         
-        // Build work type breakdown HTML
+        // Build work type breakdown HTML with proper bar chart
         let workTypeHtml = '';
         if (data.work_types && data.work_types.length > 0) {
             workTypeHtml = '<div class="work-types-breakdown"><h4>Work Types</h4><div class="work-type-bars">';
             const maxCount = data.work_types[0].count;
-            data.work_types.forEach(wt => {
+            data.work_types.slice(0, 5).forEach(wt => {
                 const pct = Math.round((wt.count / maxCount) * 100);
+                const label = wt.work_type.length > 20 ? wt.work_type.substring(0, 20) + '...' : wt.work_type;
                 workTypeHtml += `
-                    <div class="work-type-bar">
-                        <span class="work-type-label">${wt.work_type}</span>
-                        <div class="bar-container">
-                            <div class="bar-fill" style="width: ${pct}%"></div>
-                            <span class="bar-count">${wt.count}</span>
+                    <div class="work-type-row">
+                        <span class="work-type-label" title="${wt.work_type}">${label}</span>
+                        <div class="work-type-bar-container">
+                            <div class="work-type-bar" style="width: ${pct}%"></div>
                         </div>
+                        <span class="work-type-count">${wt.count}</span>
                     </div>`;
             });
             workTypeHtml += '</div></div>';
