@@ -1434,7 +1434,7 @@ async function showLicenseInfo(licenseNumber, licenseType) {
     modal.style.display = 'flex';
     
     try {
-        const response = await fetch(\`/api/license/\${licenseNumber}/permits\`);
+        const response = await fetch(`/api/license/${licenseNumber}/permits`);
         const data = await response.json();
         
         if (!data.success) {
@@ -1448,14 +1448,14 @@ async function showLicenseInfo(licenseNumber, licenseType) {
             const maxCount = data.work_types[0].count;
             data.work_types.forEach(wt => {
                 const pct = Math.round((wt.count / maxCount) * 100);
-                workTypeHtml += \`
+                workTypeHtml += `
                     <div class="work-type-bar">
-                        <span class="work-type-label">\${wt.work_type}</span>
+                        <span class="work-type-label">${wt.work_type}</span>
                         <div class="bar-container">
-                            <div class="bar-fill" style="width: \${pct}%"></div>
-                            <span class="bar-count">\${wt.count}</span>
+                            <div class="bar-fill" style="width: ${pct}%"></div>
+                            <span class="bar-count">${wt.count}</span>
                         </div>
-                    </div>\`;
+                    </div>`;
             });
             workTypeHtml += '</div></div>';
         }
@@ -1468,21 +1468,21 @@ async function showLicenseInfo(licenseNumber, licenseType) {
             displayPermits.forEach(p => {
                 const dateStr = p.issue_date ? new Date(p.issue_date).toLocaleDateString() : 
                                (p.filing_date ? 'Filed ' + new Date(p.filing_date).toLocaleDateString() : 'No date');
-                permitsHtml += \`
+                permitsHtml += `
                     <div class="license-permit-item">
                         <div class="permit-item-header">
-                            <a href="/property/\${p.bbl}" class="permit-address">\${p.address || 'Unknown Address'}</a>
-                            <span class="permit-date-small">\${dateStr}</span>
+                            <a href="/property/${p.bbl}" class="permit-address">${p.address || 'Unknown Address'}</a>
+                            <span class="permit-date-small">${dateStr}</span>
                         </div>
                         <div class="permit-item-details">
-                            <span class="permit-type-badge">\${p.job_type || 'N/A'}</span>
-                            <span class="permit-work-type-small">\${p.work_type || ''}</span>
-                            <span class="permit-no-small">#\${p.permit_no}</span>
+                            <span class="permit-type-badge">${p.job_type || 'N/A'}</span>
+                            <span class="permit-work-type-small">${p.work_type || ''}</span>
+                            <span class="permit-no-small">#${p.permit_no}</span>
                         </div>
-                    </div>\`;
+                    </div>`;
             });
             if (data.total_permits > 10) {
-                permitsHtml += \`<div class="more-permits">... and \${data.total_permits - 10} more permits</div>\`;
+                permitsHtml += `<div class="more-permits">... and ${data.total_permits - 10} more permits</div>`;
             }
             permitsHtml += '</div>';
         }
@@ -1527,53 +1527,53 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                 </div>`;
         }
         
-        modal.innerHTML = \`
+        modal.innerHTML = `
             <div class="permit-modal-content license-modal">
                 <button class="modal-close" onclick="closePermitModal()">×</button>
                 
                 <div class="license-header">
-                    <h2>License #\${licenseNumber}</h2>
-                    \${data.license_type_full ? \`<span class="license-type-badge">\${data.license_type_full}</span>\` : ''}
+                    <h2>License #${licenseNumber}</h2>
+                    ${data.license_type_full ? `<span class="license-type-badge">${data.license_type_full}</span>` : ''}
                 </div>
                 
-                \${data.applicant_name ? \`<div class="licensee-name">\${data.applicant_name}</div>\` : ''}
-                \${data.contractor_name ? \`<div class="contractor-name">Company: \${data.contractor_name}</div>\` : ''}
+                ${data.applicant_name ? `<div class="licensee-name">${data.applicant_name}</div>` : ''}
+                ${data.contractor_name ? `<div class="contractor-name">Company: ${data.contractor_name}</div>` : ''}
                 
-                \${data.specialty ? \`<div class="specialty-badge">Specialty: \${data.specialty}</div>\` : ''}
+                ${data.specialty ? `<div class="specialty-badge">Specialty: ${data.specialty}</div>` : ''}
                 
-                \${nycLicenseHtml}
-                \${nysLicenseHtml}
+                ${nycLicenseHtml}
+                ${nysLicenseHtml}
                 
                 <div class="license-stats">
                     <div class="license-stat">
-                        <span class="stat-value">\${data.total_permits}</span>
+                        <span class="stat-value">${data.total_permits}</span>
                         <span class="stat-label">Total Permits</span>
                     </div>
                     <div class="license-stat">
-                        <span class="stat-value">\${data.unique_buildings}</span>
+                        <span class="stat-value">${data.unique_buildings}</span>
                         <span class="stat-label">Buildings</span>
                     </div>
                 </div>
                 
-                \${workTypeHtml}
-                \${permitsHtml}
+                ${workTypeHtml}
+                ${permitsHtml}
                 
                 <div class="permit-modal-actions">
                     <button class="btn-close-modal" onclick="closePermitModal()">Close</button>
                 </div>
-            </div>\`;
+            </div>`;
             
     } catch (error) {
         console.error('License lookup error:', error);
-        modal.innerHTML = \`
+        modal.innerHTML = `
             <div class="permit-modal-content license-modal">
                 <button class="modal-close" onclick="closePermitModal()">×</button>
-                <h2>License #\${licenseNumber}</h2>
+                <h2>License #${licenseNumber}</h2>
                 <div class="error-message">Failed to load license information</div>
                 <div class="permit-modal-actions">
                     <button class="btn-close-modal" onclick="closePermitModal()">Close</button>
                 </div>
-            </div>\`;
+            </div>`;
     }
 }
 
