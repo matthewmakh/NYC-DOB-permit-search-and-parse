@@ -3202,7 +3202,9 @@ def api_building_profile(bbl):
                     permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
                     owner_business_name, owner_phone,
                     superintendent_business_name, site_safety_mgr_business_name,
-                    work_type, permit_status, filing_status
+                    work_type, permit_status, filing_status,
+                    work_description, exp_date, filing_date, proposed_job_start,
+                    self_cert, fee_type
                 FROM permits
                 WHERE bbl = %s
                 ORDER BY issue_date DESC

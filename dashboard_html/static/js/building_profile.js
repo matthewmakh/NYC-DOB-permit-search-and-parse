@@ -1224,9 +1224,24 @@ function showPermitDetails(index) {
                 ${addRow('Job Type', permit.job_type)}
                 ${addRow('Work Type', permit.work_type)}
                 ${addRow('Issue Date', formatDate(permit.issue_date))}
+                ${addRow('Expiration Date', formatDate(permit.exp_date))}
+                ${addRow('Filing Date', formatDate(permit.filing_date))}
                 ${addRow('Permit Status', permit.permit_status)}
                 ${addRow('Filing Status', permit.filing_status)}
+                ${addRow('Self-Certified', permit.self_cert)}
+                ${addRow('Fee Type', permit.fee_type)}
             </div>`;
+    
+    // Work Details - only if has work description or related data
+    const hasWorkDetails = permit.work_description || permit.proposed_job_start;
+    if (hasWorkDetails) {
+        html += `
+            <div class="detail-section">
+                <h3>Work Details</h3>
+                ${addRow('Work Description', permit.work_description)}
+                ${addRow('Proposed Start Date', formatDate(permit.proposed_job_start))}
+            </div>`;
+    }
     
     // Property Details - only if has data
     const hasPropertyDetails = permit.address || permit.use_type || permit.stories || permit.total_units;
