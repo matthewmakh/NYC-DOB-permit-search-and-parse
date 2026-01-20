@@ -3273,6 +3273,50 @@ def api_license_permits(license_number):
         except Exception as e:
             print(f"NYC Open Data license lookup failed: {e}")
         
+        # Try NY State ROSA API for PE/RA licenses (not in NYC DOB database)
+        nys_license_info = None
+        if license_type in ('PE', 'RA') or not nyc_license_info:
+            try:
+                import requests
+                # NY State profession codes: PE=016, RA=003
+                profession_codes = {
+                    'PE': '016',
+                    'RA': '003'
+                }
+                # Try PE first if we know it's PE, otherwise try both
+                codes_to_try = []
+                if license_type == 'PE':
+                    codes_to_try = ['016']
+                elif license_type == 'RA':
+                    codes_to_try = ['003']
+                else:
+                    # Unknown type, try PE then RA
+                    codes_to_try = ['016', '003']
+                
+                nys_api_key = 'BRJF4D6U646A5PNMIB77AAW9544QFQKAYAEWI9EPU0TNP72CEEO3L4KGVN5K3R44'
+                for prof_code in codes_to_try:
+                    nys_url = f"https://api.nysed.gov/rosa/V2/byProfessionAndLicenseNumber?licenseNumber={license_number}&professionCode={prof_code}"
+                    headers = {'x-oapi-key': nys_api_key}
+                    resp = requests.get(nys_url, headers=headers, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        # Check if valid response (has a name)
+                        if data and data.get('name', {}).get('value'):
+                            nys_license_info = {
+                                'name': data.get('name', {}).get('value'),
+                                'profession': data.get('profession', {}).get('value'),
+                                'address': data.get('address', {}).get('value'),
+                                'status': data.get('status', {}).get('value'),
+                                'date_of_licensure': data.get('dateOfLicensure', {}).get('value'),
+                                'registered_through': data.get('registeredThroughDate', {}).get('value'),
+                                'license_number': data.get('licenseNumber', {}).get('value'),
+                                'additional_qualifications': data.get('additionalQualifications', {}).get('value'),
+                                'enforcement_actions': len(data.get('enforcementActions', [])) > 0
+                            }
+                            break
+            except Exception as e:
+                print(f"NY State ROSA license lookup failed: {e}")
+        
         return jsonify({
             'success': True,
             'license_number': license_number,
@@ -3286,8 +3330,10 @@ def api_license_permits(license_number):
             'work_types': work_types,
             'job_types': job_types,
             'permits': [dict(p) for p in permits],
-            # NYC Open Data enrichment
-            'nyc_license_info': nyc_license_info
+            # NYC Open Data enrichment (GC, MP, Electricians, etc.)
+            'nyc_license_info': nyc_license_info,
+            # NY State ROSA enrichment (PE, RA)
+            'nys_license_info': nys_license_info
         })
         
     except Exception as e:

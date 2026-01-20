@@ -1411,6 +1411,31 @@
     font-weight: 600;
 }
 
+/* NY State License Info */
+.nys-license-info {
+    background: #eff6ff;
+    border: 1px solid #93c5fd;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 15px 0;
+}
+
+.nys-license-info h4 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    color: #1e40af;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.lic-row.warning {
+    color: #dc2626;
+}
+
+.lic-row.warning span {
+    color: #dc2626;
+}
+
 /* ============================================================================
    VIOLATIONS TAB
    ============================================================================ */

@@ -1507,6 +1507,26 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                 </div>`;
         }
         
+        // Build NY State license info section if available
+        let nysLicenseHtml = '';
+        if (data.nys_license_info) {
+            const nys = data.nys_license_info;
+            const statusClass = nys.status === 'Registered' ? 'status-active' : 'status-expired';
+            nysLicenseHtml = `
+                <div class="nys-license-info">
+                    <h4>NY State License Record</h4>
+                    <div class="license-details-grid">
+                        ${nys.name ? `<div class="lic-row"><span>Name:</span><span>${nys.name}</span></div>` : ''}
+                        ${nys.profession ? `<div class="lic-row"><span>Profession:</span><span>${nys.profession}</span></div>` : ''}
+                        ${nys.status ? `<div class="lic-row"><span>Status:</span><span class="${statusClass}">${nys.status}</span></div>` : ''}
+                        ${nys.registered_through ? `<div class="lic-row"><span>Registered Through:</span><span>${nys.registered_through}</span></div>` : ''}
+                        ${nys.date_of_licensure ? `<div class="lic-row"><span>Licensed Since:</span><span>${nys.date_of_licensure}</span></div>` : ''}
+                        ${nys.address ? `<div class="lic-row"><span>Location:</span><span>${nys.address}</span></div>` : ''}
+                        ${nys.enforcement_actions ? `<div class="lic-row warning"><span>⚠️ Enforcement Actions:</span><span>Yes</span></div>` : ''}
+                    </div>
+                </div>`;
+        }
+        
         modal.innerHTML = \`
             <div class="permit-modal-content license-modal">
                 <button class="modal-close" onclick="closePermitModal()">×</button>
@@ -1522,6 +1542,10 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                 \${data.specialty ? \`<div class="specialty-badge">Specialty: \${data.specialty}</div>\` : ''}
                 
                 \${nycLicenseHtml}
+                \${nysLicenseHtml}
+                
+                <div class="license-stats">
+                    <div class="license-stat">
                         <span class="stat-value">\${data.total_permits}</span>
                         <span class="stat-label">Total Permits</span>
                     </div>
