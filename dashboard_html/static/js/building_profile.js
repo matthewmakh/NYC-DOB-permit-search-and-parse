@@ -1129,7 +1129,7 @@ function renderPermitsTab() {
         <div class="permit-card" onclick="showPermitDetails(${index})" data-index="${index}">
             <div class="permit-header">
                 <span class="permit-type">${permit.job_type || 'Permit'}</span>
-                <span class="permit-date">${formatDate(permit.issue_date)}</span>
+                <span class="permit-date">${formatPermitDate(permit)}</span>
             </div>
             <div class="permit-no">Permit #${permit.permit_no}</div>
             ${permit.work_type ? `<div class="permit-work-type">${permit.work_type}</div>` : ''}
@@ -1186,7 +1186,7 @@ function filterPermits() {
         <div class="permit-card" onclick="showPermitDetails(${originalIndex})" data-index="${originalIndex}">
             <div class="permit-header">
                 <span class="permit-type">${permit.job_type || 'Permit'}</span>
-                <span class="permit-date">${formatDate(permit.issue_date)}</span>
+                <span class="permit-date">${formatPermitDate(permit)}</span>
             </div>
             <div class="permit-no">Permit #${permit.permit_no}</div>
             ${permit.work_type ? `<div class="permit-work-type">${permit.work_type}</div>` : ''}
@@ -1814,6 +1814,17 @@ function formatDate(dateStr) {
     if (!dateStr) return 'Unknown';
     const date = new Date(dateStr);
     return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function formatPermitDate(permit) {
+    if (permit.issue_date) {
+        const date = new Date(permit.issue_date);
+        return 'Issued: ' + date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    } else if (permit.filing_date) {
+        const date = new Date(permit.filing_date);
+        return 'Filed: ' + date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+    return 'No Date';
 }
 
 function getBoroughName(code) {
