@@ -3293,27 +3293,28 @@ def api_license_permits(license_number):
                     # Unknown type, try PE then RA
                     codes_to_try = ['016', '003']
                 
-                nys_api_key = 'BRJF4D6U646A5PNMIB77AAW9544QFQKAYAEWI9EPU0TNP72CEEO3L4KGVN5K3R44'
-                for prof_code in codes_to_try:
-                    nys_url = f"https://api.nysed.gov/rosa/V2/byProfessionAndLicenseNumber?licenseNumber={license_number}&professionCode={prof_code}"
-                    headers = {'x-oapi-key': nys_api_key}
-                    resp = requests.get(nys_url, headers=headers, timeout=5)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        # Check if valid response (has a name)
-                        if data and data.get('name', {}).get('value'):
-                            nys_license_info = {
-                                'name': data.get('name', {}).get('value'),
-                                'profession': data.get('profession', {}).get('value'),
-                                'address': data.get('address', {}).get('value'),
-                                'status': data.get('status', {}).get('value'),
-                                'date_of_licensure': data.get('dateOfLicensure', {}).get('value'),
-                                'registered_through': data.get('registeredThroughDate', {}).get('value'),
-                                'license_number': data.get('licenseNumber', {}).get('value'),
-                                'additional_qualifications': data.get('additionalQualifications', {}).get('value'),
-                                'enforcement_actions': len(data.get('enforcementActions', [])) > 0
-                            }
-                            break
+                nys_api_key = os.getenv('NYS_ROSA_API_KEY', '')
+                if nys_api_key:
+                    for prof_code in codes_to_try:
+                        nys_url = f"https://api.nysed.gov/rosa/V2/byProfessionAndLicenseNumber?licenseNumber={license_number}&professionCode={prof_code}"
+                        headers = {'x-oapi-key': nys_api_key}
+                        resp = requests.get(nys_url, headers=headers, timeout=5)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            # Check if valid response (has a name)
+                            if data and data.get('name', {}).get('value'):
+                                nys_license_info = {
+                                    'name': data.get('name', {}).get('value'),
+                                    'profession': data.get('profession', {}).get('value'),
+                                    'address': data.get('address', {}).get('value'),
+                                    'status': data.get('status', {}).get('value'),
+                                    'date_of_licensure': data.get('dateOfLicensure', {}).get('value'),
+                                    'registered_through': data.get('registeredThroughDate', {}).get('value'),
+                                    'license_number': data.get('licenseNumber', {}).get('value'),
+                                    'additional_qualifications': data.get('additionalQualifications', {}).get('value'),
+                                    'enforcement_actions': len(data.get('enforcementActions', [])) > 0
+                                }
+                                break
             except Exception as e:
                 print(f"NY State ROSA license lookup failed: {e}")
         
