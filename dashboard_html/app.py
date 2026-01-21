@@ -4312,28 +4312,29 @@ def api_enrich_owner():
                 'message': f'You already enriched {owner_name}'
             })
         
-        # Charge the fee (admin is free)
-        if not is_admin:
-            success, message, charge_id = charge_enrichment_fee(user_id, building_id, owner_name)
-            if not success:
-                return jsonify({'success': False, 'error': message}), 402
-        else:
-            charge_id = 'admin_free'
-        
-        # Perform enrichment
+        # Perform enrichment FIRST (before charging)
         success, data, message = enrich_owner(building_id, owner_name, address, user_id)
         print(f"Enrichment result: success={success}, message={message}")
         
         if success:
+            # Only charge AFTER successful enrichment
+            charge_id = 'admin_free'
+            charged = False
+            if not is_admin:
+                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, building_id, owner_name)
+                charged = charge_success
+                if not charge_success:
+                    print(f"WARNING: Enrichment succeeded but charge failed: {charge_msg}")
+            
             return jsonify({
                 'success': True,
                 'data': data,
-                'charged': not is_admin,
+                'charged': charged,
                 'charge_id': charge_id,
                 'message': message
             })
         else:
-            # Refund would happen here if needed
+            # No charge if enrichment failed
             return jsonify({'success': False, 'error': message}), 400
             
     except Exception as e:
@@ -4478,24 +4479,20 @@ def api_bulk_enrich():
                 
                 for owner in available:
                     try:
-                        # Charge fee (admin is free)
-                        if not is_admin:
-                            success, message, charge_id = charge_enrichment_fee(user_id, bid, owner['name'])
-                            if not success:
-                                results['failed'] += 1
-                                results['details'].append({
-                                    'building_id': bid,
-                                    'owner': owner['name'],
-                                    'success': False,
-                                    'error': message
-                                })
-                                continue
-                            results['total_charged'] += 0.35
-                        
-                        # Perform enrichment
+                        # Perform enrichment FIRST (before charging)
                         success, data, message = enrich_owner(bid, owner['name'], address, user_id)
                         
                         if success:
+                            # Only charge AFTER successful enrichment
+                            if not is_admin:
+                                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, bid, owner['name'])
+                                if charge_success:
+                                    results['total_charged'] += 0.35
+                                else:
+                                    # Enrichment worked but charge failed - still count as success
+                                    # Log the charge failure for manual follow-up
+                                    print(f"WARNING: Enrichment succeeded but charge failed for user {user_id}, building {bid}, owner {owner['name']}: {charge_msg}")
+                            
                             results['successful'] += 1
                         else:
                             results['failed'] += 1

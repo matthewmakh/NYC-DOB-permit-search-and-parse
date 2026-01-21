@@ -2394,33 +2394,50 @@
 .contact-link {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    color: #e0e0e0;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #ffffff;
     text-decoration: none;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 500;
     transition: all 0.2s;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .contact-link:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.25);
     color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.phone-link {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.15));
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+.phone-link:hover {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(37, 99, 235, 0.25));
 }
 
 .phone-link .phone-type {
     font-size: 11px;
-    color: #9ca3af;
+    color: #93c5fd;
     text-transform: capitalize;
+    font-weight: 400;
 }
 
 .email-link {
-    color: #93c5fd;
+    color: #a5f3fc;
+    background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(8, 145, 178, 0.15));
+    border-color: rgba(6, 182, 212, 0.3);
 }
 
 .email-link:hover {
-    color: #bfdbfe;
+    color: #cffafe;
+    background: linear-gradient(135deg, rgba(6, 182, 212, 0.3), rgba(8, 145, 178, 0.25));
 }
 
 /* Enrichment Modal Styles */
@@ -2537,57 +2554,64 @@
 
 /* Enriched Data Box (unlocked contacts in dark section) */
 .enriched-data-box {
-    background: rgba(74, 222, 128, 0.1);
-    border: 1px solid rgba(74, 222, 128, 0.3);
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.15), rgba(34, 197, 94, 0.08));
+    border: 2px solid rgba(74, 222, 128, 0.5);
     border-radius: 12px;
-    padding: 16px;
+    padding: 20px;
     margin-top: 16px;
+    box-shadow: 0 4px 15px rgba(74, 222, 128, 0.15);
 }
 
 .enriched-data-box h4 {
-    color: #4ade80;
-    margin: 0 0 12px 0;
-    font-size: 15px;
+    color: #22c55e;
+    margin: 0 0 16px 0;
+    font-size: 16px;
+    font-weight: 700;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 
 .enriched-data-box .unlocked-badge {
-    background: linear-gradient(135deg, #4ade80, #22c55e);
+    background: linear-gradient(135deg, #22c55e, #16a34a);
     color: white;
-    font-size: 10px;
-    padding: 2px 8px;
+    font-size: 11px;
+    padding: 4px 10px;
     border-radius: 20px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
 }
 
 /* Per-Owner Contact Groups */
 .owner-contacts-group {
-    padding: 12px 0;
+    padding: 16px 0;
 }
 
 .owner-contacts-group.owner-divider {
-    border-top: 1px solid rgba(74, 222, 128, 0.2);
-    margin-top: 8px;
+    border-top: 2px solid rgba(74, 222, 128, 0.3);
+    margin-top: 12px;
+    padding-top: 16px;
 }
 
 .owner-name-header {
-    color: #e5e7eb;
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px dashed rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 15px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: rgba(74, 222, 128, 0.2);
+    border-radius: 8px;
+    border-left: 3px solid #22c55e;
 }
 
 .owner-contacts-group .enriched-contacts {
-    padding-left: 8px;
+    padding-left: 12px;
 }
 
 .owner-contacts-group .no-contacts {
-    color: #9ca3af;
+    color: #d1d5db;
     font-size: 13px;
     font-style: italic;
     margin: 8px 0;
