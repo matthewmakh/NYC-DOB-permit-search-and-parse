@@ -4414,6 +4414,9 @@ def api_bulk_enrichment_estimate():
                     })
         
         max_cost = total_owners * cost_per_lookup
+        # Apply $0.50 minimum for batch (Stripe requirement)
+        if not is_admin and total_owners > 0 and max_cost < 0.50:
+            max_cost = 0.50
         
         return jsonify({
             'success': True,
@@ -4439,6 +4442,7 @@ def api_bulk_enrich():
     """
     Perform bulk enrichment on selected properties
     Enriches all available owners for each property
+    Charges $0.35 per successful enrichment (min $0.50) in ONE charge at the end
     
     POST body: {
         building_ids: list of int
@@ -4446,7 +4450,7 @@ def api_bulk_enrich():
     """
     try:
         from enrichment_service import get_available_owners_for_enrichment, enrich_owner
-        from stripe_service import charge_enrichment_fee
+        from stripe_service import charge_batch_enrichment_total
         
         data = request.get_json()
         building_ids = data.get('building_ids', [])
@@ -4462,8 +4466,12 @@ def api_bulk_enrich():
             'failed': 0,
             'skipped': 0,
             'total_charged': 0,
-            'details': []
+            'details': [],
+            'charge_message': ''
         }
+        
+        # Track which buildings had successful enrichments for the charge
+        enriched_building_ids = []
         
         with DatabaseConnection() as cur:
             for bid in building_ids:
@@ -4485,17 +4493,9 @@ def api_bulk_enrich():
                         success, data, message = enrich_owner(bid, owner['name'], address, user_id)
                         
                         if success:
-                            # Only charge AFTER successful enrichment - batch = $0.35 each
-                            if not is_admin:
-                                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, bid, owner['name'], is_batch=True)
-                                if charge_success:
-                                    results['total_charged'] += 0.35
-                                else:
-                                    # Enrichment worked but charge failed - still count as success
-                                    # Log the charge failure for manual follow-up
-                                    print(f"WARNING: Enrichment succeeded but charge failed for user {user_id}, building {bid}, owner {owner['name']}: {charge_msg}")
-                            
                             results['successful'] += 1
+                            if bid not in enriched_building_ids:
+                                enriched_building_ids.append(bid)
                         else:
                             results['failed'] += 1
                         
@@ -4514,6 +4514,30 @@ def api_bulk_enrich():
                             'success': False,
                             'error': str(e)
                         })
+        
+        # After all enrichments complete, charge ONCE for all successful ones
+        if results['successful'] > 0 and not is_admin:
+            # Get the successful enrichment details for the charge metadata
+            successful_details = [d for d in results['details'] if d.get('success')]
+            
+            charge_success, charge_msg, charge_id = charge_batch_enrichment_total(
+                user_id, 
+                enriched_building_ids, 
+                results['successful'],
+                successful_details
+            )
+            
+            if charge_success:
+                # Calculate actual charge: $0.35 each, min $0.50
+                calculated_total = results['successful'] * 0.35
+                actual_charged = max(calculated_total, 0.50)
+                results['total_charged'] = actual_charged
+                results['charge_message'] = charge_msg
+            else:
+                # Enrichments succeeded but charge failed
+                # Log for manual follow-up, but don't fail the response
+                print(f"WARNING: Bulk enrichment succeeded ({results['successful']} owners) but charge failed for user {user_id}: {charge_msg}")
+                results['charge_message'] = f"Enrichment successful but payment failed: {charge_msg}"
         
         return jsonify({
             'success': True,

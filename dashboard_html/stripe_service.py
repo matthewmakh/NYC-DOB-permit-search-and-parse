@@ -218,6 +218,123 @@ def charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False):
         
     finally:
         cur.close()
+
+
+def charge_batch_enrichment_total(user_id, building_ids, num_enrichments, enrichment_details):
+    """
+    Charge for batch enrichment - single aggregated charge at the end
+    $0.35 per enrichment, minimum $0.50 charge (Stripe requirement)
+    
+    Args:
+        user_id: User ID
+        building_ids: List of building IDs that were enriched
+        num_enrichments: Number of successful enrichments
+        enrichment_details: List of dicts with owner names that were enriched
+    
+    Returns: (success, message, charge_id)
+    """
+    if num_enrichments <= 0:
+        return True, "No enrichments to charge", None
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Get user's Stripe info
+        cur.execute("""
+            SELECT stripe_customer_id, subscription_status, is_admin
+            FROM users WHERE id = %s
+        """, (user_id,))
+        
+        user = cur.fetchone()
+        if not user:
+            return False, "User not found", None
+        
+        # Admin doesn't pay
+        if user['is_admin']:
+            return True, "Admin bypass", "admin_free"
+        
+        if user['subscription_status'] != 'active':
+            return False, "Active subscription required", None
+        
+        if not user['stripe_customer_id']:
+            return False, "No payment method on file", None
+        
+        # Get the customer's default payment method
+        customer = stripe.Customer.retrieve(user['stripe_customer_id'])
+        
+        if not customer.invoice_settings.default_payment_method:
+            # Try to get payment method from subscriptions
+            subscriptions = stripe.Subscription.list(
+                customer=user['stripe_customer_id'],
+                status='active',
+                limit=1
+            )
+            
+            if subscriptions.data:
+                payment_method = subscriptions.data[0].default_payment_method
+            else:
+                return False, "No payment method on file", None
+        else:
+            payment_method = customer.invoice_settings.default_payment_method
+        
+        # Calculate total: $0.35 per enrichment, minimum $0.50
+        total_cents = num_enrichments * ENRICHMENT_FEE_BATCH_CENTS
+        if total_cents < 50:
+            total_cents = 50  # Stripe minimum
+        
+        total_dollars = total_cents / 100
+        
+        # Build description
+        owner_names = [d.get('owner', 'Unknown') for d in enrichment_details[:5]]
+        if len(enrichment_details) > 5:
+            owner_names.append(f"and {len(enrichment_details) - 5} more")
+        owners_str = ", ".join(owner_names)
+        
+        # Create the charge
+        payment_intent = stripe.PaymentIntent.create(
+            amount=total_cents,
+            currency='usd',
+            customer=user['stripe_customer_id'],
+            payment_method=payment_method,
+            off_session=True,
+            confirm=True,
+            description=f"Bulk owner enrichment: {num_enrichments} lookups",
+            metadata={
+                'user_id': str(user_id),
+                'building_ids': ','.join(str(b) for b in building_ids[:10]),
+                'num_enrichments': str(num_enrichments),
+                'type': 'bulk_enrichment',
+                'owners': owners_str[:200]
+            }
+        )
+        
+        # Record the transaction
+        cur.execute("""
+            INSERT INTO enrichment_transactions 
+            (user_id, building_id, transaction_type, amount, stripe_payment_intent_id, status, description)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id, building_ids[0] if building_ids else None, 'bulk_enrichment', total_dollars, 
+            payment_intent.id, payment_intent.status,
+            f"Bulk enrichment: {num_enrichments} owners - {owners_str[:100]}"
+        ))
+        
+        conn.commit()
+        
+        return True, f"Payment successful: ${total_dollars:.2f} for {num_enrichments} enrichments", payment_intent.id
+        
+    except stripe.error.CardError as e:
+        conn.rollback()
+        return False, f"Card declined: {e.user_message}", None
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"Error charging batch enrichment fee: {e}")
+        return False, str(e), None
+        
+    finally:
+        cur.close()
         conn.close()
 
 

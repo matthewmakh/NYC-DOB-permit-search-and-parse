@@ -783,8 +783,11 @@ async function showBulkEnrichModal() {
                 </div>
                 <p class="cost-note">
                     ⚠️ <strong>Maximum charge:</strong> ${costDisplay}<br>
-                    <small>You are only charged for lookups that return results. 
-                    If an owner lookup returns no phone/email, you won't be charged for that lookup.</small>
+                    <small>
+                        You are only charged for lookups that return results.
+                        ${!data.is_admin && data.total_owners === 1 ? '<br>Note: Minimum charge of $0.50 applies.' : ''}
+                        ${!data.is_admin && data.total_owners > 1 ? '<br>Batch pricing: $0.35 per lookup, charged as a single payment at the end.' : ''}
+                    </small>
                 </p>
             </div>
             
