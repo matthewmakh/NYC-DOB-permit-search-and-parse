@@ -364,14 +364,23 @@ function addEnrichOwnerButton(container) {
     const enrichSection = document.createElement('div');
     enrichSection.className = 'enrich-owner-section';
     
-    const hasEnrichedData = enrichmentData.already_enriched && enrichmentData.enrichment_data;
+    const hasEnrichedDataPerOwner = enrichmentData.enrichment_data_per_owner && enrichmentData.enrichment_data_per_owner.length > 0;
+    const hasEnrichedData = hasEnrichedDataPerOwner || (enrichmentData.already_enriched && enrichmentData.enrichment_data);
     const hasAvailableOwners = enrichmentData.available_owners && enrichmentData.available_owners.length > 0;
     const hasEnrichedOwners = enrichmentData.enriched_owners && enrichmentData.enriched_owners.length > 0;
     
     let html = '';
     
-    // Show already unlocked data if any
-    if (hasEnrichedData) {
+    // Show already unlocked data if any - prefer per-owner display
+    if (hasEnrichedDataPerOwner) {
+        html += `
+            <div class="enriched-data-box">
+                <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                ${renderEnrichedDataPerOwner(enrichmentData.enrichment_data_per_owner)}
+            </div>
+        `;
+    } else if (hasEnrichedData) {
+        // Fallback to combined data for backward compatibility
         html += `
             <div class="enriched-data-box">
                 <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
@@ -413,7 +422,53 @@ function addEnrichOwnerButton(container) {
     container.appendChild(enrichSection);
 }
 
+function renderEnrichedDataPerOwner(dataList) {
+    // Render enrichment data grouped by owner
+    let html = '';
+    
+    dataList.forEach((ownerData, index) => {
+        const ownerName = ownerData.owner_name || 'Unknown Owner';
+        html += `<div class="owner-contacts-group ${index > 0 ? 'owner-divider' : ''}">`;
+        html += `<div class="owner-name-header">👤 ${ownerName}</div>`;
+        html += '<div class="enriched-contacts">';
+        
+        if (ownerData.phones && ownerData.phones.length > 0) {
+            html += '<div class="enriched-phones">';
+            ownerData.phones.forEach(phone => {
+                html += `
+                    <a href="tel:${phone.number}" class="contact-link phone-link">
+                        📱 ${formatPhoneNumber(phone.number)}
+                        <span class="phone-type">${phone.type || ''}</span>
+                    </a>
+                `;
+            });
+            html += '</div>';
+        }
+        
+        if (ownerData.emails && ownerData.emails.length > 0) {
+            html += '<div class="enriched-emails">';
+            ownerData.emails.forEach(email => {
+                html += `
+                    <a href="mailto:${email.email}" class="contact-link email-link">
+                        ✉️ ${email.email}
+                    </a>
+                `;
+            });
+            html += '</div>';
+        }
+        
+        if ((!ownerData.phones || ownerData.phones.length === 0) && (!ownerData.emails || ownerData.emails.length === 0)) {
+            html += '<p class="no-contacts">No contact info found</p>';
+        }
+        
+        html += '</div></div>';
+    });
+    
+    return html;
+}
+
 function renderEnrichedData(data) {
+    // Backward compatible single-owner render
     let html = '<div class="enriched-contacts">';
     
     if (data.phones && data.phones.length > 0) {

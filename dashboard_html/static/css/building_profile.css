@@ -2563,6 +2563,36 @@
     text-transform: uppercase;
 }
 
+/* Per-Owner Contact Groups */
+.owner-contacts-group {
+    padding: 12px 0;
+}
+
+.owner-contacts-group.owner-divider {
+    border-top: 1px solid rgba(74, 222, 128, 0.2);
+    margin-top: 8px;
+}
+
+.owner-name-header {
+    color: #e5e7eb;
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.owner-contacts-group .enriched-contacts {
+    padding-left: 8px;
+}
+
+.owner-contacts-group .no-contacts {
+    color: #9ca3af;
+    font-size: 13px;
+    font-style: italic;
+    margin: 8px 0;
+}
+
 /* Already Enriched Section in Modal */
 .already-enriched-section {
     margin-bottom: 1.5rem;

@@ -4122,9 +4122,23 @@ def api_building_profile(bbl):
                     enrichment_info['enriched_owners'] = enriched_owners
                     
                     # Check if user has any enrichment access
-                    has_access, enrichment_data, enriched_names = check_user_enrichment_access(current_user['id'], building_id)
+                    has_access, enrichment_data_list, enriched_names = check_user_enrichment_access(current_user['id'], building_id)
                     enrichment_info['already_enriched'] = has_access
-                    enrichment_info['enrichment_data'] = enrichment_data
+                    # enrichment_data_list is now a list of {owner_name, phones, emails} per owner
+                    enrichment_info['enrichment_data_per_owner'] = enrichment_data_list if enrichment_data_list else []
+                    # For backward compatibility, also provide combined data
+                    if enrichment_data_list:
+                        all_phones = []
+                        all_emails = []
+                        for ed in enrichment_data_list:
+                            all_phones.extend(ed.get('phones', []))
+                            all_emails.extend(ed.get('emails', []))
+                        enrichment_info['enrichment_data'] = {
+                            'phones': all_phones,
+                            'emails': all_emails
+                        }
+                    else:
+                        enrichment_info['enrichment_data'] = None
                     enrichment_info['enriched_owner_names'] = enriched_names
                 else:
                     # Not logged in - just build owner list without enrichment status
@@ -4227,14 +4241,25 @@ def api_available_owners(building_id):
         available_owners = [o for o in owners if not o.get('already_enriched')]
         
         # Check if user already has access to enriched data
-        has_access, enrichment_data, enriched_names = check_user_enrichment_access(g.user['id'], building_id)
+        has_access, enrichment_data_list, enriched_names = check_user_enrichment_access(g.user['id'], building_id)
+        
+        # Build combined enrichment data for backward compatibility
+        combined_data = None
+        if enrichment_data_list:
+            all_phones = []
+            all_emails = []
+            for ed in enrichment_data_list:
+                all_phones.extend(ed.get('phones', []))
+                all_emails.extend(ed.get('emails', []))
+            combined_data = {'phones': all_phones, 'emails': all_emails}
         
         return jsonify({
             'success': True,
             'owners': available_owners,
             'enriched_owners': enriched_owners,
             'already_enriched': has_access,
-            'enrichment_data': enrichment_data if has_access else None,
+            'enrichment_data': combined_data,
+            'enrichment_data_per_owner': enrichment_data_list if enrichment_data_list else [],
             'cost': 0 if g.user.get('is_admin') else 0.35
         })
         
@@ -4276,11 +4301,13 @@ def api_enrich_owner():
         is_admin = g.user.get('is_admin', False)
         
         # Check if user already has access for THIS SPECIFIC OWNER
-        has_access, existing_data, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
-        if has_access and existing_data:
+        has_access, existing_data_list, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
+        if has_access and existing_data_list:
+            # Find the data for this specific owner
+            owner_data = next((d for d in existing_data_list if d.get('owner_name') == owner_name), existing_data_list[0] if existing_data_list else None)
             return jsonify({
                 'success': True,
-                'data': existing_data,
+                'data': owner_data,
                 'charged': False,
                 'message': f'You already enriched {owner_name}'
             })

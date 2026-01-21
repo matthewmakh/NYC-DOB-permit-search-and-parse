@@ -245,7 +245,7 @@ def enrich_owner(building_id, owner_name, address, user_id):
                 return False, None, "No matching records found in our database for this person. They may not be in our data sources."
             return False, None, "No contact information (phone/email) found for this person in our database."
         
-        # Store in database
+        # Store in buildings table (for backward compatibility / quick access)
         cur.execute("""
             UPDATE buildings SET
                 enriched_phones = %s,
@@ -263,12 +263,17 @@ def enrich_owner(building_id, owner_name, address, user_id):
             building_id
         ))
         
-        # Record user access - constraint is now on (user_id, building_id, owner_name_searched)
+        # Record user access WITH the enrichment data (for per-owner display)
         cur.execute("""
-            INSERT INTO user_enrichments (user_id, building_id, owner_name_searched)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, building_id, owner_name_searched) DO NOTHING
-        """, (user_id, building_id, owner_name))
+            INSERT INTO user_enrichments (user_id, building_id, owner_name_searched, enriched_phones, enriched_emails, enriched_person_id, enriched_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, building_id, owner_name_searched) 
+            DO UPDATE SET 
+                enriched_phones = EXCLUDED.enriched_phones,
+                enriched_emails = EXCLUDED.enriched_emails,
+                enriched_person_id = EXCLUDED.enriched_person_id,
+                enriched_at = EXCLUDED.enriched_at
+        """, (user_id, building_id, owner_name, json.dumps(phones), json.dumps(emails), person_id, datetime.now()))
         
         conn.commit()
         
@@ -293,57 +298,53 @@ def check_user_enrichment_access(user_id, building_id, owner_name=None):
     """
     Check if user has already paid for enrichment on this building
     If owner_name is provided, checks for that specific owner
-    Returns: (has_access, enrichment_data, enriched_owner_names)
+    Returns: (has_access, enrichment_data_list, enriched_owner_names)
+    enrichment_data_list is a list of {owner_name, phones, emails} for each enriched owner
     """
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
-        # Get list of owner names already enriched for this building by this user
+        # Get all enrichments for this building by this user WITH their data
         cur.execute("""
-            SELECT owner_name_searched FROM user_enrichments
+            SELECT owner_name_searched, enriched_phones, enriched_emails, enriched_at
+            FROM user_enrichments
             WHERE user_id = %s AND building_id = %s
         """, (user_id, building_id))
-        enriched_owners = [r['owner_name_searched'].upper() for r in cur.fetchall() if r['owner_name_searched']]
+        enrichments = cur.fetchall()
+        
+        enriched_owners = [r['owner_name_searched'].upper() for r in enrichments if r['owner_name_searched']]
+        
+        # Build enrichment data list with per-owner data
+        enrichment_data_list = []
+        for r in enrichments:
+            if r['enriched_phones'] or r['enriched_emails']:
+                enrichment_data_list.append({
+                    'owner_name': r['owner_name_searched'],
+                    'phones': r['enriched_phones'] if r['enriched_phones'] else [],
+                    'emails': r['enriched_emails'] if r['enriched_emails'] else [],
+                    'enriched_at': r['enriched_at']
+                })
         
         # Check if user is admin
         cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
         user = cur.fetchone()
         is_admin = user and user['is_admin']
         
-        # Get building's enrichment data
-        cur.execute("""
-            SELECT enriched_phones, enriched_emails FROM buildings WHERE id = %s
-        """, (building_id,))
-        building = cur.fetchone()
-        
         # If checking specific owner
         if owner_name:
             already_enriched = owner_name.upper() in enriched_owners
-            if already_enriched and building and building['enriched_phones']:
-                return True, {
-                    'phones': building['enriched_phones'],
-                    'emails': building['enriched_emails']
-                }, enriched_owners
-            return False, None, enriched_owners
+            # Find this owner's specific data
+            owner_data = next((e for e in enrichment_data_list if e['owner_name'].upper() == owner_name.upper()), None)
+            if already_enriched and owner_data:
+                return True, enrichment_data_list, enriched_owners
+            return False, enrichment_data_list, enriched_owners
         
-        # General check - has any enrichment
-        if is_admin:
-            if building and building['enriched_phones']:
-                return True, {
-                    'phones': building['enriched_phones'],
-                    'emails': building['enriched_emails']
-                }, enriched_owners
-            return False, None, enriched_owners
+        # General check - has any enrichment with data
+        if len(enrichment_data_list) > 0:
+            return True, enrichment_data_list, enriched_owners
         
-        # For regular users, check if they have any enrichment on this building
-        if len(enriched_owners) > 0 and building and building['enriched_phones']:
-            return True, {
-                'phones': building['enriched_phones'],
-                'emails': building['enriched_emails']
-            }, enriched_owners
-        
-        return False, None, enriched_owners
+        return False, enrichment_data_list, enriched_owners
         
     finally:
         cur.close()
