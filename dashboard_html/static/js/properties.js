@@ -27,7 +27,8 @@ const state = {
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
-        smartFilter: null
+        smartFilter: null,
+        hasEnrichableOwner: false
     },
     sort: {
         by: 'sale_date',
@@ -94,6 +95,7 @@ async function loadProperties() {
         if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
         if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
         if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
+        if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
         
         // Add sort and pagination
         params.append('sort_by', state.sort.by);
@@ -430,6 +432,13 @@ function initializeEventListeners() {
         loadProperties();
     });
     
+    // Enrichable owner checkbox
+    document.getElementById('hasEnrichableOwner').addEventListener('change', (e) => {
+        state.filters.hasEnrichableOwner = e.target.checked;
+        state.pagination.page = 1;
+        loadProperties();
+    });
+    
     // Sort controls
     document.getElementById('sortBy').addEventListener('change', (e) => {
         state.sort.by = e.target.value;
@@ -628,7 +637,8 @@ function resetFilters() {
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
-        smartFilter: null
+        smartFilter: null,
+        hasEnrichableOwner: false
     };
 }
 
@@ -657,6 +667,7 @@ function clearFilters() {
     document.getElementById('cashOnly').checked = false;
     document.getElementById('withPermits').checked = false;
     document.getElementById('violationsFilter').value = '';
+    document.getElementById('hasEnrichableOwner').checked = false;
     
     state.pagination.page = 1;
     loadProperties();

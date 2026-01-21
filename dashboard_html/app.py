@@ -2674,6 +2674,34 @@ def api_properties():
                     where_clauses.append("b.hpd_open_violations > 0")
                 else:
                     where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
+            
+            # Enrichable owner filter - has a person name (not LLC/INC/CORP) with first+last
+            has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
+            if has_enrichable_owner:
+                # Check if any owner field has a person name (not business, has space for first+last)
+                where_clauses.append("""
+                    (
+                        -- SOS Principal is a person (best source)
+                        (b.sos_principal_name IS NOT NULL 
+                         AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.sos_principal_name ~ ' ')
+                        OR
+                        -- Current owner is a person
+                        (b.current_owner_name IS NOT NULL 
+                         AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.current_owner_name ~ ' ')
+                        OR
+                        -- RPAD owner is a person
+                        (b.owner_name_rpad IS NOT NULL 
+                         AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.owner_name_rpad ~ ' ')
+                        OR
+                        -- HPD owner is a person
+                        (b.owner_name_hpd IS NOT NULL 
+                         AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.owner_name_hpd ~ ' ')
+                    )
+                """)
         
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
