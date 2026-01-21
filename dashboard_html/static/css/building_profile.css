@@ -2562,3 +2562,42 @@
     font-weight: 600;
     text-transform: uppercase;
 }
+
+/* Already Enriched Section in Modal */
+.already-enriched-section {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.already-enriched-section h4 {
+    color: #4ade80;
+    margin: 0 0 0.75rem 0;
+    font-size: 14px;
+}
+
+.enrich-modal .owner-option.enriched {
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+.enrich-modal .owner-option.enriched.disabled input {
+    display: none;
+}
+
+.enriched-badge {
+    background: linear-gradient(135deg, #4ade80, #22c55e);
+    color: white;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 600;
+}
+
+.owner-selection h4 {
+    color: #6b7280;
+    margin: 0 0 0.75rem 0;
+    font-size: 14px;
+}

@@ -364,18 +364,26 @@ function addEnrichOwnerButton(container) {
     const enrichSection = document.createElement('div');
     enrichSection.className = 'enrich-owner-section';
     
-    if (enrichmentData.already_enriched && enrichmentData.enrichment_data) {
-        // Show already unlocked data
-        enrichSection.innerHTML = `
+    const hasEnrichedData = enrichmentData.already_enriched && enrichmentData.enrichment_data;
+    const hasAvailableOwners = enrichmentData.available_owners && enrichmentData.available_owners.length > 0;
+    const hasEnrichedOwners = enrichmentData.enriched_owners && enrichmentData.enriched_owners.length > 0;
+    
+    let html = '';
+    
+    // Show already unlocked data if any
+    if (hasEnrichedData) {
+        html += `
             <div class="enriched-data-box">
                 <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
                 ${renderEnrichedData(enrichmentData.enrichment_data)}
             </div>
         `;
-    } else if (enrichmentData.available_owners && enrichmentData.available_owners.length > 0) {
-        // User must be logged in to use enrichment
+    }
+    
+    // Show button to enrich more owners if available
+    if (hasAvailableOwners) {
         if (!enrichmentData.logged_in) {
-            enrichSection.innerHTML = `
+            html += `
                 <div class="enrich-prompt">
                     <a href="/login?next=${encodeURIComponent(window.location.pathname)}" class="enrich-owner-btn login-required">
                         📞 Get Owner Phone & Email
@@ -387,17 +395,20 @@ function addEnrichOwnerButton(container) {
         } else {
             // Show enrich button for logged in users
             const cost = enrichmentData.cost === 0 ? 'FREE' : `$${enrichmentData.cost.toFixed(2)}`;
-            enrichSection.innerHTML = `
+            const btnText = hasEnrichedOwners ? '📞 Enrich More Owners' : '📞 Get Owner Phone & Email';
+            html += `
                 <div class="enrich-prompt">
                     <button class="enrich-owner-btn" onclick="showEnrichModal(${buildingId})">
-                        📞 Get Owner Phone & Email
-                        <span class="enrich-cost">${cost}</span>
+                        ${btnText}
+                        <span class="enrich-cost">${cost} per lookup</span>
                     </button>
-                    <p class="enrich-note">Lookup owner contact information</p>
+                    <p class="enrich-note">${enrichmentData.available_owners.length} owner(s) available to lookup</p>
                 </div>
             `;
         }
     }
+    
+    enrichSection.innerHTML = html;
     
     container.appendChild(enrichSection);
 }
@@ -446,10 +457,11 @@ function formatPhoneNumber(phone) {
 function showEnrichModal(buildingId) {
     // Use pre-loaded enrichment data
     const enrichmentData = buildingData.enrichment;
-    const owners = enrichmentData?.available_owners || [];
+    const availableOwners = enrichmentData?.available_owners || [];
+    const enrichedOwners = enrichmentData?.enriched_owners || [];
     
-    if (!owners || owners.length === 0) {
-        alert('No enrichable owners found for this property.');
+    if (availableOwners.length === 0) {
+        alert('No more owners available to enrich for this property.');
         return;
     }
     
@@ -461,16 +473,42 @@ function showEnrichModal(buildingId) {
     
     const cost = enrichmentData.cost === 0 ? 'FREE (Admin)' : `$${enrichmentData.cost.toFixed(2)}`;
     
+    // Build enriched owners section
+    let enrichedHtml = '';
+    if (enrichedOwners.length > 0) {
+        enrichedHtml = `
+            <div class="already-enriched-section">
+                <h4>✅ Already Enriched</h4>
+                ${enrichedOwners.map(owner => `
+                    <div class="owner-option enriched disabled">
+                        <div class="owner-option-content">
+                            <span class="owner-option-name">${owner.name}</span>
+                            <span class="owner-option-source">${owner.source}</span>
+                            <span class="enriched-badge">✓ Unlocked</span>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    // Auto-select first recommended or first available
+    const firstRecommendedIdx = availableOwners.findIndex(o => o.recommended);
+    const autoSelectIdx = firstRecommendedIdx >= 0 ? firstRecommendedIdx : 0;
+    
     modal.innerHTML = `
         <div class="modal-content enrich-modal-content">
             <span class="modal-close" onclick="closeEnrichModal()">&times;</span>
             <h2>📞 Get Owner Contact Information</h2>
             <p class="modal-subtitle">Select an owner to lookup their phone and email</p>
             
+            ${enrichedHtml}
+            
             <div class="owner-selection">
-                ${owners.map((owner, idx) => `
+                <h4>📋 Available to Enrich (${availableOwners.length})</h4>
+                ${availableOwners.map((owner, idx) => `
                     <label class="owner-option ${owner.recommended ? 'recommended' : ''}">
-                        <input type="radio" name="owner" value="${idx}" ${owner.recommended ? 'checked' : ''}>
+                        <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
                         <div class="owner-option-content">
                             <span class="owner-option-name">${owner.name}</span>
                             <span class="owner-option-source">${owner.source}</span>
@@ -482,7 +520,7 @@ function showEnrichModal(buildingId) {
             </div>
             
             <div class="enrich-footer">
-                <p class="enrich-cost-display">Cost: <strong>${cost}</strong></p>
+                <p class="enrich-cost-display">Cost: <strong>${cost}</strong> per lookup</p>
                 <button class="btn btn-primary enrich-confirm-btn" onclick="confirmEnrich(${buildingId})">
                     Unlock Contact Info
                 </button>
@@ -493,7 +531,7 @@ function showEnrichModal(buildingId) {
     document.body.appendChild(modal);
     
     // Store owners data for later use
-    window.enrichOwners = owners;
+    window.enrichOwners = availableOwners;
 }
 
 function closeEnrichModal() {

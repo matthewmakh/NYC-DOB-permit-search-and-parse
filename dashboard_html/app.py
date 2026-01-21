@@ -4007,59 +4007,78 @@ def api_building_profile(bbl):
             building_dict['borough_name'] = borough_name
             
             # ===== ENRICHMENT DATA (include to speed up button load) =====
-            enrichment_info = {'available_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.35, 'logged_in': False}
+            enrichment_info = {'available_owners': [], 'enriched_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.35, 'logged_in': False}
             try:
-                from enrichment_service import parse_owner_name, check_user_enrichment_access
+                from enrichment_service import parse_owner_name, check_user_enrichment_access, get_available_owners_for_enrichment
                 from auth_service import validate_session
-                
-                # Build available owners list inline (faster than separate API call)
-                available_owners = []
-                
-                # SOS Principal is recommended (real person behind LLC)
-                if building['sos_principal_name']:
-                    first, middle, last = parse_owner_name(building['sos_principal_name'])
-                    if first and last:
-                        available_owners.append({
-                            'name': building['sos_principal_name'],
-                            'source': 'NY Secretary of State',
-                            'recommended': True,
-                            'reason': 'Real person behind LLC'
-                        })
-                
-                # Check other owner sources
-                owner_sources = [
-                    ('current_owner_name', 'NYC PLUTO Database'),
-                    ('owner_name_rpad', 'Tax Records (RPAD)'),
-                    ('owner_name_hpd', 'HPD Registration'),
-                    ('ecb_respondent_name', 'ECB Violations')
-                ]
-                
-                for field, source in owner_sources:
-                    name = building_dict.get(field)
-                    if name:
-                        first, middle, last = parse_owner_name(name)
-                        if first and last:
-                            if not any(o['name'].upper() == name.upper() for o in available_owners):
-                                available_owners.append({
-                                    'name': name,
-                                    'source': source,
-                                    'recommended': False
-                                })
-                
-                enrichment_info['available_owners'] = available_owners
                 
                 # Check if user is logged in (try to get user from session without requiring it)
                 session_token = session.get('session_token')
                 current_user = validate_session(session_token) if session_token else None
                 
+                # Use the enrichment service function which handles owner tracking properly
                 if current_user:
                     enrichment_info['logged_in'] = True
-                    has_access, enrichment_data = check_user_enrichment_access(current_user['id'], building_id)
+                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.35
+                    
+                    # Get available owners with enrichment status
+                    available_owners = get_available_owners_for_enrichment(building_id, current_user['id'])
+                    
+                    # Separate enriched vs available
+                    enriched_owners = [o for o in available_owners if o.get('already_enriched')]
+                    not_enriched_owners = [o for o in available_owners if not o.get('already_enriched')]
+                    
+                    enrichment_info['available_owners'] = not_enriched_owners
+                    enrichment_info['enriched_owners'] = enriched_owners
+                    
+                    # Check if user has any enrichment access
+                    has_access, enrichment_data, enriched_names = check_user_enrichment_access(current_user['id'], building_id)
                     enrichment_info['already_enriched'] = has_access
                     enrichment_info['enrichment_data'] = enrichment_data
-                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.35
+                    enrichment_info['enriched_owner_names'] = enriched_names
+                else:
+                    # Not logged in - just build owner list without enrichment status
+                    available_owners = []
+                    
+                    # SOS Principal is recommended (real person behind LLC)
+                    if building['sos_principal_name']:
+                        first, middle, last = parse_owner_name(building['sos_principal_name'])
+                        if first and last:
+                            available_owners.append({
+                                'name': building['sos_principal_name'],
+                                'source': 'NY Secretary of State',
+                                'recommended': True,
+                                'reason': 'Real person behind LLC',
+                                'already_enriched': False
+                            })
+                    
+                    # Check other owner sources
+                    owner_sources = [
+                        ('current_owner_name', 'NYC PLUTO Database'),
+                        ('owner_name_rpad', 'Tax Records (RPAD)'),
+                        ('owner_name_hpd', 'HPD Registration'),
+                        ('ecb_respondent_name', 'ECB Violations')
+                    ]
+                    
+                    for field, source in owner_sources:
+                        name = building_dict.get(field)
+                        if name:
+                            first, middle, last = parse_owner_name(name)
+                            if first and last:
+                                if not any(o['name'].upper() == name.upper() for o in available_owners):
+                                    available_owners.append({
+                                        'name': name,
+                                        'source': source,
+                                        'recommended': False,
+                                        'already_enriched': False
+                                    })
+                    
+                    enrichment_info['available_owners'] = available_owners
+                    
             except Exception as e:
                 print(f"Error getting enrichment info: {e}")
+                import traceback
+                traceback.print_exc()
         
             return jsonify({
                 'success': True,
@@ -4105,19 +4124,25 @@ def api_available_owners(building_id):
     """
     Get list of owner names available for enrichment on a building
     Returns owners that are actual people (not LLCs) with recommendation
+    Marks which owners have already been enriched by this user
     """
     try:
         from enrichment_service import get_available_owners_for_enrichment, check_user_enrichment_access
         
-        # Get available owners
-        owners = get_available_owners_for_enrichment(building_id)
+        # Get available owners with enrichment status for this user
+        owners = get_available_owners_for_enrichment(building_id, g.user['id'])
+        
+        # Separate enriched vs available
+        enriched_owners = [o for o in owners if o.get('already_enriched')]
+        available_owners = [o for o in owners if not o.get('already_enriched')]
         
         # Check if user already has access to enriched data
-        has_access, enrichment_data = check_user_enrichment_access(g.user['id'], building_id)
+        has_access, enrichment_data, enriched_names = check_user_enrichment_access(g.user['id'], building_id)
         
         return jsonify({
             'success': True,
-            'owners': owners,
+            'owners': available_owners,
+            'enriched_owners': enriched_owners,
             'already_enriched': has_access,
             'enrichment_data': enrichment_data if has_access else None,
             'cost': 0 if g.user.get('is_admin') else 0.35
@@ -4160,14 +4185,14 @@ def api_enrich_owner():
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
         
-        # Check if user already has access
-        has_access, existing_data = check_user_enrichment_access(user_id, building_id)
+        # Check if user already has access for THIS SPECIFIC OWNER
+        has_access, existing_data, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
         if has_access and existing_data:
             return jsonify({
                 'success': True,
                 'data': existing_data,
                 'charged': False,
-                'message': 'You already have access to this data'
+                'message': f'You already enriched {owner_name}'
             })
         
         # Charge the fee (admin is free)
@@ -4216,6 +4241,173 @@ def api_enrichment_history():
         })
         
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/bulk-estimate', methods=['POST'])
+@login_required
+def api_bulk_enrichment_estimate():
+    """
+    Estimate cost for bulk enrichment of selected properties
+    Returns count of enrichable owners and max cost
+    
+    POST body: {
+        building_ids: list of int
+    }
+    """
+    try:
+        from enrichment_service import get_available_owners_for_enrichment
+        
+        data = request.get_json()
+        building_ids = data.get('building_ids', [])
+        
+        if not building_ids:
+            return jsonify({'success': False, 'error': 'No buildings selected'}), 400
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        cost_per_lookup = 0 if is_admin else 0.35
+        
+        total_owners = 0
+        properties_with_owners = 0
+        breakdown = []
+        
+        with DatabaseConnection() as cur:
+            for bid in building_ids:
+                owners = get_available_owners_for_enrichment(bid, user_id)
+                # Only count owners not yet enriched
+                available = [o for o in owners if not o.get('already_enriched')]
+                if available:
+                    properties_with_owners += 1
+                    total_owners += len(available)
+                    
+                    # Get building address for breakdown
+                    cur.execute("SELECT address FROM buildings WHERE id = %s", (bid,))
+                    result = cur.fetchone()
+                    address = result['address'] if result else f"Building #{bid}"
+                    
+                    breakdown.append({
+                        'building_id': bid,
+                        'address': address,
+                        'owners': [o['name'] for o in available],
+                        'count': len(available)
+                    })
+        
+        max_cost = total_owners * cost_per_lookup
+        
+        return jsonify({
+            'success': True,
+            'total_owners': total_owners,
+            'properties_with_owners': properties_with_owners,
+            'total_properties': len(building_ids),
+            'cost_per_lookup': cost_per_lookup,
+            'max_cost': max_cost,
+            'breakdown': breakdown,
+            'is_admin': is_admin
+        })
+        
+    except Exception as e:
+        print(f"Bulk estimate error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/bulk-enrich', methods=['POST'])
+@login_required
+def api_bulk_enrich():
+    """
+    Perform bulk enrichment on selected properties
+    Enriches all available owners for each property
+    
+    POST body: {
+        building_ids: list of int
+    }
+    """
+    try:
+        from enrichment_service import get_available_owners_for_enrichment, enrich_owner
+        from stripe_service import charge_enrichment_fee
+        
+        data = request.get_json()
+        building_ids = data.get('building_ids', [])
+        
+        if not building_ids:
+            return jsonify({'success': False, 'error': 'No buildings selected'}), 400
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        
+        results = {
+            'successful': 0,
+            'failed': 0,
+            'skipped': 0,
+            'total_charged': 0,
+            'details': []
+        }
+        
+        with DatabaseConnection() as cur:
+            for bid in building_ids:
+                owners = get_available_owners_for_enrichment(bid, user_id)
+                available = [o for o in owners if not o.get('already_enriched')]
+                
+                if not available:
+                    results['skipped'] += 1
+                    continue
+                
+                # Get building info for address
+                cur.execute("SELECT address, zip_code FROM buildings WHERE id = %s", (bid,))
+                building_row = cur.fetchone()
+                address = f"{building_row['address']}, Brooklyn, NY {building_row.get('zip_code', '')}" if building_row else ""
+                
+                for owner in available:
+                    try:
+                        # Charge fee (admin is free)
+                        if not is_admin:
+                            success, message, charge_id = charge_enrichment_fee(user_id, bid, owner['name'])
+                            if not success:
+                                results['failed'] += 1
+                                results['details'].append({
+                                    'building_id': bid,
+                                    'owner': owner['name'],
+                                    'success': False,
+                                    'error': message
+                                })
+                                continue
+                            results['total_charged'] += 0.35
+                        
+                        # Perform enrichment
+                        success, data, message = enrich_owner(bid, owner['name'], address, user_id)
+                        
+                        if success:
+                            results['successful'] += 1
+                        else:
+                            results['failed'] += 1
+                        
+                        results['details'].append({
+                            'building_id': bid,
+                            'owner': owner['name'],
+                            'success': success,
+                            'message': message
+                        })
+                        
+                    except Exception as e:
+                        results['failed'] += 1
+                        results['details'].append({
+                            'building_id': bid,
+                            'owner': owner['name'],
+                            'success': False,
+                            'error': str(e)
+                        })
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+        
+    except Exception as e:
+        print(f"Bulk enrichment error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

@@ -796,6 +796,231 @@ body {
 }
 
 /* ==========================================
+   BULK ENRICHMENT MODAL
+   ========================================== */
+
+.bulk-enrich-modal-content {
+    max-width: 600px;
+}
+
+.bulk-enrich-summary {
+    background: var(--dark-bg);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.summary-row:last-child {
+    border-bottom: none;
+}
+
+.summary-row.highlight {
+    background: rgba(102, 126, 234, 0.1);
+    margin: 0.5rem -1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: none;
+}
+
+.summary-row.highlight .summary-value {
+    color: var(--primary);
+    font-weight: 700;
+    font-size: 1.25rem;
+}
+
+.summary-label {
+    color: var(--text-secondary);
+}
+
+.summary-value {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.cost-breakdown {
+    background: rgba(46, 204, 113, 0.1);
+    border: 1px solid rgba(46, 204, 113, 0.3);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.cost-breakdown h4 {
+    margin: 0 0 1rem 0;
+    color: #2ecc71;
+}
+
+.math-display {
+    font-size: 1.1rem;
+    text-align: center;
+    padding: 1rem;
+    background: var(--dark-bg);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+
+.math-display strong {
+    color: var(--primary);
+    font-size: 1.3rem;
+}
+
+.cost-note {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.cost-note small {
+    display: block;
+    margin-top: 0.5rem;
+    opacity: 0.8;
+}
+
+.breakdown-details {
+    margin-bottom: 1.5rem;
+}
+
+.breakdown-details summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 0.75rem;
+    background: var(--dark-bg);
+    border-radius: 8px;
+}
+
+.breakdown-details summary:hover {
+    color: var(--text-primary);
+}
+
+.breakdown-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: var(--dark-bg);
+    border-radius: 8px;
+}
+
+.breakdown-item {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+
+.breakdown-item:last-child {
+    border-bottom: none;
+}
+
+.breakdown-address {
+    display: block;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.breakdown-owners {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-top: 0.25rem;
+}
+
+.more-items {
+    text-align: center;
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 0.5rem;
+}
+
+.bulk-enrich-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.bulk-results-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.result-stat {
+    text-align: center;
+    padding: 1.5rem;
+    border-radius: 12px;
+    background: var(--dark-bg);
+}
+
+.result-stat.success {
+    background: rgba(46, 204, 113, 0.1);
+    border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.result-stat.failed {
+    background: rgba(231, 76, 60, 0.1);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+}
+
+.result-stat.skipped {
+    background: rgba(241, 196, 15, 0.1);
+    border: 1px solid rgba(241, 196, 15, 0.3);
+}
+
+.result-stat .stat-number {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.result-stat .stat-label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+}
+
+.total-charged {
+    text-align: center;
+    font-size: 1.1rem;
+    padding: 1rem;
+    background: var(--dark-bg);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+
+.total-charged strong {
+    color: #2ecc71;
+}
+
+.no-owners-message {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 1rem;
+}
+
+.loading-spinner {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-secondary);
+}
+
+.error-message {
+    color: var(--danger);
+    text-align: center;
+    padding: 1rem;
+}
+
+/* ==========================================
    RESPONSIVE
    ========================================== */
 

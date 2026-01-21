@@ -708,6 +708,199 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ==========================================
+// BULK ENRICHMENT
+// ==========================================
+
+async function showBulkEnrichModal() {
+    // Get all building IDs from current properties (or use current filter)
+    const buildingIds = state.properties.map(p => p.id);
+    
+    if (buildingIds.length === 0) {
+        alert('No properties to enrich. Please search for properties first.');
+        return;
+    }
+    
+    // Show loading modal
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'bulk-enrich-modal';
+    modal.style.display = 'block';
+    modal.innerHTML = `
+        <div class="modal-content bulk-enrich-modal-content">
+            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+            <h2>📞 Bulk Owner Enrichment</h2>
+            <div class="loading-spinner">
+                <p>Calculating enrichment cost for ${buildingIds.length} properties...</p>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    
+    try {
+        // Get estimate from API
+        const response = await fetch('/api/enrichment/bulk-estimate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ building_ids: buildingIds })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to get estimate');
+        }
+        
+        // Update modal with estimate
+        const costDisplay = data.is_admin ? 'FREE (Admin)' : `$${data.max_cost.toFixed(2)}`;
+        const costPerLookup = data.is_admin ? 'FREE' : `$${data.cost_per_lookup.toFixed(2)}`;
+        
+        const modalContent = modal.querySelector('.modal-content');
+        modalContent.innerHTML = `
+            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+            <h2>📞 Bulk Owner Enrichment</h2>
+            <p class="modal-subtitle">Enrich contact info for all available owners</p>
+            
+            <div class="bulk-enrich-summary">
+                <div class="summary-row">
+                    <span class="summary-label">Properties Selected:</span>
+                    <span class="summary-value">${data.total_properties}</span>
+                </div>
+                <div class="summary-row">
+                    <span class="summary-label">Properties with Enrichable Owners:</span>
+                    <span class="summary-value">${data.properties_with_owners}</span>
+                </div>
+                <div class="summary-row highlight">
+                    <span class="summary-label">Total Owners to Enrich:</span>
+                    <span class="summary-value">${data.total_owners}</span>
+                </div>
+            </div>
+            
+            <div class="cost-breakdown">
+                <h4>💰 Cost Calculation</h4>
+                <div class="math-display">
+                    <p>${data.total_owners} owners × ${costPerLookup} per lookup = <strong>${costDisplay}</strong></p>
+                </div>
+                <p class="cost-note">
+                    ⚠️ <strong>Maximum charge:</strong> ${costDisplay}<br>
+                    <small>You are only charged for lookups that return results. 
+                    If an owner lookup returns no phone/email, you won't be charged for that lookup.</small>
+                </p>
+            </div>
+            
+            ${data.breakdown.length > 0 ? `
+                <details class="breakdown-details">
+                    <summary>📋 View Breakdown (${data.breakdown.length} properties)</summary>
+                    <div class="breakdown-list">
+                        ${data.breakdown.slice(0, 20).map(b => `
+                            <div class="breakdown-item">
+                                <span class="breakdown-address">${b.address}</span>
+                                <span class="breakdown-owners">${b.count} owner(s): ${b.owners.join(', ')}</span>
+                            </div>
+                        `).join('')}
+                        ${data.breakdown.length > 20 ? `<p class="more-items">...and ${data.breakdown.length - 20} more properties</p>` : ''}
+                    </div>
+                </details>
+            ` : ''}
+            
+            <div class="bulk-enrich-footer">
+                ${data.total_owners === 0 ? `
+                    <p class="no-owners-message">No enrichable owners found in these properties.</p>
+                    <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Close</button>
+                ` : `
+                    <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Cancel</button>
+                    <button class="btn btn-primary bulk-enrich-confirm-btn" onclick="confirmBulkEnrich()">
+                        🚀 Enrich ${data.total_owners} Owners (up to ${costDisplay})
+                    </button>
+                `}
+            </div>
+        `;
+        
+        // Store building IDs for confirmation
+        window.bulkEnrichBuildingIds = buildingIds;
+        
+    } catch (error) {
+        console.error('Bulk estimate error:', error);
+        const modalContent = modal.querySelector('.modal-content');
+        modalContent.innerHTML = `
+            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+            <h2>📞 Bulk Owner Enrichment</h2>
+            <p class="error-message">Error: ${error.message}</p>
+            <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Close</button>
+        `;
+    }
+}
+
+function closeBulkEnrichModal() {
+    const modal = document.getElementById('bulk-enrich-modal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+async function confirmBulkEnrich() {
+    const btn = document.querySelector('.bulk-enrich-confirm-btn');
+    if (!btn) return;
+    
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+    
+    try {
+        const response = await fetch('/api/enrichment/bulk-enrich', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ building_ids: window.bulkEnrichBuildingIds })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Bulk enrichment failed');
+        }
+        
+        const results = data.results;
+        
+        // Show results
+        const modal = document.getElementById('bulk-enrich-modal');
+        const modalContent = modal.querySelector('.modal-content');
+        modalContent.innerHTML = `
+            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+            <h2>✅ Bulk Enrichment Complete</h2>
+            
+            <div class="bulk-results-summary">
+                <div class="result-stat success">
+                    <span class="stat-number">${results.successful}</span>
+                    <span class="stat-label">Successful</span>
+                </div>
+                <div class="result-stat failed">
+                    <span class="stat-number">${results.failed}</span>
+                    <span class="stat-label">No Results</span>
+                </div>
+                <div class="result-stat skipped">
+                    <span class="stat-number">${results.skipped}</span>
+                    <span class="stat-label">Skipped</span>
+                </div>
+            </div>
+            
+            <div class="total-charged">
+                <p>Total Charged: <strong>$${results.total_charged.toFixed(2)}</strong></p>
+            </div>
+            
+            <div class="bulk-enrich-footer">
+                <button class="btn btn-primary" onclick="closeBulkEnrichModal(); loadProperties();">
+                    Done - Refresh Results
+                </button>
+            </div>
+        `;
+        
+    } catch (error) {
+        console.error('Bulk enrich error:', error);
+        btn.disabled = false;
+        btn.textContent = 'Try Again';
+        alert('Error: ' + error.message);
+    }
+}
+
 // Make functions globally available
 window.viewProperty = viewProperty;
 window.viewOwnerPortfolio = viewOwnerPortfolio;
@@ -716,5 +909,8 @@ window.closeExportModal = closeExportModal;
 window.downloadExport = downloadExport;
 window.goToPage = goToPage;
 window.clearFilters = clearFilters;
+window.showBulkEnrichModal = showBulkEnrichModal;
+window.closeBulkEnrichModal = closeBulkEnrichModal;
+window.confirmBulkEnrich = confirmBulkEnrich;
 
 console.log('🏢 Properties Intelligence loaded');

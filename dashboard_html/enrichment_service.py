@@ -301,62 +301,86 @@ def enrich_owner(building_id, owner_name, address, user_id):
         conn.close()
 
 
-def check_user_enrichment_access(user_id, building_id):
+def check_user_enrichment_access(user_id, building_id, owner_name=None):
     """
     Check if user has already paid for enrichment on this building
-    Returns: (has_access, enrichment_data)
+    If owner_name is provided, checks for that specific owner
+    Returns: (has_access, enrichment_data, enriched_owner_names)
     """
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
+        # Get list of owner names already enriched for this building by this user
+        cur.execute("""
+            SELECT owner_name_searched FROM user_enrichments
+            WHERE user_id = %s AND building_id = %s
+        """, (user_id, building_id))
+        enriched_owners = [r['owner_name_searched'].upper() for r in cur.fetchall() if r['owner_name_searched']]
+        
         # Check if user is admin
         cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
         user = cur.fetchone()
-        if user and user['is_admin']:
-            # Admin gets free access
-            cur.execute("""
-                SELECT enriched_phones, enriched_emails FROM buildings WHERE id = %s
-            """, (building_id,))
-            building = cur.fetchone()
+        is_admin = user and user['is_admin']
+        
+        # Get building's enrichment data
+        cur.execute("""
+            SELECT enriched_phones, enriched_emails FROM buildings WHERE id = %s
+        """, (building_id,))
+        building = cur.fetchone()
+        
+        # If checking specific owner
+        if owner_name:
+            already_enriched = owner_name.upper() in enriched_owners
+            if already_enriched and building and building['enriched_phones']:
+                return True, {
+                    'phones': building['enriched_phones'],
+                    'emails': building['enriched_emails']
+                }, enriched_owners
+            return False, None, enriched_owners
+        
+        # General check - has any enrichment
+        if is_admin:
             if building and building['enriched_phones']:
                 return True, {
                     'phones': building['enriched_phones'],
                     'emails': building['enriched_emails']
-                }
-            return False, None
+                }, enriched_owners
+            return False, None, enriched_owners
         
-        # Check user_enrichments table
-        cur.execute("""
-            SELECT ue.id, b.enriched_phones, b.enriched_emails
-            FROM user_enrichments ue
-            JOIN buildings b ON ue.building_id = b.id
-            WHERE ue.user_id = %s AND ue.building_id = %s
-        """, (user_id, building_id))
-        
-        result = cur.fetchone()
-        if result and result['enriched_phones']:
+        # For regular users, check if they have any enrichment on this building
+        if len(enriched_owners) > 0 and building and building['enriched_phones']:
             return True, {
-                'phones': result['enriched_phones'],
-                'emails': result['enriched_emails']
-            }
+                'phones': building['enriched_phones'],
+                'emails': building['enriched_emails']
+            }, enriched_owners
         
-        return False, None
+        return False, None, enriched_owners
         
     finally:
         cur.close()
         conn.close()
 
 
-def get_available_owners_for_enrichment(building_id):
+def get_available_owners_for_enrichment(building_id, user_id=None):
     """
     Get list of owner names that can be enriched for a building
-    Returns list of {name, source, recommended} dicts
+    If user_id provided, marks which owners are already enriched
+    Returns list of {name, source, recommended, already_enriched} dicts
     """
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
+        # Get already enriched owners for this user
+        enriched_owners = []
+        if user_id:
+            cur.execute("""
+                SELECT owner_name_searched FROM user_enrichments
+                WHERE user_id = %s AND building_id = %s
+            """, (user_id, building_id))
+            enriched_owners = [r['owner_name_searched'].upper() for r in cur.fetchall() if r['owner_name_searched']]
+        
         cur.execute("""
             SELECT 
                 current_owner_name,
@@ -377,11 +401,13 @@ def get_available_owners_for_enrichment(building_id):
         if building['sos_principal_name']:
             first, middle, last = parse_owner_name(building['sos_principal_name'])
             if first and last:  # Only if it's a person name
+                is_enriched = building['sos_principal_name'].upper() in enriched_owners
                 owners.append({
                     'name': building['sos_principal_name'],
                     'source': 'NY Secretary of State',
-                    'recommended': True,
-                    'reason': 'Real person behind LLC'
+                    'recommended': not is_enriched,  # Only recommend if not already enriched
+                    'reason': 'Real person behind LLC',
+                    'already_enriched': is_enriched
                 })
         
         # Other sources
@@ -400,10 +426,12 @@ def get_available_owners_for_enrichment(building_id):
                 if first and last:
                     # Check if already added
                     if not any(o['name'].upper() == name.upper() for o in owners):
+                        is_enriched = name.upper() in enriched_owners
                         owners.append({
                             'name': name,
                             'source': source,
-                            'recommended': False
+                            'recommended': False,
+                            'already_enriched': is_enriched
                         })
         
         return owners
