@@ -14,7 +14,8 @@ stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
 # Subscription price: $250/month
 SUBSCRIPTION_PRICE = os.getenv('STRIPE_PRICE_ID')
-ENRICHMENT_FEE_CENTS = 35  # $0.35
+ENRICHMENT_FEE_SINGLE_CENTS = 50  # $0.50 for single lookup
+ENRICHMENT_FEE_BATCH_CENTS = 35   # $0.35 each for batch (2+)
 
 
 def get_db_connection():
@@ -121,9 +122,10 @@ def create_setup_intent(customer_id):
         raise e
 
 
-def charge_enrichment_fee(user_id, building_id, owner_name):
+def charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False):
     """
-    Charge $0.35 for enrichment lookup
+    Charge for enrichment lookup
+    Single: $0.50, Batch (2+): $0.35 each
     Returns: (success, message, charge_id)
     """
     conn = get_db_connection()
@@ -168,20 +170,25 @@ def charge_enrichment_fee(user_id, building_id, owner_name):
         else:
             payment_method = customer.invoice_settings.default_payment_method
         
+        # Determine fee based on single vs batch
+        fee_cents = ENRICHMENT_FEE_BATCH_CENTS if is_batch else ENRICHMENT_FEE_SINGLE_CENTS
+        fee_dollars = fee_cents / 100
+        
         # Create the charge
         payment_intent = stripe.PaymentIntent.create(
-            amount=ENRICHMENT_FEE_CENTS,
+            amount=fee_cents,
             currency='usd',
             customer=user['stripe_customer_id'],
             payment_method=payment_method,
             off_session=True,
             confirm=True,
-            description=f"Owner enrichment for building ID {building_id}",
+            description=f"Owner enrichment for building ID {building_id}{' (batch)' if is_batch else ''}",
             metadata={
                 'user_id': str(user_id),
                 'building_id': str(building_id),
                 'owner_name': owner_name[:100] if owner_name else '',
-                'type': 'enrichment_fee'
+                'type': 'enrichment_fee',
+                'is_batch': str(is_batch)
             }
         )
         
@@ -191,7 +198,7 @@ def charge_enrichment_fee(user_id, building_id, owner_name):
             (user_id, building_id, transaction_type, amount, stripe_payment_intent_id, status, description)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
-            user_id, building_id, 'enrichment', 0.35, 
+            user_id, building_id, 'enrichment', fee_dollars, 
             payment_intent.id, payment_intent.status,
             f"Enrichment for: {owner_name}"
         ))

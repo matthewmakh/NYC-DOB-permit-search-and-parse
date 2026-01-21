@@ -404,12 +404,14 @@ function addEnrichOwnerButton(container) {
         } else {
             // Show enrich button for logged in users
             const cost = enrichmentData.cost === 0 ? 'FREE' : `$${enrichmentData.cost.toFixed(2)}`;
+            const batchCost = enrichmentData.batch_cost || enrichmentData.cost;
+            const batchDisplay = batchCost === 0 ? '' : ` ($${batchCost.toFixed(2)} in bulk)`;
             const btnText = hasEnrichedOwners ? '📞 Enrich More Owners' : '📞 Get Owner Phone & Email';
             html += `
                 <div class="enrich-prompt">
                     <button class="enrich-owner-btn" onclick="showEnrichModal(${buildingId})">
                         ${btnText}
-                        <span class="enrich-cost">${cost} per lookup</span>
+                        <span class="enrich-cost">${cost} each${batchDisplay}</span>
                     </button>
                     <p class="enrich-note">${enrichmentData.available_owners.length} owner(s) available to lookup</p>
                 </div>
@@ -654,7 +656,7 @@ async function confirmEnrich(buildingId) {
             }
             
             if (data.charged) {
-                showNotification('Contact info unlocked! $0.35 charged.', 'success');
+                showNotification('Contact info unlocked! $0.50 charged.', 'success');
             } else {
                 showNotification('Contact info retrieved!', 'success');
             }

@@ -4097,7 +4097,7 @@ def api_building_profile(bbl):
             building_dict['borough_name'] = borough_name
             
             # ===== ENRICHMENT DATA (include to speed up button load) =====
-            enrichment_info = {'available_owners': [], 'enriched_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.35, 'logged_in': False}
+            enrichment_info = {'available_owners': [], 'enriched_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.50, 'batch_cost': 0.35, 'logged_in': False}
             try:
                 from enrichment_service import parse_owner_name, check_user_enrichment_access, get_available_owners_for_enrichment
                 from auth_service import validate_session
@@ -4109,7 +4109,8 @@ def api_building_profile(bbl):
                 # Use the enrichment service function which handles owner tracking properly
                 if current_user:
                     enrichment_info['logged_in'] = True
-                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.35
+                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.50
+                    enrichment_info['batch_cost'] = 0 if current_user.get('is_admin') else 0.35
                     
                     # Get available owners with enrichment status
                     available_owners = get_available_owners_for_enrichment(building_id, current_user['id'])
@@ -4260,7 +4261,8 @@ def api_available_owners(building_id):
             'already_enriched': has_access,
             'enrichment_data': combined_data,
             'enrichment_data_per_owner': enrichment_data_list if enrichment_data_list else [],
-            'cost': 0 if g.user.get('is_admin') else 0.35
+            'cost': 0 if g.user.get('is_admin') else 0.50,
+            'batch_cost': 0 if g.user.get('is_admin') else 0.35
         })
         
     except Exception as e:
@@ -4317,11 +4319,11 @@ def api_enrich_owner():
         print(f"Enrichment result: success={success}, message={message}")
         
         if success:
-            # Only charge AFTER successful enrichment
+            # Only charge AFTER successful enrichment - single lookup = $0.50
             charge_id = 'admin_free'
             charged = False
             if not is_admin:
-                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, building_id, owner_name)
+                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False)
                 charged = charge_success
                 if not charge_success:
                     print(f"WARNING: Enrichment succeeded but charge failed: {charge_msg}")
@@ -4384,7 +4386,7 @@ def api_bulk_enrichment_estimate():
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
-        cost_per_lookup = 0 if is_admin else 0.35
+        cost_per_lookup = 0 if is_admin else 0.35  # Batch rate
         
         total_owners = 0
         properties_with_owners = 0
@@ -4483,9 +4485,9 @@ def api_bulk_enrich():
                         success, data, message = enrich_owner(bid, owner['name'], address, user_id)
                         
                         if success:
-                            # Only charge AFTER successful enrichment
+                            # Only charge AFTER successful enrichment - batch = $0.35 each
                             if not is_admin:
-                                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, bid, owner['name'])
+                                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, bid, owner['name'], is_batch=True)
                                 if charge_success:
                                     results['total_charged'] += 0.35
                                 else:
