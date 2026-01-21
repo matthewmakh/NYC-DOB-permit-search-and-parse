@@ -511,6 +511,7 @@ async function downloadExport() {
     if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
+    if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
     
     // Add sort
     params.append('sort_by', state.sort.by);

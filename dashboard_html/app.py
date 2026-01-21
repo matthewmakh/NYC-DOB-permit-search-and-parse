@@ -3045,10 +3045,41 @@ def api_properties_export():
             if min_permits:
                 where_clauses.append("""(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s""")
                 params.append(min_permits)
+            if recent_permit_days:
+                where_clauses.append("""EXISTS (
+                    SELECT 1 FROM permits p 
+                    WHERE p.bbl = b.bbl 
+                    AND (p.filing_date >= CURRENT_DATE - INTERVAL '%s days'
+                         OR p.issue_date >= CURRENT_DATE - INTERVAL '%s days')
+                )""")
+                params.extend([recent_permit_days, recent_permit_days])
             if has_violations == 'true':
-                where_clauses.append("COALESCE(b.hpd_violations_count, 0) > 0")
+                where_clauses.append("COALESCE(b.hpd_total_violations, 0) > 0")
             elif has_violations == 'false':
-                where_clauses.append("COALESCE(b.hpd_violations_count, 0) = 0")
+                where_clauses.append("COALESCE(b.hpd_total_violations, 0) = 0")
+            
+            # Enrichable owner filter
+            has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
+            if has_enrichable_owner:
+                where_clauses.append("""
+                    (
+                        (b.sos_principal_name IS NOT NULL 
+                         AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.sos_principal_name ~ ' ')
+                        OR
+                        (b.current_owner_name IS NOT NULL 
+                         AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.current_owner_name ~ ' ')
+                        OR
+                        (b.owner_name_rpad IS NOT NULL 
+                         AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.owner_name_rpad ~ ' ')
+                        OR
+                        (b.owner_name_hpd IS NOT NULL 
+                         AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                         AND b.owner_name_hpd ~ ' ')
+                    )
+                """)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
