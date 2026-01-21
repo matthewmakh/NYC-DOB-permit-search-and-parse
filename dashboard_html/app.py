@@ -2980,15 +2980,31 @@ def api_properties_export():
             params = []
             
             if search:
-                where_clauses.append("""(
-                    b.address ILIKE %s OR 
-                    b.bbl LIKE %s OR 
-                    b.current_owner_name ILIKE %s OR
-                    b.owner_name_rpad ILIKE %s OR
-                    b.owner_name_hpd ILIKE %s
-                )""")
-                search_term = f"%{search}%"
-                params.extend([search_term, search_term, search_term, search_term, search_term])
+                # Check if search looks like a zip code (5 digits starting with 1)
+                is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
+                
+                if is_zip_search:
+                    # Search by zip code - join with permits table
+                    where_clauses.append("""(
+                        b.address ILIKE %s OR 
+                        b.bbl LIKE %s OR 
+                        b.current_owner_name ILIKE %s OR
+                        b.owner_name_rpad ILIKE %s OR
+                        b.owner_name_hpd ILIKE %s OR
+                        EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.zip_code = %s)
+                    )""")
+                    search_term = f"%{search}%"
+                    params.extend([search_term, search_term, search_term, search_term, search_term, search])
+                else:
+                    where_clauses.append("""(
+                        b.address ILIKE %s OR 
+                        b.bbl LIKE %s OR 
+                        b.current_owner_name ILIKE %s OR
+                        b.owner_name_rpad ILIKE %s OR
+                        b.owner_name_hpd ILIKE %s
+                    )""")
+                    search_term = f"%{search}%"
+                    params.extend([search_term, search_term, search_term, search_term, search_term])
             
             if owner:
                 where_clauses.append("""(
@@ -3049,10 +3065,10 @@ def api_properties_export():
                 where_clauses.append("""EXISTS (
                     SELECT 1 FROM permits p 
                     WHERE p.bbl = b.bbl 
-                    AND (p.filing_date >= CURRENT_DATE - INTERVAL '%s days'
-                         OR p.issue_date >= CURRENT_DATE - INTERVAL '%s days')
+                    AND (p.filing_date >= CURRENT_DATE - (%s || ' days')::interval
+                         OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
                 )""")
-                params.extend([recent_permit_days, recent_permit_days])
+                params.extend([str(recent_permit_days), str(recent_permit_days)])
             if has_violations == 'true':
                 where_clauses.append("COALESCE(b.hpd_total_violations, 0) > 0")
             elif has_violations == 'false':
