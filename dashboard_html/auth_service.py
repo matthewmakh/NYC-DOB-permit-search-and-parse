@@ -80,7 +80,7 @@ def create_user(email, password):
             ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
-            email, password_hash, is_admin, is_admin,  # Admin is auto-verified
+            email, password_hash, is_admin, True,  # Auto-verify all accounts
             verification_token, verification_expires,
             'active' if is_admin else 'inactive'
         ))
@@ -163,8 +163,7 @@ def authenticate_user(email, password):
         if not verify_password(password, user['password_hash']):
             return False, "Invalid email or password", None
         
-        if not user['is_verified']:
-            return False, "Please verify your email before logging in", None
+        # Email verification check removed - accounts are auto-verified
         
         # Check subscription status (admin bypasses)
         if not user['is_admin'] and user['subscription_status'] != 'active':
