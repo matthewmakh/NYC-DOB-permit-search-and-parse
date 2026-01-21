@@ -4445,9 +4445,9 @@ def api_bulk_enrich():
                     continue
                 
                 # Get building info for address
-                cur.execute("SELECT address, zip_code FROM buildings WHERE id = %s", (bid,))
+                cur.execute("SELECT b.address, p.zip_code FROM buildings b LEFT JOIN permits p ON b.bbl = p.bbl WHERE b.id = %s LIMIT 1", (bid,))
                 building_row = cur.fetchone()
-                address = f"{building_row['address']}, Brooklyn, NY {building_row.get('zip_code', '')}" if building_row else ""
+                address = f"{building_row['address']}, NY {building_row.get('zip_code') or ''}" if building_row else ""
                 
                 for owner in available:
                     try:
