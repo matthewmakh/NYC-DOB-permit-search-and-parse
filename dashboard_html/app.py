@@ -2899,6 +2899,238 @@ def api_properties_stats():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/properties/export')
+@login_required
+def api_properties_export():
+    """
+    Export properties to CSV based on current filters
+    Includes unlocked contact data for THIS user only
+    Max 10,000 properties per export
+    """
+    import csv
+    from io import StringIO
+    from flask import Response
+    
+    try:
+        # Get current user ID
+        user_id = session.get('user_id')
+        
+        # Get requested fields
+        fields_param = request.args.get('fields', '')
+        requested_fields = [f.strip() for f in fields_param.split(',') if f.strip()]
+        
+        if not requested_fields:
+            requested_fields = ['address', 'bbl', 'owner_name', 'assessed_value', 'sale_price', 'sale_date']
+        
+        with DatabaseConnection() as cur:
+            # Parse filter parameters (same as api_properties)
+            search = request.args.get('search', '').strip()
+            owner = request.args.get('owner', '').strip()
+            min_value = request.args.get('min_value', type=float)
+            max_value = request.args.get('max_value', type=float)
+            min_sale_price = request.args.get('min_sale_price', type=float)
+            max_sale_price = request.args.get('max_sale_price', type=float)
+            sale_date_from = request.args.get('sale_date_from')
+            sale_date_to = request.args.get('sale_date_to')
+            cash_only = request.args.get('cash_only', '').lower() == 'true'
+            with_permits = request.args.get('with_permits', '').lower() == 'true'
+            min_permits = request.args.get('min_permits', type=int)
+            recent_permit_days = request.args.get('recent_permit_days', type=int)
+            borough = request.args.get('borough', type=int)
+            building_class = request.args.get('building_class', '').strip()
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            has_violations = request.args.get('has_violations')
+            recent_sale_days = request.args.get('recent_sale_days', type=int)
+            financing_min = request.args.get('financing_min', type=float)
+            financing_max = request.args.get('financing_max', type=float)
+            sort_by = request.args.get('sort_by', 'sale_date')
+            sort_order = request.args.get('sort_order', 'desc').lower()
+            
+            # Build WHERE clauses
+            where_clauses = []
+            params = []
+            
+            if search:
+                where_clauses.append("""(
+                    b.address ILIKE %s OR 
+                    b.bbl LIKE %s OR 
+                    b.current_owner_name ILIKE %s OR
+                    b.owner_name_rpad ILIKE %s OR
+                    b.owner_name_hpd ILIKE %s
+                )""")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term, search_term, search_term, search_term])
+            
+            if owner:
+                where_clauses.append("""(
+                    b.current_owner_name ILIKE %s OR
+                    b.owner_name_rpad ILIKE %s OR
+                    b.owner_name_hpd ILIKE %s
+                )""")
+                owner_term = f"%{owner}%"
+                params.extend([owner_term, owner_term, owner_term])
+            
+            if min_value is not None:
+                where_clauses.append("b.assessed_total_value >= %s")
+                params.append(min_value)
+            if max_value is not None:
+                where_clauses.append("b.assessed_total_value <= %s")
+                params.append(max_value)
+            if min_sale_price is not None:
+                where_clauses.append("b.sale_price >= %s")
+                params.append(min_sale_price)
+            if max_sale_price is not None:
+                where_clauses.append("b.sale_price <= %s")
+                params.append(max_sale_price)
+            if sale_date_from:
+                where_clauses.append("b.sale_date >= %s")
+                params.append(sale_date_from)
+            if sale_date_to:
+                where_clauses.append("b.sale_date <= %s")
+                params.append(sale_date_to)
+            if cash_only:
+                where_clauses.append("b.is_cash_purchase = true")
+            if recent_sale_days:
+                where_clauses.append("b.sale_date >= CURRENT_DATE - INTERVAL '%s days'")
+                params.append(recent_sale_days)
+            if financing_min is not None:
+                where_clauses.append("b.financing_ratio >= %s")
+                params.append(financing_min)
+            if financing_max is not None:
+                where_clauses.append("b.financing_ratio <= %s")
+                params.append(financing_max)
+            if borough:
+                where_clauses.append("LEFT(b.bbl, 1) = %s")
+                params.append(str(borough))
+            if building_class:
+                where_clauses.append("b.building_class LIKE %s")
+                params.append(f"{building_class.upper()}%")
+            if min_units is not None:
+                where_clauses.append("COALESCE(b.total_units, 0) >= %s")
+                params.append(min_units)
+            if max_units is not None:
+                where_clauses.append("COALESCE(b.total_units, 0) <= %s")
+                params.append(max_units)
+            if with_permits:
+                where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+            if min_permits:
+                where_clauses.append("""(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s""")
+                params.append(min_permits)
+            if has_violations == 'true':
+                where_clauses.append("COALESCE(b.hpd_violations_count, 0) > 0")
+            elif has_violations == 'false':
+                where_clauses.append("COALESCE(b.hpd_violations_count, 0) = 0")
+            
+            where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+            # Sort mapping
+            sort_columns = {
+                'sale_date': 'b.sale_date',
+                'value': 'b.assessed_total_value',
+                'sale_price': 'b.sale_price',
+                'address': 'b.address',
+                'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
+            }
+            sort_col = sort_columns.get(sort_by, 'b.sale_date')
+            sort_dir = 'ASC' if sort_order == 'asc' else 'DESC'
+            
+            # Get user's unlocked building IDs
+            cur.execute("""
+                SELECT building_id FROM user_enrichments WHERE user_id = %s
+            """, (user_id,))
+            unlocked_building_ids = set(r['building_id'] for r in cur.fetchall())
+            
+            # Query properties (max 10,000)
+            query = f"""
+                SELECT 
+                    b.id,
+                    b.bbl,
+                    b.address,
+                    LEFT(b.bbl, 1) as borough_code,
+                    b.building_class,
+                    b.year_built,
+                    COALESCE(b.total_units, 0) as units,
+                    COALESCE(b.current_owner_name, b.owner_name_rpad, b.owner_name_hpd) as owner_name,
+                    b.owner_address_hpd as owner_address,
+                    b.assessed_total_value,
+                    b.sale_price,
+                    b.sale_date,
+                    b.is_cash_purchase,
+                    b.enformion_phone,
+                    b.enformion_email,
+                    COALESCE(b.hpd_violations_count, 0) as violation_count,
+                    (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
+                FROM buildings b
+                WHERE {where_sql}
+                ORDER BY {sort_col} {sort_dir} NULLS LAST
+                LIMIT 10000
+            """
+            
+            cur.execute(query, params)
+            properties = cur.fetchall()
+            
+            # Build CSV
+            output = StringIO()
+            
+            # Map field names to column headers and data keys
+            field_mapping = {
+                'address': ('Address', lambda p: p['address'] or ''),
+                'bbl': ('BBL', lambda p: p['bbl'] or ''),
+                'borough': ('Borough', lambda p: {
+                    '1': 'Manhattan', '2': 'Bronx', '3': 'Brooklyn', 
+                    '4': 'Queens', '5': 'Staten Island'
+                }.get(p['borough_code'], '')),
+                'zip_code': ('Zip Code', lambda p: ''),  # Not in current query
+                'building_class': ('Building Class', lambda p: p['building_class'] or ''),
+                'year_built': ('Year Built', lambda p: p['year_built'] or ''),
+                'units': ('Units', lambda p: p['units'] or ''),
+                'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
+                'owner_phone': ('Owner Phone', lambda p: p['enformion_phone'] if p['id'] in unlocked_building_ids else ''),
+                'owner_email': ('Owner Email', lambda p: p['enformion_email'] if p['id'] in unlocked_building_ids else ''),
+                'owner_address': ('Owner Address', lambda p: p['owner_address'] or ''),
+                'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
+                'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
+                'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
+                'is_cash_purchase': ('Cash Purchase', lambda p: 'Yes' if p['is_cash_purchase'] else 'No'),
+                'permit_count': ('Permit Count', lambda p: p['permit_count'] or 0),
+                'violation_count': ('Violation Count', lambda p: p['violation_count'] or 0),
+            }
+            
+            # Filter to only requested fields
+            headers = []
+            extractors = []
+            for field in requested_fields:
+                if field in field_mapping:
+                    header, extractor = field_mapping[field]
+                    headers.append(header)
+                    extractors.append(extractor)
+            
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            
+            for prop in properties:
+                row = [extractor(prop) for extractor in extractors]
+                writer.writerow(row)
+            
+            # Create response
+            output.seek(0)
+            from datetime import datetime
+            filename = f"properties_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename={filename}'}
+            )
+            
+    except Exception as e:
+        print(f"Properties export error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ============================================================================
 # CONTRACTOR PROFILE ROUTES
 # ============================================================================

@@ -430,24 +430,6 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Smart filters
-    document.querySelectorAll('.smart-filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const filter = btn.dataset.filter;
-            
-            // Toggle active state
-            const isActive = btn.classList.contains('active');
-            document.querySelectorAll('.smart-filter-btn').forEach(b => b.classList.remove('active'));
-            
-            if (!isActive) {
-                btn.classList.add('active');
-                applySmartFilter(filter);
-            } else {
-                clearFilters();
-            }
-        });
-    });
-    
     // Sort controls
     document.getElementById('sortBy').addEventListener('change', (e) => {
         state.sort.by = e.target.value;
@@ -469,62 +451,68 @@ function initializeEventListeners() {
     // Clear filters button
     document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
     
-    // Export button
-    document.getElementById('exportBtn').addEventListener('click', exportProperties);
+    // Export button - show modal
+    document.getElementById('exportBtn').addEventListener('click', showExportModal);
 }
 
 // ==========================================
-// SMART FILTERS
+// EXPORT FUNCTIONALITY
 // ==========================================
 
-function applySmartFilter(filter) {
-    // Reset filters first
-    resetFilters();
+function showExportModal() {
+    const totalCount = state.pagination.total_count || state.pagination.totalCount || 0;
+    document.getElementById('exportCount').textContent = formatNumber(Math.min(totalCount, 10000));
+    document.getElementById('exportModal').style.display = 'flex';
+}
+
+function closeExportModal() {
+    document.getElementById('exportModal').style.display = 'none';
+}
+
+async function downloadExport() {
+    // Get selected fields
+    const checkboxes = document.querySelectorAll('input[name="export_field"]:checked');
+    const fields = Array.from(checkboxes).map(cb => cb.value);
     
-    switch (filter) {
-        case 'hot_leads':
-            state.filters.recentSaleDays = 180;
-            state.filters.minValue = 500000;
-            break;
-            
-        case 'high_value':
-            state.filters.minValue = 1000000;
-            break;
-            
-        case 'cash_buyers':
-            state.filters.cashOnly = true;
-            document.getElementById('cashOnly').checked = true;
-            break;
-            
-        case 'recent_sales':
-            state.filters.recentSaleDays = 90;
-            break;
-            
-        case 'active_construction':
-            state.filters.withPermits = true;
-            state.filters.minPermits = 1;
-            document.getElementById('withPermits').checked = true;
-            document.getElementById('minPermits').value = 1;
-            break;
-            
-        case 'flippers':
-            state.filters.recentSaleDays = 365;
-            state.filters.minSalePrice = 100000;
-            break;
-            
-        case 'leveraged':
-            state.filters.financingMin = 0.8;
-            document.getElementById('financingMin').value = 80;
-            break;
-            
-        case 'violations':
-            state.filters.hasViolations = 'true';
-            document.getElementById('violationsFilter').value = 'true';
-            break;
+    if (fields.length === 0) {
+        alert('Please select at least one field to export');
+        return;
     }
     
-    state.pagination.page = 1;
-    loadProperties();
+    // Build query params from current filters
+    const params = new URLSearchParams();
+    
+    if (state.filters.search) params.append('search', state.filters.search);
+    if (state.filters.owner) params.append('owner', state.filters.owner);
+    if (state.filters.minValue) params.append('min_value', state.filters.minValue);
+    if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
+    if (state.filters.minSalePrice) params.append('min_sale_price', state.filters.minSalePrice);
+    if (state.filters.maxSalePrice) params.append('max_sale_price', state.filters.maxSalePrice);
+    if (state.filters.saleDateFrom) params.append('sale_date_from', state.filters.saleDateFrom);
+    if (state.filters.saleDateTo) params.append('sale_date_to', state.filters.saleDateTo);
+    if (state.filters.cashOnly) params.append('cash_only', 'true');
+    if (state.filters.withPermits) params.append('with_permits', 'true');
+    if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
+    if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
+    if (state.filters.borough) params.append('borough', state.filters.borough);
+    if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
+    if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
+    if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
+    if (state.filters.hasViolations !== null) params.append('has_violations', state.filters.hasViolations);
+    if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
+    if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
+    if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
+    
+    // Add sort
+    params.append('sort_by', state.sort.by);
+    params.append('sort_order', state.sort.order);
+    
+    // Add selected fields
+    params.append('fields', fields.join(','));
+    
+    // Trigger download
+    window.location.href = `/api/properties/export?${params}`;
+    closeExportModal();
 }
 
 // ==========================================
@@ -670,23 +658,8 @@ function clearFilters() {
     document.getElementById('withPermits').checked = false;
     document.getElementById('violationsFilter').value = '';
     
-    // Clear smart filter active states
-    document.querySelectorAll('.smart-filter-btn').forEach(btn => btn.classList.remove('active'));
-    
     state.pagination.page = 1;
     loadProperties();
-}
-
-function exportProperties() {
-    // Build current filter query
-    const params = new URLSearchParams();
-    if (state.filters.search) params.append('search', state.filters.search);
-    if (state.filters.owner) params.append('owner', state.filters.owner);
-    // ... add other filters
-    
-    // Download as CSV
-    alert('Export functionality coming soon!');
-    // window.location.href = `/api/properties/export?${params}`;
 }
 
 function showLoading(show) {
@@ -727,6 +700,8 @@ function escapeHtml(text) {
 window.viewProperty = viewProperty;
 window.viewOwnerPortfolio = viewOwnerPortfolio;
 window.closePortfolioModal = closePortfolioModal;
+window.closeExportModal = closeExportModal;
+window.downloadExport = downloadExport;
 window.goToPage = goToPage;
 window.clearFilters = clearFilters;
 

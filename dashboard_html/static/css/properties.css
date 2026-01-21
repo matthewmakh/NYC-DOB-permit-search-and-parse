@@ -713,6 +713,89 @@ body {
 }
 
 /* ==========================================
+   EXPORT MODAL
+   ========================================== */
+
+.export-modal {
+    max-width: 600px;
+}
+
+.export-info {
+    background: #374151;
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.export-info p {
+    margin: 5px 0;
+}
+
+.export-info #exportCount {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.export-limit-note {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.export-fields h4 {
+    margin-bottom: 15px;
+    color: var(--text-secondary);
+}
+
+.field-groups {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+}
+
+.field-group {
+    background: #374151;
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.field-group h5 {
+    margin-bottom: 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.field-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.field-group label:hover {
+    color: var(--text-primary);
+}
+
+.field-group input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+}
+
+.export-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+/* ==========================================
    RESPONSIVE
    ========================================== */
 
