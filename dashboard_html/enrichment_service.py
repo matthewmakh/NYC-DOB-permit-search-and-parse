@@ -234,14 +234,14 @@ def enrich_owner(building_id, owner_name, address, user_id):
         if not first_name or not last_name:
             return False, None, "Could not parse owner name - may be a business entity"
         
-        # Parse address into components
+        # Parse address - only use city/state/zip, NOT street address (improves match rate)
         address_parts = address.split(',') if address else []
-        address_line1 = address_parts[0].strip() if address_parts else ""
-        address_line2 = ', '.join(address_parts[1:]).strip() if len(address_parts) > 1 else ""
+        # Skip street address (first part), use city/state/zip only
+        address_line2 = ', '.join(address_parts[1:]).strip() if len(address_parts) > 1 else "Brooklyn, NY"
         
-        # Call API
+        # Call API with empty street address - just city/state/zip
         success, api_response, error = call_enformion_api(
-            first_name, last_name, address_line1, address_line2, middle_name
+            first_name, last_name, "", address_line2, middle_name
         )
         
         if not success:
@@ -251,7 +251,11 @@ def enrich_owner(building_id, owner_name, address, user_id):
         phones, emails, person_id = extract_contact_info(api_response)
         
         if not phones and not emails:
-            return False, None, "No contact information found for this person"
+            # Check if the API returned a "no matches" message
+            api_message = api_response.get('message', '') if isinstance(api_response, dict) else ''
+            if 'no' in api_message.lower() and 'match' in api_message.lower():
+                return False, None, "No matching records found in our database for this person. They may not be in our data sources."
+            return False, None, "No contact information (phone/email) found for this person in our database."
         
         # Store in database
         cur.execute("""
