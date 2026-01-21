@@ -3148,6 +3148,66 @@ def api_properties_export():
             cur.execute(query, params)
             properties = cur.fetchall()
             
+            # Batch query contacts for all BBLs (for all_contacts field)
+            bbls = [p['bbl'] for p in properties if p.get('bbl')]
+            contacts_by_bbl = {}
+            
+            if bbls and ('all_contacts' in requested_fields or 'all_contact_phones' in requested_fields or 'contact_names' in requested_fields):
+                # Get contacts from contacts table via permit_contacts
+                cur.execute("""
+                    SELECT DISTINCT p.bbl, c.name, c.phone, c.role
+                    FROM contacts c
+                    JOIN permit_contacts pc ON c.id = pc.contact_id
+                    JOIN permits p ON pc.permit_id = p.id
+                    WHERE p.bbl = ANY(%s) AND c.phone IS NOT NULL
+                """, (bbls,))
+                
+                for row in cur.fetchall():
+                    bbl = row['bbl']
+                    if bbl not in contacts_by_bbl:
+                        contacts_by_bbl[bbl] = []
+                    contacts_by_bbl[bbl].append({
+                        'name': row['name'],
+                        'phone': row['phone'],
+                        'role': row['role'] or 'Contact'
+                    })
+                
+                # Also get contacts directly from permits (permittee, owner)
+                cur.execute("""
+                    SELECT DISTINCT bbl, 
+                        permittee_business_name, permittee_phone, permittee_license_type,
+                        owner_business_name, owner_phone
+                    FROM permits
+                    WHERE bbl = ANY(%s) 
+                    AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL)
+                """, (bbls,))
+                
+                for row in cur.fetchall():
+                    bbl = row['bbl']
+                    if bbl not in contacts_by_bbl:
+                        contacts_by_bbl[bbl] = []
+                    
+                    # Add permittee contact
+                    if row['permittee_business_name'] and row['permittee_phone']:
+                        # Check if not already added
+                        existing_phones = [c['phone'] for c in contacts_by_bbl[bbl]]
+                        if row['permittee_phone'] not in existing_phones:
+                            contacts_by_bbl[bbl].append({
+                                'name': row['permittee_business_name'],
+                                'phone': row['permittee_phone'],
+                                'role': f"Contractor ({row['permittee_license_type'] or 'GC'})"
+                            })
+                    
+                    # Add owner contact from permit
+                    if row['owner_business_name'] and row['owner_phone']:
+                        existing_phones = [c['phone'] for c in contacts_by_bbl[bbl]]
+                        if row['owner_phone'] not in existing_phones:
+                            contacts_by_bbl[bbl].append({
+                                'name': row['owner_business_name'],
+                                'phone': row['owner_phone'],
+                                'role': 'Property Owner'
+                            })
+            
             # Build CSV
             output = StringIO()
             
@@ -3169,6 +3229,32 @@ def api_properties_export():
                     return '; '.join([em.get('email', '') for em in emails if em.get('email')])
                 return ''
             
+            # Helper to get all permit contacts for a property
+            def get_all_contacts(p):
+                bbl = p.get('bbl')
+                if not bbl or bbl not in contacts_by_bbl:
+                    return ''
+                contacts = contacts_by_bbl[bbl]
+                return '; '.join([f"{c['name']} ({c['role']}): {c['phone']}" for c in contacts])
+            
+            # Helper to get just phone numbers from permit contacts
+            def get_all_contact_phones(p):
+                bbl = p.get('bbl')
+                if not bbl or bbl not in contacts_by_bbl:
+                    return ''
+                contacts = contacts_by_bbl[bbl]
+                phones = list(set([c['phone'] for c in contacts if c.get('phone')]))
+                return '; '.join(phones)
+            
+            # Helper to get just names from permit contacts
+            def get_contact_names(p):
+                bbl = p.get('bbl')
+                if not bbl or bbl not in contacts_by_bbl:
+                    return ''
+                contacts = contacts_by_bbl[bbl]
+                names = list(set([c['name'] for c in contacts if c.get('name')]))
+                return '; '.join(names)
+            
             # Map field names to column headers and data keys
             field_mapping = {
                 'address': ('Address', lambda p: p['address'] or ''),
@@ -3182,8 +3268,8 @@ def api_properties_export():
                 'year_built': ('Year Built', lambda p: p['year_built'] or ''),
                 'units': ('Units', lambda p: p['units'] or ''),
                 'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
-                'owner_phone': ('Owner Phone', get_all_phones),
-                'owner_email': ('Owner Email', get_all_emails),
+                'owner_phone': ('Enriched Owner Phone', get_all_phones),
+                'owner_email': ('Enriched Owner Email', get_all_emails),
                 'owner_address': ('Owner Address', lambda p: p['owner_address'] or ''),
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
@@ -3191,6 +3277,10 @@ def api_properties_export():
                 'is_cash_purchase': ('Cash Purchase', lambda p: 'Yes' if p['is_cash_purchase'] else 'No'),
                 'permit_count': ('Permit Count', lambda p: p['permit_count'] or 0),
                 'violation_count': ('Violation Count', lambda p: p['violation_count'] or 0),
+                # NEW: Permit-based contacts (from Contacts tab)
+                'all_contacts': ('All Contacts', get_all_contacts),
+                'all_contact_phones': ('All Contact Phones', get_all_contact_phones),
+                'contact_names': ('Contact Names', get_contact_names),
             }
             
             # Filter to only requested fields

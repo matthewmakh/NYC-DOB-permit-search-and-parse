@@ -199,33 +199,21 @@ def enrich_owner(building_id, owner_name, address, user_id):
         
         building = cur.fetchone()
         if building and building['enriched_phones']:
-            # Already has data - check if user has access
+            # Already has data - check if THIS USER has enriched THIS SPECIFIC OWNER
             cur.execute("""
                 SELECT id FROM user_enrichments 
-                WHERE user_id = %s AND building_id = %s
-            """, (user_id, building_id))
+                WHERE user_id = %s AND building_id = %s AND UPPER(owner_name_searched) = UPPER(%s)
+            """, (user_id, building_id, owner_name))
             
             if cur.fetchone():
-                # User already paid for this
+                # User already paid for this specific owner
                 return True, {
                     'phones': building['enriched_phones'],
                     'emails': building['enriched_emails'],
                     'already_had_access': True
                 }, "Data already unlocked"
-            else:
-                # Data exists but user hasn't paid - just record access, charge already happened
-                cur.execute("""
-                    INSERT INTO user_enrichments (user_id, building_id, owner_name_searched)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id, building_id) DO NOTHING
-                """, (user_id, building_id, owner_name))
-                conn.commit()
-                
-                return True, {
-                    'phones': building['enriched_phones'],
-                    'emails': building['enriched_emails'],
-                    'from_cache': True
-                }, "Data retrieved from cache"
+            # Note: Even if building has cached data from another owner's lookup,
+            # we still need to call API for this new owner - fall through to API call
         
         # Need to call API
         # Parse the owner name
@@ -275,11 +263,11 @@ def enrich_owner(building_id, owner_name, address, user_id):
             building_id
         ))
         
-        # Record user access
+        # Record user access - constraint is now on (user_id, building_id, owner_name_searched)
         cur.execute("""
             INSERT INTO user_enrichments (user_id, building_id, owner_name_searched)
             VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, building_id) DO NOTHING
+            ON CONFLICT (user_id, building_id, owner_name_searched) DO NOTHING
         """, (user_id, building_id, owner_name))
         
         conn.commit()
