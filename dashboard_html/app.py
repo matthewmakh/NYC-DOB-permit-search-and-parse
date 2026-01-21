@@ -2940,8 +2940,11 @@ def api_properties_export():
     from flask import Response
     
     try:
-        # Get current user ID
-        user_id = session.get('user_id')
+        # Get current user ID from g.user (set by login_required decorator)
+        user_id = g.user['id'] if g.user else None
+        
+        if not user_id:
+            return jsonify({'success': False, 'error': 'User not authenticated'}), 401
         
         # Get requested fields
         fields_param = request.args.get('fields', '')
@@ -3148,22 +3151,22 @@ def api_properties_export():
             # Build CSV
             output = StringIO()
             
-            # Helper to extract first phone from JSON
-            def get_first_phone(p):
+            # Helper to extract ALL phones from JSON (semicolon separated)
+            def get_all_phones(p):
                 if p['id'] not in unlocked_building_ids:
                     return ''
                 phones = p.get('enriched_phones')
                 if phones and isinstance(phones, list) and len(phones) > 0:
-                    return phones[0].get('number', '')
+                    return '; '.join([ph.get('number', '') for ph in phones if ph.get('number')])
                 return ''
             
-            # Helper to extract first email from JSON
-            def get_first_email(p):
+            # Helper to extract ALL emails from JSON (semicolon separated)
+            def get_all_emails(p):
                 if p['id'] not in unlocked_building_ids:
                     return ''
                 emails = p.get('enriched_emails')
                 if emails and isinstance(emails, list) and len(emails) > 0:
-                    return emails[0].get('email', '')
+                    return '; '.join([em.get('email', '') for em in emails if em.get('email')])
                 return ''
             
             # Map field names to column headers and data keys
@@ -3179,8 +3182,8 @@ def api_properties_export():
                 'year_built': ('Year Built', lambda p: p['year_built'] or ''),
                 'units': ('Units', lambda p: p['units'] or ''),
                 'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
-                'owner_phone': ('Owner Phone', get_first_phone),
-                'owner_email': ('Owner Email', get_first_email),
+                'owner_phone': ('Owner Phone', get_all_phones),
+                'owner_email': ('Owner Email', get_all_emails),
                 'owner_address': ('Owner Address', lambda p: p['owner_address'] or ''),
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
