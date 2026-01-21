@@ -3052,14 +3052,14 @@ def api_properties_export():
                     b.year_built,
                     COALESCE(b.total_units, 0) as units,
                     COALESCE(b.current_owner_name, b.owner_name_rpad, b.owner_name_hpd) as owner_name,
-                    b.owner_address_hpd as owner_address,
+                    COALESCE(b.sos_principal_street, b.ecb_respondent_address) as owner_address,
                     b.assessed_total_value,
                     b.sale_price,
                     b.sale_date,
                     b.is_cash_purchase,
-                    b.enformion_phone,
-                    b.enformion_email,
-                    COALESCE(b.hpd_violations_count, 0) as violation_count,
+                    b.enriched_phones,
+                    b.enriched_emails,
+                    COALESCE(b.hpd_total_violations, 0) as violation_count,
                     (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
                 FROM buildings b
                 WHERE {where_sql}
@@ -3072,6 +3072,24 @@ def api_properties_export():
             
             # Build CSV
             output = StringIO()
+            
+            # Helper to extract first phone from JSON
+            def get_first_phone(p):
+                if p['id'] not in unlocked_building_ids:
+                    return ''
+                phones = p.get('enriched_phones')
+                if phones and isinstance(phones, list) and len(phones) > 0:
+                    return phones[0].get('number', '')
+                return ''
+            
+            # Helper to extract first email from JSON
+            def get_first_email(p):
+                if p['id'] not in unlocked_building_ids:
+                    return ''
+                emails = p.get('enriched_emails')
+                if emails and isinstance(emails, list) and len(emails) > 0:
+                    return emails[0].get('email', '')
+                return ''
             
             # Map field names to column headers and data keys
             field_mapping = {
@@ -3086,8 +3104,8 @@ def api_properties_export():
                 'year_built': ('Year Built', lambda p: p['year_built'] or ''),
                 'units': ('Units', lambda p: p['units'] or ''),
                 'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
-                'owner_phone': ('Owner Phone', lambda p: p['enformion_phone'] if p['id'] in unlocked_building_ids else ''),
-                'owner_email': ('Owner Email', lambda p: p['enformion_email'] if p['id'] in unlocked_building_ids else ''),
+                'owner_phone': ('Owner Phone', get_first_phone),
+                'owner_email': ('Owner Email', get_first_email),
                 'owner_address': ('Owner Address', lambda p: p['owner_address'] or ''),
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
