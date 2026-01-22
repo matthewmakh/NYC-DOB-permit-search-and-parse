@@ -370,6 +370,51 @@ body {
     font-size: 0.85rem;
 }
 
+/* Enrichment Info Section */
+.enrichment-info {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.enrichment-info h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+}
+
+.enrichment-info > p {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.enrichment-pricing {
+    list-style: none;
+    margin-bottom: 0.75rem;
+}
+
+.enrichment-pricing li {
+    padding: 0.5rem 0;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    border-bottom: none;
+}
+
+.enrichment-pricing li strong {
+    color: var(--secondary);
+}
+
+p.enrichment-note {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-style: italic;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .auth-container {
