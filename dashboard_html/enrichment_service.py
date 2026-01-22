@@ -32,6 +32,7 @@ def parse_owner_name(full_name):
     """
     Parse a full name into first, middle, last
     Handles formats like "SMITH, JOHN" or "JOHN SMITH" or "JOHN T SMITH"
+    Returns (None, None, None) for businesses/entities
     """
     if not full_name:
         return None, None, None
@@ -39,10 +40,52 @@ def parse_owner_name(full_name):
     # Clean up the name
     name = full_name.strip().upper()
     
-    # Remove common suffixes/prefixes
-    for suffix in ['LLC', 'INC', 'CORP', 'LTD', 'CO', 'COMPANY', 'TRUST', 'ESTATE']:
-        if suffix in name:
-            return None, None, None  # It's a business, not a person
+    # Quick checks for obvious non-person patterns
+    if '&' in name:  # Partnership: "SMITH & JONES"
+        return None, None, None
+    if name.startswith('CITY OF') or name.startswith('STATE OF') or name.startswith('COUNTY OF'):
+        return None, None, None
+    if name.startswith('BANK OF') or name.startswith('HEIRS OF') or name.startswith('ESTATE OF'):
+        return None, None, None
+    
+    # Check for business suffixes using word boundaries
+    # Split into words to avoid matching "CO" inside "FRANCO"
+    words = name.replace(',', ' ').replace('.', ' ').split()
+    
+    # If it looks like "LASTNAME, FIRSTNAME" format with just 2 words, 
+    # the first word is likely a last name (even if it matches a keyword)
+    # e.g., "CHURCH, CHARLOTTE" is a person, not "ST MARKS CHURCH"
+    is_lastname_firstname_format = ',' in name and len(words) == 2
+    
+    # Strong business indicators - always reject (legal suffixes, very unlikely last names)
+    strong_indicators = [
+        'LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'LLP', 'PLLC', 'PC',
+        'COMPANY', 'PROPERTIES', 'REALTY', 'HOLDINGS', 'ENTERPRISES',
+        'INVESTMENTS', 'DEVELOPMENT', 'MANAGEMENT', 'FOUNDATION'
+    ]
+    
+    # Weak indicators - only reject if NOT in lastname,firstname format
+    # These could be last names: CHURCH, BANKS, GRANT, TEMPLE, etc.
+    weak_indicators = [
+        'TRUST', 'ESTATE', 'ASSOCIATES', 'PARTNERS', 'PARTNERSHIP',
+        'GROUP', 'CAPITAL', 'FUND',
+        'HOUSING', 'AUTHORITY', 'BANK', 'GRID', 'EDISON', 'UTILITY',
+        'CITY', 'STATE', 'COUNTY', 'FEDERAL', 'MUNICIPAL', 'NATIONAL',
+        'CHURCH', 'TEMPLE', 'SYNAGOGUE', 'MOSQUE', 'CONGREGATION',
+        'SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HOSPITAL', 'MEDICAL',
+        'ASSOCIATION', 'SOCIETY', 'CLUB', 'ORGANIZATION', 'COMMITTEE'
+    ]
+    
+    # Always check strong indicators
+    for word in words:
+        if word in strong_indicators:
+            return None, None, None
+    
+    # Only check weak indicators if it's NOT a simple lastname,firstname format
+    if not is_lastname_firstname_format:
+        for word in words:
+            if word in weak_indicators:
+                return None, None, None
     
     # Handle "LAST, FIRST MIDDLE" format
     if ',' in name:
