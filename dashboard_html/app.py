@@ -34,12 +34,44 @@ from auth_routes import auth_bp
 from auth_service import login_required, validate_session
 app.register_blueprint(auth_bp)
 
-# Activity logging - disabled for now (file not deployed)
-# from activity_service import (
-#     log_activity, log_page_view, log_search, log_export, log_error, log_api_call,
-#     ActivityType, ActivityCategory,
-#     get_activity_logs, get_activity_stats, get_recent_logins, get_recent_errors
-# )
+# Activity logging - try to import, use stubs if not available
+try:
+    from activity_service import (
+        log_activity, log_page_view, log_search, log_export, log_error, log_api_call,
+        ActivityType, ActivityCategory,
+        get_activity_logs, get_activity_stats, get_recent_logins, get_recent_errors
+    )
+    ACTIVITY_LOGGING_ENABLED = True
+except ImportError:
+    # Create stub functions that do nothing
+    ACTIVITY_LOGGING_ENABLED = False
+    def log_activity(*args, **kwargs): pass
+    def log_page_view(*args, **kwargs): pass
+    def log_search(*args, **kwargs): pass
+    def log_export(*args, **kwargs): pass
+    def log_error(*args, **kwargs): pass
+    def log_api_call(*args, **kwargs): pass
+    def get_activity_logs(*args, **kwargs): return []
+    def get_activity_stats(*args, **kwargs): return {}
+    def get_recent_logins(*args, **kwargs): return []
+    def get_recent_errors(*args, **kwargs): return []
+    
+    # Create stub classes
+    class ActivityType:
+        ADMIN_ACTIVITY_VIEW = 'admin_activity_view'
+        BUTTON_CLICK = 'button_click'
+        SECTION_CLICK = 'section_click'
+        TAB_SWITCH = 'tab_switch'
+        FILTER_CHANGE = 'filter_change'
+        FORM_SUBMIT = 'form_submit'
+        SEARCH = 'search'
+        EXPORT = 'export'
+        DATA_VIEW = 'data_view'
+        ERROR = 'error'
+    
+    class ActivityCategory:
+        ADMIN = 'admin'
+        INTERACTION = 'interaction'
 
 # Simple in-memory cache (can upgrade to Redis later)
 cache = Cache(app, config={
@@ -4693,6 +4725,208 @@ def api_bulk_enrich():
         
     except Exception as e:
         print(f"Bulk enrichment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# PERMIT CONTACT ENRICHMENT APIs
+# ============================================================================
+
+@app.route('/api/enrichment/permit-contacts/<bbl>')
+@login_required
+def api_get_enrichable_permit_contacts(bbl):
+    """
+    Get list of permit contacts that can be enriched for a building.
+    Shows which are already enriched and whether user has access.
+    """
+    try:
+        from enrichment_service import get_enrichable_permit_contacts, get_enriched_contacts_for_building
+        
+        user_id = g.user['id']
+        
+        # Get enrichable contacts from permits
+        enrichable = get_enrichable_permit_contacts(bbl, user_id)
+        
+        # Get already enriched contacts with user access info
+        enriched = get_enriched_contacts_for_building(bbl, user_id)
+        
+        return jsonify({
+            'success': True,
+            'enrichable_contacts': enrichable,
+            'enriched_contacts': enriched,
+            'cost_per_enrichment': 0.50,  # Single lookup rate
+            'is_admin': g.user.get('is_admin', False)
+        })
+        
+    except Exception as e:
+        print(f"Get permit contacts error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/permit-contact', methods=['POST'])
+@login_required
+def api_enrich_permit_contact():
+    """
+    Enrich a single permit contact (applicant/permittee).
+    
+    POST body: {
+        bbl: string,
+        building_id: int (optional),
+        permit_id: int (optional),
+        contact_name: string,
+        contact_type: string ('applicant', 'permittee', 'owner'),
+        license_number: string (optional),
+        license_type: string (optional),
+        original_phone: string (optional)
+    }
+    
+    Returns enriched phone/email data.
+    Charges $0.50 per enrichment (or free if already enriched by another user).
+    """
+    try:
+        from enrichment_service import (
+            enrich_permit_contact, 
+            check_permit_contact_enrichment
+        )
+        from stripe_service import charge_enrichment_fee
+        
+        data = request.get_json()
+        
+        bbl = data.get('bbl')
+        building_id = data.get('building_id')
+        permit_id = data.get('permit_id')
+        contact_name = data.get('contact_name')
+        contact_type = data.get('contact_type', 'applicant')
+        license_number = data.get('license_number')
+        license_type = data.get('license_type')
+        original_phone = data.get('original_phone')
+        
+        if not bbl or not contact_name:
+            return jsonify({'success': False, 'error': 'BBL and contact_name required'}), 400
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        
+        # Check if already enriched and user has access
+        already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
+            bbl, contact_name, contact_type, user_id
+        )
+        
+        if already_enriched and user_has_access:
+            return jsonify({
+                'success': True,
+                'data': existing_data,
+                'charged': False,
+                'message': 'Contact already unlocked'
+            })
+        
+        # Need to charge if:
+        # 1. Not already enriched (new lookup), or
+        # 2. Already enriched but user hasn't paid to unlock
+        need_to_charge = not is_admin and (not already_enriched or not user_has_access)
+        
+        # Perform enrichment (will use cached data if available, or call API)
+        success, enrichment_data, message = enrich_permit_contact(
+            bbl, building_id, permit_id, contact_name, contact_type,
+            license_number, license_type, original_phone, user_id
+        )
+        
+        if success:
+            # Charge if needed
+            charged = False
+            charge_id = 'admin_free' if is_admin else None
+            
+            if need_to_charge:
+                # Get building_id for charge record
+                if not building_id:
+                    with DatabaseConnection() as cur:
+                        cur.execute("SELECT id FROM buildings WHERE bbl = %s", (bbl,))
+                        result = cur.fetchone()
+                        building_id = result['id'] if result else None
+                
+                charge_success, charge_msg, charge_id = charge_enrichment_fee(
+                    user_id, building_id or 0, contact_name, is_batch=False
+                )
+                charged = charge_success
+                
+                if not charge_success:
+                    print(f"WARNING: Permit contact enrichment succeeded but charge failed: {charge_msg}")
+            
+            return jsonify({
+                'success': True,
+                'data': enrichment_data,
+                'charged': charged,
+                'charge_id': charge_id,
+                'message': message
+            })
+        else:
+            return jsonify({'success': False, 'error': message}), 400
+            
+    except Exception as e:
+        print(f"Permit contact enrichment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/building/<bbl>/enriched-contacts')
+def api_get_building_enriched_contacts(bbl):
+    """
+    Get all enriched contacts for a building (for Contacts tab).
+    Returns enriched permit contacts + owner enrichments.
+    Only shows full data for unlocked contacts.
+    """
+    try:
+        from enrichment_service import get_enriched_contacts_for_building
+        
+        # Get user ID if logged in
+        user_id = None
+        if hasattr(g, 'user') and g.user:
+            user_id = g.user['id']
+        
+        # Get enriched permit contacts
+        enriched_permit_contacts = get_enriched_contacts_for_building(bbl, user_id)
+        
+        # Also get owner enrichments from buildings table
+        owner_enrichments = []
+        if user_id:
+            with DatabaseConnection() as cur:
+                # Get building ID
+                cur.execute("SELECT id FROM buildings WHERE bbl = %s", (bbl,))
+                building = cur.fetchone()
+                
+                if building:
+                    # Get user's owner enrichments
+                    cur.execute("""
+                        SELECT owner_name_searched, enriched_phones, enriched_emails, enriched_at
+                        FROM user_enrichments
+                        WHERE user_id = %s AND building_id = %s
+                    """, (user_id, building['id']))
+                    
+                    for row in cur.fetchall():
+                        owner_enrichments.append({
+                            'name': row['owner_name_searched'],
+                            'type': 'owner',
+                            'enriched': True,
+                            'has_access': True,
+                            'phones': row['enriched_phones'] or [],
+                            'emails': row['enriched_emails'] or [],
+                            'enriched_at': str(row['enriched_at']) if row['enriched_at'] else None
+                        })
+        
+        return jsonify({
+            'success': True,
+            'permit_contacts': enriched_permit_contacts,
+            'owner_contacts': owner_enrichments,
+            'logged_in': user_id is not None
+        })
+        
+    except Exception as e:
+        print(f"Get building enriched contacts error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500

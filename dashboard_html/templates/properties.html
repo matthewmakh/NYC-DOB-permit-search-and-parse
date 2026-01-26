@@ -367,6 +367,7 @@
                             <label><input type="checkbox" name="export_field" value="all_contacts"> All Contacts (Name, Role, Phone)</label>
                             <label><input type="checkbox" name="export_field" value="all_contact_phones"> All Contact Phones</label>
                             <label><input type="checkbox" name="export_field" value="contact_names"> Contact Names Only</label>
+                            <label><input type="checkbox" name="export_field" value="enriched_permit_contacts"> Enriched Permit Contacts (unlocked)</label>
                         </div>
                         <div class="field-group">
                             <h5>💰 Financial</h5>
@@ -380,6 +381,25 @@
                             <label><input type="checkbox" name="export_field" value="permit_count"> Permit Count</label>
                             <label><input type="checkbox" name="export_field" value="violation_count"> Violation Count</label>
                         </div>
+                    </div>
+                </div>
+                
+                <!-- Enrichment Add-on Section -->
+                <div class="export-enrichment-section">
+                    <div class="enrichment-toggle">
+                        <label class="enrichment-checkbox">
+                            <input type="checkbox" id="exportEnrichContacts" onchange="updateEnrichmentEstimate()">
+                            <span class="checkbox-label">
+                                📞 <strong>Enrich contractor contacts</strong> (+$0.35/property)
+                            </span>
+                        </label>
+                        <p class="enrichment-description">
+                            Look up phone numbers and emails for permit applicants/contractors.
+                            Only charged for new enrichments - previously unlocked contacts are free.
+                        </p>
+                    </div>
+                    <div id="enrichmentEstimate" class="enrichment-estimate" style="display: none;">
+                        <div class="estimate-loading">Calculating enrichment cost...</div>
                     </div>
                 </div>
                 

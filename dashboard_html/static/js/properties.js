@@ -934,6 +934,57 @@ async function confirmBulkEnrich() {
     }
 }
 
+// ==========================================
+// EXPORT ENRICHMENT FUNCTIONS
+// ==========================================
+
+/**
+ * Update enrichment cost estimate when checkbox is toggled
+ */
+async function updateEnrichmentEstimate() {
+    const checkbox = document.getElementById('exportEnrichContacts');
+    const estimateDiv = document.getElementById('enrichmentEstimate');
+    
+    if (!checkbox.checked) {
+        estimateDiv.style.display = 'none';
+        return;
+    }
+    
+    estimateDiv.style.display = 'block';
+    estimateDiv.innerHTML = '<div class="estimate-loading">⏳ Calculating enrichment cost...</div>';
+    
+    try {
+        // Get count of properties in current filter
+        const totalCount = Math.min(state.pagination.total_count || 0, 10000);
+        
+        // Estimate: assume ~60% of properties have enrichable contacts
+        const estimatedEnrichable = Math.round(totalCount * 0.6);
+        const estimatedCost = Math.max(estimatedEnrichable * 0.35, 0.50);
+        
+        estimateDiv.innerHTML = `
+            <div class="estimate-result">
+                <div class="estimate-row">
+                    <span>Properties to export:</span>
+                    <strong>${formatNumber(totalCount)}</strong>
+                </div>
+                <div class="estimate-row">
+                    <span>Est. enrichable contacts:</span>
+                    <strong>~${formatNumber(estimatedEnrichable)}</strong>
+                </div>
+                <div class="estimate-row estimate-total">
+                    <span>Max enrichment cost:</span>
+                    <strong>$${estimatedCost.toFixed(2)}</strong>
+                </div>
+                <p class="estimate-note">
+                    <small>💡 You'll only be charged for new enrichments. Previously unlocked contacts are free.</small>
+                </p>
+            </div>
+        `;
+    } catch (error) {
+        estimateDiv.innerHTML = '<div class="estimate-error">Failed to calculate estimate</div>';
+    }
+}
+
 // Make functions globally available
 window.viewProperty = viewProperty;
 window.viewOwnerPortfolio = viewOwnerPortfolio;
@@ -945,5 +996,4 @@ window.clearFilters = clearFilters;
 window.showBulkEnrichModal = showBulkEnrichModal;
 window.closeBulkEnrichModal = closeBulkEnrichModal;
 window.confirmBulkEnrich = confirmBulkEnrich;
-
-console.log('🏢 Properties Intelligence loaded');
+window.updateEnrichmentEstimate = updateEnrichmentEstimate;

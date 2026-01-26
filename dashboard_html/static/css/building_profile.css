@@ -2655,3 +2655,209 @@
     margin: 0 0 0.75rem 0;
     font-size: 14px;
 }
+/* ============================================
+   PERMIT CONTACT ENRICHMENT STYLES
+   ============================================ */
+
+/* Enrich button in permit modal */
+.enrich-contact-section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.enrich-contact-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.enrich-contact-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.enrich-contact-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.enrich-contact-btn .enrich-cost {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+}
+
+.enrich-success {
+    color: #4ade80;
+    font-size: 14px;
+    padding: 8px 0;
+}
+
+.enrich-error {
+    color: #f87171;
+    font-size: 13px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: rgba(248, 113, 113, 0.1);
+    border-radius: 6px;
+}
+
+/* Loading spinner */
+.loading-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 0.8s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Enriched contact data in permit modal */
+.enriched-contact-data {
+    margin: 12px 0;
+    padding: 12px;
+    background: rgba(74, 222, 128, 0.1);
+    border-radius: 8px;
+    border: 1px solid rgba(74, 222, 128, 0.2);
+}
+
+.enriched-phone-item,
+.enriched-email-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    color: #e2e8f0;
+}
+
+.enriched-phone-item .phone-number,
+.enriched-email-item .email-address {
+    color: #a5f3fc;
+    text-decoration: none;
+}
+
+.enriched-phone-item .phone-type,
+.phone-type-badge {
+    font-size: 11px;
+    background: rgba(147, 197, 253, 0.2);
+    color: #93c5fd;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: capitalize;
+}
+
+/* Contacts Tab - Enriched Section */
+.contacts-section {
+    margin-bottom: 24px;
+}
+
+.contacts-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 16px;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.enriched-contacts-section .contacts-section-title {
+    color: #4ade80;
+}
+
+.contacts-list.enriched-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Enriched contact card */
+.enriched-contact-card {
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.1), rgba(34, 197, 94, 0.05));
+    border: 1px solid rgba(74, 222, 128, 0.25);
+}
+
+.enriched-contact-card .contact-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.verified-badge {
+    background: linear-gradient(135deg, #4ade80, #22c55e);
+    color: white;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.enriched-contact-card .enriched-phone,
+.enriched-contact-card .enriched-email {
+    padding: 4px 0;
+}
+
+.enriched-contact-card .enriched-phone a,
+.enriched-contact-card .enriched-email a {
+    color: #a5f3fc;
+    text-decoration: none;
+}
+
+.enriched-contact-card .enriched-phone a:hover,
+.enriched-contact-card .enriched-email a:hover {
+    text-decoration: underline;
+}
+
+.contact-enriched-date {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-top: 8px;
+}
+
+/* Locked contact card */
+.locked-contact {
+    opacity: 0.8;
+    border-style: dashed;
+}
+
+.contact-locked {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #9ca3af;
+}
+
+.unlock-btn {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    border: none;
+    color: white;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: 8px;
+}
+
+.unlock-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+}

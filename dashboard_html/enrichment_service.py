@@ -471,3 +471,381 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
     finally:
         cur.close()
         conn.close()
+
+# ============================================================================
+# PERMIT CONTACT ENRICHMENT FUNCTIONS
+# ============================================================================
+
+def check_permit_contact_enrichment(bbl, contact_name, contact_type, user_id=None):
+    """
+    Check if a permit contact has already been enriched.
+    Returns: (already_enriched, enrichment_data, user_has_access)
+    
+    - If enriched by anyone, return the data
+    - If user_id provided, check if THIS user has unlocked access
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Check if this contact has been enriched
+        cur.execute("""
+            SELECT id, enriched_phones, enriched_emails, first_enriched_by, first_enriched_at
+            FROM permit_contact_enrichments
+            WHERE bbl = %s AND UPPER(contact_name) = UPPER(%s) AND contact_type = %s
+        """, (bbl, contact_name, contact_type))
+        
+        enrichment = cur.fetchone()
+        
+        if not enrichment:
+            return False, None, False
+        
+        # Check if this user has unlocked access
+        user_has_access = False
+        if user_id:
+            # First enricher always has access
+            if enrichment['first_enriched_by'] == user_id:
+                user_has_access = True
+            else:
+                # Check if they paid to unlock
+                cur.execute("""
+                    SELECT id FROM user_permit_contact_unlocks
+                    WHERE user_id = %s AND enrichment_id = %s
+                """, (user_id, enrichment['id']))
+                user_has_access = cur.fetchone() is not None
+            
+            # Check if admin (always has access)
+            if not user_has_access:
+                cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+                user = cur.fetchone()
+                user_has_access = user and user['is_admin']
+        
+        enrichment_data = {
+            'id': enrichment['id'],
+            'phones': enrichment['enriched_phones'] or [],
+            'emails': enrichment['enriched_emails'] or [],
+            'enriched_at': str(enrichment['first_enriched_at']) if enrichment['first_enriched_at'] else None
+        }
+        
+        return True, enrichment_data, user_has_access
+        
+    finally:
+        cur.close()
+        conn.close()
+
+
+def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_type, 
+                          license_number, license_type, original_phone, user_id):
+    """
+    Enrich a permit contact (applicant/permittee) and store results.
+    Returns: (success, data, message)
+    
+    Logic:
+    1. Check if already enriched - if yes, just grant user access
+    2. If not enriched, call Enformion API
+    3. Store enrichment data
+    4. Grant user access
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Check if already enriched
+        already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
+            bbl, contact_name, contact_type, user_id
+        )
+        
+        if already_enriched and user_has_access:
+            return True, existing_data, "Contact already unlocked"
+        
+        if already_enriched and existing_data:
+            # Data exists but user hasn't paid - grant access
+            cur.execute("""
+                INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, enrichment_id) DO NOTHING
+            """, (user_id, existing_data['id']))
+            conn.commit()
+            return True, existing_data, "Contact unlocked"
+        
+        # Need to call API - parse the contact name
+        first_name, middle_name, last_name = parse_owner_name(contact_name)
+        
+        if not first_name or not last_name:
+            return False, None, "Could not parse name - may be a business entity"
+        
+        # Get address from building for better match
+        cur.execute("SELECT address FROM buildings WHERE bbl = %s", (bbl,))
+        building = cur.fetchone()
+        address = building['address'] if building else ""
+        
+        # Call Enformion API
+        success, api_response, error = call_enformion_api(
+            first_name, last_name, "", "New York, NY", middle_name
+        )
+        
+        if not success:
+            return False, None, f"Enrichment API error: {error}"
+        
+        # Extract contact info
+        phones, emails, person_id = extract_contact_info(api_response)
+        
+        if not phones and not emails:
+            api_message = api_response.get('message', '') if isinstance(api_response, dict) else ''
+            if 'no' in api_message.lower() and 'match' in api_message.lower():
+                return False, None, "No matching records found for this person."
+            return False, None, "No contact information found for this person."
+        
+        # Store enrichment
+        cur.execute("""
+            INSERT INTO permit_contact_enrichments 
+            (bbl, building_id, permit_id, contact_name, contact_type, license_number, 
+             license_type, original_phone, enriched_phones, enriched_emails, 
+             enriched_person_id, enriched_raw_response, first_enriched_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (bbl, contact_name, contact_type) 
+            DO UPDATE SET 
+                enriched_phones = EXCLUDED.enriched_phones,
+                enriched_emails = EXCLUDED.enriched_emails,
+                enriched_person_id = EXCLUDED.enriched_person_id,
+                enriched_raw_response = EXCLUDED.enriched_raw_response
+            RETURNING id
+        """, (
+            bbl, building_id, permit_id, contact_name, contact_type, license_number,
+            license_type, original_phone, json.dumps(phones), json.dumps(emails),
+            person_id, json.dumps(api_response), user_id
+        ))
+        
+        enrichment_id = cur.fetchone()['id']
+        
+        # Grant user access
+        cur.execute("""
+            INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, enrichment_id) DO NOTHING
+        """, (user_id, enrichment_id))
+        
+        conn.commit()
+        
+        return True, {
+            'id': enrichment_id,
+            'phones': phones,
+            'emails': emails,
+            'person_id': person_id,
+            'from_api': True
+        }, "Contact information found"
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"Permit contact enrichment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, str(e)
+        
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_enriched_contacts_for_building(bbl, user_id=None):
+    """
+    Get all enriched permit contacts for a building.
+    Only returns contact data for contacts the user has access to.
+    Returns list of contacts with enrichment data (or locked indicator)
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Check if user is admin
+        is_admin = False
+        if user_id:
+            cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+            user = cur.fetchone()
+            is_admin = user and user['is_admin']
+        
+        # Get all enrichments for this building
+        cur.execute("""
+            SELECT 
+                pce.id,
+                pce.contact_name,
+                pce.contact_type,
+                pce.license_number,
+                pce.license_type,
+                pce.original_phone,
+                pce.enriched_phones,
+                pce.enriched_emails,
+                pce.first_enriched_by,
+                pce.first_enriched_at,
+                upcu.user_id as unlocked_by_user
+            FROM permit_contact_enrichments pce
+            LEFT JOIN user_permit_contact_unlocks upcu 
+                ON pce.id = upcu.enrichment_id AND upcu.user_id = %s
+            WHERE pce.bbl = %s
+            ORDER BY pce.first_enriched_at DESC
+        """, (user_id or 0, bbl))
+        
+        enrichments = cur.fetchall()
+        
+        contacts = []
+        for e in enrichments:
+            # Check if user has access
+            has_access = is_admin or e['first_enriched_by'] == user_id or e['unlocked_by_user'] is not None
+            
+            contact = {
+                'id': e['id'],
+                'name': e['contact_name'],
+                'type': e['contact_type'],
+                'license_number': e['license_number'],
+                'license_type': e['license_type'],
+                'original_phone': e['original_phone'],
+                'enriched': True,
+                'has_access': has_access,
+                'enriched_at': str(e['first_enriched_at']) if e['first_enriched_at'] else None
+            }
+            
+            if has_access:
+                contact['phones'] = e['enriched_phones'] or []
+                contact['emails'] = e['enriched_emails'] or []
+            else:
+                # Show locked indicator
+                contact['phones'] = None
+                contact['emails'] = None
+                contact['locked'] = True
+            
+            contacts.append(contact)
+        
+        return contacts
+        
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_enrichable_permit_contacts(bbl, user_id=None):
+    """
+    Get list of permit contacts that can be enriched for a building.
+    Returns contacts from permits that have names but may not have phone numbers.
+    Marks which ones are already enriched/unlocked.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Get already enriched contacts for this building
+        cur.execute("""
+            SELECT UPPER(contact_name) as name, contact_type
+            FROM permit_contact_enrichments
+            WHERE bbl = %s
+        """, (bbl,))
+        enriched = {(r['name'], r['contact_type']) for r in cur.fetchall()}
+        
+        # Get user's unlocked contacts
+        unlocked_ids = set()
+        if user_id:
+            cur.execute("""
+                SELECT pce.id
+                FROM permit_contact_enrichments pce
+                LEFT JOIN user_permit_contact_unlocks upcu 
+                    ON pce.id = upcu.enrichment_id AND upcu.user_id = %s
+                WHERE pce.bbl = %s AND (pce.first_enriched_by = %s OR upcu.id IS NOT NULL)
+            """, (user_id, bbl, user_id))
+            unlocked_ids = {r['id'] for r in cur.fetchall()}
+        
+        # Get all contacts from permits for this building
+        cur.execute("""
+            SELECT DISTINCT
+                p.id as permit_id,
+                p.permit_no,
+                p.applicant,
+                p.applicant_license as applicant_license_number,
+                p.permittee_business_name,
+                p.permittee_license_number,
+                p.permittee_license_type,
+                p.permittee_phone,
+                p.owner_business_name,
+                p.owner_phone
+            FROM permits p
+            WHERE p.bbl = %s
+            ORDER BY p.issue_date DESC NULLS LAST
+        """, (bbl,))
+        
+        permits = cur.fetchall()
+        contacts = []
+        seen_names = set()
+        
+        for p in permits:
+            # Applicant
+            if p['applicant']:
+                name = p['applicant'].strip()
+                key = (name.upper(), 'applicant')
+                if name.upper() not in seen_names:
+                    first, _, last = parse_owner_name(name)
+                    is_enrichable = first and last  # Must be a person name
+                    is_enriched = key in enriched
+                    
+                    contacts.append({
+                        'permit_id': p['permit_id'],
+                        'permit_no': p['permit_no'],
+                        'name': name,
+                        'type': 'applicant',
+                        'license_number': p['applicant_license_number'],
+                        'license_type': None,
+                        'existing_phone': None,
+                        'is_enrichable': is_enrichable,
+                        'is_enriched': is_enriched,
+                        'is_unlocked': is_enriched  # Will be updated below
+                    })
+                    seen_names.add(name.upper())
+            
+            # Permittee
+            if p['permittee_business_name']:
+                name = p['permittee_business_name'].strip()
+                key = (name.upper(), 'permittee')
+                if name.upper() not in seen_names:
+                    first, _, last = parse_owner_name(name)
+                    is_enrichable = first and last
+                    is_enriched = key in enriched
+                    
+                    contacts.append({
+                        'permit_id': p['permit_id'],
+                        'permit_no': p['permit_no'],
+                        'name': name,
+                        'type': 'permittee',
+                        'license_number': p['permittee_license_number'],
+                        'license_type': p['permittee_license_type'],
+                        'existing_phone': p['permittee_phone'],
+                        'is_enrichable': is_enrichable,
+                        'is_enriched': is_enriched,
+                        'is_unlocked': is_enriched
+                    })
+                    seen_names.add(name.upper())
+            
+            # Owner from permit
+            if p['owner_business_name']:
+                name = p['owner_business_name'].strip()
+                key = (name.upper(), 'owner')
+                if name.upper() not in seen_names:
+                    first, _, last = parse_owner_name(name)
+                    is_enrichable = first and last
+                    is_enriched = key in enriched
+                    
+                    contacts.append({
+                        'permit_id': p['permit_id'],
+                        'permit_no': p['permit_no'],
+                        'name': name,
+                        'type': 'owner',
+                        'license_number': None,
+                        'license_type': None,
+                        'existing_phone': p['owner_phone'],
+                        'is_enrichable': is_enrichable,
+                        'is_enriched': is_enriched,
+                        'is_unlocked': is_enriched
+                    })
+                    seen_names.add(name.upper())
+        
+        return contacts
+        
+    finally:
+        cur.close()
+        conn.close()

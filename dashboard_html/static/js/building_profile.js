@@ -1430,10 +1430,13 @@ function showPermitDetails(index) {
     
     // Applicant - only if has data
     if (permit.applicant) {
+        const applicantEnrichBtn = buildEnrichButton(permit, permit.applicant, 'applicant');
         html += `
             <div class="detail-section">
                 <h3>Applicant</h3>
                 ${addRow('Name', permit.applicant)}
+                <div id="applicant-enriched-data-${permit.id}"></div>
+                ${applicantEnrichBtn}
             </div>`;
     }
     
@@ -1447,6 +1450,8 @@ function showPermitDetails(index) {
             const licenseType = permit.permittee_license_type || '';
             licenseDisplay = `<a href="#" onclick="showLicenseInfo('${permit.permittee_license_number}', '${licenseType}'); return false;" class="license-link">${permit.permittee_license_number}</a>`;
         }
+        const permitteeEnrichBtn = buildEnrichButton(permit, permit.permittee_business_name, 'permittee', 
+            permit.permittee_license_number, permit.permittee_license_type, permit.permittee_phone);
         html += `
             <div class="detail-section">
                 <h3>Permittee</h3>
@@ -1454,16 +1459,21 @@ function showPermitDetails(index) {
                 ${addRow('License Type', permit.permittee_license_type)}
                 ${permit.permittee_license_number ? `<div class="detail-row"><span>License #</span><span>${licenseDisplay}</span></div>` : ''}
                 ${addRow('Phone', permit.permittee_phone ? formatPhoneNumber(permit.permittee_phone) : null)}
+                <div id="permittee-enriched-data-${permit.id}"></div>
+                ${permitteeEnrichBtn}
             </div>`;
     }
     
     // Owner - only if has data
     if (permit.owner_business_name || permit.owner_phone) {
+        const ownerEnrichBtn = buildEnrichButton(permit, permit.owner_business_name, 'owner', null, null, permit.owner_phone);
         html += `
             <div class="detail-section">
                 <h3>Owner</h3>
                 ${addRow('Business Name', permit.owner_business_name)}
                 ${addRow('Phone', permit.owner_phone ? formatPhoneNumber(permit.owner_phone) : null)}
+                <div id="owner-enriched-data-${permit.id}"></div>
+                ${ownerEnrichBtn}
             </div>`;
     }
     
@@ -1496,6 +1506,169 @@ function showPermitDetails(index) {
     
     document.getElementById('permit-modal').innerHTML = html;
     document.getElementById('permit-modal').style.display = 'flex';
+}
+
+/**
+ * Build an enrich button for a contact in the permit modal
+ */
+function buildEnrichButton(permit, contactName, contactType, licenseNumber = null, licenseType = null, existingPhone = null) {
+    if (!contactName) return '';
+    
+    // Check if this looks like a person name (not a business)
+    const businessIndicators = ['LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'COMPANY', 'PROPERTIES', 'REALTY'];
+    const upperName = contactName.toUpperCase();
+    const isLikelyBusiness = businessIndicators.some(ind => upperName.includes(ind));
+    
+    if (isLikelyBusiness) {
+        return ''; // Don't show enrich button for businesses
+    }
+    
+    const bbl = buildingData?.building?.bbl || BBL;
+    const buildingId = buildingData?.building?.id;
+    const permitId = permit.id;
+    
+    // Create unique button ID
+    const buttonId = `enrich-btn-${contactType}-${permitId}`;
+    
+    return `
+        <div class="enrich-contact-section" id="enrich-section-${contactType}-${permitId}">
+            <button class="enrich-contact-btn" id="${buttonId}" 
+                onclick="enrichPermitContact('${bbl}', ${buildingId || 'null'}, ${permitId}, '${contactName.replace(/'/g, "\\'")}', '${contactType}', '${licenseNumber || ''}', '${licenseType || ''}', '${existingPhone || ''}', this)">
+                📞 Get Contact Info
+                <span class="enrich-cost">$0.50</span>
+            </button>
+        </div>
+    `;
+}
+
+/**
+ * Enrich a permit contact (called from the enrich button)
+ */
+async function enrichPermitContact(bbl, buildingId, permitId, contactName, contactType, licenseNumber, licenseType, existingPhone, button) {
+    // Disable button and show loading
+    button.disabled = true;
+    button.innerHTML = '<span class="loading-spinner"></span> Enriching...';
+    
+    try {
+        const response = await fetch('/api/enrichment/permit-contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bbl: bbl,
+                building_id: buildingId,
+                permit_id: permitId,
+                contact_name: contactName,
+                contact_type: contactType,
+                license_number: licenseNumber || null,
+                license_type: licenseType || null,
+                original_phone: existingPhone || null
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Show enriched data
+            const dataContainer = document.getElementById(`${contactType}-enriched-data-${permitId}`);
+            if (dataContainer) {
+                dataContainer.innerHTML = renderEnrichedContactData(data.data, contactName);
+            }
+            
+            // Update button to show success
+            button.outerHTML = `
+                <div class="enrich-success">
+                    ✅ Contact info unlocked${data.charged ? ' - $0.50 charged' : ''}
+                </div>
+            `;
+            
+            // Refresh contacts tab to show new enriched contact
+            if (typeof renderContactsTab === 'function') {
+                await refreshEnrichedContacts();
+            }
+        } else {
+            // Show error
+            button.disabled = false;
+            button.innerHTML = `📞 Get Contact Info <span class="enrich-cost">$0.50</span>`;
+            
+            // Show error message
+            const section = button.closest('.enrich-contact-section');
+            if (section) {
+                section.insertAdjacentHTML('beforeend', `
+                    <div class="enrich-error">${data.error || 'Enrichment failed'}</div>
+                `);
+            }
+        }
+    } catch (error) {
+        console.error('Enrichment error:', error);
+        button.disabled = false;
+        button.innerHTML = `📞 Get Contact Info <span class="enrich-cost">$0.50</span>`;
+    }
+}
+
+/**
+ * Render enriched contact data in the permit modal
+ */
+function renderEnrichedContactData(data, contactName) {
+    if (!data) return '';
+    
+    let html = '<div class="enriched-contact-data">';
+    
+    // Phones
+    if (data.phones && data.phones.length > 0) {
+        html += '<div class="enriched-phones">';
+        data.phones.forEach(phone => {
+            html += `
+                <div class="enriched-phone-item">
+                    <span class="phone-icon">📞</span>
+                    <span class="phone-number">${formatPhoneNumber(phone.number)}</span>
+                    ${phone.type ? `<span class="phone-type">${phone.type}</span>` : ''}
+                    ${phone.is_valid === false ? `<span class="phone-invalid">⚠️</span>` : ''}
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    // Emails
+    if (data.emails && data.emails.length > 0) {
+        html += '<div class="enriched-emails">';
+        data.emails.forEach(email => {
+            html += `
+                <div class="enriched-email-item">
+                    <span class="email-icon">✉️</span>
+                    <a href="mailto:${email.email}" class="email-address">${email.email}</a>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+/**
+ * Refresh enriched contacts for the Contacts tab
+ */
+async function refreshEnrichedContacts() {
+    try {
+        const bbl = buildingData?.building?.bbl || BBL;
+        const response = await fetch(`/api/building/${bbl}/enriched-contacts`);
+        const data = await response.json();
+        
+        if (data.success) {
+            // Update buildingData with new enriched contacts
+            buildingData.enriched_contacts = {
+                permit_contacts: data.permit_contacts,
+                owner_contacts: data.owner_contacts
+            };
+            
+            // Re-render contacts tab
+            renderContactsTab();
+        }
+    } catch (error) {
+        console.error('Error refreshing enriched contacts:', error);
+    }
 }
 
 function closePermitModal() {
@@ -2106,46 +2279,202 @@ function renderContactsTab() {
     const { contacts } = buildingData;
     const container = document.getElementById('contacts-directory');
     
+    let html = '';
+    
+    // First, show enriched contacts (most valuable)
+    const enrichedContacts = buildingData.enriched_contacts || {};
+    const hasEnrichedContacts = (enrichedContacts.permit_contacts && enrichedContacts.permit_contacts.length > 0) ||
+                                 (enrichedContacts.owner_contacts && enrichedContacts.owner_contacts.length > 0);
+    
+    if (hasEnrichedContacts) {
+        html += '<div class="contacts-section enriched-contacts-section">';
+        html += '<h4 class="contacts-section-title">📞 Enriched Contacts <span class="enriched-badge">VERIFIED</span></h4>';
+        html += '<div class="contacts-list enriched-list">';
+        
+        // Owner enrichments
+        if (enrichedContacts.owner_contacts) {
+            enrichedContacts.owner_contacts.forEach(contact => {
+                html += renderEnrichedContactCard(contact, 'Property Owner');
+            });
+        }
+        
+        // Permit contact enrichments
+        if (enrichedContacts.permit_contacts) {
+            enrichedContacts.permit_contacts.forEach(contact => {
+                if (contact.has_access) {
+                    html += renderEnrichedContactCard(contact, getContactTypeLabel(contact.type));
+                } else if (contact.enriched) {
+                    // Show locked card
+                    html += `
+                        <div class="contact-card locked-contact">
+                            <div class="contact-name">${contact.name}</div>
+                            <div class="contact-role">${getContactTypeLabel(contact.type)}</div>
+                            <div class="contact-locked">
+                                🔒 Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+        }
+        
+        html += '</div></div>';
+    }
+    
+    // Then show permit contacts (from permit data)
     if (!contacts || contacts.length === 0) {
-        container.innerHTML = '<div class="no-data">No contacts available</div>';
-        return;
+        if (!hasEnrichedContacts) {
+            container.innerHTML = '<div class="no-data">No contacts available</div>';
+            return;
+        }
+    } else {
+        // Filter to only contacts with phone numbers or useful info
+        const usefulContacts = contacts.filter(c => c.phone || c.permit_count);
+        
+        if (usefulContacts.length > 0) {
+            html += '<div class="contacts-section permit-contacts-section">';
+            html += '<h4 class="contacts-section-title">👷 Contractors from Permits</h4>';
+            html += '<div class="contacts-list">';
+            
+            usefulContacts.forEach(contact => {
+                html += `
+                <div class="contact-card">
+                    <div class="contact-name">${contact.name}</div>
+                    <div class="contact-role">${contact.role}</div>
+                    ${contact.phone ? `
+                        <div class="contact-phone">
+                            📞 ${formatPhoneNumber(contact.phone)}
+                            ${contact.is_mobile ? ' <span class="mobile-badge">📱 Mobile</span>' : ''}
+                            ${contact.line_type ? ` <span class="line-type-badge">${contact.line_type}</span>` : ''}
+                        </div>
+                    ` : ''}
+                    ${contact.carrier ? `<div class="contact-carrier">Carrier: ${contact.carrier}</div>` : ''}
+                    ${contact.license ? `<div class="contact-license">License: ${contact.license}</div>` : ''}
+                    ${contact.permit_count ? `<div class="contact-permits">${formatNumber(contact.permit_count)} permit(s) filed</div>` : ''}
+                </div>`;
+            });
+            
+            html += '</div></div>';
+        } else if (!hasEnrichedContacts) {
+            html = `
+                <div class="no-data">
+                    <p>📋 <strong>${contacts.length} contractors</strong> have worked on this property</p>
+                    <p>Phone numbers not available in current dataset</p>
+                    <p><em>Tip: Click on a permit and use "Get Contact Info" to find phone numbers</em></p>
+                </div>`;
+        }
     }
     
-    // Filter to only contacts with phone numbers or useful info
-    const usefulContacts = contacts.filter(c => c.phone || c.permit_count);
+    container.innerHTML = html || '<div class="no-data">No contacts available</div>';
     
-    if (usefulContacts.length === 0) {
-        container.innerHTML = `
-            <div class="no-data">
-                <p>📋 <strong>${contacts.length} contractors</strong> have worked on this property</p>
-                <p>Phone numbers not available in current dataset</p>
-            </div>`;
-        return;
+    // Load enriched contacts if not already loaded
+    if (!buildingData.enriched_contacts) {
+        loadEnrichedContacts();
     }
+}
+
+/**
+ * Render an enriched contact card for the Contacts tab
+ */
+function renderEnrichedContactCard(contact, roleLabel) {
+    let html = `
+        <div class="contact-card enriched-contact-card">
+            <div class="contact-header">
+                <div class="contact-name">${contact.name}</div>
+                <span class="verified-badge">✓ Verified</span>
+            </div>
+            <div class="contact-role">${roleLabel}</div>
+    `;
     
-    let html = '<div class="contacts-list">';
-    
-    usefulContacts.forEach(contact => {
-        html += `
-        <div class="contact-card">
-            <div class="contact-name">${contact.name}</div>
-            <div class="contact-role">${contact.role}</div>
-            ${contact.phone ? `
-                <div class="contact-phone">
-                    📞 ${formatPhoneNumber(contact.phone)}
-                    ${contact.is_mobile ? ' <span class="mobile-badge">📱 Mobile</span>' : ''}
-                    ${contact.line_type ? ` <span class="line-type-badge">${contact.line_type}</span>` : ''}
+    // Show phones
+    if (contact.phones && contact.phones.length > 0) {
+        contact.phones.forEach(phone => {
+            html += `
+                <div class="contact-phone enriched-phone">
+                    📞 <a href="tel:${phone.number}">${formatPhoneNumber(phone.number)}</a>
+                    ${phone.type ? `<span class="phone-type-badge">${phone.type}</span>` : ''}
                 </div>
-            ` : ''}
-            ${contact.carrier ? `<div class="contact-carrier">Carrier: ${contact.carrier}</div>` : ''}
-            ${contact.license ? `<div class="contact-license">License: ${contact.license}</div>` : ''}
-            ${contact.permit_count ? `<div class="contact-permits">${formatNumber(contact.permit_count)} permit(s) filed</div>` : ''}
-        </div>`;
-    });
+            `;
+        });
+    }
+    
+    // Show emails
+    if (contact.emails && contact.emails.length > 0) {
+        contact.emails.forEach(email => {
+            html += `
+                <div class="contact-email enriched-email">
+                    ✉️ <a href="mailto:${email.email}">${email.email}</a>
+                </div>
+            `;
+        });
+    }
+    
+    // Show license info if available
+    if (contact.license_number) {
+        html += `
+            <div class="contact-license">
+                License: ${contact.license_number}${contact.license_type ? ` (${contact.license_type})` : ''}
+            </div>
+        `;
+    }
+    
+    // Show enriched date
+    if (contact.enriched_at) {
+        const date = new Date(contact.enriched_at);
+        html += `<div class="contact-enriched-date">Enriched: ${date.toLocaleDateString()}</div>`;
+    }
     
     html += '</div>';
-    container.innerHTML = html;
+    return html;
 }
+
+/**
+ * Get display label for contact type
+ */
+function getContactTypeLabel(type) {
+    const labels = {
+        'applicant': 'Permit Applicant',
+        'permittee': 'Licensed Contractor',
+        'owner': 'Property Owner',
+        'superintendent': 'Superintendent'
+    };
+    return labels[type] || type;
+}
+
+/**
+ * Load enriched contacts from API
+ */
+async function loadEnrichedContacts() {
+    try {
+        const bbl = buildingData?.building?.bbl || BBL;
+        const response = await fetch(`/api/building/${bbl}/enriched-contacts`);
+        const data = await response.json();
+        
+        if (data.success) {
+            buildingData.enriched_contacts = {
+                permit_contacts: data.permit_contacts,
+                owner_contacts: data.owner_contacts
+            };
+            
+            // Re-render if we got new data
+            if ((data.permit_contacts && data.permit_contacts.length > 0) ||
+                (data.owner_contacts && data.owner_contacts.length > 0)) {
+                renderContactsTab();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading enriched contacts:', error);
+    }
+}
+
+/**
+ * Unlock a permit contact that was enriched by another user
+ */
+async function unlockPermitContact(enrichmentId) {
+    // TODO: Implement unlock flow - similar to enrich but just grants access
+    alert('Contact unlock coming soon! For now, please re-enrich from the permit modal.');
+}
+
 
 // ============================================================================
 // UTILITY FUNCTIONS

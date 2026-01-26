@@ -1061,19 +1061,104 @@ body {
 }
 
 /* ==========================================
-   RESPONSIVE
+   EXPORT ENRICHMENT SECTION
    ========================================== */
 
-@media (max-width: 1200px) {
-    .main-container {
-        grid-template-columns: 280px 1fr;
-    }
-    
-    .properties-grid {
-        grid-template-columns: 1fr;
-    }
+.export-enrichment-section {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(37, 99, 235, 0.05));
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 12px;
 }
 
+.enrichment-toggle {
+    margin-bottom: 1rem;
+}
+
+.enrichment-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    cursor: pointer;
+}
+
+.enrichment-checkbox input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    margin-top: 2px;
+    accent-color: #3b82f6;
+}
+
+.enrichment-checkbox .checkbox-label {
+    font-size: 15px;
+    color: var(--text-primary);
+}
+
+.enrichment-description {
+    margin: 0.75rem 0 0 28px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.enrichment-estimate {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+}
+
+.estimate-loading {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.estimate-result {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.estimate-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.estimate-row strong {
+    color: var(--text-primary);
+}
+
+.estimate-row.estimate-total {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 16px;
+}
+
+.estimate-row.estimate-total strong {
+    color: #4ade80;
+}
+
+.estimate-note {
+    margin: 12px 0 0 0;
+    padding: 8px 12px;
+    background: rgba(74, 222, 128, 0.1);
+    border-radius: 6px;
+    font-size: 12px;
+    color: #4ade80;
+}
+
+.estimate-error {
+    text-align: center;
+    color: var(--danger);
+    font-size: 14px;
+}
+
+/* ==========================================
 @media (max-width: 768px) {
     .main-container {
         grid-template-columns: 1fr;
