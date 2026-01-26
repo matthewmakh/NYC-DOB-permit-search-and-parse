@@ -3496,6 +3496,312 @@ def api_properties_export():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/properties/export-with-enrichment', methods=['POST'])
+@login_required
+def api_properties_export_with_enrichment():
+    """
+    Export properties to CSV with permit contact enrichment.
+    This endpoint:
+    1. Gets properties matching filters
+    2. Finds enrichable permit contacts for each property
+    3. Enriches contacts (charges $0.35/property for NEW enrichments only)
+    4. Returns CSV with enriched contact data
+    
+    Charges are processed BEFORE data is returned.
+    Previously unlocked contacts are free.
+    """
+    import csv
+    from io import StringIO
+    from flask import Response
+    
+    try:
+        from enrichment_service import (
+            enrich_permit_contact, 
+            check_permit_contact_enrichment,
+            grant_permit_contact_access,
+            get_enrichable_permit_contacts
+        )
+        from stripe_service import charge_enrichment_fee
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        
+        # Get requested fields
+        fields_param = request.args.get('fields', '')
+        requested_fields = [f.strip() for f in fields_param.split(',') if f.strip()]
+        
+        if not requested_fields:
+            requested_fields = ['address', 'bbl', 'owner_name', 'enriched_permit_contacts']
+        
+        # Ensure enriched_permit_contacts is in the fields
+        if 'enriched_permit_contacts' not in requested_fields:
+            requested_fields.append('enriched_permit_contacts')
+        
+        with DatabaseConnection() as cur:
+            # Parse filter parameters (same as regular export)
+            search = request.args.get('search', '').strip()
+            owner = request.args.get('owner', '').strip()
+            min_value = request.args.get('min_value', type=float)
+            max_value = request.args.get('max_value', type=float)
+            min_sale_price = request.args.get('min_sale_price', type=float)
+            max_sale_price = request.args.get('max_sale_price', type=float)
+            sale_date_from = request.args.get('sale_date_from')
+            sale_date_to = request.args.get('sale_date_to')
+            cash_only = request.args.get('cash_only', '').lower() == 'true'
+            with_permits = request.args.get('with_permits', '').lower() == 'true'
+            min_permits = request.args.get('min_permits', type=int)
+            recent_permit_days = request.args.get('recent_permit_days', type=int)
+            borough = request.args.get('borough', type=int)
+            building_class = request.args.get('building_class', '').strip()
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            has_violations = request.args.get('has_violations')
+            recent_sale_days = request.args.get('recent_sale_days', type=int)
+            financing_min = request.args.get('financing_min', type=float)
+            financing_max = request.args.get('financing_max', type=float)
+            
+            # Build WHERE clauses (same as regular export - simplified for brevity)
+            where_clauses = []
+            params = []
+            
+            if search:
+                where_clauses.append("(b.address ILIKE %s OR b.bbl LIKE %s OR b.current_owner_name ILIKE %s)")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term, search_term])
+            
+            if owner:
+                where_clauses.append("(b.current_owner_name ILIKE %s OR b.owner_name_rpad ILIKE %s)")
+                owner_term = f"%{owner}%"
+                params.extend([owner_term, owner_term])
+            
+            if min_value is not None:
+                where_clauses.append("b.assessed_total_value >= %s")
+                params.append(min_value)
+            
+            if max_value is not None:
+                where_clauses.append("b.assessed_total_value <= %s")
+                params.append(max_value)
+            
+            if borough:
+                where_clauses.append("b.borough_code = %s")
+                params.append(str(borough))
+            
+            if min_units:
+                where_clauses.append("b.residential_units >= %s")
+                params.append(min_units)
+            
+            if max_units:
+                where_clauses.append("b.residential_units <= %s")
+                params.append(max_units)
+            
+            if with_permits or min_permits:
+                where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+            
+            # Build query (limit 10000)
+            where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+            query = f"""
+                SELECT b.id, b.bbl, b.address, b.borough_code, b.building_class,
+                       b.year_built, b.residential_units as units,
+                       b.current_owner_name as owner_name,
+                       b.assessed_total_value, b.sale_price, b.sale_date
+                FROM buildings b
+                WHERE {where_clause}
+                ORDER BY b.sale_date DESC NULLS LAST
+                LIMIT 10000
+            """
+            
+            cur.execute(query, params)
+            properties = cur.fetchall()
+            
+            print(f"[Bulk Export] Found {len(properties)} properties to export with enrichment")
+            
+            # Track enrichment results and charges
+            enriched_contacts_by_bbl = {}
+            total_charged = 0.0
+            new_enrichments_count = 0
+            already_unlocked_count = 0
+            failed_enrichments = []
+            
+            # Process each property's permit contacts
+            for prop in properties:
+                bbl = prop['bbl']
+                building_id = prop['id']
+                enriched_contacts_by_bbl[bbl] = []
+                
+                # Get enrichable contacts for this property
+                enrichable = get_enrichable_permit_contacts(bbl)
+                
+                for contact in enrichable:
+                    contact_name = contact.get('name')
+                    contact_type = contact.get('type', 'applicant')
+                    license_number = contact.get('license_number')
+                    license_type = contact.get('license_type')
+                    original_phone = contact.get('phone')
+                    permit_id = contact.get('permit_id')
+                    
+                    if not contact_name:
+                        continue
+                    
+                    # Check if already enriched and user has access
+                    already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
+                        bbl, contact_name, contact_type, user_id
+                    )
+                    
+                    if already_enriched and user_has_access:
+                        # Already have access - add to results, no charge
+                        already_unlocked_count += 1
+                        enriched_contacts_by_bbl[bbl].append({
+                            'name': contact_name,
+                            'type': contact_type,
+                            'phones': existing_data.get('phones', []),
+                            'emails': existing_data.get('emails', [])
+                        })
+                        continue
+                    
+                    # Need to enrich (or just grant access if already enriched)
+                    # For bulk: charge FIRST, then grant access
+                    need_to_charge = not is_admin
+                    
+                    if need_to_charge:
+                        # Charge for this enrichment ($0.35 for bulk)
+                        charge_success, charge_msg, charge_id = charge_enrichment_fee(
+                            user_id, building_id, contact_name, is_batch=True
+                        )
+                        
+                        if not charge_success:
+                            failed_enrichments.append({
+                                'bbl': bbl,
+                                'contact': contact_name,
+                                'error': f'Payment failed: {charge_msg}'
+                            })
+                            continue
+                        
+                        total_charged += 0.35
+                    else:
+                        charge_id = 'admin_free'
+                    
+                    # Now do the enrichment (with grant_access=True since we already charged)
+                    success, enrichment_data, message = enrich_permit_contact(
+                        bbl, building_id, permit_id, contact_name, contact_type,
+                        license_number, license_type, original_phone, user_id,
+                        grant_access=True  # Grant access since charge succeeded
+                    )
+                    
+                    if success:
+                        new_enrichments_count += 1
+                        enriched_contacts_by_bbl[bbl].append({
+                            'name': contact_name,
+                            'type': contact_type,
+                            'phones': enrichment_data.get('phones', []),
+                            'emails': enrichment_data.get('emails', [])
+                        })
+                    else:
+                        failed_enrichments.append({
+                            'bbl': bbl,
+                            'contact': contact_name,
+                            'error': message
+                        })
+            
+            print(f"[Bulk Export] Enrichment complete: {new_enrichments_count} new, {already_unlocked_count} already unlocked, {len(failed_enrichments)} failed. Total charged: ${total_charged:.2f}")
+            
+            # Build CSV with enriched data
+            output = StringIO()
+            
+            # Helper to format enriched contacts
+            def get_enriched_contacts_str(p):
+                bbl = p.get('bbl')
+                contacts = enriched_contacts_by_bbl.get(bbl, [])
+                if not contacts:
+                    return ''
+                
+                parts = []
+                for c in contacts:
+                    phones = [ph.get('number', '') for ph in c.get('phones', []) if ph.get('number')]
+                    emails = [em.get('email', '') for em in c.get('emails', []) if em.get('email')]
+                    contact_str = f"{c['name']} ({c['type']})"
+                    if phones:
+                        contact_str += f" Phone: {', '.join(phones[:2])}"
+                    if emails:
+                        contact_str += f" Email: {', '.join(emails[:2])}"
+                    parts.append(contact_str)
+                
+                return ' | '.join(parts)
+            
+            # Helper to get just phones
+            def get_enriched_phones_str(p):
+                bbl = p.get('bbl')
+                contacts = enriched_contacts_by_bbl.get(bbl, [])
+                all_phones = []
+                for c in contacts:
+                    phones = [ph.get('number', '') for ph in c.get('phones', []) if ph.get('number')]
+                    all_phones.extend(phones)
+                return '; '.join(list(set(all_phones)))
+            
+            # Helper to get just emails
+            def get_enriched_emails_str(p):
+                bbl = p.get('bbl')
+                contacts = enriched_contacts_by_bbl.get(bbl, [])
+                all_emails = []
+                for c in contacts:
+                    emails = [em.get('email', '') for em in c.get('emails', []) if em.get('email')]
+                    all_emails.extend(emails)
+                return '; '.join(list(set(all_emails)))
+            
+            # Field mapping
+            field_mapping = {
+                'address': ('Address', lambda p: p['address'] or ''),
+                'bbl': ('BBL', lambda p: p['bbl'] or ''),
+                'borough': ('Borough', lambda p: {
+                    '1': 'Manhattan', '2': 'Bronx', '3': 'Brooklyn', 
+                    '4': 'Queens', '5': 'Staten Island'
+                }.get(p['borough_code'], '')),
+                'building_class': ('Building Class', lambda p: p['building_class'] or ''),
+                'year_built': ('Year Built', lambda p: p['year_built'] or ''),
+                'units': ('Units', lambda p: p['units'] or ''),
+                'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
+                'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
+                'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
+                'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
+                'enriched_permit_contacts': ('Enriched Permit Contacts', get_enriched_contacts_str),
+                'enriched_permit_phones': ('Enriched Contact Phones', get_enriched_phones_str),
+                'enriched_permit_emails': ('Enriched Contact Emails', get_enriched_emails_str),
+            }
+            
+            # Build headers and extractors
+            headers = []
+            extractors = []
+            for field in requested_fields:
+                if field in field_mapping:
+                    header, extractor = field_mapping[field]
+                    headers.append(header)
+                    extractors.append(extractor)
+            
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            
+            for prop in properties:
+                row = [extractor(prop) for extractor in extractors]
+                writer.writerow(row)
+            
+            # Return CSV
+            output.seek(0)
+            from datetime import datetime
+            filename = f"properties_export_enriched_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename={filename}'}
+            )
+            
+    except Exception as e:
+        print(f"Bulk export with enrichment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ============================================================================
 # CONTRACTOR PROFILE ROUTES
 # ============================================================================
@@ -4790,7 +5096,8 @@ def api_enrich_permit_contact():
     try:
         from enrichment_service import (
             enrich_permit_contact, 
-            check_permit_contact_enrichment
+            check_permit_contact_enrichment,
+            grant_permit_contact_access
         )
         from stripe_service import charge_enrichment_fee
         
@@ -4824,21 +5131,18 @@ def api_enrich_permit_contact():
                 'message': 'Contact already unlocked'
             })
         
-        # Need to charge if:
-        # 1. Not already enriched (new lookup), or
-        # 2. Already enriched but user hasn't paid to unlock
+        # Need to charge if not admin and (new lookup or user hasn't unlocked)
         need_to_charge = not is_admin and (not already_enriched or not user_has_access)
         
-        # Perform enrichment (will use cached data if available, or call API)
+        # Perform enrichment (grant_access=True only for admin, regular users get access after charge)
         success, enrichment_data, message = enrich_permit_contact(
             bbl, building_id, permit_id, contact_name, contact_type,
-            license_number, license_type, original_phone, user_id
+            license_number, license_type, original_phone, user_id,
+            grant_access=is_admin  # Admin gets immediate access
         )
         
         if success:
-            # Charge if needed
-            charged = False
-            charge_id = 'admin_free' if is_admin else None
+            enrichment_id = enrichment_data.get('id')
             
             if need_to_charge:
                 # Get building_id for charge record
@@ -4848,21 +5152,41 @@ def api_enrich_permit_contact():
                         result = cur.fetchone()
                         building_id = result['id'] if result else None
                 
+                # Charge FIRST
                 charge_success, charge_msg, charge_id = charge_enrichment_fee(
                     user_id, building_id or 0, contact_name, is_batch=False
                 )
-                charged = charge_success
                 
-                if not charge_success:
-                    print(f"WARNING: Permit contact enrichment succeeded but charge failed: {charge_msg}")
-            
-            return jsonify({
-                'success': True,
-                'data': enrichment_data,
-                'charged': charged,
-                'charge_id': charge_id,
-                'message': message
-            })
+                if charge_success:
+                    # Only grant access AFTER successful charge
+                    grant_permit_contact_access(
+                        user_id, enrichment_id, 
+                        charge_amount=0.50, 
+                        stripe_charge_id=charge_id
+                    )
+                    return jsonify({
+                        'success': True,
+                        'data': enrichment_data,
+                        'charged': True,
+                        'charge_id': charge_id,
+                        'message': message
+                    })
+                else:
+                    # Charge failed - don't grant access, don't return data
+                    print(f"Permit contact enrichment charge failed: {charge_msg}")
+                    return jsonify({
+                        'success': False, 
+                        'error': f'Payment failed: {charge_msg}'
+                    }), 402
+            else:
+                # Admin or no charge needed - already granted access
+                return jsonify({
+                    'success': True,
+                    'data': enrichment_data,
+                    'charged': False,
+                    'charge_id': 'admin_free' if is_admin else None,
+                    'message': message
+                })
         else:
             return jsonify({'success': False, 'error': message}), 400
             

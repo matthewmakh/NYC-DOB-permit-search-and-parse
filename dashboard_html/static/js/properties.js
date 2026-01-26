@@ -516,6 +516,10 @@ async function downloadExport() {
         return;
     }
     
+    // Check if enrichment is requested
+    const enrichContactsCheckbox = document.getElementById('exportEnrichContacts');
+    const enrichContacts = enrichContactsCheckbox && enrichContactsCheckbox.checked;
+    
     // Build query params from current filters
     const params = new URLSearchParams();
     
@@ -548,9 +552,59 @@ async function downloadExport() {
     // Add selected fields
     params.append('fields', fields.join(','));
     
-    // Trigger download
-    window.location.href = `/api/properties/export?${params}`;
-    closeExportModal();
+    // If enrichment is requested, we need to do a POST request with confirmation
+    if (enrichContacts) {
+        const totalCount = Math.min(state.pagination.total_count || 0, 10000);
+        const estimatedEnrichable = Math.round(totalCount * 0.6);
+        const estimatedCost = Math.max(estimatedEnrichable * 0.35, 0.50).toFixed(2);
+        
+        if (!confirm(`This export will include contact enrichment.\n\nEstimated max cost: $${estimatedCost}\n\nYou'll only be charged for new enrichments - previously unlocked contacts are free.\n\nProceed with enrichment?`)) {
+            return;
+        }
+        
+        params.append('enrich_contacts', 'true');
+        
+        // Show loading indicator
+        const exportBtn = document.querySelector('.modal-footer .btn-primary');
+        const originalText = exportBtn.textContent;
+        exportBtn.textContent = 'Enriching & Exporting...';
+        exportBtn.disabled = true;
+        
+        try {
+            // POST request for enrichment export (since it can take time and charges money)
+            const response = await fetch(`/api/properties/export-with-enrichment?${params}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Export failed');
+            }
+            
+            // Download the response as a file
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `properties_export_enriched_${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+            
+            closeExportModal();
+        } catch (error) {
+            alert('Export failed: ' + error.message);
+        } finally {
+            exportBtn.textContent = originalText;
+            exportBtn.disabled = false;
+        }
+    } else {
+        // Standard export without enrichment - direct download
+        window.location.href = `/api/properties/export?${params}`;
+        closeExportModal();
+    }
 }
 
 // ==========================================

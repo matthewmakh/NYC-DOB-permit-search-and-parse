@@ -534,17 +534,47 @@ def check_permit_contact_enrichment(bbl, contact_name, contact_type, user_id=Non
         conn.close()
 
 
+def grant_permit_contact_access(user_id, enrichment_id, charge_amount=None, stripe_charge_id=None):
+    """
+    Grant a user access to a permit contact enrichment.
+    Call this ONLY after successful charge or for admin users.
+    Returns: (success, error_message)
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id, charge_amount, stripe_charge_id)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id, enrichment_id) DO NOTHING
+        """, (user_id, enrichment_id, charge_amount, stripe_charge_id))
+        conn.commit()
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error granting permit contact access: {e}")
+        return False, str(e)
+    finally:
+        cur.close()
+        conn.close()
+
+
 def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_type, 
-                          license_number, license_type, original_phone, user_id):
+                          license_number, license_type, original_phone, user_id, 
+                          grant_access=False):
     """
     Enrich a permit contact (applicant/permittee) and store results.
     Returns: (success, data, message)
     
     Logic:
-    1. Check if already enriched - if yes, just grant user access
-    2. If not enriched, call Enformion API
-    3. Store enrichment data
-    4. Grant user access
+    1. Check if already enriched and user has access - return data
+    2. Check if already enriched but user doesn't have access - return data (access granted separately)
+    3. If not enriched, call Enformion API and store results
+    
+    NOTE: This function does NOT grant user access by default.
+    Access should be granted by app.py ONLY after successful charge.
+    Set grant_access=True for admin users or after charge succeeds.
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -559,14 +589,21 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
             return True, existing_data, "Contact already unlocked"
         
         if already_enriched and existing_data:
-            # Data exists but user hasn't paid - grant access
-            cur.execute("""
-                INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
-                VALUES (%s, %s)
-                ON CONFLICT (user_id, enrichment_id) DO NOTHING
-            """, (user_id, existing_data['id']))
-            conn.commit()
-            return True, existing_data, "Contact unlocked"
+            # Data exists but user hasn't paid yet
+            # Return the data but don't grant access (that happens after charge)
+            if grant_access:
+                # Admin user or charge already succeeded - grant access now
+                cur.execute("""
+                    INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id, enrichment_id) DO NOTHING
+                """, (user_id, existing_data['id']))
+                conn.commit()
+                return True, existing_data, "Contact unlocked"
+            else:
+                # Return data but mark that access still needed
+                existing_data['needs_access_grant'] = True
+                return True, existing_data, "Contact enriched, pending access grant"
         
         # Need to call API - parse the contact name
         first_name, middle_name, last_name = parse_owner_name(contact_name)
@@ -618,22 +655,28 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
         
         enrichment_id = cur.fetchone()['id']
         
-        # Grant user access
-        cur.execute("""
-            INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
-            VALUES (%s, %s)
-            ON CONFLICT (user_id, enrichment_id) DO NOTHING
-        """, (user_id, enrichment_id))
+        # Only grant access if explicitly requested (admin users or after charge succeeds)
+        if grant_access:
+            cur.execute("""
+                INSERT INTO user_permit_contact_unlocks (user_id, enrichment_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, enrichment_id) DO NOTHING
+            """, (user_id, enrichment_id))
         
         conn.commit()
         
-        return True, {
+        result_data = {
             'id': enrichment_id,
             'phones': phones,
             'emails': emails,
             'person_id': person_id,
             'from_api': True
-        }, "Contact information found"
+        }
+        
+        if not grant_access:
+            result_data['needs_access_grant'] = True
+        
+        return True, result_data, "Contact information found"
         
     except Exception as e:
         conn.rollback()
