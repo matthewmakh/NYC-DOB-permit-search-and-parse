@@ -34,12 +34,12 @@ from auth_routes import auth_bp
 from auth_service import login_required, validate_session
 app.register_blueprint(auth_bp)
 
-# Import activity logging
-from activity_service import (
-    log_activity, log_page_view, log_search, log_export, log_error, log_api_call,
-    ActivityType, ActivityCategory,
-    get_activity_logs, get_activity_stats, get_recent_logins, get_recent_errors
-)
+# Activity logging - disabled for now (file not deployed)
+# from activity_service import (
+#     log_activity, log_page_view, log_search, log_export, log_error, log_api_call,
+#     ActivityType, ActivityCategory,
+#     get_activity_logs, get_activity_stats, get_recent_logins, get_recent_errors
+# )
 
 # Simple in-memory cache (can upgrade to Redis later)
 cache = Cache(app, config={
