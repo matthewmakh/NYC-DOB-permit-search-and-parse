@@ -19,6 +19,8 @@ const state = {
         withPermits: false,
         minPermits: null,
         recentPermitDays: null,
+        permitType: null,  // NEW: Permit type filter
+        propertyType: null,  // NEW: Residential/Commercial filter
         borough: null,
         buildingClass: '',
         minUnits: null,
@@ -87,6 +89,8 @@ async function loadProperties() {
         if (state.filters.withPermits) params.append('with_permits', 'true');
         if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
         if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
+        if (state.filters.permitType) params.append('permit_type', state.filters.permitType);
+        if (state.filters.propertyType) params.append('property_type', state.filters.propertyType);
         if (state.filters.borough) params.append('borough', state.filters.borough);
         if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
         if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
@@ -145,6 +149,8 @@ function renderProperties() {
         const salePrice = property.sale_price || 0;
         const permitCount = property.permit_count || 0;
         const violationCount = property.hpd_violations_count || 0;
+        const contractorName = property.contractor_name || null;
+        const contractorPhone = property.contractor_phone || null;
         
         return `
             <div class="property-card" onclick="viewProperty('${property.bbl}')">
@@ -164,6 +170,14 @@ function renderProperties() {
                     <div class="owner-label">Owner</div>
                     <div class="owner-name">${escapeHtml(owner)}</div>
                 </div>
+                
+                ${contractorName || contractorPhone ? `
+                    <div class="property-contractor">
+                        <div class="contractor-label">📋 Permit Contact</div>
+                        ${contractorName ? `<div class="contractor-name">${escapeHtml(contractorName)}</div>` : ''}
+                        ${contractorPhone ? `<a href="tel:${contractorPhone}" class="contractor-phone" onclick="event.stopPropagation();">📞 ${contractorPhone}</a>` : ''}
+                    </div>
+                ` : ''}
                 
                 <div class="property-details">
                     ${property.units ? `
@@ -400,6 +414,20 @@ function initializeEventListeners() {
     
     document.getElementById('recentPermitCustomDays').addEventListener('change', (e) => {
         state.filters.recentPermitDays = e.target.value ? parseInt(e.target.value) : null;
+        state.pagination.page = 1;
+        loadProperties();
+    });
+    
+    // Permit type filter
+    document.getElementById('permitType').addEventListener('change', (e) => {
+        state.filters.permitType = e.target.value || null;
+        state.pagination.page = 1;
+        loadProperties();
+    });
+    
+    // Property type filter (residential/commercial/mixed)
+    document.getElementById('propertyType').addEventListener('change', (e) => {
+        state.filters.propertyType = e.target.value || null;
         state.pagination.page = 1;
         loadProperties();
     });
@@ -656,10 +684,12 @@ function clearFilters() {
     document.getElementById('saleDateFrom').value = '';
     document.getElementById('saleDateTo').value = '';
     document.getElementById('boroughFilter').value = '';
+    document.getElementById('propertyType').value = '';
     document.getElementById('buildingClass').value = '';
     document.getElementById('minUnits').value = '';
     document.getElementById('maxUnits').value = '';
     document.getElementById('minPermits').value = '';
+    document.getElementById('permitType').value = '';
     document.getElementById('recentPermitDays').value = '';
     document.getElementById('recentPermitCustomDays').value = '';
     document.getElementById('recentPermitCustomDays').style.display = 'none';

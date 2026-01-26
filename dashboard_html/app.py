@@ -11,6 +11,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import os
+import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests
@@ -32,6 +33,13 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=48)
 from auth_routes import auth_bp
 from auth_service import login_required, validate_session
 app.register_blueprint(auth_bp)
+
+# Import activity logging
+from activity_service import (
+    log_activity, log_page_view, log_search, log_export, log_error, log_api_call,
+    ActivityType, ActivityCategory,
+    get_activity_logs, get_activity_stats, get_recent_logins, get_recent_errors
+)
 
 # Simple in-memory cache (can upgrade to Redis later)
 cache = Cache(app, config={
@@ -164,6 +172,83 @@ class DatabaseConnection:
                     self.conn = None
         
         return False  # Don't suppress exceptions
+
+
+# ============================================================================
+# ACTIVITY LOGGING MIDDLEWARE
+# ============================================================================
+
+# Map of endpoints to friendly page names
+PAGE_NAMES = {
+    'index': 'Home',
+    'old_dashboard': 'Old Dashboard',
+    'construction': 'Construction Intelligence',
+    'investments': 'Investments',
+    'analytics': 'Analytics',
+    'search_results': 'Search Results',
+    'property_detail': 'Property Profile',
+    'properties_page': 'Properties',
+    'contractors_page': 'Contractors',
+    'contractor_profile': 'Contractor Profile',
+}
+
+# Endpoints to skip logging (health checks, static files, etc.)
+SKIP_LOGGING_ENDPOINTS = {'static', 'api_health', 'get_stats'}
+
+
+@app.before_request
+def before_request_logging():
+    """Store request start time for response time calculation"""
+    g.request_start_time = time.time()
+
+
+@app.after_request
+def after_request_logging(response):
+    """Log page views and API calls after each request"""
+    try:
+        # Skip if no endpoint or if it's a static file
+        if not request.endpoint or request.endpoint in SKIP_LOGGING_ENDPOINTS:
+            return response
+        
+        # Skip auth routes (they have their own logging)
+        if request.endpoint.startswith('auth.'):
+            return response
+        
+        # Calculate response time
+        response_time_ms = None
+        if hasattr(g, 'request_start_time'):
+            response_time_ms = int((time.time() - g.request_start_time) * 1000)
+        
+        # Determine if this is a page view or API call
+        is_api = request.path.startswith('/api/')
+        
+        if is_api:
+            # Log API calls (but not all of them to avoid noise)
+            # Only log search, export, and data-fetching APIs
+            if any(x in request.path for x in ['/search', '/export', '/enrich']):
+                log_api_call(
+                    endpoint=request.path,
+                    method=request.method,
+                    response_status=response.status_code,
+                    response_time_ms=response_time_ms,
+                    success=response.status_code < 400
+                )
+        else:
+            # Log page views
+            page_name = PAGE_NAMES.get(request.endpoint, request.endpoint)
+            log_page_view(
+                page_name=page_name,
+                page_url=request.url,
+                metadata={
+                    'response_status': response.status_code,
+                    'response_time_ms': response_time_ms
+                }
+            )
+    except Exception as e:
+        # Don't let logging errors break the app
+        print(f"Activity logging middleware error: {e}")
+    
+    return response
 
 
 def calculate_lead_score(permit):
@@ -1679,6 +1764,7 @@ def get_top_contractors():
 
 
 @app.route('/api/construction/export')
+@login_required
 def export_construction_permits():
     """Export permits to CSV"""
     try:
@@ -1765,6 +1851,18 @@ def export_construction_permits():
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = "attachment; filename=construction_permits.csv"
         output.headers["Content-type"] = "text/csv"
+        
+        # Log the export
+        log_export(
+            export_type='csv',
+            record_count=len(permits),
+            filter_params={
+                'job_types': job_types,
+                'borough': borough,
+                'days': days
+            }
+        )
+        
         return output
         
     except Exception as e:
@@ -2240,6 +2338,13 @@ def api_search():
             cur.execute(sql, params)
             results = cur.fetchall()
             
+            # Log the search
+            log_search(
+                query=query,
+                result_count=len(results),
+                filter_params={'tokens': tokens}
+            )
+            
             return jsonify([dict(r) for r in results])
 
     except Exception as e:
@@ -2554,6 +2659,8 @@ def api_properties():
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
+            permit_type = request.args.get('permit_type', '').strip()  # NEW: Permit type filter
+            property_type = request.args.get('property_type', '').strip()  # NEW: Residential/Commercial filter
             borough = request.args.get('borough', type=int)
             building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
@@ -2655,6 +2762,18 @@ def api_properties():
                 where_clauses.append("LEFT(b.bbl, 1) = %s")
                 params.append(str(borough))
         
+            # Property type filter (residential/commercial/mixed)
+            if property_type:
+                if property_type == 'residential':
+                    # A=1-family, B=2-family, C=walk-up, D=elevator, R=condo
+                    where_clauses.append("b.building_class ~ '^[ABCDR]'")
+                elif property_type == 'commercial':
+                    # K=stores, O=office, E=warehouse, F=factory, G=garage
+                    where_clauses.append("b.building_class ~ '^[KOEFG]'")
+                elif property_type == 'mixed':
+                    # S=mixed residential/commercial
+                    where_clauses.append("b.building_class LIKE 'S%'")
+        
             # Building class
             if building_class:
                 where_clauses.append("b.building_class LIKE %s")
@@ -2728,6 +2847,17 @@ def api_properties():
                                OR issue_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days')
                     ) rp ON b.bbl = rp.bbl
                 """
+            
+            # Add permit type subquery if filtering by permit type
+            permit_type_sql = ""
+            if permit_type:
+                permit_type_sql = f"""
+                    LEFT JOIN (
+                        SELECT DISTINCT bbl
+                        FROM permits
+                        WHERE bbl IS NOT NULL AND permit_type = '{permit_type}'
+                    ) pt ON b.bbl = pt.bbl
+                """
         
             # Apply permit filters
             if with_permits:
@@ -2737,6 +2867,9 @@ def api_properties():
             if recent_permit_days is not None:
                 has_prior_conditions = where_clauses or with_permits or min_permits is not None
                 where_sql += (" AND " if has_prior_conditions else "WHERE ") + "rp.bbl IS NOT NULL"
+            if permit_type:
+                has_prior_conditions = where_clauses or with_permits or min_permits is not None or recent_permit_days is not None
+                where_sql += (" AND " if has_prior_conditions else "WHERE ") + "pt.bbl IS NOT NULL"
         
             # Validate and sanitize sort column
             valid_sort_columns = {
@@ -2756,6 +2889,7 @@ def api_properties():
                 FROM buildings b
                 {permit_count_sql}
                 {recent_permit_sql}
+                {permit_type_sql}
                 {where_sql}
             """
             cur.execute(count_query, params)
@@ -2798,10 +2932,23 @@ def api_properties():
                     b.acris_mortgage_count,
                     b.acris_total_transactions,
                     COALESCE(pc.permit_count, 0) as permit_count,
+                    pcon.contractor_name,
+                    pcon.contractor_phone,
                     b.last_updated
                 FROM buildings b
                 {permit_count_sql}
+                LEFT JOIN LATERAL (
+                    SELECT 
+                        COALESCE(p.permittee_business_name, p.applicant) as contractor_name,
+                        p.permittee_phone as contractor_phone
+                    FROM permits p
+                    WHERE p.bbl = b.bbl 
+                      AND (p.permittee_phone IS NOT NULL OR p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
+                    ORDER BY p.issue_date DESC NULLS LAST
+                    LIMIT 1
+                ) pcon ON true
                 {recent_permit_sql}
+                {permit_type_sql}
                 {where_sql}
                 ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
                 LIMIT %s OFFSET %s
@@ -4767,6 +4914,296 @@ def translate_building_class(code):
     }
     
     return translations.get(code, f"Building code {code}")
+
+
+# ============================================================================
+# ADMIN ACTIVITY LOGS ROUTES (Admin Only)
+# ============================================================================
+
+def admin_required(f):
+    """Decorator that requires admin access"""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check if user is logged in and is admin
+        if not hasattr(g, 'user') or not g.user:
+            return redirect(url_for('auth.login'))
+        if not g.user.get('is_admin'):
+            return jsonify({'success': False, 'error': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@app.route('/admin/activity')
+@login_required
+@admin_required
+def admin_activity_page():
+    """Admin activity logs page"""
+    log_activity(
+        activity_type=ActivityType.ADMIN_ACTIVITY_VIEW,
+        activity_category=ActivityCategory.ADMIN,
+        description='Admin viewed activity logs',
+        page_name='Admin Activity Logs'
+    )
+    return render_template('admin_activity.html', user=g.user)
+
+
+@app.route('/api/admin/activity-logs')
+@login_required
+@admin_required
+def api_admin_activity_logs():
+    """
+    API to get activity logs with filtering
+    
+    Query Parameters:
+    - user_id: Filter by specific user
+    - user_email: Filter by email (partial match)
+    - activity_type: Filter by type (comma-separated for multiple)
+    - activity_category: Filter by category (comma-separated for multiple)
+    - ip_address: Filter by IP
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - page_name: Filter by page name
+    - search: General search in descriptions
+    - success_only: true/false to filter by action success
+    - limit: Results per page (default 100, max 500)
+    - offset: Pagination offset
+    - order_by: Sort column (created_at, user_email, activity_type, etc.)
+    - order_dir: ASC or DESC
+    """
+    try:
+        # Parse query parameters
+        user_id = request.args.get('user_id', type=int)
+        user_email = request.args.get('user_email', '').strip() or None
+        activity_type = request.args.get('activity_type', '').strip()
+        activity_category = request.args.get('activity_category', '').strip()
+        ip_address = request.args.get('ip_address', '').strip() or None
+        start_date = request.args.get('start_date', '').strip() or None
+        end_date = request.args.get('end_date', '').strip() or None
+        page_name = request.args.get('page_name', '').strip() or None
+        search = request.args.get('search', '').strip() or None
+        success_only = request.args.get('success_only', '').strip()
+        limit = min(500, request.args.get('limit', 100, type=int))
+        offset = request.args.get('offset', 0, type=int)
+        order_by = request.args.get('order_by', 'created_at')
+        order_dir = request.args.get('order_dir', 'DESC')
+        
+        # Parse types and categories (comma-separated)
+        activity_types = [t.strip() for t in activity_type.split(',') if t.strip()] if activity_type else None
+        activity_categories = [c.strip() for c in activity_category.split(',') if c.strip()] if activity_category else None
+        
+        # Parse success_only
+        if success_only.lower() == 'true':
+            success_only_bool = True
+        elif success_only.lower() == 'false':
+            success_only_bool = False
+        else:
+            success_only_bool = None
+        
+        # Get logs
+        logs = get_activity_logs(
+            user_id=user_id,
+            user_email=user_email,
+            activity_type=activity_types,
+            activity_category=activity_categories,
+            ip_address=ip_address,
+            start_date=start_date,
+            end_date=end_date,
+            page_name=page_name,
+            search_query=search,
+            success_only=success_only_bool,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            order_dir=order_dir
+        )
+        
+        # Convert datetime objects to ISO strings for JSON
+        for log in logs:
+            if log.get('created_at'):
+                log['created_at'] = log['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'logs': logs,
+            'count': len(logs),
+            'limit': limit,
+            'offset': offset
+        })
+        
+    except Exception as e:
+        print(f"Admin activity logs error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/activity-stats')
+@login_required
+@admin_required
+def api_admin_activity_stats():
+    """
+    API to get activity statistics
+    
+    Query Parameters:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - user_id: Filter stats by specific user
+    """
+    try:
+        start_date = request.args.get('start_date', '').strip() or None
+        end_date = request.args.get('end_date', '').strip() or None
+        user_id = request.args.get('user_id', type=int)
+        
+        stats = get_activity_stats(
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id
+        )
+        
+        return jsonify({
+            'success': True,
+            'stats': stats
+        })
+        
+    except Exception as e:
+        print(f"Admin activity stats error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/activity/track', methods=['POST'])
+def api_activity_track():
+    """
+    Receive client-side tracking events.
+    Used by the activity_tracker.js to log user interactions.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        events = data.get('events', [])
+        
+        for event in events:
+            event_type = event.get('type', 'unknown')
+            event_data = event.get('data', {})
+            
+            # Map client event types to activity types
+            type_mapping = {
+                'click': ActivityType.BUTTON_CLICK,
+                'section_view': ActivityType.SECTION_CLICK,
+                'tab_switch': ActivityType.TAB_SWITCH,
+                'filter_change': ActivityType.FILTER_CHANGE,
+                'form_submit': ActivityType.FORM_SUBMIT,
+                'search': ActivityType.SEARCH,
+                'export': ActivityType.EXPORT,
+                'data_view': ActivityType.DATA_VIEW,
+                'error': ActivityType.ERROR
+            }
+            
+            activity_type = type_mapping.get(event_type, 'client_event')
+            
+            log_activity(
+                activity_type=activity_type,
+                activity_category=ActivityCategory.INTERACTION,
+                description=f"Client event: {event_type}",
+                page_url=event.get('page_url'),
+                element_id=event_data.get('element_id'),
+                element_type=event_data.get('element_type'),
+                element_text=event_data.get('element_text'),
+                search_query=event_data.get('query'),
+                metadata={
+                    'client_event': True,
+                    'event_data': event_data,
+                    'screen_width': event.get('screen_width'),
+                    'screen_height': event.get('screen_height')
+                }
+            )
+        
+        return jsonify({'success': True, 'tracked': len(events)})
+        
+    except Exception as e:
+        print(f"Activity tracking error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/recent-logins')
+@login_required
+@admin_required
+def api_admin_recent_logins():
+    """Get recent login attempts"""
+    try:
+        limit = min(100, request.args.get('limit', 50, type=int))
+        logins = get_recent_logins(limit=limit)
+        
+        # Convert datetime objects
+        for login in logins:
+            if login.get('created_at'):
+                login['created_at'] = login['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'logins': logins,
+            'count': len(logins)
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/recent-errors')
+@login_required
+@admin_required
+def api_admin_recent_errors():
+    """Get recent errors"""
+    try:
+        limit = min(100, request.args.get('limit', 50, type=int))
+        errors = get_recent_errors(limit=limit)
+        
+        # Convert datetime objects
+        for error in errors:
+            if error.get('created_at'):
+                error['created_at'] = error['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'errors': errors,
+            'count': len(errors)
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/users')
+@login_required
+@admin_required
+def api_admin_users():
+    """Get list of all users for filtering"""
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT id, email, is_admin, subscription_status, created_at, last_login
+                FROM users
+                ORDER BY created_at DESC
+            """)
+            users = cur.fetchall()
+            
+            # Convert datetime objects
+            for user in users:
+                if user.get('created_at'):
+                    user['created_at'] = user['created_at'].isoformat()
+                if user.get('last_login'):
+                    user['last_login'] = user['last_login'].isoformat()
+            
+            return jsonify({
+                'success': True,
+                'users': [dict(u) for u in users],
+                'count': len(users)
+            })
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

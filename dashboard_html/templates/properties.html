@@ -97,6 +97,18 @@
                 </select>
             </div>
 
+            <!-- Property Type (Residential/Commercial) -->
+            <div class="filter-section">
+                <h3>🏠 Property Type</h3>
+                <select id="propertyType" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="residential">Residential</option>
+                    <option value="commercial">Commercial</option>
+                    <option value="mixed">Mixed Use</option>
+                </select>
+                <small class="filter-hint">Filter by property category</small>
+            </div>
+
             <!-- Building Class -->
             <div class="filter-section">
                 <h3>🏢 Building Class</h3>
@@ -123,6 +135,20 @@
                 </label>
                 <input type="number" id="minPermits" class="filter-input" 
                     placeholder="Min permit count">
+                
+                <!-- Permit Type Filter -->
+                <label class="filter-label" style="margin-top: 12px;">Permit Type</label>
+                <select id="permitType" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="EW">EW - Equipment Work</option>
+                    <option value="PL">PL - Plumbing</option>
+                    <option value="EQ">EQ - Equipment</option>
+                    <option value="AL">AL - Alteration</option>
+                    <option value="NB">NB - New Building</option>
+                    <option value="SG">SG - Sign</option>
+                    <option value="DM">DM - Demolition</option>
+                    <option value="FO">FO - Foundation</option>
+                </select>
                 
                 <!-- Recent Permit Filter -->
                 <label class="filter-label" style="margin-top: 12px;">Recent Permits</label>
