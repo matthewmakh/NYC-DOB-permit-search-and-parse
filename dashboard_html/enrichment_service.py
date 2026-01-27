@@ -801,13 +801,14 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                 p.id as permit_id,
                 p.permit_no,
                 p.applicant,
-                p.applicant_license as applicant_license_number,
+                p.hic_license as applicant_license_number,
                 p.permittee_business_name,
                 p.permittee_license_number,
                 p.permittee_license_type,
                 p.permittee_phone,
                 p.owner_business_name,
-                p.owner_phone
+                p.owner_phone,
+                p.issue_date
             FROM permits p
             WHERE p.bbl = %s
             ORDER BY p.issue_date DESC NULLS LAST
@@ -815,16 +816,18 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
         
         permits = cur.fetchall()
         contacts = []
-        seen_names = set()
+        seen_names = set()  # Track names we've already added (case-insensitive)
         
         for p in permits:
             # Applicant
             if p['applicant']:
                 name = p['applicant'].strip()
-                key = (name.upper(), 'applicant')
-                if name.upper() not in seen_names:
+                name_upper = name.upper()
+                # Skip if we've already seen this name (regardless of type)
+                if name_upper not in seen_names:
                     first, _, last = parse_owner_name(name)
                     is_enrichable = first and last  # Must be a person name
+                    key = (name_upper, 'applicant')
                     is_enriched = key in enriched
                     
                     contacts.append({
@@ -839,15 +842,16 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                         'is_enriched': is_enriched,
                         'is_unlocked': is_enriched  # Will be updated below
                     })
-                    seen_names.add(name.upper())
+                    seen_names.add(name_upper)
             
-            # Permittee
+            # Permittee - only add if name not already seen
             if p['permittee_business_name']:
                 name = p['permittee_business_name'].strip()
-                key = (name.upper(), 'permittee')
-                if name.upper() not in seen_names:
+                name_upper = name.upper()
+                if name_upper not in seen_names:
                     first, _, last = parse_owner_name(name)
                     is_enrichable = first and last
+                    key = (name_upper, 'permittee')
                     is_enriched = key in enriched
                     
                     contacts.append({
@@ -862,15 +866,16 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                         'is_enriched': is_enriched,
                         'is_unlocked': is_enriched
                     })
-                    seen_names.add(name.upper())
+                    seen_names.add(name_upper)
             
-            # Owner from permit
+            # Owner from permit - only add if name not already seen
             if p['owner_business_name']:
                 name = p['owner_business_name'].strip()
-                key = (name.upper(), 'owner')
-                if name.upper() not in seen_names:
+                name_upper = name.upper()
+                if name_upper not in seen_names:
                     first, _, last = parse_owner_name(name)
                     is_enrichable = first and last
+                    key = (name_upper, 'owner')
                     is_enriched = key in enriched
                     
                     contacts.append({
@@ -885,7 +890,7 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                         'is_enriched': is_enriched,
                         'is_unlocked': is_enriched
                     })
-                    seen_names.add(name.upper())
+                    seen_names.add(name_upper)
         
         return contacts
         
