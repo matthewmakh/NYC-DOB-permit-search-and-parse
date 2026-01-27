@@ -1008,34 +1008,66 @@ async function updateEnrichmentEstimate() {
     estimateDiv.innerHTML = '<div class="estimate-loading">⏳ Calculating enrichment cost...</div>';
     
     try {
-        // Get count of properties in current filter
-        const totalCount = Math.min(state.pagination.total_count || 0, 10000);
+        // Build query params from current filters
+        const params = new URLSearchParams();
         
-        // Estimate: assume ~60% of properties have enrichable contacts
-        const estimatedEnrichable = Math.round(totalCount * 0.6);
-        const estimatedCost = Math.max(estimatedEnrichable * 0.35, 0.50);
+        if (state.filters.search) params.append('search', state.filters.search);
+        if (state.filters.owner) params.append('owner', state.filters.owner);
+        if (state.filters.minValue) params.append('min_value', state.filters.minValue);
+        if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
+        if (state.filters.borough) params.append('borough', state.filters.borough);
+        if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
+        if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
+        if (state.filters.withPermits) params.append('with_permits', 'true');
+        
+        // Call API to get accurate estimate
+        const response = await fetch(`/api/properties/export/enrichment-estimate?${params}`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to calculate estimate');
+        }
+        
+        const isAdmin = data.is_admin;
+        const cost = isAdmin ? 0 : data.estimated_cost;
         
         estimateDiv.innerHTML = `
             <div class="estimate-result">
                 <div class="estimate-row">
                     <span>Properties to export:</span>
-                    <strong>${formatNumber(totalCount)}</strong>
+                    <strong>${formatNumber(data.total_properties)}</strong>
                 </div>
                 <div class="estimate-row">
-                    <span>Est. enrichable contacts:</span>
-                    <strong>~${formatNumber(estimatedEnrichable)}</strong>
+                    <span>Properties with contacts:</span>
+                    <strong>${formatNumber(data.properties_with_contacts)}</strong>
+                </div>
+                <div class="estimate-row">
+                    <span>Total enrichable contacts:</span>
+                    <strong>${formatNumber(data.total_contacts)}</strong>
+                </div>
+                <div class="estimate-row">
+                    <span style="color: #27ae60;">✓ Already unlocked (free):</span>
+                    <strong>${formatNumber(data.already_unlocked)}</strong>
+                </div>
+                <div class="estimate-row" style="color: #e67e22;">
+                    <span>⚡ New enrichments (charged):</span>
+                    <strong>${formatNumber(data.need_enrichment)}</strong>
                 </div>
                 <div class="estimate-row estimate-total">
-                    <span>Max enrichment cost:</span>
-                    <strong>$${estimatedCost.toFixed(2)}</strong>
+                    <span>${isAdmin ? 'Admin - Free:' : 'Total cost:'}:</span>
+                    <strong>${isAdmin ? 'FREE' : '$' + cost.toFixed(2)}</strong>
                 </div>
-                <p class="estimate-note">
-                    <small>💡 You'll only be charged for new enrichments. Previously unlocked contacts are free.</small>
-                </p>
+                ${!isAdmin && data.need_enrichment > 0 ? `
+                    <p class="estimate-note">
+                        <small>💡 $${data.cost_per_contact.toFixed(2)} per new contact (${data.need_enrichment} × $${data.cost_per_contact.toFixed(2)} = $${cost.toFixed(2)})</small>
+                    </p>
+                ` : ''}
+                ${isAdmin ? '<p class="estimate-note"><small>🔑 Admin access - all enrichments are free</small></p>' : ''}
             </div>
         `;
     } catch (error) {
-        estimateDiv.innerHTML = '<div class="estimate-error">Failed to calculate estimate</div>';
+        console.error('Enrichment estimate error:', error);
+        estimateDiv.innerHTML = '<div class="estimate-error">❌ Failed to calculate estimate: ' + error.message + '</div>';
     }
 }
 

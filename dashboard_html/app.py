@@ -3496,6 +3496,143 @@ def api_properties_export():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/properties/export/enrichment-estimate')
+@login_required
+def api_properties_export_enrichment_estimate():
+    """
+    Calculate accurate enrichment cost estimate for bulk export.
+    Returns count of enrichable contacts and cost.
+    Only counts NEW contacts that will be charged (excludes already unlocked).
+    """
+    try:
+        from enrichment_service import (
+            get_enrichable_permit_contacts,
+            check_permit_contact_enrichment
+        )
+        
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+        
+        with DatabaseConnection() as cur:
+            # Parse filter parameters (same as export)
+            search = request.args.get('search', '').strip()
+            owner = request.args.get('owner', '').strip()
+            min_value = request.args.get('min_value', type=float)
+            max_value = request.args.get('max_value', type=float)
+            borough = request.args.get('borough', type=int)
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            with_permits = request.args.get('with_permits', '').lower() == 'true'
+            
+            # Build WHERE clauses
+            where_clauses = []
+            params = []
+            
+            if search:
+                where_clauses.append("(b.address ILIKE %s OR b.bbl LIKE %s OR b.current_owner_name ILIKE %s)")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term, search_term])
+            
+            if owner:
+                where_clauses.append("(b.current_owner_name ILIKE %s OR b.owner_name_rpad ILIKE %s)")
+                owner_term = f"%{owner}%"
+                params.extend([owner_term, owner_term])
+            
+            if min_value is not None:
+                where_clauses.append("b.assessed_total_value >= %s")
+                params.append(min_value)
+            
+            if max_value is not None:
+                where_clauses.append("b.assessed_total_value <= %s")
+                params.append(max_value)
+            
+            if borough:
+                where_clauses.append("b.borough_code = %s")
+                params.append(str(borough))
+            
+            if min_units:
+                where_clauses.append("b.residential_units >= %s")
+                params.append(min_units)
+            
+            if max_units:
+                where_clauses.append("b.residential_units <= %s")
+                params.append(max_units)
+            
+            if with_permits:
+                where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+            
+            where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+            # Get properties (limit 10000)
+            query = f"""
+                SELECT b.id, b.bbl
+                FROM buildings b
+                WHERE {where_clause}
+                ORDER BY b.sale_date DESC NULLS LAST
+                LIMIT 10000
+            """
+            
+            cur.execute(query, params)
+            properties = cur.fetchall()
+            
+            # Count enrichable contacts
+            total_contacts = 0
+            already_unlocked = 0
+            need_enrichment = 0
+            properties_with_contacts = 0
+            
+            for prop in properties:
+                bbl = prop['bbl']
+                
+                # Get enrichable contacts for this property
+                enrichable = get_enrichable_permit_contacts(bbl)
+                
+                prop_contacts = 0
+                for contact in enrichable:
+                    if not contact.get('is_enrichable'):
+                        continue  # Skip business names
+                    
+                    total_contacts += 1
+                    prop_contacts += 1
+                    
+                    contact_name = contact.get('name')
+                    contact_type = contact.get('type', 'applicant')
+                    
+                    # Check if user already has access
+                    already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
+                        bbl, contact_name, contact_type, user_id
+                    )
+                    
+                    if already_enriched and user_has_access:
+                        already_unlocked += 1
+                    else:
+                        need_enrichment += 1
+                
+                if prop_contacts > 0:
+                    properties_with_contacts += 1
+            
+            # Calculate cost ($0.35 per NEW contact, min $0.50)
+            estimated_cost = max(need_enrichment * 0.35, 0.50) if need_enrichment > 0 else 0.0
+            
+            return jsonify({
+                'success': True,
+                'total_properties': len(properties),
+                'properties_with_contacts': properties_with_contacts,
+                'total_contacts': total_contacts,
+                'already_unlocked': already_unlocked,
+                'need_enrichment': need_enrichment,
+                'estimated_cost': round(estimated_cost, 2),
+                'is_admin': is_admin,
+                'cost_per_contact': 0.35
+            })
+            
+    except Exception as e:
+        print(f"Enrichment estimate error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/properties/export-with-enrichment', methods=['POST'])
 @login_required
 def api_properties_export_with_enrichment():
