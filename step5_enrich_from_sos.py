@@ -28,6 +28,10 @@ import argparse
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import psycopg2
 from psycopg2.extras import execute_values
 from dotenv import load_dotenv

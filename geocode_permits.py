@@ -23,6 +23,10 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 load_dotenv()
 
 # Configuration - Optimized for NYC Geoclient V2 User

@@ -16,7 +16,18 @@ Each step is self-contained and checks if work is needed before running.
 import subprocess
 import sys
 import time
+import os
 from datetime import datetime
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Startup diagnostics
+print(f"[STARTUP] Pipeline starting at {datetime.now().isoformat()}", flush=True)
+print(f"[STARTUP] Python: {sys.version}", flush=True)
+print(f"[STARTUP] Working directory: {os.getcwd()}", flush=True)
+print(f"[STARTUP] DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}", flush=True)
 
 # Colors for output
 class Colors:
@@ -29,51 +40,47 @@ class Colors:
     BOLD = '\033[1m'
 
 def print_header(msg):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}")
-    print(f"{Colors.BOLD}{Colors.HEADER}{msg}{Colors.END}")
-    print(f"{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}\n")
+    print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}", flush=True)
+    print(f"{Colors.BOLD}{Colors.HEADER}{msg}{Colors.END}", flush=True)
+    print(f"{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}\n", flush=True)
 
 def print_step(step_num, name):
-    print(f"\n{Colors.BOLD}{Colors.BLUE}▶ Step {step_num}: {name}{Colors.END}")
-    print(f"{Colors.BLUE}{'─'*70}{Colors.END}")
+    print(f"\n{Colors.BOLD}{Colors.BLUE}▶ Step {step_num}: {name}{Colors.END}", flush=True)
+    print(f"{Colors.BLUE}{'─'*70}{Colors.END}", flush=True)
 
 def print_success(msg):
-    print(f"{Colors.GREEN}✅ {msg}{Colors.END}")
+    print(f"{Colors.GREEN}✅ {msg}{Colors.END}", flush=True)
 
 def print_error(msg):
-    print(f"{Colors.RED}❌ {msg}{Colors.END}")
+    print(f"{Colors.RED}❌ {msg}{Colors.END}", flush=True)
 
 def print_warning(msg):
-    print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
+    print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}", flush=True)
 
 def run_script(script_name, description):
-    """Run a Python script and return success status"""
-    print(f"\n🚀 Running: {script_name}")
-    print(f"   Description: {description}")
+    """Run a Python script and return success status - streams output in real-time"""
+    print(f"\n🚀 Running: {script_name}", flush=True)
+    print(f"   Description: {description}", flush=True)
     
     start_time = time.time()
     
     try:
+        # Stream output directly instead of capturing (for Railway logs)
         result = subprocess.run(
-            [sys.executable, script_name],
-            capture_output=True,
+            [sys.executable, '-u', script_name],  # -u for unbuffered Python output
             text=True,
             check=False
+            # Note: No capture_output, so stdout/stderr go directly to console
         )
         
         duration = time.time() - start_time
-        
-        # Print script output
-        if result.stdout:
-            print(result.stdout)
         
         if result.returncode == 0:
             print_success(f"Completed in {duration:.1f}s")
             return True
         else:
             print_error(f"Failed with exit code {result.returncode}")
-            if result.stderr:
-                print(f"\nError output:\n{result.stderr}")
+            # Note: stderr was streamed directly to console, not captured
             return False
             
     except Exception as e:
@@ -184,4 +191,10 @@ def main():
         sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"[FATAL] Unhandled exception in pipeline: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

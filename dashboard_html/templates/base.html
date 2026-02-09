@@ -22,6 +22,9 @@
                 <a href="/investments" class="nav-link {% if active_page == 'investments' %}active{% endif %}">💰 Investments</a>
                 <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">🏢 Properties</a>
                 <a href="/analytics" class="nav-link {% if active_page == 'analytics' %}active{% endif %}">📊 Analytics</a>
+                {% if user and user.is_admin %}
+                <a href="/admin/activity" class="nav-link {% if active_page == 'admin' %}active{% endif %}">🔐 Activity</a>
+                {% endif %}
             </div>
             <div class="nav-actions">
                 {% block nav_actions %}

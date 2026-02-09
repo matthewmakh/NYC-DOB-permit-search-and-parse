@@ -10,6 +10,10 @@ from auth_service import (
     verify_email, get_user_by_email, validate_session
 )
 from stripe_service import create_checkout_session, handle_subscription_webhook
+from activity_service import (
+    log_activity, log_auth_event, log_page_view,
+    ActivityType, ActivityCategory
+)
 import stripe
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
@@ -24,7 +28,7 @@ def login():
     # Check if already logged in
     session_token = session.get('session_token')
     if session_token and validate_session(session_token):
-        return redirect(url_for('home'))
+        return redirect(url_for('index'))
     
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
@@ -42,18 +46,43 @@ def login():
             session['session_token'] = session_token
             session.permanent = True
             
+            # Log successful login
+            log_auth_event(
+                ActivityType.LOGIN,
+                user_id=user['id'],
+                user_email=email,
+                success=True
+            )
+            
             # Redirect to intended page or home
             next_url = request.args.get('next', '/')
             return redirect(next_url)
         
         elif message == 'subscription_required':
+            # Log login attempt (subscription required)
+            log_auth_event(
+                ActivityType.LOGIN_FAILED,
+                user_id=user['id'] if user else None,
+                user_email=email,
+                success=False,
+                error_message='Subscription required'
+            )
             # User exists but no subscription - redirect to checkout
             flash('Please complete your subscription to access the platform.', 'warning')
             return redirect(url_for('auth.complete_subscription', email=email))
         
         else:
+            # Log failed login
+            log_auth_event(
+                ActivityType.LOGIN_FAILED,
+                user_email=email,
+                success=False,
+                error_message=message
+            )
             flash(message, 'error')
     
+    # Log page view for login page
+    log_page_view('Login Page')
     return render_template('login.html')
 
 
@@ -61,6 +90,7 @@ def login():
 def signup():
     """Signup page and handler"""
     if request.method == 'GET':
+        log_page_view('Signup Page')
         return render_template('signup.html')
     
     # POST - JSON API for signup
@@ -69,9 +99,21 @@ def signup():
     password = data.get('password', '')
     
     if not email or not password:
+        log_auth_event(
+            ActivityType.SIGNUP_FAILED,
+            user_email=email,
+            success=False,
+            error_message='Email and password required'
+        )
         return jsonify({'success': False, 'error': 'Email and password required'})
     
     if len(password) < 8:
+        log_auth_event(
+            ActivityType.SIGNUP_FAILED,
+            user_email=email,
+            success=False,
+            error_message='Password too short'
+        )
         return jsonify({'success': False, 'error': 'Password must be at least 8 characters'})
     
     # Check if this is the admin email
@@ -82,13 +124,35 @@ def signup():
     success, result, user_id = create_user(email, password)
     
     if not success:
+        log_auth_event(
+            ActivityType.SIGNUP_FAILED,
+            user_email=email,
+            success=False,
+            error_message=result
+        )
         return jsonify({'success': False, 'error': result})
+    
+    # Log successful signup
+    log_auth_event(
+        ActivityType.SIGNUP,
+        user_id=user_id,
+        user_email=email,
+        success=True
+    )
     
     if is_admin:
         # Admin gets direct access without Stripe
         session_token = create_session(user_id, request.remote_addr, request.user_agent.string[:500])
         session['session_token'] = session_token
         session.permanent = True
+        
+        # Log admin login after signup
+        log_auth_event(
+            ActivityType.LOGIN,
+            user_id=user_id,
+            user_email=email,
+            success=True
+        )
         return jsonify({'success': True, 'is_admin': True})
     
     # Create Stripe checkout session for regular users
@@ -161,7 +225,7 @@ def subscription_success():
                 session.permanent = True
                 
                 flash('Welcome! Your subscription is now active.', 'success')
-                return redirect(url_for('home'))
+                return redirect(url_for('index'))
         except Exception as e:
             print(f"Error retrieving checkout session: {e}")
     
@@ -182,8 +246,17 @@ def verify(token):
     success, message = verify_email(token)
     
     if success:
+        log_auth_event(
+            ActivityType.EMAIL_VERIFIED,
+            success=True
+        )
         flash(message, 'success')
     else:
+        log_auth_event(
+            ActivityType.EMAIL_VERIFIED,
+            success=False,
+            error_message=message
+        )
         flash(message, 'error')
     
     return redirect(url_for('auth.login'))
@@ -202,10 +275,17 @@ def forgot_password():
     """Password reset request"""
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
+        # Log password reset request
+        log_auth_event(
+            ActivityType.PASSWORD_RESET_REQUEST,
+            user_email=email,
+            success=True
+        )
         # TODO: Implement password reset
         flash('If an account exists with that email, a reset link has been sent.', 'success')
         return redirect(url_for('auth.login'))
     
+    log_page_view('Forgot Password Page')
     return render_template('forgot_password.html')
 
 
@@ -213,6 +293,17 @@ def forgot_password():
 def logout():
     """Logout user"""
     session_token = session.get('session_token')
+    
+    # Log logout before destroying session
+    user = validate_session(session_token) if session_token else None
+    if user:
+        log_auth_event(
+            ActivityType.LOGOUT,
+            user_id=user.get('id'),
+            user_email=user.get('email'),
+            success=True
+        )
+    
     if session_token:
         destroy_session(session_token)
     

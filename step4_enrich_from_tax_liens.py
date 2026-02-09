@@ -22,12 +22,17 @@ Updates buildings table fields:
 import psycopg2
 import psycopg2.extras
 import os
+import sys
 import requests
 import time
 from datetime import datetime
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 # Load .env from dashboard_html subdirectory
 load_dotenv('dashboard_html/.env')

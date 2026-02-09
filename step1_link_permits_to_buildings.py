@@ -9,7 +9,12 @@ Step 1: Link permits to buildings table
 import psycopg2
 import psycopg2.extras
 import os
+import sys
 from dotenv import load_dotenv
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 load_dotenv()
 

@@ -17,9 +17,14 @@ Populates:
 import psycopg2
 import psycopg2.extras
 import os
+import sys
 import requests
 import time
 from dotenv import load_dotenv
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 load_dotenv()
 

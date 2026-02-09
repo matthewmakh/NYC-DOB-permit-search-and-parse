@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activity Logs - Admin Panel</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        /* Admin-specific styles */
+        .admin-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        
+        .admin-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1a1a2e;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .admin-title i {
+            color: #6366f1;
+        }
+        
+        /* Stats Cards */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .stat-card-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+        
+        .stat-card-label {
+            color: #6b7280;
+            font-size: 14px;
+        }
+        
+        .stat-card-icon {
+            float: right;
+            font-size: 24px;
+            opacity: 0.3;
+        }
+        
+        /* Filter Section */
+        .filters-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .filters-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+        
+        .filters-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #374151;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .filters-toggle {
+            color: #6b7280;
+            transition: transform 0.2s;
+        }
+        
+        .filters-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+        
+        .filters-body {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+        
+        .filters-body.collapsed {
+            display: none;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        
+        .filter-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #6b7280;
+            text-transform: uppercase;
+        }
+        
+        .filter-input, .filter-select {
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #f9fafb;
+            transition: all 0.2s;
+        }
+        
+        .filter-input:focus, .filter-select:focus {
+            border-color: #6366f1;
+            outline: none;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+        
+        .filter-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+        }
+        
+        /* Activity Table */
+        .activity-table-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e5e7eb;
+            overflow: hidden;
+        }
+        
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #e5e7eb;
+            background: #f9fafb;
+        }
+        
+        .table-title {
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .table-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .activity-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .activity-table th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            white-space: nowrap;
+        }
+        
+        .activity-table td {
+            padding: 12px 16px;
+            font-size: 13px;
+            color: #374151;
+            border-bottom: 1px solid #f3f4f6;
+            vertical-align: top;
+        }
+        
+        .activity-table tr:hover {
+            background: #f9fafb;
+        }
+        
+        .activity-table tr.error-row {
+            background: #fef2f2;
+        }
+        
+        .activity-table tr.error-row:hover {
+            background: #fee2e2;
+        }
+        
+        /* Activity Type Badges */
+        .activity-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .badge-auth {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+        
+        .badge-navigation {
+            background: #f3e8ff;
+            color: #7c3aed;
+        }
+        
+        .badge-interaction {
+            background: #fef3c7;
+            color: #b45309;
+        }
+        
+        .badge-data {
+            background: #d1fae5;
+            color: #047857;
+        }
+        
+        .badge-system {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        .badge-admin {
+            background: #fce7f3;
+            color: #be185d;
+        }
+        
+        /* Status Indicators */
+        .status-success {
+            color: #10b981;
+        }
+        
+        .status-error {
+            color: #ef4444;
+        }
+        
+        /* Device Icons */
+        .device-icon {
+            margin-right: 6px;
+            color: #6b7280;
+        }
+        
+        /* IP and Location Info */
+        .location-info {
+            font-size: 11px;
+            color: #9ca3af;
+            margin-top: 2px;
+        }
+        
+        /* User Info */
+        .user-email {
+            font-weight: 500;
+            color: #1a1a2e;
+        }
+        
+        .user-anonymous {
+            color: #9ca3af;
+            font-style: italic;
+        }
+        
+        /* Timestamp */
+        .timestamp {
+            white-space: nowrap;
+            font-size: 12px;
+        }
+        
+        .timestamp-date {
+            color: #374151;
+        }
+        
+        .timestamp-time {
+            color: #9ca3af;
+        }
+        
+        /* Description */
+        .activity-description {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-top: 1px solid #e5e7eb;
+            background: #f9fafb;
+        }
+        
+        .pagination-info {
+            font-size: 14px;
+            color: #6b7280;
+        }
+        
+        .pagination-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        /* Quick Filters Pills */
+        .quick-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        
+        .quick-filter-pill {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #e5e7eb;
+            background: white;
+            color: #6b7280;
+            transition: all 0.2s;
+        }
+        
+        .quick-filter-pill:hover {
+            border-color: #6366f1;
+            color: #6366f1;
+        }
+        
+        .quick-filter-pill.active {
+            background: #6366f1;
+            border-color: #6366f1;
+            color: white;
+        }
+        
+        /* Loading State */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .loading-overlay.active {
+            display: flex;
+        }
+        
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Detail Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-overlay.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow: auto;
+        }
+        
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: #6b7280;
+            cursor: pointer;
+        }
+        
+        .modal-body {
+            padding: 20px;
+        }
+        
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        
+        .detail-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        
+        .detail-label {
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        
+        .detail-value {
+            font-size: 14px;
+            color: #1a1a2e;
+            word-break: break-word;
+        }
+        
+        .detail-full-width {
+            grid-column: span 2;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .filters-body {
+                grid-template-columns: 1fr;
+            }
+            
+            .activity-table {
+                font-size: 12px;
+            }
+            
+            .activity-table th,
+            .activity-table td {
+                padding: 8px 10px;
+            }
+            
+            .hide-mobile {
+                display: none;
+            }
+            
+            .detail-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .detail-full-width {
+                grid-column: span 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🏙️ NYC Real Estate Intel</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/construction" class="nav-link">🏗️ Construction</a>
+                <a href="/contractors" class="nav-link">👷 Contractors</a>
+                <a href="/investments" class="nav-link">💰 Investments</a>
+                <a href="/properties" class="nav-link">🏢 Properties</a>
+                <a href="/analytics" class="nav-link">📊 Analytics</a>
+                {% if user and user.is_admin %}
+                <a href="/admin/activity" class="nav-link active">🔐 Activity Logs</a>
+                {% endif %}
+            </div>
+            <div class="nav-actions">
+                <a href="/auth/logout" class="btn btn-outline logout-btn" title="Logout">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="admin-container">
+        <div class="admin-header">
+            <h1 class="admin-title">
+                <i class="fas fa-chart-line"></i>
+                Activity Logs
+            </h1>
+            <div>
+                <button class="btn btn-outline" id="refreshBtn">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+                <button class="btn btn-primary" id="exportLogsBtn">
+                    <i class="fas fa-download"></i> Export
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="stats-row" id="statsRow">
+            <div class="stat-card">
+                <i class="fas fa-list-ul stat-card-icon"></i>
+                <div class="stat-card-value" id="totalActivities">-</div>
+                <div class="stat-card-label">Total Activities</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-users stat-card-icon"></i>
+                <div class="stat-card-value" id="uniqueUsers">-</div>
+                <div class="stat-card-label">Unique Users</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-globe stat-card-icon"></i>
+                <div class="stat-card-value" id="uniqueIPs">-</div>
+                <div class="stat-card-label">Unique IPs</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-sign-in-alt stat-card-icon"></i>
+                <div class="stat-card-value" id="loginCount">-</div>
+                <div class="stat-card-label">Logins (Today)</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-exclamation-circle stat-card-icon"></i>
+                <div class="stat-card-value" id="errorCount">-</div>
+                <div class="stat-card-label">Errors</div>
+            </div>
+        </div>
+
+        <!-- Quick Filters -->
+        <div class="quick-filters">
+            <button class="quick-filter-pill active" data-filter="all">All Activities</button>
+            <button class="quick-filter-pill" data-filter="auth">🔐 Auth</button>
+            <button class="quick-filter-pill" data-filter="navigation">📄 Page Views</button>
+            <button class="quick-filter-pill" data-filter="data">📊 Data</button>
+            <button class="quick-filter-pill" data-filter="interaction">👆 Interactions</button>
+            <button class="quick-filter-pill" data-filter="system">⚠️ Errors</button>
+        </div>
+
+        <!-- Filters Section -->
+        <div class="filters-section">
+            <div class="filters-header" id="filtersHeader">
+                <div class="filters-title">
+                    <i class="fas fa-filter"></i> Advanced Filters
+                </div>
+                <i class="fas fa-chevron-down filters-toggle" id="filtersToggle"></i>
+            </div>
+            <div class="filters-body collapsed" id="filtersBody">
+                <div class="filter-group">
+                    <label class="filter-label">User</label>
+                    <select class="filter-select" id="filterUser">
+                        <option value="">All Users</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Activity Type</label>
+                    <select class="filter-select" id="filterType">
+                        <option value="">All Types</option>
+                        <option value="login">Login</option>
+                        <option value="login_failed">Login Failed</option>
+                        <option value="logout">Logout</option>
+                        <option value="signup">Signup</option>
+                        <option value="page_view">Page View</option>
+                        <option value="search">Search</option>
+                        <option value="export">Export</option>
+                        <option value="api_call">API Call</option>
+                        <option value="error">Error</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">IP Address</label>
+                    <input type="text" class="filter-input" id="filterIP" placeholder="e.g., 192.168.1.1">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Start Date</label>
+                    <input type="date" class="filter-input" id="filterStartDate">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">End Date</label>
+                    <input type="date" class="filter-input" id="filterEndDate">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Search Description</label>
+                    <input type="text" class="filter-input" id="filterSearch" placeholder="Search...">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Status</label>
+                    <select class="filter-select" id="filterSuccess">
+                        <option value="">All</option>
+                        <option value="true">Success Only</option>
+                        <option value="false">Errors Only</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Results Per Page</label>
+                    <select class="filter-select" id="filterLimit">
+                        <option value="50">50</option>
+                        <option value="100" selected>100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                    </select>
+                </div>
+            </div>
+            <div class="filter-actions" id="filterActions" style="display:none;">
+                <button class="btn btn-primary" id="applyFiltersBtn">Apply Filters</button>
+                <button class="btn btn-outline" id="clearFiltersBtn">Clear Filters</button>
+            </div>
+        </div>
+
+        <!-- Activity Table -->
+        <div class="activity-table-container">
+            <div class="table-header">
+                <span class="table-title">Activity Log</span>
+                <span id="resultCount" style="color: #6b7280; font-size: 14px;"></span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="activity-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>User</th>
+                            <th>Activity</th>
+                            <th>Description</th>
+                            <th class="hide-mobile">Device</th>
+                            <th class="hide-mobile">IP / Location</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityTableBody">
+                        <!-- Dynamic content -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination">
+                <div class="pagination-info" id="paginationInfo">
+                    Showing 0 results
+                </div>
+                <div class="pagination-controls">
+                    <button class="btn btn-outline" id="prevPageBtn" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </button>
+                    <button class="btn btn-outline" id="nextPageBtn">
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Detail Modal -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Activity Details</h3>
+                <button class="modal-close" id="closeModalBtn">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentFilters = {
+            activity_category: '',
+            activity_type: '',
+            user_id: '',
+            ip_address: '',
+            start_date: '',
+            end_date: '',
+            search: '',
+            success_only: '',
+            limit: 100,
+            offset: 0
+        };
+        
+        let allLogs = [];
+        let allUsers = [];
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadUsers();
+            loadStats();
+            loadLogs();
+            setupEventListeners();
+        });
+        
+        function setupEventListeners() {
+            // Filters toggle
+            document.getElementById('filtersHeader').addEventListener('click', function() {
+                const body = document.getElementById('filtersBody');
+                const toggle = document.getElementById('filtersToggle');
+                const actions = document.getElementById('filterActions');
+                body.classList.toggle('collapsed');
+                toggle.classList.toggle('collapsed');
+                actions.style.display = body.classList.contains('collapsed') ? 'none' : 'flex';
+            });
+            
+            // Quick filters
+            document.querySelectorAll('.quick-filter-pill').forEach(pill => {
+                pill.addEventListener('click', function() {
+                    document.querySelectorAll('.quick-filter-pill').forEach(p => p.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    const filter = this.dataset.filter;
+                    if (filter === 'all') {
+                        currentFilters.activity_category = '';
+                        currentFilters.success_only = '';
+                    } else if (filter === 'system') {
+                        currentFilters.activity_category = 'system';
+                        currentFilters.success_only = 'false';
+                    } else {
+                        currentFilters.activity_category = filter;
+                        currentFilters.success_only = '';
+                    }
+                    currentFilters.offset = 0;
+                    loadLogs();
+                });
+            });
+            
+            // Apply filters
+            document.getElementById('applyFiltersBtn').addEventListener('click', applyAdvancedFilters);
+            document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
+            
+            // Refresh
+            document.getElementById('refreshBtn').addEventListener('click', function() {
+                loadStats();
+                loadLogs();
+            });
+            
+            // Pagination
+            document.getElementById('prevPageBtn').addEventListener('click', function() {
+                if (currentFilters.offset >= currentFilters.limit) {
+                    currentFilters.offset -= currentFilters.limit;
+                    loadLogs();
+                }
+            });
+            
+            document.getElementById('nextPageBtn').addEventListener('click', function() {
+                currentFilters.offset += currentFilters.limit;
+                loadLogs();
+            });
+            
+            // Modal close
+            document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+            document.getElementById('detailModal').addEventListener('click', function(e) {
+                if (e.target === this) closeModal();
+            });
+            
+            // Export
+            document.getElementById('exportLogsBtn').addEventListener('click', exportLogs);
+        }
+        
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.add('active');
+        }
+        
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.remove('active');
+        }
+        
+        async function loadUsers() {
+            try {
+                const response = await fetch('/api/admin/users');
+                const data = await response.json();
+                if (data.success) {
+                    allUsers = data.users;
+                    const select = document.getElementById('filterUser');
+                    data.users.forEach(user => {
+                        const option = document.createElement('option');
+                        option.value = user.id;
+                        option.textContent = user.email;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading users:', error);
+            }
+        }
+        
+        async function loadStats() {
+            try {
+                // Get today's date for filtering
+                const today = new Date().toISOString().split('T')[0];
+                
+                const response = await fetch(`/api/admin/activity-stats?start_date=${today}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const stats = data.stats;
+                    document.getElementById('totalActivities').textContent = stats.total_count?.toLocaleString() || '0';
+                    document.getElementById('uniqueUsers').textContent = stats.unique_users?.toLocaleString() || '0';
+                    document.getElementById('uniqueIPs').textContent = stats.unique_ips?.toLocaleString() || '0';
+                    document.getElementById('loginCount').textContent = (stats.type_counts?.login || 0).toLocaleString();
+                    document.getElementById('errorCount').textContent = stats.failed_count?.toLocaleString() || '0';
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+        
+        async function loadLogs() {
+            showLoading();
+            
+            try {
+                const params = new URLSearchParams();
+                if (currentFilters.activity_category) params.append('activity_category', currentFilters.activity_category);
+                if (currentFilters.activity_type) params.append('activity_type', currentFilters.activity_type);
+                if (currentFilters.user_id) params.append('user_id', currentFilters.user_id);
+                if (currentFilters.ip_address) params.append('ip_address', currentFilters.ip_address);
+                if (currentFilters.start_date) params.append('start_date', currentFilters.start_date);
+                if (currentFilters.end_date) params.append('end_date', currentFilters.end_date);
+                if (currentFilters.search) params.append('search', currentFilters.search);
+                if (currentFilters.success_only) params.append('success_only', currentFilters.success_only);
+                params.append('limit', currentFilters.limit);
+                params.append('offset', currentFilters.offset);
+                
+                const response = await fetch(`/api/admin/activity-logs?${params.toString()}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    allLogs = data.logs;
+                    renderTable(data.logs);
+                    updatePagination(data.count);
+                }
+            } catch (error) {
+                console.error('Error loading logs:', error);
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        function renderTable(logs) {
+            const tbody = document.getElementById('activityTableBody');
+            
+            if (logs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 40px; color: #6b7280;">
+                            <i class="fas fa-inbox" style="font-size: 48px; margin-bottom: 16px; display: block; opacity: 0.3;"></i>
+                            No activity logs found
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = logs.map((log, index) => {
+                const isError = !log.action_success;
+                const timestamp = new Date(log.created_at);
+                const dateStr = timestamp.toLocaleDateString();
+                const timeStr = timestamp.toLocaleTimeString();
+                
+                return `
+                    <tr class="${isError ? 'error-row' : ''}" data-index="${index}">
+                        <td>
+                            <div class="timestamp">
+                                <div class="timestamp-date">${dateStr}</div>
+                                <div class="timestamp-time">${timeStr}</div>
+                            </div>
+                        </td>
+                        <td>
+                            ${log.user_email 
+                                ? `<span class="user-email">${escapeHtml(log.user_email)}</span>` 
+                                : '<span class="user-anonymous">Anonymous</span>'}
+                        </td>
+                        <td>
+                            <span class="activity-badge badge-${log.activity_category || 'system'}">
+                                ${getCategoryIcon(log.activity_category)}
+                                ${formatActivityType(log.activity_type)}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="activity-description" title="${escapeHtml(log.activity_description || '')}">
+                                ${escapeHtml(log.activity_description || log.page_name || '-')}
+                            </div>
+                        </td>
+                        <td class="hide-mobile">
+                            ${getDeviceIcon(log.device_type)}
+                            ${log.device_browser || 'Unknown'}
+                        </td>
+                        <td class="hide-mobile">
+                            <div>${log.ip_address || '-'}</div>
+                            ${log.ip_city ? `<div class="location-info">${log.ip_city}, ${log.ip_country || ''}</div>` : ''}
+                        </td>
+                        <td>
+                            ${log.action_success 
+                                ? '<i class="fas fa-check-circle status-success"></i>' 
+                                : '<i class="fas fa-times-circle status-error"></i>'}
+                        </td>
+                        <td>
+                            <button class="btn btn-outline btn-sm" onclick="showDetails(${index})" title="View Details">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        function updatePagination(count) {
+            const start = currentFilters.offset + 1;
+            const end = currentFilters.offset + count;
+            document.getElementById('paginationInfo').textContent = 
+                count === 0 ? 'No results' : `Showing ${start} - ${end}`;
+            document.getElementById('resultCount').textContent = `(${count} results)`;
+            
+            document.getElementById('prevPageBtn').disabled = currentFilters.offset === 0;
+            document.getElementById('nextPageBtn').disabled = count < currentFilters.limit;
+        }
+        
+        function applyAdvancedFilters() {
+            currentFilters.user_id = document.getElementById('filterUser').value;
+            currentFilters.activity_type = document.getElementById('filterType').value;
+            currentFilters.ip_address = document.getElementById('filterIP').value;
+            currentFilters.start_date = document.getElementById('filterStartDate').value;
+            currentFilters.end_date = document.getElementById('filterEndDate').value;
+            currentFilters.search = document.getElementById('filterSearch').value;
+            currentFilters.success_only = document.getElementById('filterSuccess').value;
+            currentFilters.limit = parseInt(document.getElementById('filterLimit').value);
+            currentFilters.offset = 0;
+            
+            loadLogs();
+        }
+        
+        function clearFilters() {
+            document.getElementById('filterUser').value = '';
+            document.getElementById('filterType').value = '';
+            document.getElementById('filterIP').value = '';
+            document.getElementById('filterStartDate').value = '';
+            document.getElementById('filterEndDate').value = '';
+            document.getElementById('filterSearch').value = '';
+            document.getElementById('filterSuccess').value = '';
+            document.getElementById('filterLimit').value = '100';
+            
+            currentFilters = {
+                activity_category: '',
+                activity_type: '',
+                user_id: '',
+                ip_address: '',
+                start_date: '',
+                end_date: '',
+                search: '',
+                success_only: '',
+                limit: 100,
+                offset: 0
+            };
+            
+            document.querySelectorAll('.quick-filter-pill').forEach(p => p.classList.remove('active'));
+            document.querySelector('.quick-filter-pill[data-filter="all"]').classList.add('active');
+            
+            loadLogs();
+        }
+        
+        function showDetails(index) {
+            const log = allLogs[index];
+            if (!log) return;
+            
+            const timestamp = new Date(log.created_at);
+            
+            let html = `<div class="detail-grid">`;
+            
+            // Basic info
+            html += detailItem('Timestamp', timestamp.toLocaleString());
+            html += detailItem('User', log.user_email || 'Anonymous');
+            html += detailItem('Activity Type', formatActivityType(log.activity_type));
+            html += detailItem('Category', log.activity_category || '-');
+            html += detailItem('Status', log.action_success ? '✅ Success' : '❌ Failed');
+            html += detailItem('Session Token', log.session_token ? '***' + log.session_token.slice(-8) : '-');
+            
+            // Page info
+            html += detailItem('Page Name', log.page_name || '-', true);
+            html += detailItem('Page URL', log.page_url || '-', true);
+            html += detailItem('Referrer', log.referrer_url || '-', true);
+            
+            // Description
+            html += detailItem('Description', log.activity_description || '-', true);
+            
+            // Error info
+            if (log.error_message) {
+                html += detailItem('Error Message', log.error_message, true);
+            }
+            
+            // Request info
+            if (log.http_method) {
+                html += detailItem('HTTP Method', log.http_method);
+            }
+            if (log.endpoint) {
+                html += detailItem('Endpoint', log.endpoint);
+            }
+            if (log.response_status) {
+                html += detailItem('Response Status', log.response_status);
+            }
+            if (log.response_time_ms) {
+                html += detailItem('Response Time', log.response_time_ms + 'ms');
+            }
+            
+            // Device info
+            html += detailItem('Device Type', log.device_type || '-');
+            html += detailItem('OS', log.device_os || '-');
+            html += detailItem('Browser', `${log.device_browser || 'Unknown'} ${log.browser_version || ''}`);
+            html += detailItem('User Agent', log.user_agent || '-', true);
+            
+            // Location info
+            html += detailItem('IP Address', log.ip_address || '-');
+            html += detailItem('Location', 
+                [log.ip_city, log.ip_region, log.ip_country].filter(Boolean).join(', ') || '-');
+            if (log.ip_timezone) html += detailItem('Timezone', log.ip_timezone);
+            if (log.ip_isp) html += detailItem('ISP', log.ip_isp);
+            
+            // Metadata
+            if (log.metadata) {
+                html += detailItem('Additional Data', JSON.stringify(log.metadata, null, 2), true);
+            }
+            if (log.request_params) {
+                html += detailItem('Request Params', JSON.stringify(log.request_params, null, 2), true);
+            }
+            if (log.filter_params) {
+                html += detailItem('Filter Params', JSON.stringify(log.filter_params, null, 2), true);
+            }
+            
+            html += '</div>';
+            
+            document.getElementById('modalBody').innerHTML = html;
+            document.getElementById('detailModal').classList.add('active');
+        }
+        
+        function detailItem(label, value, fullWidth = false) {
+            return `
+                <div class="detail-item ${fullWidth ? 'detail-full-width' : ''}">
+                    <div class="detail-label">${escapeHtml(label)}</div>
+                    <div class="detail-value">${escapeHtml(String(value))}</div>
+                </div>
+            `;
+        }
+        
+        function closeModal() {
+            document.getElementById('detailModal').classList.remove('active');
+        }
+        
+        function exportLogs() {
+            // Create CSV from current logs
+            if (allLogs.length === 0) {
+                alert('No logs to export');
+                return;
+            }
+            
+            const headers = [
+                'Timestamp', 'User Email', 'Activity Type', 'Category', 'Description',
+                'Page URL', 'Device Type', 'Browser', 'IP Address', 'Location',
+                'Success', 'Error Message'
+            ];
+            
+            const rows = allLogs.map(log => [
+                log.created_at,
+                log.user_email || '',
+                log.activity_type,
+                log.activity_category,
+                log.activity_description || '',
+                log.page_url || '',
+                log.device_type || '',
+                log.device_browser || '',
+                log.ip_address || '',
+                [log.ip_city, log.ip_country].filter(Boolean).join(', '),
+                log.action_success ? 'Yes' : 'No',
+                log.error_message || ''
+            ]);
+            
+            const csv = [headers, ...rows]
+                .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+                .join('\n');
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `activity_logs_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        // Utility functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function getCategoryIcon(category) {
+            const icons = {
+                auth: '🔐',
+                navigation: '📄',
+                interaction: '👆',
+                data: '📊',
+                system: '⚙️',
+                admin: '👑'
+            };
+            return icons[category] || '📋';
+        }
+        
+        function formatActivityType(type) {
+            if (!type) return 'Unknown';
+            return type.split('_').map(word => 
+                word.charAt(0).toUpperCase() + word.slice(1)
+            ).join(' ');
+        }
+        
+        function getDeviceIcon(type) {
+            const icons = {
+                mobile: '<i class="fas fa-mobile-alt device-icon"></i>',
+                tablet: '<i class="fas fa-tablet-alt device-icon"></i>',
+                desktop: '<i class="fas fa-desktop device-icon"></i>'
+            };
+            return icons[type] || '<i class="fas fa-question device-icon"></i>';
+        }
+    </script>
+</body>
+</html>

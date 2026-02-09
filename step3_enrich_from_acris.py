@@ -11,10 +11,15 @@ Step 3: Enhanced ACRIS Enrichment - Full Transaction History & Party Intelligenc
 import psycopg2
 import psycopg2.extras
 import os
+import sys
 import requests
 import time
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 load_dotenv()
 
