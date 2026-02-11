@@ -98,14 +98,24 @@ def link_permits_to_buildings():
     2. Create building records for unique BBLs
     3. Link permits to buildings via BBL
     """
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    print("Step 1: Linking Permits to Buildings", flush=True)
+    print("=" * 60, flush=True)
+    
+    # Debug: Show connection info (masked)
+    db_url_masked = DATABASE_URL[:30] + "..." if DATABASE_URL else "None"
+    print(f"🔌 Connecting to database ({db_url_masked})...", flush=True)
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor, connect_timeout=30)
+        print("✅ Connected to database", flush=True)
+    except Exception as e:
+        print(f"❌ Database connection failed: {e}", flush=True)
+        raise
+    
     cur = conn.cursor()
     
-    print("Step 1: Linking Permits to Buildings")
-    print("=" * 60)
-    
     # Phase 1: Derive BBL for permits with block/lot but no BBL
-    print("\n📊 Phase 1: Deriving BBLs from block/lot...")
+    print("\n📊 Phase 1: Deriving BBLs from block/lot...", flush=True)
     cur.execute("""
         SELECT id, permit_no, address, block, lot, bin
         FROM permits
