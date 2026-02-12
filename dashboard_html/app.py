@@ -99,7 +99,8 @@ if DATABASE_URL:
         'database': parsed.path.lstrip('/'),
         'user': parsed.username,
         'password': parsed.password,
-        'connect_timeout': 10
+        'connect_timeout': 10,
+        'sslmode': 'require'
     }
     print(f"✅ Using DATABASE_URL (host: {parsed.hostname})", flush=True)
 else:
@@ -110,7 +111,8 @@ else:
         'database': os.getenv('DB_NAME', 'permits_db'),
         'user': os.getenv('DB_USER', 'postgres'),
         'password': os.getenv('DB_PASSWORD', ''),
-        'connect_timeout': 10
+        'connect_timeout': 10,
+        'sslmode': 'require'  # Railway requires SSL for public connections
     }
     print(f"✅ Using individual DB vars (host: {DB_CONFIG['host']}, port: {DB_CONFIG['port']}, db: {DB_CONFIG['database']}, user: {DB_CONFIG['user']}, pass: {'*' * len(DB_CONFIG['password']) if DB_CONFIG['password'] else 'EMPTY!'})", flush=True)
 
