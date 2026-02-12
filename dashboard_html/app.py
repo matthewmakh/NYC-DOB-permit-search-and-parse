@@ -79,15 +79,40 @@ cache = Cache(app, config={
     'CACHE_DEFAULT_TIMEOUT': 300  # 5 minutes
 })
 
-# Database configuration
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'port': os.getenv('DB_PORT', '5432'),
-    'database': os.getenv('DB_NAME', 'permits_db'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', ''),
-    'connect_timeout': 10
-}
+# Force unbuffered output for Railway logging
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+print(f"[STARTUP] Flask app loading...", flush=True)
+
+# Database configuration - support both DATABASE_URL and individual vars
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+if DATABASE_URL:
+    # Parse DATABASE_URL (format: postgresql://user:password@host:port/database)
+    from urllib.parse import urlparse
+    parsed = urlparse(DATABASE_URL)
+    DB_CONFIG = {
+        'host': parsed.hostname,
+        'port': str(parsed.port or 5432),
+        'database': parsed.path.lstrip('/'),
+        'user': parsed.username,
+        'password': parsed.password,
+        'connect_timeout': 10
+    }
+    print(f"✅ Using DATABASE_URL (host: {parsed.hostname})", flush=True)
+else:
+    # Fall back to individual environment variables
+    DB_CONFIG = {
+        'host': os.getenv('DB_HOST', 'localhost'),
+        'port': os.getenv('DB_PORT', '5432'),
+        'database': os.getenv('DB_NAME', 'permits_db'),
+        'user': os.getenv('DB_USER', 'postgres'),
+        'password': os.getenv('DB_PASSWORD', ''),
+        'connect_timeout': 10
+    }
+    print(f"✅ Using individual DB vars (host: {DB_CONFIG['host']}, port: {DB_CONFIG['port']}, db: {DB_CONFIG['database']}, user: {DB_CONFIG['user']}, pass: {'*' * len(DB_CONFIG['password']) if DB_CONFIG['password'] else 'EMPTY!'})", flush=True)
 
 # Simple connection pool: 2-10 connections per worker
 # Railway free tier supports up to 20 connections total
@@ -100,8 +125,15 @@ def init_db_pool():
     if db_pool is None:
         # Use smaller pool per worker to avoid exceeding connection limit
         # 2 workers × 5 max connections = 10 total max
-        db_pool = pool.SimpleConnectionPool(1, 5, **DB_CONFIG)
-        print(f"✅ Initialized connection pool for worker PID {os.getpid()}")
+        try:
+            print(f"🔌 Creating connection pool to {DB_CONFIG['host']}:{DB_CONFIG['port']}...", flush=True)
+            db_pool = pool.SimpleConnectionPool(1, 5, **DB_CONFIG)
+            print(f"✅ Initialized connection pool for worker PID {os.getpid()}", flush=True)
+        except Exception as e:
+            print(f"❌ Failed to create connection pool: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
     return db_pool
 
 
@@ -131,14 +163,17 @@ def get_db_connection():
                 conn = db_pool.getconn()
         return conn
     except Exception as e:
-        print(f"Error getting connection from pool: {e}")
+        print(f"❌ Error getting connection from pool: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         # If pool is having issues, try to recreate it
         try:
             db_pool = None
             init_db_pool()
             return db_pool.getconn()
         except Exception as e2:
-            print(f"Failed to recreate pool: {e2}")
+            print(f"❌ Failed to recreate pool: {e2}", flush=True)
+            traceback.print_exc()
             raise
 
 
