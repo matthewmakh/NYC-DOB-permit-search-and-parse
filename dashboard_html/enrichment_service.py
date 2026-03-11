@@ -1,6 +1,7 @@
 """
-Enformion Enrichment Service
+Enrichment Service
 Handles contact enrichment API calls and storing results
+Supports: Enformion (primary) and Apify TruePeopleSearch (fallback)
 """
 
 import os
@@ -9,11 +10,16 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import json
+import time
 
-# Enformion API Configuration
+# Enformion API Configuration (Primary)
 ENFORMION_API_URL = 'https://devapi.enformion.com/Contact/EnrichPlus'
 ENFORMION_AP_NAME = os.getenv('ENFORMION_AP_NAME')
 ENFORMION_AP_PASSWORD = os.getenv('ENFORMION_AP_PASSWORD')
+
+# Apify TruePeopleSearch Configuration (Fallback)
+APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN')
+APIFY_ACTOR_ID = 'vmf6h5lxPAkB1W2gT'  # Skip Trace / TruePeopleSearch actor
 
 
 def get_db_connection():
@@ -165,6 +171,138 @@ def call_enformion_api(first_name, last_name, address_line1=None, address_line2=
         return False, None, str(e)
 
 
+def call_apify_truepeoplesearch(first_name, last_name, address_line1=None, city=None, state=None, zipcode=None):
+    """
+    Call Apify TruePeopleSearch actor as fallback enrichment
+    Returns: (success, response_data, error_message)
+    """
+    if not APIFY_API_TOKEN:
+        return False, None, "Apify API token not configured"
+    
+    # Build the search input - Name+CityStateZip format
+    # Format: "FIRSTNAME LASTNAME; CITY, STATE ZIP" or "FIRSTNAME LASTNAME; STATE ZIP"
+    full_name = f"{first_name or ''} {last_name or ''}".strip()
+    location = f"{city or 'Brooklyn'}, {state or 'NY'}"
+    if zipcode:
+        location += f" {zipcode}"
+    
+    name_query = f"{full_name}; {location}"
+    
+    run_input = {
+        "name": [name_query],
+        "max_results": 1
+    }
+    
+    print(f"Apify TruePeopleSearch API call with input: {run_input}")
+    
+    try:
+        # Start the actor run
+        start_url = f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}/runs?token={APIFY_API_TOKEN}"
+        response = requests.post(
+            start_url,
+            json=run_input,
+            headers={'Content-Type': 'application/json'},
+            timeout=30
+        )
+        
+        if response.status_code != 201:
+            return False, None, f"Failed to start Apify actor: {response.status_code} - {response.text[:200]}"
+        
+        run_data = response.json()
+        run_id = run_data.get('data', {}).get('id')
+        
+        if not run_id:
+            return False, None, "Failed to get Apify run ID"
+        
+        print(f"Apify run started: {run_id}")
+        
+        # Poll for completion (max 60 seconds)
+        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_API_TOKEN}"
+        for _ in range(30):  # 30 attempts, 2 seconds apart = 60 seconds max
+            time.sleep(2)
+            status_response = requests.get(status_url, timeout=10)
+            
+            if status_response.status_code != 200:
+                continue
+                
+            status_data = status_response.json()
+            run_status = status_data.get('data', {}).get('status')
+            
+            print(f"Apify run status: {run_status}")
+            
+            if run_status == 'SUCCEEDED':
+                # Get the dataset items
+                dataset_id = status_data.get('data', {}).get('defaultDatasetId')
+                if dataset_id:
+                    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_API_TOKEN}"
+                    items_response = requests.get(items_url, timeout=30)
+                    
+                    if items_response.status_code == 200:
+                        items = items_response.json()
+                        if items and len(items) > 0:
+                            return True, items[0], None
+                        return False, None, "No results found"
+                    
+                return False, None, "Failed to get dataset items"
+            elif run_status in ['FAILED', 'ABORTED', 'TIMED-OUT']:
+                return False, None, f"Apify run {run_status}"
+        
+        return False, None, "Apify run timed out"
+        
+    except requests.Timeout:
+        return False, None, "Apify API request timed out"
+    except Exception as e:
+        print(f"Apify exception: {e}")
+        return False, None, str(e)
+
+
+def extract_apify_contact_info(api_response):
+    """
+    Extract phones and emails from Apify TruePeopleSearch response
+    Returns: (phones_list, emails_list, person_id)
+    """
+    phones = []
+    emails = []
+    person_id = None
+    
+    if not api_response:
+        return phones, emails, person_id
+    
+    print(f"Extracting contact info from Apify response: {str(api_response)[:500]}")
+    
+    try:
+        # Extract person link as ID
+        person_id = api_response.get('Person Link', '')
+        
+        # Extract phones (up to 5)
+        for i in range(1, 6):
+            phone_num = api_response.get(f'Phone-{i}', '')
+            phone_type = api_response.get(f'Phone-{i} Type', '')
+            if phone_num:
+                phones.append({
+                    'number': phone_num,
+                    'type': phone_type.lower() if phone_type else 'unknown',
+                    'is_valid': True
+                })
+        
+        # Extract emails (up to 5)
+        for i in range(1, 6):
+            email_addr = api_response.get(f'Email-{i}', '')
+            if email_addr:
+                emails.append({
+                    'email': email_addr,
+                    'is_valid': True
+                })
+        
+    except Exception as e:
+        print(f"Error extracting Apify contact info: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print(f"Extracted from Apify: {len(phones)} phones, {len(emails)} emails")
+    return phones, emails, person_id
+
+
 def extract_contact_info(api_response):
     """
     Extract phones and emails from Enformion response
@@ -275,11 +413,35 @@ def enrich_owner(building_id, owner_name, address, user_id):
             first_name, last_name, "", address_line2, middle_name
         )
         
-        if not success:
-            return False, None, f"Enrichment API error: {error}"
+        enrichment_source = 'enformion'
         
-        # Extract contact info
-        phones, emails, person_id = extract_contact_info(api_response)
+        # If Enformion fails, try Apify TruePeopleSearch as fallback
+        if not success:
+            print(f"Enformion failed ({error}), trying Apify TruePeopleSearch fallback...")
+            
+            # Parse city/state from address_line2 (e.g., "Brooklyn, NY 11223")
+            city, state, zipcode = None, None, None
+            if address_line2:
+                parts = address_line2.replace(',', ' ').split()
+                if len(parts) >= 2:
+                    city = parts[0]
+                    state = parts[1] if len(parts) > 1 else 'NY'
+                    zipcode = parts[2] if len(parts) > 2 else None
+            
+            success, api_response, error = call_apify_truepeoplesearch(
+                first_name, last_name, None, city, state, zipcode
+            )
+            
+            if success:
+                enrichment_source = 'apify_truepeoplesearch'
+            else:
+                return False, None, f"Enrichment API error: {error}"
+        
+        # Extract contact info based on source
+        if enrichment_source == 'apify_truepeoplesearch':
+            phones, emails, person_id = extract_apify_contact_info(api_response)
+        else:
+            phones, emails, person_id = extract_contact_info(api_response)
         
         if not phones and not emails:
             # Check if the API returned a "no matches" message
