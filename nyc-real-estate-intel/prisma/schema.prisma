@@ -1,0 +1,290 @@
+// This is your Prisma schema file
+// It maps to the existing PostgreSQL database on Railway
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE TABLES
+// ============================================================================
+
+model Building {
+  id      Int     @id @default(autoincrement())
+  bbl     String  @unique @db.VarChar(10)
+  address String? @db.Text
+  borough String? @db.VarChar(20)
+  block   String? @db.VarChar(20)
+  lot     String? @db.VarChar(20)
+  bin     String? @db.VarChar(50)
+
+  // PLUTO Data
+  current_owner_name String? @db.VarChar(500)
+  units              Int?
+  sqft               Int?
+  year_built         Int?
+  year_altered       Int?
+  building_class     String? @db.VarChar(10)
+  land_use           String? @db.VarChar(50)
+  residential_units  Int?
+  total_units        Int?
+  num_floors         Int?
+  building_sqft      Int?
+  lot_sqft           Int?
+
+  // RPAD Data
+  owner_name_rpad      String?  @db.VarChar(500)
+  assessed_land_value  Decimal? @db.Decimal
+  assessed_total_value Decimal? @db.Decimal
+
+  // HPD Data
+  owner_name_hpd        String? @db.VarChar(500)
+  hpd_registration_id   String? @db.VarChar(50)
+  hpd_open_violations   Int?    @default(0)
+  hpd_total_violations  Int?    @default(0)
+  hpd_open_complaints   Int?    @default(0)
+  hpd_total_complaints  Int?    @default(0)
+
+  // Value estimates
+  estimated_value          Decimal?  @db.Decimal
+  value_source             String?   @db.VarChar(50)
+  estimated_rent_per_unit  Decimal?  @db.Decimal
+  estimated_annual_rent    Decimal?  @db.Decimal
+  estimated_equity         Decimal?  @db.Decimal
+
+  // ACRIS Data - Primary Deed
+  sale_price             Decimal?  @db.Decimal(12, 2)
+  sale_date              DateTime? @db.Date
+  sale_recorded_date     DateTime? @db.Date
+  sale_buyer_primary     String?   @db.VarChar(255)
+  sale_seller_primary    String?   @db.VarChar(255)
+  sale_percent_transferred Int?
+  sale_crfn              String?   @db.VarChar(50)
+  purchase_date          DateTime? @db.Date
+  purchase_price         Decimal?  @db.Decimal(12, 2)
+
+  // ACRIS Data - Primary Mortgage
+  mortgage_amount        Decimal?  @db.Decimal(12, 2)
+  mortgage_date          DateTime? @db.Date
+  mortgage_lender_primary String?  @db.VarChar(255)
+  mortgage_crfn          String?   @db.VarChar(50)
+
+  // Calculated Intelligence
+  is_cash_purchase Boolean?
+  financing_ratio  Decimal? @db.Decimal(5, 2)
+  days_since_sale  Int?
+
+  // Transaction Counts
+  acris_total_transactions Int?
+  acris_deed_count         Int?
+  acris_mortgage_count     Int?
+  acris_satisfaction_count Int?
+  acris_last_enriched      DateTime? @db.Timestamp
+
+  // Tax Delinquency & Liens
+  has_tax_delinquency          Boolean?
+  tax_delinquency_count        Int?
+  tax_delinquency_water_only   Boolean?
+  ecb_violation_count          Int?
+  ecb_total_balance            Decimal?  @db.Decimal(12, 2)
+  ecb_open_violations          Int?
+  ecb_total_penalty            Decimal?  @db.Decimal(12, 2)
+  ecb_amount_paid              Decimal?  @db.Decimal(12, 2)
+  ecb_most_recent_hearing_date DateTime? @db.Date
+  ecb_most_recent_hearing_status String?  @db.VarChar(100)
+  ecb_respondent_name          String?   @db.VarChar(255)
+  ecb_respondent_address       String?   @db.VarChar(500)
+  ecb_respondent_city          String?   @db.VarChar(100)
+
+  // Timestamps
+  last_updated DateTime? @default(now()) @db.Timestamp
+
+  // Relations
+  enrichment_results  EnrichmentResult[]
+
+  @@map("buildings")
+}
+
+model Permit {
+  id                           Int       @id @default(autoincrement())
+  permit_no                    String?   @db.VarChar(100)
+  job_type                     String?   @db.VarChar(500)
+  address                      String?   @db.Text
+  borough                      String?   @db.VarChar(20)
+  block                        String?   @db.VarChar(20)
+  lot                          String?   @db.VarChar(20)
+  bbl                          String?   @db.VarChar(10)
+  bin                          String?   @db.VarChar(50)
+  applicant                    String?   @db.VarChar(225)
+  stories                      String?   @db.VarChar(20)
+  total_units                  String?   @db.VarChar(20)
+  use_type                     String?   @db.VarChar(100)
+  issue_date                   DateTime? @db.Date
+  exp_date                     DateTime? @db.Date
+  permit_status                String?   @db.VarChar(50)
+  filing_status                String?   @db.VarChar(50)
+  link                         String?   @db.Text
+  work_description             String?   @db.Text
+
+  // Contact Info
+  permittee_business_name      String?   @db.VarChar(255)
+  permittee_phone              String?   @db.VarChar(50)
+  owner_business_name          String?   @db.VarChar(255)
+  owner_phone                  String?   @db.VarChar(50)
+  superintendent_business_name String?   @db.VarChar(255)
+  site_safety_mgr_business_name String?  @db.VarChar(255)
+
+  // Geocoding
+  latitude  Float?  @db.DoublePrecision
+  longitude Float?  @db.DoublePrecision
+
+  @@index([bbl])
+  @@index([issue_date(sort: Desc)])
+  @@map("permits")
+}
+
+// ============================================================================
+// USER & AUTH TABLES
+// ============================================================================
+
+model User {
+  id                     Int       @id @default(autoincrement())
+  email                  String    @unique @db.VarChar(255)
+  password_hash          String    @db.VarChar(255)
+  is_admin               Boolean   @default(false)
+  is_verified            Boolean   @default(false)
+  subscription_status    String    @default("none") @db.VarChar(50)
+  stripe_customer_id     String?   @db.VarChar(255)
+  stripe_subscription_id String?   @db.VarChar(255)
+  created_at             DateTime  @default(now()) @db.Timestamp
+  updated_at             DateTime  @updatedAt @db.Timestamp
+
+  // Relations
+  sessions               Session[]
+  activity_logs          ActivityLog[]
+  enrichment_transactions EnrichmentTransaction[]
+
+  @@map("users")
+}
+
+model Session {
+  id            Int      @id @default(autoincrement())
+  user_id       Int
+  session_token String   @unique @db.VarChar(255)
+  ip_address    String?  @db.VarChar(50)
+  user_agent    String?  @db.VarChar(500)
+  expires_at    DateTime @db.Timestamp
+  created_at    DateTime @default(now()) @db.Timestamp
+
+  // Relations
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([session_token])
+  @@index([user_id])
+  @@map("sessions")
+}
+
+// ============================================================================
+// ENRICHMENT TABLES
+// ============================================================================
+
+model EnrichmentResult {
+  id              Int       @id @default(autoincrement())
+  building_id     Int
+  owner_name      String    @db.VarChar(255)
+  source          String    @db.VarChar(50)
+  phones          String[]  @db.VarChar(50)
+  emails          String[]  @db.VarChar(255)
+  addresses       Json?
+  raw_response    Json?
+  created_at      DateTime  @default(now()) @db.Timestamp
+
+  // Relations
+  building Building @relation(fields: [building_id], references: [id])
+
+  @@index([building_id])
+  @@map("enrichment_results")
+}
+
+model EnrichmentTransaction {
+  id                      Int       @id @default(autoincrement())
+  user_id                 Int
+  building_id             Int?
+  transaction_type        String    @db.VarChar(50)
+  amount                  Decimal   @db.Decimal(10, 2)
+  stripe_payment_intent_id String?  @db.VarChar(255)
+  status                  String    @db.VarChar(50)
+  description             String?   @db.Text
+  created_at              DateTime  @default(now()) @db.Timestamp
+
+  // Relations
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@map("enrichment_transactions")
+}
+
+// ============================================================================
+// ACTIVITY LOGGING
+// ============================================================================
+
+model ActivityLog {
+  id            Int       @id @default(autoincrement())
+  user_id       Int?
+  activity_type String    @db.VarChar(50)
+  category      String    @db.VarChar(50)
+  description   String?   @db.Text
+  metadata      Json?
+  ip_address    String?   @db.VarChar(50)
+  user_agent    String?   @db.VarChar(500)
+  created_at    DateTime  @default(now()) @db.Timestamp
+
+  // Relations
+  user User? @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([activity_type])
+  @@index([created_at(sort: Desc)])
+  @@map("activity_logs")
+}
+
+// ============================================================================
+// ACRIS TABLES (Read-only - populated by enrichment pipeline)
+// ============================================================================
+
+model AcrisDocument {
+  id            Int       @id @default(autoincrement())
+  bbl           String    @db.VarChar(10)
+  document_id   String    @unique @db.VarChar(50)
+  crfn          String?   @db.VarChar(50)
+  doc_type      String?   @db.VarChar(100)
+  doc_date      DateTime? @db.Date
+  recorded_date DateTime? @db.Date
+  doc_amount    Decimal?  @db.Decimal(14, 2)
+  created_at    DateTime  @default(now()) @db.Timestamp
+
+  // Relations
+  parties AcrisParty[]
+
+  @@index([bbl])
+  @@map("acris_documents")
+}
+
+model AcrisParty {
+  id          Int    @id @default(autoincrement())
+  document_id Int
+  party_type  String @db.VarChar(50)
+  name        String @db.VarChar(255)
+  address     String? @db.VarChar(500)
+
+  // Relations
+  document AcrisDocument @relation(fields: [document_id], references: [id], onDelete: Cascade)
+
+  @@index([document_id])
+  @@map("acris_parties")
+}
