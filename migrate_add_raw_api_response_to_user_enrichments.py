@@ -16,14 +16,25 @@ from dotenv import load_dotenv
 load_dotenv('dashboard_html/.env')
 
 
-def run_migration():
-    conn = psycopg2.connect(
+def _connect():
+    """Connect using DATABASE_URL (Railway-style) when present, else fall back
+    to discrete DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME (local .env style).
+    Lets `railway run python3 migrate_*.py` Just Work without needing to
+    re-shape env vars."""
+    url = os.getenv('DATABASE_URL')
+    if url:
+        return psycopg2.connect(url)
+    return psycopg2.connect(
         host=os.getenv('DB_HOST'),
         port=os.getenv('DB_PORT'),
         user=os.getenv('DB_USER'),
         password=os.getenv('DB_PASSWORD'),
         database=os.getenv('DB_NAME'),
     )
+
+
+def run_migration():
+    conn = _connect()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         print("Adding raw_api_response column to user_enrichments...")
