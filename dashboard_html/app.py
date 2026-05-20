@@ -3094,27 +3094,35 @@ def api_properties():
                 where_clauses.append("""
                     (
                         -- SOS Principal is a person (best source)
-                        (b.sos_principal_name IS NOT NULL 
+                        (b.sos_principal_name IS NOT NULL
                          AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
                          AND b.sos_principal_name ~ ' ')
                         OR
                         -- Current owner is a person
-                        (b.current_owner_name IS NOT NULL 
+                        (b.current_owner_name IS NOT NULL
                          AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
                          AND b.current_owner_name ~ ' ')
                         OR
                         -- RPAD owner is a person
-                        (b.owner_name_rpad IS NOT NULL 
+                        (b.owner_name_rpad IS NOT NULL
                          AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
                          AND b.owner_name_rpad ~ ' ')
                         OR
                         -- HPD owner is a person
-                        (b.owner_name_hpd IS NOT NULL 
+                        (b.owner_name_hpd IS NOT NULL
                          AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
                          AND b.owner_name_hpd ~ ' ')
                     )
                 """)
-        
+
+            # Permit type filter — bound parameter (was previously interpolated raw,
+            # which was a SQL-injection risk via the ?permit_type= query param).
+            if permit_type:
+                where_clauses.append(
+                    "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
+                )
+                params.append(permit_type)
+
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         
@@ -3140,18 +3148,7 @@ def api_properties():
                                OR issue_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days')
                     ) rp ON b.bbl = rp.bbl
                 """
-            
-            # Add permit type subquery if filtering by permit type
-            permit_type_sql = ""
-            if permit_type:
-                permit_type_sql = f"""
-                    LEFT JOIN (
-                        SELECT DISTINCT bbl
-                        FROM permits
-                        WHERE bbl IS NOT NULL AND permit_type = '{permit_type}'
-                    ) pt ON b.bbl = pt.bbl
-                """
-        
+
             # Apply permit filters
             if with_permits:
                 where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
@@ -3160,9 +3157,6 @@ def api_properties():
             if recent_permit_days is not None:
                 has_prior_conditions = where_clauses or with_permits or min_permits is not None
                 where_sql += (" AND " if has_prior_conditions else "WHERE ") + "rp.bbl IS NOT NULL"
-            if permit_type:
-                has_prior_conditions = where_clauses or with_permits or min_permits is not None or recent_permit_days is not None
-                where_sql += (" AND " if has_prior_conditions else "WHERE ") + "pt.bbl IS NOT NULL"
         
             # Validate and sanitize sort column
             valid_sort_columns = {
@@ -3182,7 +3176,6 @@ def api_properties():
                 FROM buildings b
                 {permit_count_sql}
                 {recent_permit_sql}
-                {permit_type_sql}
                 {where_sql}
             """
             cur.execute(count_query, params)
@@ -3241,7 +3234,6 @@ def api_properties():
                     LIMIT 1
                 ) pcon ON true
                 {recent_permit_sql}
-                {permit_type_sql}
                 {where_sql}
                 ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
                 LIMIT %s OFFSET %s
