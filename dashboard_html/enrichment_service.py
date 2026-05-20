@@ -5,6 +5,7 @@ Supports: Enformion (primary) and Apify TruePeopleSearch (fallback)
 """
 
 import os
+import re
 import requests
 from datetime import datetime
 import psycopg2
@@ -140,6 +141,58 @@ def parse_owner_name(full_name):
     return first, middle, last
 
 
+# NYC address parser. Works backwards from the ZIP, which is the most reliable
+# anchor — a 5-digit number at the end of the string. The previous parser
+# split on whitespace and grabbed parts[0]/parts[1]/parts[2] as city/state/zip,
+# which corrupted multi-word boroughs ("NEW YORK" became city="NEW", state="YORK").
+_ZIP_TAIL_RE = re.compile(r'\b(\d{5})(?:-\d{4})?\s*$')
+_STATE_TAIL_RE = re.compile(r'\b([A-Z]{2})\s*$')
+
+
+def parse_nyc_address(address):
+    """Parse a full street address into (street, city, state, zip).
+
+    Handles multi-word boroughs (NEW YORK, STATEN ISLAND), apartment lines
+    embedded as extra comma segments, missing components, and the common
+    "STREET CITY ST ZIP" no-comma form. Any missing piece is returned as
+    None — callers should default reasonably (state='NY' for NYC data).
+    """
+    if not address:
+        return None, None, None, None
+    s = address.strip().upper()
+
+    zipcode = None
+    m = _ZIP_TAIL_RE.search(s)
+    if m:
+        zipcode = m.group(1)
+        s = s[:m.start()].rstrip(' ,')
+
+    # Only treat a trailing 2-letter token as a state if we already found a
+    # ZIP — otherwise common street suffixes like "ST", "RD", "DR" get
+    # misparsed as state codes ('123 main st' -> state='ST').
+    state = None
+    if zipcode:
+        m = _STATE_TAIL_RE.search(s)
+        if m:
+            state = m.group(1)
+            s = s[:m.start()].rstrip(' ,')
+
+    parts = [p.strip() for p in s.split(',') if p.strip()]
+    if len(parts) >= 2:
+        # Treat the LAST comma segment as city; everything before is street
+        # (possibly with apartment/unit info). Handles both
+        # "123 MAIN ST, BROOKLYN" and "123 MAIN ST, APT 4, BROOKLYN".
+        city = parts[-1]
+        street = ', '.join(parts[:-1])
+    elif len(parts) == 1:
+        # No comma — assume the whole thing is the street, no city info.
+        street, city = parts[0], None
+    else:
+        street, city = None, None
+
+    return street, city, state, zipcode
+
+
 def _parse_with_suffix(full_name):
     """Variant of parse_owner_name that also returns the suffix (JR/SR/III).
     Used by canonical_name_key so suffix can participate in dedup."""
@@ -214,136 +267,299 @@ def call_enformion_api(first_name, last_name, address_line1=None, address_line2=
         return False, None, str(e)
 
 
-def call_apify_truepeoplesearch(first_name, last_name, address_line1=None, city=None, state=None, zipcode=None):
+def _build_apify_name_query(first_name, last_name, middle_name=None, suffix=None,
+                             city=None, state=None, zipcode=None):
+    """Build the name-search string the actor expects.
+
+    Format: "FIRST [MIDDLE] LAST [SUFFIX]; [CITY,] STATE [ZIP]"
+    The actor recognizes this as the "Name+CityStateZip Search" mode and
+    matches on TPS's name index. Including the middle name dramatically
+    reduces false-positive matches for common first/last combinations.
     """
-    Call Apify TruePeopleSearch actor as fallback enrichment
-    Returns: (success, response_data, error_message)
+    name_parts = [first_name]
+    if middle_name:
+        name_parts.append(middle_name)
+    name_parts.append(last_name)
+    if suffix:
+        name_parts.append(suffix)
+    full_name = ' '.join(p for p in name_parts if p).strip()
+
+    location_parts = []
+    if city:
+        location_parts.append(city)
+    location = ', '.join(location_parts)
+    state_zip = ' '.join(p for p in [state or 'NY', zipcode] if p)
+    location = f"{location}, {state_zip}" if location else state_zip
+
+    return f"{full_name}; {location}".strip()
+
+
+def _build_apify_address_query(street_address, city=None, state=None, zipcode=None):
+    """Build the street-address search string. Format:
+    "STREET; CITY, STATE ZIP" — actor interprets as "Street+CityStateZip Search"
+    and returns the person currently associated with that address. Often more
+    accurate than a name search for common names like 'JOHN SMITH', since the
+    property address is unique to one occupant."""
+    if not street_address:
+        return None
+    location_parts = []
+    if city:
+        location_parts.append(city)
+    location = ', '.join(location_parts)
+    state_zip = ' '.join(p for p in [state or 'NY', zipcode] if p)
+    location = f"{location}, {state_zip}" if location else state_zip
+    return f"{street_address}; {location}".strip()
+
+
+# Apify's run-sync-get-dataset-items endpoint runs the actor and returns the
+# dataset in a single blocking HTTP call. Replaces the old 3-step
+# start-run -> poll-status -> fetch-dataset dance, which leaked run state on
+# crashes and had a brittle 60s polling loop.
+APIFY_SYNC_TIMEOUT_SECONDS = 180
+
+
+def call_apify_truepeoplesearch(first_name, last_name, middle_name=None, suffix=None,
+                                 street_address=None, city=None, state=None, zipcode=None,
+                                 max_results=5, include_address_fallback=True):
+    """Call the Apify TruePeopleSearch actor via the run-sync endpoint.
+
+    Builds a name-based search ('JOHN R SMITH JR; NEW YORK, NY 10001') as the
+    primary query. If `include_address_fallback` is True and we have a street
+    address, also includes an address-based query so the actor can return
+    whoever lives at that property — useful when the name search returns the
+    wrong John Smith.
+
+    Returns (success, response_data, error). `response_data` is the BEST
+    single item picked from the dataset (preferring items with phones), with
+    the full dataset accessible via `_apify_all_results` for raw storage.
     """
     if not APIFY_API_TOKEN:
         return False, None, "Apify API token not configured"
-    
-    # Build the search input - Name+CityStateZip format
-    # Format: "FIRSTNAME LASTNAME; CITY, STATE ZIP" or "FIRSTNAME LASTNAME; STATE ZIP"
-    full_name = f"{first_name or ''} {last_name or ''}".strip()
-    location = f"{city or 'Brooklyn'}, {state or 'NY'}"
-    if zipcode:
-        location += f" {zipcode}"
-    
-    name_query = f"{full_name}; {location}"
-    
+
+    queries = []
+    primary = _build_apify_name_query(first_name, last_name, middle_name, suffix,
+                                       city, state, zipcode)
+    if primary:
+        queries.append(primary)
+    if include_address_fallback:
+        address_q = _build_apify_address_query(street_address, city, state, zipcode)
+        if address_q:
+            queries.append(address_q)
+
+    if not queries:
+        return False, None, "No usable search input (no name and no address)"
+
     run_input = {
-        "name": [name_query],
-        "max_results": 1
+        'name': queries,
+        'max_results': max_results,
     }
-    
-    print(f"Apify TruePeopleSearch API call with input: {run_input}")
-    
+
+    print(f"Apify TruePeopleSearch call: {len(queries)} queries, max_results={max_results}")
+    for q in queries:
+        print(f"  query: {q!r}")
+
+    # One blocking call. timeout_secs in the URL is the actor-side ceiling;
+    # the requests timeout is a hair higher so the HTTP layer doesn't bail
+    # before the actor finishes.
+    url = (f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}"
+           f"/run-sync-get-dataset-items?token={APIFY_API_TOKEN}"
+           f"&timeout={APIFY_SYNC_TIMEOUT_SECONDS}")
+
     try:
-        # Start the actor run
-        start_url = f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}/runs?token={APIFY_API_TOKEN}"
         response = requests.post(
-            start_url,
+            url,
             json=run_input,
             headers={'Content-Type': 'application/json'},
-            timeout=30
+            timeout=APIFY_SYNC_TIMEOUT_SECONDS + 15,
         )
-        
-        if response.status_code != 201:
-            return False, None, f"Failed to start Apify actor: {response.status_code} - {response.text[:200]}"
-        
-        run_data = response.json()
-        run_id = run_data.get('data', {}).get('id')
-        
-        if not run_id:
-            return False, None, "Failed to get Apify run ID"
-        
-        print(f"Apify run started: {run_id}")
-        
-        # Poll for completion (max 60 seconds)
-        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_API_TOKEN}"
-        for _ in range(30):  # 30 attempts, 2 seconds apart = 60 seconds max
-            time.sleep(2)
-            status_response = requests.get(status_url, timeout=10)
-            
-            if status_response.status_code != 200:
-                continue
-                
-            status_data = status_response.json()
-            run_status = status_data.get('data', {}).get('status')
-            
-            print(f"Apify run status: {run_status}")
-            
-            if run_status == 'SUCCEEDED':
-                # Get the dataset items
-                dataset_id = status_data.get('data', {}).get('defaultDatasetId')
-                if dataset_id:
-                    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_API_TOKEN}"
-                    items_response = requests.get(items_url, timeout=30)
-                    
-                    if items_response.status_code == 200:
-                        items = items_response.json()
-                        if items and len(items) > 0:
-                            return True, items[0], None
-                        return False, None, "No results found"
-                    
-                return False, None, "Failed to get dataset items"
-            elif run_status in ['FAILED', 'ABORTED', 'TIMED-OUT']:
-                return False, None, f"Apify run {run_status}"
-        
-        return False, None, "Apify run timed out"
-        
     except requests.Timeout:
         return False, None, "Apify API request timed out"
     except Exception as e:
         print(f"Apify exception: {e}")
         return False, None, str(e)
 
+    if response.status_code not in (200, 201):
+        return False, None, (
+            f"Apify error {response.status_code}: {response.text[:200]}"
+        )
+
+    try:
+        items = response.json()
+    except ValueError:
+        return False, None, "Apify returned non-JSON response"
+
+    if not isinstance(items, list):
+        return False, None, f"Unexpected Apify response shape: {type(items).__name__}"
+    if not items:
+        return False, None, "No results found"
+
+    # Schema-drift sanity check — if the response has none of the keys we
+    # expect, the actor probably changed its output shape and we'd silently
+    # return zero phones. Surface that loudly so we notice in logs.
+    expected_keys = {'Phone-1', 'Email-1', 'Person Link', 'First Name', 'Last Name'}
+    first_keys = set(items[0].keys()) if isinstance(items[0], dict) else set()
+    if not (expected_keys & first_keys):
+        print(f"WARNING: Apify response missing all expected keys. "
+              f"Got: {sorted(first_keys)[:20]}")
+
+    best = _pick_best_apify_item(items)
+    if best is None:
+        return False, None, "No usable result in Apify response"
+
+    # Attach the full result list so the caller can persist it raw without
+    # re-fetching. Use a leading underscore so it's clearly internal.
+    best['_apify_all_results'] = items
+    best['_apify_query_input'] = run_input
+    return True, best, None
+
+
+def _pick_best_apify_item(items):
+    """Choose the most useful item from up to N actor results.
+
+    Preference: item with phones > item with emails > first item. When two
+    items have phones, prefer the one whose Phone-1 has a more recent
+    'Last Reported' date (TPS surfaces dates like 'Last reported Apr 2026').
+    """
+    if not items:
+        return None
+
+    def _has_phone(it):
+        return bool(it.get('Phone-1'))
+
+    def _has_email(it):
+        return bool(it.get('Email-1'))
+
+    phoned = [i for i in items if _has_phone(i)]
+    if phoned:
+        # Prefer most-recently reported Phone-1. The TPS date string sorts
+        # lexically wrong ('Apr' < 'Dec') so we parse to YYYYMM for ordering.
+        def _last_reported_score(it):
+            raw = it.get('Phone-1 Last Reported', '') or ''
+            return _parse_tps_date_to_yyyymm(raw)
+        phoned.sort(key=_last_reported_score, reverse=True)
+        return phoned[0]
+
+    emailed = [i for i in items if _has_email(i)]
+    if emailed:
+        return emailed[0]
+
+    return items[0]
+
+
+_TPS_MONTH = {
+    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+}
+
+
+def _parse_tps_date_to_yyyymm(raw):
+    """Parse 'Last reported Apr 2026' -> 202604 for sorting. Returns 0 on
+    failure so missing-date items sort last."""
+    if not raw:
+        return 0
+    parts = raw.upper().split()
+    month = year = None
+    for tok in parts:
+        if tok[:3] in _TPS_MONTH and month is None:
+            month = _TPS_MONTH[tok[:3]]
+        elif tok.isdigit() and len(tok) == 4 and year is None:
+            year = int(tok)
+    if year is None:
+        return 0
+    return year * 100 + (month or 0)
+
 
 def extract_apify_contact_info(api_response):
-    """
-    Extract phones and emails from Apify TruePeopleSearch response
-    Returns: (phones_list, emails_list, person_id)
+    """Extract phones and emails from one Apify TruePeopleSearch item.
+
+    Captures each phone's full metadata — type (Wireless/Landline/VoIP),
+    provider (Verizon/T-Mobile/etc.), and the 'Last reported' / 'First
+    reported' dates — so the UI can show 'last seen Apr 2026' annotations
+    and rank phones by recency.
+
+    Returns: (phones_list, emails_list, person_id).
     """
     phones = []
     emails = []
     person_id = None
-    
+
     if not api_response:
         return phones, emails, person_id
-    
-    print(f"Extracting contact info from Apify response: {str(api_response)[:500]}")
-    
+
     try:
-        # Extract person link as ID
-        person_id = api_response.get('Person Link', '')
-        
-        # Extract phones (up to 5)
+        person_id = api_response.get('Person Link', '') or None
+
+        # TPS exposes 5 phone slots. Capture every populated field per slot.
         for i in range(1, 6):
-            phone_num = api_response.get(f'Phone-{i}', '')
-            phone_type = api_response.get(f'Phone-{i} Type', '')
-            if phone_num:
-                phones.append({
-                    'number': phone_num,
-                    'type': phone_type.lower() if phone_type else 'unknown',
-                    'is_valid': True
-                })
-        
-        # Extract emails (up to 5)
+            number = api_response.get(f'Phone-{i}', '')
+            if not number:
+                continue
+            phone_type = api_response.get(f'Phone-{i} Type', '') or ''
+            last_reported = api_response.get(f'Phone-{i} Last Reported', '') or ''
+            first_reported = api_response.get(f'Phone-{i} First Reported', '') or ''
+            provider = api_response.get(f'Phone-{i} Provider', '') or ''
+
+            phones.append({
+                'number': number,
+                'type': phone_type.lower() if phone_type else 'unknown',
+                'provider': provider or None,
+                'last_reported': last_reported or None,
+                'last_reported_yyyymm': _parse_tps_date_to_yyyymm(last_reported),
+                'first_reported': first_reported or None,
+                'is_valid': True,
+            })
+
+        # Rank phones with most-recent "Last reported" first. The provider's
+        # original ordering is name-search relevance, but for outreach the
+        # most recently seen number is what we want to dial first.
+        phones.sort(key=lambda p: p.get('last_reported_yyyymm') or 0, reverse=True)
+
         for i in range(1, 6):
             email_addr = api_response.get(f'Email-{i}', '')
             if email_addr:
                 emails.append({
                     'email': email_addr,
-                    'is_valid': True
+                    'is_valid': True,
                 })
-        
+
     except Exception as e:
         print(f"Error extracting Apify contact info: {e}")
         import traceback
         traceback.print_exc()
-    
-    print(f"Extracted from Apify: {len(phones)} phones, {len(emails)} emails")
+
+    print(f"Extracted from Apify: {len(phones)} phones, {len(emails)} emails, "
+          f"person_id={person_id!r}")
     return phones, emails, person_id
+
+
+def summarize_apify_match(api_response):
+    """Pull the human-readable identity fields from an Apify item so we can
+    show the user *who* we matched (their age, county, current address,
+    relatives). Used for match-verification UI and stored alongside the raw
+    response. Safe to call on partial responses — every field is optional."""
+    if not api_response:
+        return None
+    return {
+        'matched_name': ' '.join(p for p in [
+            api_response.get('First Name'),
+            api_response.get('Last Name'),
+        ] if p) or None,
+        'age': api_response.get('Age') or None,
+        'born': api_response.get('Born') or None,
+        'lives_in': api_response.get('Lives in') or None,
+        'current_address': ', '.join(p for p in [
+            api_response.get('Street Address'),
+            api_response.get('Address Locality'),
+            api_response.get('Address Region'),
+            api_response.get('Postal Code'),
+        ] if p) or None,
+        'county': api_response.get('County Name') or None,
+        'previous_addresses': api_response.get('Previous Addresses') or [],
+        'relatives': api_response.get('Relatives') or [],
+        'associates': api_response.get('Associates') or [],
+        'search_option': api_response.get('Search Option') or None,
+        'input_given': api_response.get('Input Given') or None,
+    }
 
 
 def extract_contact_info(api_response):
@@ -448,42 +664,47 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=PROVIDER_EN
             # Note: Even if building has cached data from another owner's lookup,
             # we still need to call API for this new owner - fall through to API call
 
-        # Need to call API
-        # Parse the owner name
+        # Need to call API. Parse the owner name with HumanName so we can pass
+        # middle name and suffix to the provider — TPS in particular benefits
+        # massively from disambiguation by middle name on common surnames.
         first_name, middle_name, last_name = parse_owner_name(owner_name)
-
         if not first_name or not last_name:
             return False, None, "Could not parse owner name - may be a business entity"
 
-        # Parse address - only use city/state/zip, NOT street address (improves match rate)
-        address_parts = address.split(',') if address else []
-        # Skip street address (first part), use city/state/zip only
-        address_line2 = ', '.join(address_parts[1:]).strip() if len(address_parts) > 1 else "Brooklyn, NY"
+        with_suffix = _parse_with_suffix(owner_name) or (first_name, middle_name or '', last_name, '')
+        suffix = with_suffix[3] or None
 
-        # Parse city/state/zip out of address_line2 once; used by Apify path(s).
-        city, state, zipcode = None, None, None
-        if address_line2:
-            parts = address_line2.replace(',', ' ').split()
-            if len(parts) >= 2:
-                city = parts[0]
-                state = parts[1] if len(parts) > 1 else 'NY'
-                zipcode = parts[2] if len(parts) > 2 else None
+        # Parse the property address robustly (handles NEW YORK / STATEN ISLAND
+        # and other multi-word boroughs the old parser corrupted).
+        street, city, state, zipcode = parse_nyc_address(address)
+        if not state:
+            state = 'NY'
+        # address_line2 = "CITY, STATE ZIP" for Enformion's address line.
+        # If we have no city we omit it — better than guessing "Brooklyn".
+        addr_line2_parts = []
+        if city:
+            addr_line2_parts.append(city)
+        addr_line2_parts.append(' '.join(p for p in [state, zipcode] if p))
+        address_line2 = ', '.join(addr_line2_parts)
 
         enrichment_source = None
         api_response = None
         error = None
 
         if provider == PROVIDER_APIFY:
-            # Skip Enformion entirely.
+            # Skip Enformion entirely. Pass full identity (middle + suffix) AND
+            # the street address so the actor can do both name and address
+            # searches in one run.
             success, api_response, error = call_apify_truepeoplesearch(
-                first_name, last_name, None, city, state, zipcode
+                first_name=first_name, last_name=last_name,
+                middle_name=middle_name, suffix=suffix,
+                street_address=street, city=city, state=state, zipcode=zipcode,
             )
             if success:
                 enrichment_source = 'apify_truepeoplesearch'
             else:
                 return False, None, f"Apify enrichment error: {error}"
         else:
-            # Enformion-only or Enformion-with-fallback both start here.
             success, api_response, error = call_enformion_api(
                 first_name, last_name, "", address_line2, middle_name
             )
@@ -492,30 +713,45 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=PROVIDER_EN
             elif provider == PROVIDER_ENFORMION_FALLBACK:
                 print(f"Enformion failed ({error}), trying Apify TruePeopleSearch fallback...")
                 success, api_response, error = call_apify_truepeoplesearch(
-                    first_name, last_name, None, city, state, zipcode
+                    first_name=first_name, last_name=last_name,
+                    middle_name=middle_name, suffix=suffix,
+                    street_address=street, city=city, state=state, zipcode=zipcode,
                 )
                 if success:
                     enrichment_source = 'apify_truepeoplesearch'
                 else:
                     return False, None, f"Enrichment API error: {error}"
             else:
-                # Strict Enformion-only mode — surface the failure rather than fall back.
                 return False, None, f"Enformion enrichment error: {error}"
 
-        # Extract contact info based on source
+        # Extract contact info based on source.
         if enrichment_source == 'apify_truepeoplesearch':
             phones, emails, person_id = extract_apify_contact_info(api_response)
+            match_summary = summarize_apify_match(api_response)
         else:
             phones, emails, person_id = extract_contact_info(api_response)
-        
+            match_summary = None
+
         if not phones and not emails:
-            # Check if the API returned a "no matches" message
             api_message = api_response.get('message', '') if isinstance(api_response, dict) else ''
             if 'no' in api_message.lower() and 'match' in api_message.lower():
                 return False, None, "No matching records found in our database for this person. They may not be in our data sources."
             return False, None, "No contact information (phone/email) found for this person in our database."
-        
-        # Store in buildings table (for backward compatibility / quick access)
+
+        # Strip the internal extras we attached in call_apify_truepeoplesearch
+        # before persisting; they're not part of the actor's actual output.
+        if isinstance(api_response, dict):
+            stored_response = {k: v for k, v in api_response.items()
+                               if not k.startswith('_apify_')}
+            # Keep the full dataset so we can reanalyze in the future without
+            # re-paying — it's the most valuable thing the actor returned.
+            stored_response['_all_results'] = api_response.get('_apify_all_results', [])
+            stored_response['_query_input'] = api_response.get('_apify_query_input', {})
+            stored_response['_match_summary'] = match_summary
+        else:
+            stored_response = api_response
+
+        # Store in buildings table (for backward compatibility / quick access).
         cur.execute("""
             UPDATE buildings SET
                 enriched_phones = %s,
@@ -529,21 +765,30 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=PROVIDER_EN
             json.dumps(emails),
             datetime.now(),
             person_id,
-            json.dumps(api_response),
-            building_id
+            json.dumps(stored_response),
+            building_id,
         ))
-        
-        # Record user access WITH the enrichment data (for per-owner display)
+
+        # Record user access WITH the enrichment data (for per-owner display).
+        # The raw_api_response column lets us backfill new fields (age,
+        # relatives, etc.) later without re-paying for the lookup.
         cur.execute("""
-            INSERT INTO user_enrichments (user_id, building_id, owner_name_searched, enriched_phones, enriched_emails, enriched_person_id, enriched_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id, building_id, owner_name_searched) 
-            DO UPDATE SET 
+            INSERT INTO user_enrichments (user_id, building_id, owner_name_searched,
+                                          enriched_phones, enriched_emails,
+                                          enriched_person_id, enriched_at,
+                                          raw_api_response)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, building_id, owner_name_searched)
+            DO UPDATE SET
                 enriched_phones = EXCLUDED.enriched_phones,
                 enriched_emails = EXCLUDED.enriched_emails,
                 enriched_person_id = EXCLUDED.enriched_person_id,
-                enriched_at = EXCLUDED.enriched_at
-        """, (user_id, building_id, owner_name, json.dumps(phones), json.dumps(emails), person_id, datetime.now()))
+                enriched_at = EXCLUDED.enriched_at,
+                raw_api_response = EXCLUDED.raw_api_response
+        """, (user_id, building_id, owner_name,
+              json.dumps(phones), json.dumps(emails),
+              person_id, datetime.now(),
+              json.dumps(stored_response)))
         
         conn.commit()
         
