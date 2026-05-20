@@ -5309,7 +5309,7 @@ def api_bulk_enrichment_estimate():
             estimate_owners_for_buildings,
             VALID_OWNER_STRATEGIES,
             VALID_PROVIDERS,
-            PROVIDER_ENFORMION_FALLBACK,
+            DEFAULT_PROVIDER,
             CUSTOMER_COST_PER_LOOKUP,
             CUSTOMER_MIN_CHARGE,
             provider_real_cost_per_lookup,
@@ -5324,10 +5324,10 @@ def api_bulk_enrichment_estimate():
         is_admin = g.user.get('is_admin', False)
 
         # Only admin can pick a non-default provider. Anyone else is locked into
-        # the existing Enformion-with-Apify-fallback behavior.
-        provider = data.get('provider', PROVIDER_ENFORMION_FALLBACK)
+        # the Apify-with-Enformion-fallback default.
+        provider = data.get('provider', DEFAULT_PROVIDER)
         if not is_admin or provider not in VALID_PROVIDERS:
-            provider = PROVIDER_ENFORMION_FALLBACK
+            provider = DEFAULT_PROVIDER
 
         building_ids, _mode, err = _resolve_bulk_enrich_target(data)
         if err:
@@ -5401,7 +5401,7 @@ def api_bulk_enrich_job_start():
             estimate_owners_for_buildings,
             VALID_OWNER_STRATEGIES,
             VALID_PROVIDERS,
-            PROVIDER_ENFORMION_FALLBACK,
+            DEFAULT_PROVIDER,
             CUSTOMER_COST_PER_LOOKUP,
             CUSTOMER_MIN_CHARGE,
             provider_real_cost_per_lookup,
@@ -5416,9 +5416,9 @@ def api_bulk_enrich_job_start():
         is_admin = g.user.get('is_admin', False)
 
         # Admin-only provider override (matches the estimate endpoint)
-        provider = data.get('provider', PROVIDER_ENFORMION_FALLBACK)
+        provider = data.get('provider', DEFAULT_PROVIDER)
         if not is_admin or provider not in VALID_PROVIDERS:
-            provider = PROVIDER_ENFORMION_FALLBACK
+            provider = DEFAULT_PROVIDER
 
         building_ids, _mode, err = _resolve_bulk_enrich_target(data)
         if err:
