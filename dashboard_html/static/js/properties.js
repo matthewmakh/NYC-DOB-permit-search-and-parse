@@ -860,6 +860,8 @@ function buildBulkEnrichFiltersPayload() {
     if (f.withPermits) payload.with_permits = true;
     if (f.minPermits) payload.min_permits = f.minPermits;
     if (f.recentPermitDays) payload.recent_permit_days = f.recentPermitDays;
+    if (f.permitType) payload.permit_type = f.permitType;
+    if (f.propertyType) payload.property_type = f.propertyType;
     if (f.borough && f.borough.length) payload.borough = f.borough;
     if (f.buildingClass) payload.building_class = f.buildingClass;
     if (f.minUnits) payload.min_units = f.minUnits;

@@ -2769,6 +2769,8 @@ def _resolve_filter_building_ids(args, limit=None):
     with_permits = str(g('with_permits', default='')).lower() == 'true'
     min_permits = g('min_permits', type=int)
     recent_permit_days = g('recent_permit_days', type=int)
+    permit_type = (g('permit_type', default='') or '').strip()
+    property_type = (g('property_type', default='') or '').strip()
     boroughs = _parse_boroughs_param(g('borough', default=''), multi_source=args if hasattr(args, 'getlist') else None)
     building_class = (g('building_class', default='') or '').strip()
     min_units = g('min_units', type=int)
@@ -2853,6 +2855,22 @@ def _resolve_filter_building_ids(args, limit=None):
                    OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
         )""")
         params.extend([str(recent_permit_days), str(recent_permit_days)])
+    if permit_type:
+        # Parameterized — staging's /api/properties version interpolates this raw,
+        # which is a SQL-injection risk we should fix separately.
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
+        )
+        params.append(permit_type)
+    if property_type:
+        # Mirror the building-class regexes used by /api/properties so the
+        # bulk-enrich resolver returns the same set the page is showing.
+        if property_type == 'residential':
+            where_clauses.append("b.building_class ~ '^[ABCDR]'")
+        elif property_type == 'commercial':
+            where_clauses.append("b.building_class ~ '^[KOEFG]'")
+        elif property_type == 'mixed':
+            where_clauses.append("b.building_class LIKE 'S%%'")
     if has_violations is not None:
         hv = str(has_violations).lower()
         if hv == 'true':
