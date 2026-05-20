@@ -1053,9 +1053,135 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                         'is_unlocked': is_enriched
                     })
                     seen_names.add(name_upper)
-        
+
         return contacts
-        
+
     finally:
         cur.close()
         conn.close()
+
+
+# ============================================================================
+# OWNER-STRATEGY HELPERS FOR BULK BUILDING-OWNER ENRICHMENT
+# ============================================================================
+
+# Recognised owner-selection strategies for bulk enrichment.
+OWNER_STRATEGY_RECOMMENDED = 'recommended'
+OWNER_STRATEGY_ALL = 'all'
+VALID_OWNER_STRATEGIES = (OWNER_STRATEGY_RECOMMENDED, OWNER_STRATEGY_ALL)
+
+
+def filter_owners_by_strategy(owners, strategy):
+    """Given the list returned by get_available_owners_for_enrichment, pick which ones
+    to actually enrich based on the user's chosen strategy.
+
+    - 'recommended': the SOS principal (real person behind an LLC) if available,
+      otherwise the first non-SOS owner. Returns at most one owner.
+    - 'all': returns every distinct owner unchanged.
+    """
+    if not owners:
+        return []
+    if strategy == OWNER_STRATEGY_ALL:
+        return owners
+    # Default to 'recommended'
+    sos = next((o for o in owners if o.get('source') == 'NY Secretary of State'), None)
+    if sos:
+        return [sos]
+    return [owners[0]]
+
+
+def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
+    """Lightweight estimate used to populate the bulk-enrich confirmation modal.
+
+    Two DB queries (one for buildings, one for the user's already-enriched owners)
+    instead of 2*N. For 5k buildings this matters.
+
+    Returns: (total_owners, properties_with_owners, breakdown[], per_building_map)
+    where per_building_map is {building_id: [owner dicts to enrich]}.
+    """
+    if not building_ids:
+        return 0, 0, [], {}
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT building_id, owner_name_searched
+            FROM user_enrichments
+            WHERE user_id = %s AND building_id = ANY(%s)
+            """,
+            (user_id, list(building_ids)),
+        )
+        enriched_by_building = {}
+        for r in cur.fetchall():
+            if not r['owner_name_searched']:
+                continue
+            enriched_by_building.setdefault(r['building_id'], set()).add(
+                r['owner_name_searched'].upper()
+            )
+
+        cur.execute(
+            """
+            SELECT id, address,
+                   current_owner_name, owner_name_rpad, owner_name_hpd,
+                   sos_principal_name, ecb_respondent_name
+            FROM buildings
+            WHERE id = ANY(%s)
+            """,
+            (list(building_ids),),
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+    source_map = [
+        ('sos_principal_name', 'NY Secretary of State', True),
+        ('current_owner_name', 'NYC PLUTO Database', False),
+        ('owner_name_rpad', 'Tax Records (RPAD)', False),
+        ('owner_name_hpd', 'HPD Registration', False),
+        ('ecb_respondent_name', 'ECB Violations', False),
+    ]
+
+    total_owners = 0
+    properties_with_owners = 0
+    breakdown = []
+    per_building_map = {}
+
+    for row in rows:
+        bid = row['id']
+        enriched_upper = enriched_by_building.get(bid, set())
+        owners = []
+        seen_upper = set()
+        for field, source, is_sos in source_map:
+            name = row[field]
+            if not name:
+                continue
+            first, _mid, last = parse_owner_name(name)
+            if not first or not last:
+                continue
+            upper = name.upper()
+            if upper in seen_upper:
+                continue
+            seen_upper.add(upper)
+            owners.append({
+                'name': name,
+                'source': source,
+                'recommended': is_sos,
+                'already_enriched': upper in enriched_upper,
+            })
+        available = [o for o in owners if not o['already_enriched']]
+        chosen = filter_owners_by_strategy(available, owner_strategy)
+        if chosen:
+            properties_with_owners += 1
+            total_owners += len(chosen)
+            per_building_map[bid] = chosen
+            breakdown.append({
+                'building_id': bid,
+                'address': row['address'] or f"Building #{bid}",
+                'owners': [o['name'] for o in chosen],
+                'count': len(chosen),
+            })
+
+    return total_owners, properties_with_owners, breakdown, per_building_map

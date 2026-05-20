@@ -19,9 +19,9 @@ const state = {
         withPermits: false,
         minPermits: null,
         recentPermitDays: null,
-        permitType: null,  // NEW: Permit type filter
-        propertyType: null,  // NEW: Residential/Commercial filter
-        borough: null,
+        permitType: null,  // Permit type filter
+        propertyType: null,  // Residential/Commercial filter
+        borough: [],
         buildingClass: '',
         minUnits: null,
         maxUnits: null,
@@ -49,7 +49,34 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeEventListeners();
     loadStats();
     loadProperties();
+    checkResumableBulkEnrichJob();
 });
+
+async function checkResumableBulkEnrichJob() {
+    try {
+        const res = await fetch('/api/enrichment/bulk-jobs');
+        const data = await res.json();
+        if (!data.success || !data.jobs || !data.jobs.length) return;
+        const active = data.jobs.find(j => ['pending', 'running', 'cancel_requested'].includes(j.status));
+        if (!active) return;
+        // Auto-open progress modal so the user can watch it / cancel.
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'bulk-enrich-modal';
+        modal.style.display = 'block';
+        modal.innerHTML = `<div class="modal-content bulk-enrich-modal-content"></div>`;
+        document.body.appendChild(modal);
+        renderBulkEnrichProgress(active.id, {
+            total_owners_planned: active.total_owners_planned,
+            total_properties: active.total_properties,
+            estimated_max_cost: active.estimated_max_cost,
+            owner_strategy: active.owner_strategy,
+        });
+        beginBulkEnrichPolling(active.id);
+    } catch (e) {
+        console.warn('Could not check resumable job:', e);
+    }
+}
 
 // ==========================================
 // DATA LOADING
@@ -91,7 +118,7 @@ async function loadProperties() {
         if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
         if (state.filters.permitType) params.append('permit_type', state.filters.permitType);
         if (state.filters.propertyType) params.append('property_type', state.filters.propertyType);
-        if (state.filters.borough) params.append('borough', state.filters.borough);
+        if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
         if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
         if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
         if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
@@ -352,11 +379,15 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Borough filter
-    document.getElementById('boroughFilter').addEventListener('change', (e) => {
-        state.filters.borough = e.target.value ? parseInt(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
+    // Borough filter (multi-select via checkboxes)
+    document.querySelectorAll('.borough-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const checked = Array.from(document.querySelectorAll('.borough-cb:checked'))
+                .map(el => el.value);
+            state.filters.borough = checked;
+            state.pagination.page = 1;
+            loadProperties();
+        });
     });
     
     // Building class
@@ -535,7 +566,7 @@ async function downloadExport() {
     if (state.filters.withPermits) params.append('with_permits', 'true');
     if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
     if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
-    if (state.filters.borough) params.append('borough', state.filters.borough);
+    if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
     if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
     if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
     if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
@@ -712,7 +743,9 @@ function resetFilters() {
         withPermits: false,
         minPermits: null,
         recentPermitDays: null,
-        borough: null,
+        permitType: null,
+        propertyType: null,
+        borough: [],
         buildingClass: '',
         minUnits: null,
         maxUnits: null,
@@ -737,8 +770,9 @@ function clearFilters() {
     document.getElementById('maxSalePrice').value = '';
     document.getElementById('saleDateFrom').value = '';
     document.getElementById('saleDateTo').value = '';
-    document.getElementById('boroughFilter').value = '';
-    document.getElementById('propertyType').value = '';
+    document.querySelectorAll('.borough-cb').forEach(cb => { cb.checked = false; });
+    const propertyTypeEl = document.getElementById('propertyType');
+    if (propertyTypeEl) propertyTypeEl.value = '';
     document.getElementById('buildingClass').value = '';
     document.getElementById('minUnits').value = '';
     document.getElementById('maxUnits').value = '';
@@ -795,17 +829,56 @@ function escapeHtml(text) {
 // ==========================================
 // BULK ENRICHMENT
 // ==========================================
+//
+// Flow:
+//   1. POST /api/enrichment/bulk-estimate  with {filters, owner_strategy}
+//      -> returns total_owners + estimated cost
+//   2. User confirms (and types CONFIRM if cost > $500)
+//   3. POST /api/enrichment/bulk-job/start -> returns job_id
+//   4. Poll GET /api/enrichment/bulk-job/<id> every few seconds
+//   5. Show progress bar / counters / cancel button until status terminal.
+
+// Build a {filters: {...}} payload that mirrors the params the /api/properties
+// query is using. This is what gets sent to the bulk endpoints so the server
+// enriches the EXACT set of properties the user is viewing.
+function buildBulkEnrichFiltersPayload() {
+    const f = state.filters;
+    const payload = {};
+    if (f.search) payload.search = f.search;
+    if (f.owner) payload.owner = f.owner;
+    if (f.minValue) payload.min_value = f.minValue;
+    if (f.maxValue) payload.max_value = f.maxValue;
+    if (f.minSalePrice) payload.min_sale_price = f.minSalePrice;
+    if (f.maxSalePrice) payload.max_sale_price = f.maxSalePrice;
+    if (f.saleDateFrom) payload.sale_date_from = f.saleDateFrom;
+    if (f.saleDateTo) payload.sale_date_to = f.saleDateTo;
+    if (f.cashOnly) payload.cash_only = true;
+    if (f.withPermits) payload.with_permits = true;
+    if (f.minPermits) payload.min_permits = f.minPermits;
+    if (f.recentPermitDays) payload.recent_permit_days = f.recentPermitDays;
+    if (f.borough && f.borough.length) payload.borough = f.borough;
+    if (f.buildingClass) payload.building_class = f.buildingClass;
+    if (f.minUnits) payload.min_units = f.minUnits;
+    if (f.maxUnits) payload.max_units = f.maxUnits;
+    if (f.hasViolations !== null && f.hasViolations !== undefined && f.hasViolations !== '') {
+        payload.has_violations = f.hasViolations;
+    }
+    if (f.recentSaleDays) payload.recent_sale_days = f.recentSaleDays;
+    if (f.financingMin) payload.financing_min = f.financingMin;
+    if (f.financingMax) payload.financing_max = f.financingMax;
+    if (f.hasEnrichableOwner) payload.has_enrichable_owner = true;
+    return payload;
+}
+
+let _bulkEnrichPollTimer = null;
 
 async function showBulkEnrichModal() {
-    // Get all building IDs from current properties (or use current filter)
-    const buildingIds = state.properties.map(p => p.id);
-    
-    if (buildingIds.length === 0) {
-        alert('No properties to enrich. Please search for properties first.');
+    const totalFiltered = state.pagination.total_count || state.pagination.totalCount || 0;
+    if (totalFiltered === 0) {
+        alert('No properties match the current filters. Adjust filters first.');
         return;
     }
-    
-    // Show loading modal
+
     const modal = document.createElement('div');
     modal.className = 'modal';
     modal.id = 'bulk-enrich-modal';
@@ -814,178 +887,292 @@ async function showBulkEnrichModal() {
         <div class="modal-content bulk-enrich-modal-content">
             <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
             <h2>📞 Bulk Owner Enrichment</h2>
-            <div class="loading-spinner">
-                <p>Calculating enrichment cost for ${buildingIds.length} properties...</p>
+            <p class="modal-subtitle">Enriches every property matching your current filters
+                (<strong>${formatNumber(totalFiltered)}</strong> total, not just this page).</p>
+
+            <div class="be-strategy">
+                <h4>👥 Which owners to enrich per property</h4>
+                <label>
+                    <input type="radio" name="be-strategy" value="recommended" checked>
+                    <strong>Recommended</strong> &mdash; 1 owner per property
+                    (SOS principal if available, otherwise the primary listed owner)
+                </label>
+                <label>
+                    <input type="radio" name="be-strategy" value="all">
+                    <strong>All available owners</strong> &mdash; enriches every distinct
+                    owner name found (SOS + PLUTO + RPAD + HPD). Higher cost.
+                </label>
+            </div>
+
+            <div id="be-estimate-block" class="loading-spinner">
+                <p>Calculating cost for ${formatNumber(totalFiltered)} properties...</p>
+            </div>
+
+            <div class="bulk-enrich-footer" id="be-footer">
+                <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Cancel</button>
+                <button class="btn btn-primary" id="be-start-btn" disabled>Calculating…</button>
             </div>
         </div>
     `;
     document.body.appendChild(modal);
-    
+
+    // Stash for use by other handlers
+    window._beFilters = buildBulkEnrichFiltersPayload();
+
+    // Re-estimate whenever the strategy changes
+    document.querySelectorAll('input[name="be-strategy"]').forEach(r => {
+        r.addEventListener('change', refreshBulkEnrichEstimate);
+    });
+    refreshBulkEnrichEstimate();
+}
+
+async function refreshBulkEnrichEstimate() {
+    const block = document.getElementById('be-estimate-block');
+    const startBtn = document.getElementById('be-start-btn');
+    if (!block || !startBtn) return;
+
+    const strategy = (document.querySelector('input[name="be-strategy"]:checked') || {}).value || 'recommended';
+    startBtn.disabled = true;
+    startBtn.textContent = 'Calculating…';
+    block.innerHTML = `<div class="loading-spinner"><p>Calculating cost…</p></div>`;
+
     try {
-        // Get estimate from API
-        const response = await fetch('/api/enrichment/bulk-estimate', {
+        const res = await fetch('/api/enrichment/bulk-estimate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ building_ids: buildingIds })
+            body: JSON.stringify({
+                filters: window._beFilters,
+                owner_strategy: strategy,
+            }),
         });
-        
-        const data = await response.json();
-        
-        if (!data.success) {
-            throw new Error(data.error || 'Failed to get estimate');
-        }
-        
-        // Update modal with estimate
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to get estimate');
+
+        window._beEstimate = data;
+
         const costDisplay = data.is_admin ? 'FREE (Admin)' : `$${data.max_cost.toFixed(2)}`;
         const costPerLookup = data.is_admin ? 'FREE' : `$${data.cost_per_lookup.toFixed(2)}`;
-        
-        const modalContent = modal.querySelector('.modal-content');
-        modalContent.innerHTML = `
-            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-            <h2>📞 Bulk Owner Enrichment</h2>
-            <p class="modal-subtitle">Enrich contact info for all available owners</p>
-            
+
+        block.innerHTML = `
             <div class="bulk-enrich-summary">
                 <div class="summary-row">
-                    <span class="summary-label">Properties Selected:</span>
-                    <span class="summary-value">${data.total_properties}</span>
+                    <span class="summary-label">Properties matching filters:</span>
+                    <span class="summary-value">${formatNumber(data.total_properties)}</span>
                 </div>
                 <div class="summary-row">
-                    <span class="summary-label">Properties with Enrichable Owners:</span>
-                    <span class="summary-value">${data.properties_with_owners}</span>
+                    <span class="summary-label">Properties with enrichable owners:</span>
+                    <span class="summary-value">${formatNumber(data.properties_with_owners)}</span>
                 </div>
                 <div class="summary-row highlight">
-                    <span class="summary-label">Total Owners to Enrich:</span>
-                    <span class="summary-value">${data.total_owners}</span>
+                    <span class="summary-label">Owners to enrich (${strategy}):</span>
+                    <span class="summary-value">${formatNumber(data.total_owners)}</span>
                 </div>
             </div>
-            
+
             <div class="cost-breakdown">
-                <h4>💰 Cost Calculation</h4>
+                <h4>💰 Cost</h4>
                 <div class="math-display">
-                    <p>${data.total_owners} owners × ${costPerLookup} per lookup = <strong>${costDisplay}</strong></p>
+                    <p>${formatNumber(data.total_owners)} owners × ${costPerLookup} = <strong>${costDisplay}</strong></p>
                 </div>
-                <p class="cost-note">
-                    ⚠️ <strong>Maximum charge:</strong> ${costDisplay}<br>
-                    <small>
-                        You are only charged for lookups that return results.
-                        ${!data.is_admin && data.total_owners === 1 ? '<br>Note: Minimum charge of $0.50 applies.' : ''}
-                        ${!data.is_admin && data.total_owners > 1 ? '<br>Batch pricing: $0.35 per lookup, charged as a single payment at the end.' : ''}
-                    </small>
-                </p>
+                <p class="cost-note"><small>
+                    You're only charged for lookups that return data. Batch pricing: $0.35 per lookup.
+                    ${!data.is_admin && data.total_owners > 0 && data.total_owners < 2 ? 'Minimum charge of $0.50 applies.' : ''}
+                </small></p>
             </div>
-            
-            ${data.breakdown.length > 0 ? `
-                <details class="breakdown-details">
-                    <summary>📋 View Breakdown (${data.breakdown.length} properties)</summary>
-                    <div class="breakdown-list">
-                        ${data.breakdown.slice(0, 20).map(b => `
-                            <div class="breakdown-item">
-                                <span class="breakdown-address">${b.address}</span>
-                                <span class="breakdown-owners">${b.count} owner(s): ${b.owners.join(', ')}</span>
-                            </div>
-                        `).join('')}
-                        ${data.breakdown.length > 20 ? `<p class="more-items">...and ${data.breakdown.length - 20} more properties</p>` : ''}
-                    </div>
-                </details>
+
+            ${data.requires_typed_confirmation ? `
+                <div class="be-confirm-block">
+                    ⚠️ This run will charge up to <strong>${costDisplay}</strong>.
+                    Type <code>CONFIRM</code> to authorize.
+                    <input type="text" id="be-confirm-input" class="be-confirm-input"
+                           placeholder="Type CONFIRM" autocomplete="off">
+                </div>
             ` : ''}
-            
-            <div class="bulk-enrich-footer">
-                ${data.total_owners === 0 ? `
-                    <p class="no-owners-message">No enrichable owners found in these properties.</p>
-                    <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Close</button>
-                ` : `
-                    <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Cancel</button>
-                    <button class="btn btn-primary bulk-enrich-confirm-btn" onclick="confirmBulkEnrich()">
-                        🚀 Enrich ${data.total_owners} Owners (up to ${costDisplay})
-                    </button>
-                `}
+        `;
+
+        if (data.total_owners === 0) {
+            startBtn.textContent = 'No owners to enrich';
+            startBtn.disabled = true;
+            return;
+        }
+
+        startBtn.disabled = false;
+        startBtn.textContent = `🚀 Enrich ${formatNumber(data.total_owners)} owners (up to ${costDisplay})`;
+        startBtn.onclick = startBulkEnrichJob;
+
+        if (data.requires_typed_confirmation) {
+            // Disable until they type CONFIRM
+            startBtn.disabled = true;
+            const ci = document.getElementById('be-confirm-input');
+            ci.addEventListener('input', () => {
+                startBtn.disabled = ci.value.trim().toUpperCase() !== 'CONFIRM';
+            });
+        }
+    } catch (err) {
+        block.innerHTML = `<p class="error-message">Error: ${err.message}</p>`;
+        startBtn.textContent = 'Retry';
+        startBtn.disabled = false;
+        startBtn.onclick = refreshBulkEnrichEstimate;
+    }
+}
+
+async function startBulkEnrichJob() {
+    const startBtn = document.getElementById('be-start-btn');
+    if (!startBtn || startBtn.disabled) return;
+    const strategy = (document.querySelector('input[name="be-strategy"]:checked') || {}).value || 'recommended';
+    const confirmEl = document.getElementById('be-confirm-input');
+    const confirmText = confirmEl ? confirmEl.value.trim() : '';
+
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting…';
+
+    try {
+        const res = await fetch('/api/enrichment/bulk-job/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filters: window._beFilters,
+                owner_strategy: strategy,
+                confirm_typed: confirmText,
+            }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to start job');
+
+        renderBulkEnrichProgress(data.job_id, data);
+        beginBulkEnrichPolling(data.job_id);
+    } catch (err) {
+        alert('Could not start bulk enrichment: ' + err.message);
+        startBtn.disabled = false;
+        startBtn.textContent = 'Try again';
+    }
+}
+
+function renderBulkEnrichProgress(jobId, initialData) {
+    const modal = document.getElementById('bulk-enrich-modal');
+    if (!modal) return;
+    const content = modal.querySelector('.modal-content');
+    const planned = initialData.total_owners_planned || 0;
+    const props = initialData.total_properties || 0;
+    const maxCost = initialData.estimated_max_cost || 0;
+    const strategy = initialData.owner_strategy || 'recommended';
+
+    content.innerHTML = `
+        <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+        <h2>📞 Bulk Enrichment Running</h2>
+        <p class="modal-subtitle">
+            Job #${jobId} &middot; ${formatNumber(props)} properties &middot;
+            ${formatNumber(planned)} owners (${strategy}) &middot;
+            up to <strong>$${maxCost.toFixed(2)}</strong>
+        </p>
+
+        <div class="be-progress-wrap">
+            <div class="be-progress-bar"><div class="be-progress-fill" id="be-pf"></div></div>
+            <div class="be-progress-meta">
+                <span id="be-progress-text">Starting…</span>
+                <span id="be-progress-pct">0%</span>
             </div>
-        `;
-        
-        // Store building IDs for confirmation
-        window.bulkEnrichBuildingIds = buildingIds;
-        
-    } catch (error) {
-        console.error('Bulk estimate error:', error);
-        const modalContent = modal.querySelector('.modal-content');
-        modalContent.innerHTML = `
-            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-            <h2>📞 Bulk Owner Enrichment</h2>
-            <p class="error-message">Error: ${error.message}</p>
-            <button class="btn btn-secondary" onclick="closeBulkEnrichModal()">Close</button>
-        `;
+        </div>
+
+        <div class="be-counters">
+            <span class="be-counter success">Successful: <strong id="be-c-success">0</strong></span>
+            <span class="be-counter failed">No data: <strong id="be-c-failed">0</strong></span>
+            <span class="be-counter skipped">Skipped: <strong id="be-c-skipped">0</strong></span>
+            <span class="be-counter">Properties: <strong id="be-c-props">0</strong> / ${formatNumber(props)}</span>
+        </div>
+
+        <p id="be-charge-msg" style="margin: 0.5rem 0;"></p>
+
+        <div class="bulk-enrich-footer">
+            <button class="btn btn-secondary" id="be-cancel-btn" onclick="cancelBulkEnrichJob(${jobId})">
+                Stop after current property
+            </button>
+            <button class="btn btn-primary" id="be-close-btn" style="display:none;" onclick="closeBulkEnrichModal(); loadProperties();">
+                Done — refresh results
+            </button>
+        </div>
+    `;
+}
+
+function beginBulkEnrichPolling(jobId) {
+    if (_bulkEnrichPollTimer) clearInterval(_bulkEnrichPollTimer);
+    const tick = async () => {
+        try {
+            const res = await fetch(`/api/enrichment/bulk-job/${jobId}`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Poll failed');
+            updateBulkEnrichProgressUI(data.job);
+            if (['completed', 'failed', 'cancelled'].includes(data.job.status)) {
+                clearInterval(_bulkEnrichPollTimer);
+                _bulkEnrichPollTimer = null;
+                finalizeBulkEnrichUI(data.job);
+            }
+        } catch (e) {
+            // Keep polling; surface intermittent errors quietly
+            console.warn('Poll error:', e);
+        }
+    };
+    tick();
+    _bulkEnrichPollTimer = setInterval(tick, 3000);
+}
+
+function updateBulkEnrichProgressUI(job) {
+    const planned = job.total_owners_planned || 1;
+    const attempted = job.owners_attempted || 0;
+    const pct = Math.min(100, Math.round((attempted / planned) * 100));
+    const pf = document.getElementById('be-pf');
+    if (pf) pf.style.width = `${pct}%`;
+    const pctEl = document.getElementById('be-progress-pct');
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    const txt = document.getElementById('be-progress-text');
+    if (txt) txt.textContent = `${formatNumber(attempted)} / ${formatNumber(planned)} owners attempted — status: ${job.status}`;
+    const elS = document.getElementById('be-c-success');
+    if (elS) elS.textContent = formatNumber(job.owners_successful || 0);
+    const elF = document.getElementById('be-c-failed');
+    if (elF) elF.textContent = formatNumber(job.owners_failed || 0);
+    const elSk = document.getElementById('be-c-skipped');
+    if (elSk) elSk.textContent = formatNumber(job.owners_skipped || 0);
+    const elP = document.getElementById('be-c-props');
+    if (elP) elP.textContent = formatNumber(job.properties_processed || 0);
+}
+
+function finalizeBulkEnrichUI(job) {
+    const cancelBtn = document.getElementById('be-cancel-btn');
+    const closeBtn = document.getElementById('be-close-btn');
+    const txt = document.getElementById('be-progress-text');
+    const chargeMsg = document.getElementById('be-charge-msg');
+
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (closeBtn) closeBtn.style.display = 'inline-block';
+
+    let headline;
+    if (job.status === 'completed') headline = `✅ Completed. Charged $${(job.total_charged || 0).toFixed(2)}.`;
+    else if (job.status === 'cancelled') headline = `⏹ Cancelled. Charged $${(job.total_charged || 0).toFixed(2)} for ${formatNumber(job.owners_successful || 0)} completed lookups.`;
+    else headline = `❌ Failed: ${job.error_message || 'unknown error'}`;
+
+    if (txt) txt.textContent = headline;
+    if (chargeMsg && job.error_message) {
+        chargeMsg.innerHTML = `<small style="color: #ff9800;">${job.error_message}</small>`;
+    }
+}
+
+async function cancelBulkEnrichJob(jobId) {
+    const btn = document.getElementById('be-cancel-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
+    try {
+        await fetch(`/api/enrichment/bulk-job/${jobId}/cancel`, { method: 'POST' });
+    } catch (e) {
+        console.warn('Cancel failed:', e);
     }
 }
 
 function closeBulkEnrichModal() {
+    if (_bulkEnrichPollTimer) {
+        clearInterval(_bulkEnrichPollTimer);
+        _bulkEnrichPollTimer = null;
+    }
     const modal = document.getElementById('bulk-enrich-modal');
-    if (modal) {
-        modal.remove();
-    }
-}
-
-async function confirmBulkEnrich() {
-    const btn = document.querySelector('.bulk-enrich-confirm-btn');
-    if (!btn) return;
-    
-    btn.disabled = true;
-    btn.textContent = 'Processing...';
-    
-    try {
-        const response = await fetch('/api/enrichment/bulk-enrich', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ building_ids: window.bulkEnrichBuildingIds })
-        });
-        
-        const data = await response.json();
-        
-        if (!data.success) {
-            throw new Error(data.error || 'Bulk enrichment failed');
-        }
-        
-        const results = data.results;
-        
-        // Show results
-        const modal = document.getElementById('bulk-enrich-modal');
-        const modalContent = modal.querySelector('.modal-content');
-        modalContent.innerHTML = `
-            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-            <h2>✅ Bulk Enrichment Complete</h2>
-            
-            <div class="bulk-results-summary">
-                <div class="result-stat success">
-                    <span class="stat-number">${results.successful}</span>
-                    <span class="stat-label">Successful</span>
-                </div>
-                <div class="result-stat failed">
-                    <span class="stat-number">${results.failed}</span>
-                    <span class="stat-label">No Results</span>
-                </div>
-                <div class="result-stat skipped">
-                    <span class="stat-number">${results.skipped}</span>
-                    <span class="stat-label">Skipped</span>
-                </div>
-            </div>
-            
-            <div class="total-charged">
-                <p>Total Charged: <strong>$${results.total_charged.toFixed(2)}</strong></p>
-            </div>
-            
-            <div class="bulk-enrich-footer">
-                <button class="btn btn-primary" onclick="closeBulkEnrichModal(); loadProperties();">
-                    Done - Refresh Results
-                </button>
-            </div>
-        `;
-        
-    } catch (error) {
-        console.error('Bulk enrich error:', error);
-        btn.disabled = false;
-        btn.textContent = 'Try Again';
-        alert('Error: ' + error.message);
-    }
+    if (modal) modal.remove();
 }
 
 // ==========================================
@@ -1015,7 +1202,7 @@ async function updateEnrichmentEstimate() {
         if (state.filters.owner) params.append('owner', state.filters.owner);
         if (state.filters.minValue) params.append('min_value', state.filters.minValue);
         if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
-        if (state.filters.borough) params.append('borough', state.filters.borough);
+        if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
         if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
         if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
         if (state.filters.withPermits) params.append('with_permits', 'true');
@@ -1081,5 +1268,8 @@ window.goToPage = goToPage;
 window.clearFilters = clearFilters;
 window.showBulkEnrichModal = showBulkEnrichModal;
 window.closeBulkEnrichModal = closeBulkEnrichModal;
-window.confirmBulkEnrich = confirmBulkEnrich;
+window.cancelBulkEnrichJob = cancelBulkEnrichJob;
+window.startBulkEnrichJob = startBulkEnrichJob;
 window.updateEnrichmentEstimate = updateEnrichmentEstimate;
+
+console.log('🏢 Properties Intelligence loaded');
