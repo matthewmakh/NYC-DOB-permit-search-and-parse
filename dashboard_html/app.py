@@ -62,6 +62,14 @@ def init_db_pool():
         # 2 workers × 5 max connections = 10 total max
         db_pool = pool.SimpleConnectionPool(1, 5, **DB_CONFIG)
         print(f"✅ Initialized connection pool for worker PID {os.getpid()}")
+        # One-off, idempotent: ensure bulk_enrich_jobs table exists and any
+        # 'running' jobs from a previous container are marked failed.
+        try:
+            import bulk_enrich_service
+            bulk_enrich_service.init_bulk_enrich_jobs_table()
+            bulk_enrich_service.resume_orphaned_jobs()
+        except Exception as e:
+            print(f"⚠️  bulk_enrich_service init skipped: {e}")
     return db_pool
 
 
@@ -2512,6 +2520,203 @@ def properties_page():
     return render_template('properties.html')
 
 
+# Hard cap on the number of properties one bulk-enrich job can target.
+# Caps cost/runtime exposure even with the type-to-confirm gate in the UI.
+BULK_ENRICH_MAX_PROPERTIES = 20000
+
+
+def _parse_boroughs_param(raw, multi_source=None):
+    """Parse the borough query param into a list of valid borough codes.
+
+    Accepts either repeated values (?borough=1&borough=3) or a single
+    comma-separated value (?borough=1,3). Empty / unknown codes are dropped.
+
+    `multi_source` (optional) is a MultiDict-like object with `getlist`.
+    If provided, it's used instead of Flask's global request — needed when
+    the filter logic is invoked outside a Flask request (e.g., from the
+    bulk-enrich resolver which feeds in a synthesized MultiDict).
+    """
+    valid = {'1', '2', '3', '4', '5'}
+    raw_values = []
+
+    if multi_source is not None and hasattr(multi_source, 'getlist'):
+        for v in multi_source.getlist('borough'):
+            raw_values.extend(str(v).split(','))
+    else:
+        # Prefer the live Flask request (handles both repeated and comma-separated)
+        try:
+            for v in request.args.getlist('borough'):
+                raw_values.extend(str(v).split(','))
+        except RuntimeError:
+            if raw:
+                raw_values = str(raw).split(',')
+
+    out = []
+    seen = set()
+    for v in raw_values:
+        v = v.strip()
+        if v in valid and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _resolve_filter_building_ids(args, limit=None):
+    """Return the list of building IDs matching the same filters as /api/properties,
+    ignoring pagination. Used by the bulk-enrich endpoints so that 'enrich filtered'
+    enriches exactly the set the user is browsing, not just the current page.
+
+    `args` is a Flask MultiDict (request.args) or any object with .get().
+    """
+    def g(name, type=None, default=None):
+        if hasattr(args, 'get'):
+            try:
+                return args.get(name, default=default, type=type) if type else args.get(name, default)
+            except TypeError:
+                # plain dicts don't take a `type` arg
+                v = args.get(name, default)
+                if type and v is not None:
+                    try:
+                        return type(v)
+                    except (TypeError, ValueError):
+                        return default
+                return v
+        return default
+
+    search = (g('search', default='') or '').strip()
+    owner = (g('owner', default='') or '').strip()
+    min_value = g('min_value', type=float)
+    max_value = g('max_value', type=float)
+    min_sale_price = g('min_sale_price', type=float)
+    max_sale_price = g('max_sale_price', type=float)
+    sale_date_from = g('sale_date_from')
+    sale_date_to = g('sale_date_to')
+    cash_only = str(g('cash_only', default='')).lower() == 'true'
+    with_permits = str(g('with_permits', default='')).lower() == 'true'
+    min_permits = g('min_permits', type=int)
+    recent_permit_days = g('recent_permit_days', type=int)
+    boroughs = _parse_boroughs_param(g('borough', default=''), multi_source=args if hasattr(args, 'getlist') else None)
+    building_class = (g('building_class', default='') or '').strip()
+    min_units = g('min_units', type=int)
+    max_units = g('max_units', type=int)
+    has_violations = g('has_violations')
+    recent_sale_days = g('recent_sale_days', type=int)
+    financing_min = g('financing_min', type=float)
+    financing_max = g('financing_max', type=float)
+    has_enrichable_owner = str(g('has_enrichable_owner', default='')).lower() == 'true'
+
+    where_clauses = []
+    params = []
+
+    if search:
+        is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
+        if is_zip_search:
+            where_clauses.append("""(
+                b.address ILIKE %s OR b.bbl LIKE %s OR
+                b.current_owner_name ILIKE %s OR b.owner_name_rpad ILIKE %s OR
+                b.owner_name_hpd ILIKE %s OR
+                EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.zip_code = %s)
+            )""")
+            term = f"%{search}%"
+            params.extend([term, term, term, term, term, search])
+        else:
+            where_clauses.append("""(
+                b.address ILIKE %s OR b.bbl LIKE %s OR
+                b.current_owner_name ILIKE %s OR b.owner_name_rpad ILIKE %s OR
+                b.owner_name_hpd ILIKE %s
+            )""")
+            term = f"%{search}%"
+            params.extend([term, term, term, term, term])
+
+    if owner:
+        where_clauses.append("""(
+            b.current_owner_name ILIKE %s OR b.owner_name_rpad ILIKE %s OR b.owner_name_hpd ILIKE %s
+        )""")
+        ot = f"%{owner}%"
+        params.extend([ot, ot, ot])
+
+    if min_value is not None:
+        where_clauses.append("b.assessed_total_value >= %s"); params.append(min_value)
+    if max_value is not None:
+        where_clauses.append("b.assessed_total_value <= %s"); params.append(max_value)
+    if min_sale_price is not None:
+        where_clauses.append("b.sale_price >= %s"); params.append(min_sale_price)
+    if max_sale_price is not None:
+        where_clauses.append("b.sale_price <= %s"); params.append(max_sale_price)
+    if sale_date_from:
+        where_clauses.append("b.sale_date >= %s"); params.append(sale_date_from)
+    if sale_date_to:
+        where_clauses.append("b.sale_date <= %s"); params.append(sale_date_to)
+    if cash_only:
+        where_clauses.append("b.is_cash_purchase = true")
+    if recent_sale_days:
+        where_clauses.append("b.sale_date >= CURRENT_DATE - INTERVAL '%s days'")
+        params.append(recent_sale_days)
+    if financing_min is not None:
+        where_clauses.append("b.financing_ratio >= %s"); params.append(financing_min)
+    if financing_max is not None:
+        where_clauses.append("b.financing_ratio <= %s"); params.append(financing_max)
+    if boroughs:
+        placeholders = ','.join(['%s'] * len(boroughs))
+        where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
+        params.extend(boroughs)
+    if building_class:
+        where_clauses.append("b.building_class LIKE %s")
+        params.append(f"{building_class.upper()}%")
+    if min_units is not None:
+        where_clauses.append("COALESCE(b.total_units, 0) >= %s"); params.append(min_units)
+    if max_units is not None:
+        where_clauses.append("COALESCE(b.total_units, 0) <= %s"); params.append(max_units)
+    if with_permits:
+        where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+    if min_permits is not None:
+        where_clauses.append("(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
+        params.append(min_permits)
+    if recent_permit_days is not None:
+        where_clauses.append("""EXISTS (
+            SELECT 1 FROM permits p WHERE p.bbl = b.bbl
+              AND (p.filing_date >= CURRENT_DATE - (%s || ' days')::interval
+                   OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
+        )""")
+        params.extend([str(recent_permit_days), str(recent_permit_days)])
+    if has_violations is not None:
+        hv = str(has_violations).lower()
+        if hv == 'true':
+            where_clauses.append("b.hpd_open_violations > 0")
+        elif hv == 'false':
+            where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
+    if has_enrichable_owner:
+        where_clauses.append("""
+            (
+                (b.sos_principal_name IS NOT NULL
+                 AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                 AND b.sos_principal_name ~ ' ')
+                OR (b.current_owner_name IS NOT NULL
+                    AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                    AND b.current_owner_name ~ ' ')
+                OR (b.owner_name_rpad IS NOT NULL
+                    AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                    AND b.owner_name_rpad ~ ' ')
+                OR (b.owner_name_hpd IS NOT NULL
+                    AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
+                    AND b.owner_name_hpd ~ ' ')
+            )
+        """)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    limit_sql = f"LIMIT {int(limit)}" if limit else ""
+    query = f"""
+        SELECT b.id
+        FROM buildings b
+        {where_sql}
+        ORDER BY b.id
+        {limit_sql}
+    """
+    with DatabaseConnection() as cur:
+        cur.execute(query, params)
+        return [r['id'] for r in cur.fetchall()]
+
+
 @app.route('/api/properties')
 @cache.cached(timeout=300, query_string=True)
 def api_properties():
@@ -2554,7 +2759,7 @@ def api_properties():
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
-            borough = request.args.get('borough', type=int)
+            boroughs = _parse_boroughs_param(request.args.get('borough', ''))
             building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
@@ -2651,9 +2856,10 @@ def api_properties():
                 params.append(financing_max)
         
             # Borough filter - extract from BBL (first digit is borough code)
-            if borough:
-                where_clauses.append("LEFT(b.bbl, 1) = %s")
-                params.append(str(borough))
+            if boroughs:
+                placeholders = ','.join(['%s'] * len(boroughs))
+                where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
+                params.extend(boroughs)
         
             # Building class
             if building_class:
@@ -2967,7 +3173,7 @@ def api_properties_export():
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
-            borough = request.args.get('borough', type=int)
+            boroughs = _parse_boroughs_param(request.args.get('borough', ''))
             building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
@@ -3047,9 +3253,10 @@ def api_properties_export():
             if financing_max is not None:
                 where_clauses.append("b.financing_ratio <= %s")
                 params.append(financing_max)
-            if borough:
-                where_clauses.append("LEFT(b.bbl, 1) = %s")
-                params.append(str(borough))
+            if boroughs:
+                placeholders = ','.join(['%s'] * len(boroughs))
+                where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
+                params.extend(boroughs)
             if building_class:
                 where_clauses.append("b.building_class LIKE %s")
                 params.append(f"{building_class.upper()}%")
@@ -4364,60 +4571,91 @@ def api_enrichment_history():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _resolve_bulk_enrich_target(req_data):
+    """Given the POST body for bulk-enrich endpoints, return (building_ids, mode, error).
+
+    Accepts either:
+      - {filters: {...}}  -> re-run the property filter server-side; enriches EXACTLY
+        the set the user is browsing (not just the current page, not the whole DB).
+      - {building_ids: [...]} -> use the explicit list (back-compat / power-user).
+
+    The filters branch is the safety-critical path: we must never enrich anything
+    that wouldn't appear in the filtered Properties view.
+    """
+    filters = req_data.get('filters')
+    explicit_ids = req_data.get('building_ids')
+
+    if filters is not None:
+        # Synthesize a MultiDict-like wrapper around the filters JSON
+        from werkzeug.datastructures import MultiDict
+        md = MultiDict()
+        for k, v in filters.items():
+            if v is None or v == '' or v is False:
+                continue
+            if isinstance(v, list):
+                # borough may arrive as an array
+                md.setlist(k, [str(x) for x in v])
+            else:
+                md[k] = str(v)
+        try:
+            building_ids = _resolve_filter_building_ids(md, limit=BULK_ENRICH_MAX_PROPERTIES + 1)
+        except Exception as e:
+            return None, None, f"Failed to resolve filters: {e}"
+        if len(building_ids) > BULK_ENRICH_MAX_PROPERTIES:
+            return None, None, (
+                f"Too many properties match these filters "
+                f"({len(building_ids)} > {BULK_ENRICH_MAX_PROPERTIES}). "
+                "Narrow your filters and try again."
+            )
+        return building_ids, 'filters', None
+
+    if isinstance(explicit_ids, list) and explicit_ids:
+        # Sanitize: must be ints, capped
+        try:
+            ids = [int(x) for x in explicit_ids][:BULK_ENRICH_MAX_PROPERTIES]
+        except (TypeError, ValueError):
+            return None, None, "building_ids must be a list of integers"
+        return ids, 'explicit', None
+
+    return None, None, "Must provide either 'filters' or 'building_ids'"
+
+
 @app.route('/api/enrichment/bulk-estimate', methods=['POST'])
 @login_required
 def api_bulk_enrichment_estimate():
-    """
-    Estimate cost for bulk enrichment of selected properties
-    Returns count of enrichable owners and max cost
-    
-    POST body: {
-        building_ids: list of int
-    }
+    """Estimate cost for bulk enrichment.
+
+    POST body:
+        {
+          "filters": { ...properties.js filter dict... },   # OR
+          "building_ids": [int, ...],
+          "owner_strategy": "recommended" | "all"           # default: recommended
+        }
     """
     try:
-        from enrichment_service import get_available_owners_for_enrichment
-        
-        data = request.get_json()
-        building_ids = data.get('building_ids', [])
-        
-        if not building_ids:
-            return jsonify({'success': False, 'error': 'No buildings selected'}), 400
-        
+        from enrichment_service import estimate_owners_for_buildings, VALID_OWNER_STRATEGIES
+
+        data = request.get_json() or {}
+        owner_strategy = data.get('owner_strategy', 'recommended')
+        if owner_strategy not in VALID_OWNER_STRATEGIES:
+            owner_strategy = 'recommended'
+
+        building_ids, _mode, err = _resolve_bulk_enrich_target(data)
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
-        cost_per_lookup = 0 if is_admin else 0.35  # Batch rate
-        
-        total_owners = 0
-        properties_with_owners = 0
-        breakdown = []
-        
-        with DatabaseConnection() as cur:
-            for bid in building_ids:
-                owners = get_available_owners_for_enrichment(bid, user_id)
-                # Only count owners not yet enriched
-                available = [o for o in owners if not o.get('already_enriched')]
-                if available:
-                    properties_with_owners += 1
-                    total_owners += len(available)
-                    
-                    # Get building address for breakdown
-                    cur.execute("SELECT address FROM buildings WHERE id = %s", (bid,))
-                    result = cur.fetchone()
-                    address = result['address'] if result else f"Building #{bid}"
-                    
-                    breakdown.append({
-                        'building_id': bid,
-                        'address': address,
-                        'owners': [o['name'] for o in available],
-                        'count': len(available)
-                    })
-        
+        cost_per_lookup = 0 if is_admin else 0.35
+
+        total_owners, properties_with_owners, breakdown, _per_building = (
+            estimate_owners_for_buildings(building_ids, user_id, owner_strategy)
+        )
+
         max_cost = total_owners * cost_per_lookup
-        # Apply $0.50 minimum for batch (Stripe requirement)
         if not is_admin and total_owners > 0 and max_cost < 0.50:
             max_cost = 0.50
-        
+
         return jsonify({
             'success': True,
             'total_owners': total_owners,
@@ -4425,10 +4663,14 @@ def api_bulk_enrichment_estimate():
             'total_properties': len(building_ids),
             'cost_per_lookup': cost_per_lookup,
             'max_cost': max_cost,
-            'breakdown': breakdown,
-            'is_admin': is_admin
+            'breakdown': breakdown[:50],  # cap UI payload size
+            'breakdown_truncated': len(breakdown) > 50,
+            'owner_strategy': owner_strategy,
+            'is_admin': is_admin,
+            'requires_typed_confirmation': (not is_admin) and max_cost > 500,
+            'max_properties_cap': BULK_ENRICH_MAX_PROPERTIES,
         })
-        
+
     except Exception as e:
         print(f"Bulk estimate error: {e}")
         import traceback
@@ -4436,118 +4678,155 @@ def api_bulk_enrichment_estimate():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/enrichment/bulk-enrich', methods=['POST'])
+@app.route('/api/enrichment/bulk-job/start', methods=['POST'])
 @login_required
-def api_bulk_enrich():
-    """
-    Perform bulk enrichment on selected properties
-    Enriches all available owners for each property
-    Charges $0.35 per successful enrichment (min $0.50) in ONE charge at the end
-    
-    POST body: {
-        building_ids: list of int
-    }
+def api_bulk_enrich_job_start():
+    """Kick off a background bulk-enrich job.
+
+    POST body:
+        {
+          "filters": {...} OR "building_ids": [...],
+          "owner_strategy": "recommended" | "all",
+          "confirm_typed": "CONFIRM"   # required if estimated cost > $500
+        }
+    Returns: {success: true, job_id: int, total_properties: int, total_owners_planned: int, ...}
     """
     try:
-        from enrichment_service import get_available_owners_for_enrichment, enrich_owner
-        from stripe_service import charge_batch_enrichment_total
-        
-        data = request.get_json()
-        building_ids = data.get('building_ids', [])
-        
-        if not building_ids:
-            return jsonify({'success': False, 'error': 'No buildings selected'}), 400
-        
+        import bulk_enrich_service
+        from enrichment_service import estimate_owners_for_buildings, VALID_OWNER_STRATEGIES
+
+        data = request.get_json() or {}
+        owner_strategy = data.get('owner_strategy', 'recommended')
+        if owner_strategy not in VALID_OWNER_STRATEGIES:
+            owner_strategy = 'recommended'
+
+        building_ids, _mode, err = _resolve_bulk_enrich_target(data)
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
-        
-        results = {
-            'successful': 0,
-            'failed': 0,
-            'skipped': 0,
-            'total_charged': 0,
-            'details': [],
-            'charge_message': ''
-        }
-        
-        # Track which buildings had successful enrichments for the charge
-        enriched_building_ids = []
-        
-        with DatabaseConnection() as cur:
-            for bid in building_ids:
-                owners = get_available_owners_for_enrichment(bid, user_id)
-                available = [o for o in owners if not o.get('already_enriched')]
-                
-                if not available:
-                    results['skipped'] += 1
-                    continue
-                
-                # Get building info for address
-                cur.execute("SELECT b.address, p.zip_code FROM buildings b LEFT JOIN permits p ON b.bbl = p.bbl WHERE b.id = %s LIMIT 1", (bid,))
-                building_row = cur.fetchone()
-                address = f"{building_row['address']}, NY {building_row.get('zip_code') or ''}" if building_row else ""
-                
-                for owner in available:
-                    try:
-                        # Perform enrichment FIRST (before charging)
-                        success, data, message = enrich_owner(bid, owner['name'], address, user_id)
-                        
-                        if success:
-                            results['successful'] += 1
-                            if bid not in enriched_building_ids:
-                                enriched_building_ids.append(bid)
-                        else:
-                            results['failed'] += 1
-                        
-                        results['details'].append({
-                            'building_id': bid,
-                            'owner': owner['name'],
-                            'success': success,
-                            'message': message
-                        })
-                        
-                    except Exception as e:
-                        results['failed'] += 1
-                        results['details'].append({
-                            'building_id': bid,
-                            'owner': owner['name'],
-                            'success': False,
-                            'error': str(e)
-                        })
-        
-        # After all enrichments complete, charge ONCE for all successful ones
-        if results['successful'] > 0 and not is_admin:
-            # Get the successful enrichment details for the charge metadata
-            successful_details = [d for d in results['details'] if d.get('success')]
-            
-            charge_success, charge_msg, charge_id = charge_batch_enrichment_total(
-                user_id, 
-                enriched_building_ids, 
-                results['successful'],
-                successful_details
-            )
-            
-            if charge_success:
-                # Calculate actual charge: $0.35 each, min $0.50
-                calculated_total = results['successful'] * 0.35
-                actual_charged = max(calculated_total, 0.50)
-                results['total_charged'] = actual_charged
-                results['charge_message'] = charge_msg
-            else:
-                # Enrichments succeeded but charge failed
-                # Log for manual follow-up, but don't fail the response
-                print(f"WARNING: Bulk enrichment succeeded ({results['successful']} owners) but charge failed for user {user_id}: {charge_msg}")
-                results['charge_message'] = f"Enrichment successful but payment failed: {charge_msg}"
-        
+        cost_per_lookup = 0 if is_admin else 0.35
+
+        # Re-estimate so we know the planned owner count and gate by confirm-string
+        total_owners, _props_with_owners, _breakdown, _per_b = (
+            estimate_owners_for_buildings(building_ids, user_id, owner_strategy)
+        )
+        max_cost = total_owners * cost_per_lookup
+        if not is_admin and total_owners > 0 and max_cost < 0.50:
+            max_cost = 0.50
+
+        if not is_admin and max_cost > 500:
+            typed = (data.get('confirm_typed') or '').strip().upper()
+            if typed != 'CONFIRM':
+                return jsonify({
+                    'success': False,
+                    'requires_typed_confirmation': True,
+                    'error': "Type CONFIRM to authorize charges above $500.",
+                    'estimated_max_cost': max_cost,
+                }), 400
+
+        if total_owners == 0:
+            return jsonify({
+                'success': False,
+                'error': "No enrichable owners found in the selected properties.",
+            }), 400
+
+        # Only persist filters if that's how the user requested it
+        persisted_filters = data.get('filters') or {}
+        if 'building_ids' in data:
+            persisted_filters = {'_explicit_ids_count': len(building_ids)}
+
+        job_id = bulk_enrich_service.create_job(
+            user_id=user_id,
+            filters=persisted_filters,
+            building_ids=building_ids,
+            total_owners_planned=total_owners,
+            estimated_max_cost=max_cost,
+            cost_per_lookup=cost_per_lookup,
+            is_admin=is_admin,
+            owner_strategy=owner_strategy,
+        )
+
+        bulk_enrich_service.start_job_worker(job_id)
+
         return jsonify({
             'success': True,
-            'results': results
+            'job_id': job_id,
+            'total_properties': len(building_ids),
+            'total_owners_planned': total_owners,
+            'estimated_max_cost': max_cost,
+            'cost_per_lookup': cost_per_lookup,
+            'owner_strategy': owner_strategy,
         })
-        
+
     except Exception as e:
-        print(f"Bulk enrichment error: {e}")
+        print(f"Bulk-job start error: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/bulk-job/<int:job_id>', methods=['GET'])
+@login_required
+def api_bulk_enrich_job_status(job_id):
+    """Poll a bulk-enrich job's status."""
+    try:
+        import bulk_enrich_service
+        user_id = g.user['id']
+        job = bulk_enrich_service.get_job(job_id, user_id=user_id)
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+        # Drop the heavy building_ids array from polling responses
+        job.pop('building_ids', None)
+        # Format datetimes / Decimals for JSON
+        for k, v in list(job.items()):
+            if hasattr(v, 'isoformat'):
+                job[k] = v.isoformat()
+            elif hasattr(v, 'quantize'):
+                job[k] = float(v)
+
+        return jsonify({'success': True, 'job': job})
+
+    except Exception as e:
+        print(f"Bulk-job status error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/bulk-job/<int:job_id>/cancel', methods=['POST'])
+@login_required
+def api_bulk_enrich_job_cancel(job_id):
+    """Request cancellation of a running bulk-enrich job."""
+    try:
+        import bulk_enrich_service
+        user_id = g.user['id']
+        ok = bulk_enrich_service.request_cancel(job_id, user_id)
+        if not ok:
+            return jsonify({'success': False, 'error': 'Job not found or already finished'}), 404
+        return jsonify({'success': True, 'message': 'Cancellation requested'})
+    except Exception as e:
+        print(f"Bulk-job cancel error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/bulk-jobs', methods=['GET'])
+@login_required
+def api_bulk_enrich_jobs_list():
+    """List the current user's recent bulk-enrich jobs (so the page can show
+    'a job is still running' on reload)."""
+    try:
+        import bulk_enrich_service
+        user_id = g.user['id']
+        jobs = bulk_enrich_service.list_recent_jobs_for_user(user_id, limit=5)
+        for job in jobs:
+            for k, v in list(job.items()):
+                if hasattr(v, 'isoformat'):
+                    job[k] = v.isoformat()
+                elif hasattr(v, 'quantize'):
+                    job[k] = float(v)
+        return jsonify({'success': True, 'jobs': jobs})
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

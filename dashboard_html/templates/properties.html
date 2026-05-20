@@ -87,14 +87,24 @@
             <!-- Borough Filter -->
             <div class="filter-section">
                 <h3>🗺️ Borough</h3>
-                <select id="boroughFilter" class="filter-select">
-                    <option value="">All Boroughs</option>
-                    <option value="1">Manhattan</option>
-                    <option value="2">Bronx</option>
-                    <option value="3">Brooklyn</option>
-                    <option value="4">Queens</option>
-                    <option value="5">Staten Island</option>
-                </select>
+                <div id="boroughFilter" class="borough-checkboxes">
+                    <label class="checkbox-label borough-cb-label">
+                        <input type="checkbox" class="borough-cb" value="1"> Manhattan
+                    </label>
+                    <label class="checkbox-label borough-cb-label">
+                        <input type="checkbox" class="borough-cb" value="2"> Bronx
+                    </label>
+                    <label class="checkbox-label borough-cb-label">
+                        <input type="checkbox" class="borough-cb" value="3"> Brooklyn
+                    </label>
+                    <label class="checkbox-label borough-cb-label">
+                        <input type="checkbox" class="borough-cb" value="4"> Queens
+                    </label>
+                    <label class="checkbox-label borough-cb-label">
+                        <input type="checkbox" class="borough-cb" value="5"> Staten Island
+                    </label>
+                </div>
+                <small class="filter-hint">Leave all unchecked to include every borough</small>
             </div>
 
             <!-- Building Class -->
