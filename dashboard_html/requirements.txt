@@ -7,3 +7,4 @@ gunicorn==21.2.0
 twilio==9.3.7
 requests==2.31.0
 stripe==7.0.0
+nameparser==1.1.3
