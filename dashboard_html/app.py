@@ -5290,47 +5290,79 @@ def api_bulk_enrichment_estimate():
         {
           "filters": { ...properties.js filter dict... },   # OR
           "building_ids": [int, ...],
-          "owner_strategy": "recommended" | "all"           # default: recommended
+          "owner_strategy": "recommended" | "all",          # default: recommended
+          "provider": "enformion" | "apify" | "enformion_fallback"  # admin-only override
         }
     """
     try:
-        from enrichment_service import estimate_owners_for_buildings, VALID_OWNER_STRATEGIES
+        from enrichment_service import (
+            estimate_owners_for_buildings,
+            VALID_OWNER_STRATEGIES,
+            VALID_PROVIDERS,
+            PROVIDER_ENFORMION_FALLBACK,
+            CUSTOMER_COST_PER_LOOKUP,
+            CUSTOMER_MIN_CHARGE,
+            provider_real_cost_per_lookup,
+        )
 
         data = request.get_json() or {}
         owner_strategy = data.get('owner_strategy', 'recommended')
         if owner_strategy not in VALID_OWNER_STRATEGIES:
             owner_strategy = 'recommended'
 
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+
+        # Only admin can pick a non-default provider. Anyone else is locked into
+        # the existing Enformion-with-Apify-fallback behavior.
+        provider = data.get('provider', PROVIDER_ENFORMION_FALLBACK)
+        if not is_admin or provider not in VALID_PROVIDERS:
+            provider = PROVIDER_ENFORMION_FALLBACK
+
         building_ids, _mode, err = _resolve_bulk_enrich_target(data)
         if err:
             return jsonify({'success': False, 'error': err}), 400
-
-        user_id = g.user['id']
-        is_admin = g.user.get('is_admin', False)
-        cost_per_lookup = 0 if is_admin else 0.35
 
         total_owners, properties_with_owners, breakdown, _per_building = (
             estimate_owners_for_buildings(building_ids, user_id, owner_strategy)
         )
 
-        max_cost = total_owners * cost_per_lookup
-        if not is_admin and total_owners > 0 and max_cost < 0.50:
-            max_cost = 0.50
+        # Customer-facing math (what a regular paying user would owe). Admin
+        # gets the same numbers shown for transparency, but is not actually
+        # charged.
+        customer_max_cost = total_owners * CUSTOMER_COST_PER_LOOKUP
+        if total_owners > 0 and customer_max_cost < CUSTOMER_MIN_CHARGE:
+            customer_max_cost = CUSTOMER_MIN_CHARGE
 
-        return jsonify({
+        cost_per_lookup = 0 if is_admin else CUSTOMER_COST_PER_LOOKUP
+        max_cost = 0 if is_admin else customer_max_cost
+
+        # Real upstream provider cost (what we pay the vendor). Only surfaced
+        # to admins so they can monitor margin.
+        provider_unit_cost = provider_real_cost_per_lookup(provider)
+        provider_max_cost = total_owners * provider_unit_cost
+
+        response = {
             'success': True,
             'total_owners': total_owners,
             'properties_with_owners': properties_with_owners,
             'total_properties': len(building_ids),
             'cost_per_lookup': cost_per_lookup,
             'max_cost': max_cost,
+            'customer_cost_per_lookup': CUSTOMER_COST_PER_LOOKUP,
+            'customer_max_cost': customer_max_cost,
             'breakdown': breakdown[:50],  # cap UI payload size
             'breakdown_truncated': len(breakdown) > 50,
             'owner_strategy': owner_strategy,
+            'provider': provider,
             'is_admin': is_admin,
             'requires_typed_confirmation': (not is_admin) and max_cost > 500,
             'max_properties_cap': BULK_ENRICH_MAX_PROPERTIES,
-        })
+        }
+        if is_admin:
+            response['provider_cost_per_lookup'] = provider_unit_cost
+            response['provider_max_cost'] = provider_max_cost
+        return jsonify(response)
 
     except Exception as e:
         print(f"Bulk estimate error: {e}")
@@ -5348,34 +5380,50 @@ def api_bulk_enrich_job_start():
         {
           "filters": {...} OR "building_ids": [...],
           "owner_strategy": "recommended" | "all",
+          "provider": "enformion" | "apify" | "enformion_fallback",  # admin-only override
           "confirm_typed": "CONFIRM"   # required if estimated cost > $500
         }
     Returns: {success: true, job_id: int, total_properties: int, total_owners_planned: int, ...}
     """
     try:
         import bulk_enrich_service
-        from enrichment_service import estimate_owners_for_buildings, VALID_OWNER_STRATEGIES
+        from enrichment_service import (
+            estimate_owners_for_buildings,
+            VALID_OWNER_STRATEGIES,
+            VALID_PROVIDERS,
+            PROVIDER_ENFORMION_FALLBACK,
+            CUSTOMER_COST_PER_LOOKUP,
+            CUSTOMER_MIN_CHARGE,
+            provider_real_cost_per_lookup,
+        )
 
         data = request.get_json() or {}
         owner_strategy = data.get('owner_strategy', 'recommended')
         if owner_strategy not in VALID_OWNER_STRATEGIES:
             owner_strategy = 'recommended'
 
+        user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
+
+        # Admin-only provider override (matches the estimate endpoint)
+        provider = data.get('provider', PROVIDER_ENFORMION_FALLBACK)
+        if not is_admin or provider not in VALID_PROVIDERS:
+            provider = PROVIDER_ENFORMION_FALLBACK
+
         building_ids, _mode, err = _resolve_bulk_enrich_target(data)
         if err:
             return jsonify({'success': False, 'error': err}), 400
 
-        user_id = g.user['id']
-        is_admin = g.user.get('is_admin', False)
-        cost_per_lookup = 0 if is_admin else 0.35
+        cost_per_lookup = 0 if is_admin else CUSTOMER_COST_PER_LOOKUP
 
         # Re-estimate so we know the planned owner count and gate by confirm-string
         total_owners, _props_with_owners, _breakdown, _per_b = (
             estimate_owners_for_buildings(building_ids, user_id, owner_strategy)
         )
-        max_cost = total_owners * cost_per_lookup
-        if not is_admin and total_owners > 0 and max_cost < 0.50:
-            max_cost = 0.50
+        customer_max_cost = total_owners * CUSTOMER_COST_PER_LOOKUP
+        if total_owners > 0 and customer_max_cost < CUSTOMER_MIN_CHARGE:
+            customer_max_cost = CUSTOMER_MIN_CHARGE
+        max_cost = 0 if is_admin else customer_max_cost
 
         if not is_admin and max_cost > 500:
             typed = (data.get('confirm_typed') or '').strip().upper()
@@ -5407,19 +5455,26 @@ def api_bulk_enrich_job_start():
             cost_per_lookup=cost_per_lookup,
             is_admin=is_admin,
             owner_strategy=owner_strategy,
+            provider=provider,
         )
 
         bulk_enrich_service.start_job_worker(job_id)
 
-        return jsonify({
+        response = {
             'success': True,
             'job_id': job_id,
             'total_properties': len(building_ids),
             'total_owners_planned': total_owners,
             'estimated_max_cost': max_cost,
+            'customer_max_cost': customer_max_cost,
             'cost_per_lookup': cost_per_lookup,
             'owner_strategy': owner_strategy,
-        })
+            'provider': provider,
+        }
+        if is_admin:
+            response['provider_cost_per_lookup'] = provider_real_cost_per_lookup(provider)
+            response['provider_max_cost'] = total_owners * provider_real_cost_per_lookup(provider)
+        return jsonify(response)
 
     except Exception as e:
         print(f"Bulk-job start error: {e}")
@@ -5654,7 +5709,9 @@ def api_bulk_enrich_job_status(job_id):
     """Poll a bulk-enrich job's status."""
     try:
         import bulk_enrich_service
+        from enrichment_service import provider_real_cost_per_lookup
         user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
         job = bulk_enrich_service.get_job(job_id, user_id=user_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
@@ -5667,6 +5724,14 @@ def api_bulk_enrich_job_status(job_id):
                 job[k] = v.isoformat()
             elif hasattr(v, 'quantize'):
                 job[k] = float(v)
+
+        # Show admin the real upstream cost as enrichments progress.
+        if is_admin:
+            provider = job.get('provider') or 'enformion_fallback'
+            unit = provider_real_cost_per_lookup(provider)
+            successful = int(job.get('owners_successful') or 0)
+            job['provider_cost_per_lookup'] = unit
+            job['provider_actual_cost'] = round(successful * unit, 4)
 
         return jsonify({'success': True, 'job': job})
 
@@ -5698,7 +5763,9 @@ def api_bulk_enrich_jobs_list():
     'a job is still running' on reload)."""
     try:
         import bulk_enrich_service
+        from enrichment_service import provider_real_cost_per_lookup
         user_id = g.user['id']
+        is_admin = g.user.get('is_admin', False)
         jobs = bulk_enrich_service.list_recent_jobs_for_user(user_id, limit=5)
         for job in jobs:
             for k, v in list(job.items()):
@@ -5706,6 +5773,11 @@ def api_bulk_enrich_jobs_list():
                     job[k] = v.isoformat()
                 elif hasattr(v, 'quantize'):
                     job[k] = float(v)
+            # Admin: surface real per-lookup vendor cost so the resume modal can
+            # render the live cost row without an extra round-trip.
+            if is_admin:
+                provider = job.get('provider') or 'enformion_fallback'
+                job['provider_cost_per_lookup'] = provider_real_cost_per_lookup(provider)
         return jsonify({'success': True, 'jobs': jobs})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

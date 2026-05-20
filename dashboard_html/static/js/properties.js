@@ -70,7 +70,11 @@ async function checkResumableBulkEnrichJob() {
             total_owners_planned: active.total_owners_planned,
             total_properties: active.total_properties,
             estimated_max_cost: active.estimated_max_cost,
+            customer_max_cost: active.estimated_max_cost,
             owner_strategy: active.owner_strategy,
+            provider: active.provider,
+            // Only set for admins — flips the admin cost row on
+            provider_cost_per_lookup: active.provider_cost_per_lookup,
         });
         beginBulkEnrichPolling(active.id);
     } catch (e) {
@@ -904,6 +908,10 @@ async function showBulkEnrichModal() {
                 </label>
             </div>
 
+            <!-- Admin-only provider selector. Populated by refreshBulkEnrichEstimate
+                 once we know whether the user is_admin. -->
+            <div id="be-provider-block" style="display:none;"></div>
+
             <div id="be-estimate-block" class="loading-spinner">
                 <p>Calculating cost for ${formatNumber(totalFiltered)} properties...</p>
             </div>
@@ -918,6 +926,7 @@ async function showBulkEnrichModal() {
 
     // Stash for use by other handlers
     window._beFilters = buildBulkEnrichFiltersPayload();
+    window._beProvider = 'enformion_fallback';
 
     // Re-estimate whenever the strategy changes
     document.querySelectorAll('input[name="be-strategy"]').forEach(r => {
@@ -926,12 +935,53 @@ async function showBulkEnrichModal() {
     refreshBulkEnrichEstimate();
 }
 
+function renderProviderSelectorIfAdmin(data) {
+    // Once the first estimate comes back we know is_admin. Inject the
+    // Enformion/Apify selector for admins; leave it hidden for everyone else.
+    const block = document.getElementById('be-provider-block');
+    if (!block) return;
+    if (!data.is_admin) {
+        block.style.display = 'none';
+        block.innerHTML = '';
+        return;
+    }
+    if (block.dataset.rendered === '1') return;  // already built; don't clobber selection
+
+    const current = window._beProvider || 'enformion_fallback';
+    block.style.display = '';
+    block.dataset.rendered = '1';
+    block.innerHTML = `
+        <div class="be-strategy">
+            <h4>🔌 Enrichment provider <span class="be-admin-tag">admin only</span></h4>
+            <label>
+                <input type="radio" name="be-provider" value="enformion_fallback" ${current === 'enformion_fallback' ? 'checked' : ''}>
+                <strong>Enformion → Apify fallback</strong> (default)
+            </label>
+            <label>
+                <input type="radio" name="be-provider" value="enformion" ${current === 'enformion' ? 'checked' : ''}>
+                <strong>Enformion only</strong>
+            </label>
+            <label>
+                <input type="radio" name="be-provider" value="apify" ${current === 'apify' ? 'checked' : ''}>
+                <strong>Apify TruePeopleSearch only</strong>
+            </label>
+        </div>
+    `;
+    block.querySelectorAll('input[name="be-provider"]').forEach(r => {
+        r.addEventListener('change', e => {
+            window._beProvider = e.target.value;
+            refreshBulkEnrichEstimate();
+        });
+    });
+}
+
 async function refreshBulkEnrichEstimate() {
     const block = document.getElementById('be-estimate-block');
     const startBtn = document.getElementById('be-start-btn');
     if (!block || !startBtn) return;
 
     const strategy = (document.querySelector('input[name="be-strategy"]:checked') || {}).value || 'recommended';
+    const provider = window._beProvider || 'enformion_fallback';
     startBtn.disabled = true;
     startBtn.textContent = 'Calculating…';
     block.innerHTML = `<div class="loading-spinner"><p>Calculating cost…</p></div>`;
@@ -943,15 +993,47 @@ async function refreshBulkEnrichEstimate() {
             body: JSON.stringify({
                 filters: window._beFilters,
                 owner_strategy: strategy,
+                provider: provider,
             }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed to get estimate');
 
         window._beEstimate = data;
+        renderProviderSelectorIfAdmin(data);
 
-        const costDisplay = data.is_admin ? 'FREE (Admin)' : `$${data.max_cost.toFixed(2)}`;
-        const costPerLookup = data.is_admin ? 'FREE' : `$${data.cost_per_lookup.toFixed(2)}`;
+        // Customer rate is what regular users would owe. Admin sees the same
+        // number so margin is transparent, but is not actually charged.
+        const customerPerLookup = data.customer_cost_per_lookup ?? data.cost_per_lookup ?? 0.35;
+        const customerMax = data.customer_max_cost ?? data.max_cost ?? 0;
+        const customerMaxStr = `$${customerMax.toFixed(2)}`;
+        const customerPerStr = `$${customerPerLookup.toFixed(2)}`;
+        const startBtnCostStr = data.is_admin ? 'FREE for admin' : `up to ${customerMaxStr}`;
+
+        // Admin-only: real upstream cost to the developer.
+        let adminCostHtml = '';
+        if (data.is_admin && data.provider_cost_per_lookup !== undefined) {
+            const providerLabel = ({
+                'enformion': 'Enformion',
+                'apify': 'Apify TruePeopleSearch',
+                'enformion_fallback': 'Enformion → Apify fallback',
+            })[data.provider] || data.provider;
+            const realUnit = data.provider_cost_per_lookup;
+            const realMax = data.provider_max_cost || 0;
+            adminCostHtml = `
+                <div class="be-admin-cost">
+                    <div class="be-admin-cost-row">
+                        <span>🔒 Admin-only — real provider cost (${providerLabel}):</span>
+                        <strong>$${realMax.toFixed(2)}</strong>
+                    </div>
+                    <div class="be-admin-cost-row sub">
+                        <span>Per lookup:</span>
+                        <span>$${realUnit.toFixed(4)} × ${formatNumber(data.total_owners)}</span>
+                    </div>
+                    <small>You (admin) are not charged. This is what the upstream vendor bills.</small>
+                </div>
+            `;
+        }
 
         block.innerHTML = `
             <div class="bulk-enrich-summary">
@@ -970,19 +1052,21 @@ async function refreshBulkEnrichEstimate() {
             </div>
 
             <div class="cost-breakdown">
-                <h4>💰 Cost</h4>
+                <h4>💰 Cost ${data.is_admin ? '<small style="font-weight:normal;">(customer rate — admin is not charged)</small>' : ''}</h4>
                 <div class="math-display">
-                    <p>${formatNumber(data.total_owners)} owners × ${costPerLookup} = <strong>${costDisplay}</strong></p>
+                    <p>${formatNumber(data.total_owners)} owners × ${customerPerStr} = <strong>${customerMaxStr}</strong></p>
                 </div>
                 <p class="cost-note"><small>
-                    You're only charged for lookups that return data. Batch pricing: $0.35 per lookup.
-                    ${!data.is_admin && data.total_owners > 0 && data.total_owners < 2 ? 'Minimum charge of $0.50 applies.' : ''}
+                    Only lookups that return data are charged. Batch pricing: ${customerPerStr} per lookup.
+                    ${data.total_owners > 0 && data.total_owners < 2 ? 'Minimum charge of $0.50 applies.' : ''}
                 </small></p>
             </div>
 
+            ${adminCostHtml}
+
             ${data.requires_typed_confirmation ? `
                 <div class="be-confirm-block">
-                    ⚠️ This run will charge up to <strong>${costDisplay}</strong>.
+                    ⚠️ This run will charge up to <strong>${customerMaxStr}</strong>.
                     Type <code>CONFIRM</code> to authorize.
                     <input type="text" id="be-confirm-input" class="be-confirm-input"
                            placeholder="Type CONFIRM" autocomplete="off">
@@ -997,7 +1081,7 @@ async function refreshBulkEnrichEstimate() {
         }
 
         startBtn.disabled = false;
-        startBtn.textContent = `🚀 Enrich ${formatNumber(data.total_owners)} owners (up to ${costDisplay})`;
+        startBtn.textContent = `🚀 Enrich ${formatNumber(data.total_owners)} owners (${startBtnCostStr})`;
         startBtn.onclick = startBulkEnrichJob;
 
         if (data.requires_typed_confirmation) {
@@ -1020,6 +1104,7 @@ async function startBulkEnrichJob() {
     const startBtn = document.getElementById('be-start-btn');
     if (!startBtn || startBtn.disabled) return;
     const strategy = (document.querySelector('input[name="be-strategy"]:checked') || {}).value || 'recommended';
+    const provider = window._beProvider || 'enformion_fallback';
     const confirmEl = document.getElementById('be-confirm-input');
     const confirmText = confirmEl ? confirmEl.value.trim() : '';
 
@@ -1033,6 +1118,7 @@ async function startBulkEnrichJob() {
             body: JSON.stringify({
                 filters: window._beFilters,
                 owner_strategy: strategy,
+                provider: provider,
                 confirm_typed: confirmText,
             }),
         });
@@ -1054,8 +1140,16 @@ function renderBulkEnrichProgress(jobId, initialData) {
     const content = modal.querySelector('.modal-content');
     const planned = initialData.total_owners_planned || 0;
     const props = initialData.total_properties || 0;
-    const maxCost = initialData.estimated_max_cost || 0;
+    const customerMax = initialData.customer_max_cost ?? initialData.estimated_max_cost ?? 0;
     const strategy = initialData.owner_strategy || 'recommended';
+    const provider = initialData.provider || 'enformion_fallback';
+    const providerLabel = ({
+        'enformion': 'Enformion',
+        'apify': 'Apify',
+        'enformion_fallback': 'Enformion→Apify',
+    })[provider] || provider;
+    const isAdmin = !!initialData.provider_cost_per_lookup; // server only sends this for admin
+    const adminUnitCost = initialData.provider_cost_per_lookup || 0;
 
     content.innerHTML = `
         <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
@@ -1063,7 +1157,8 @@ function renderBulkEnrichProgress(jobId, initialData) {
         <p class="modal-subtitle">
             Job #${jobId} &middot; ${formatNumber(props)} properties &middot;
             ${formatNumber(planned)} owners (${strategy}) &middot;
-            up to <strong>$${maxCost.toFixed(2)}</strong>
+            provider: <strong>${providerLabel}</strong> &middot;
+            customer rate: up to <strong>$${customerMax.toFixed(2)}</strong>
         </p>
 
         <div class="be-progress-wrap">
@@ -1080,6 +1175,16 @@ function renderBulkEnrichProgress(jobId, initialData) {
             <span class="be-counter skipped">Skipped: <strong id="be-c-skipped">0</strong></span>
             <span class="be-counter">Properties: <strong id="be-c-props">0</strong> / ${formatNumber(props)}</span>
         </div>
+
+        ${isAdmin ? `
+            <div class="be-admin-cost" id="be-admin-cost-live">
+                <div class="be-admin-cost-row">
+                    <span>🔒 Real provider cost so far (${providerLabel}, $${adminUnitCost.toFixed(4)}/lookup):</span>
+                    <strong id="be-admin-cost-val">$0.00</strong>
+                </div>
+                <small>You (admin) are not charged. This is the actual vendor cost as enrichments complete.</small>
+            </div>
+        ` : ''}
 
         <p id="be-charge-msg" style="margin: 0.5rem 0;"></p>
 
@@ -1134,6 +1239,11 @@ function updateBulkEnrichProgressUI(job) {
     if (elSk) elSk.textContent = formatNumber(job.owners_skipped || 0);
     const elP = document.getElementById('be-c-props');
     if (elP) elP.textContent = formatNumber(job.properties_processed || 0);
+    // Admin only: server includes provider_actual_cost on each poll
+    if (typeof job.provider_actual_cost === 'number') {
+        const elA = document.getElementById('be-admin-cost-val');
+        if (elA) elA.textContent = `$${job.provider_actual_cost.toFixed(2)}`;
+    }
 }
 
 function finalizeBulkEnrichUI(job) {

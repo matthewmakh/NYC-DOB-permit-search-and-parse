@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS bulk_enrich_jobs (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'pending',
     owner_strategy TEXT NOT NULL DEFAULT 'recommended',
+    provider TEXT NOT NULL DEFAULT 'enformion_fallback',
     filters_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     building_ids INTEGER[] NOT NULL DEFAULT '{}',
     total_properties INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +63,11 @@ CREATE TABLE IF NOT EXISTS bulk_enrich_jobs (
 )
 """
 
+# Run after CREATE so the column also lands on existing tables from earlier deploys.
+ALTER_TABLE_SQL = [
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'enformion_fallback'",
+]
+
 CREATE_INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_bulk_enrich_jobs_user ON bulk_enrich_jobs(user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_bulk_enrich_jobs_status ON bulk_enrich_jobs(status)",
@@ -74,6 +80,8 @@ def init_bulk_enrich_jobs_table():
         conn = _get_conn()
         cur = conn.cursor()
         cur.execute(CREATE_TABLE_SQL)
+        for alter_sql in ALTER_TABLE_SQL:
+            cur.execute(alter_sql)
         for idx_sql in CREATE_INDEXES_SQL:
             cur.execute(idx_sql)
         conn.commit()
@@ -88,7 +96,8 @@ def init_bulk_enrich_jobs_table():
 # ---------------------------------------------------------------------------
 
 def create_job(user_id, filters, building_ids, total_owners_planned,
-               estimated_max_cost, cost_per_lookup, is_admin, owner_strategy):
+               estimated_max_cost, cost_per_lookup, is_admin, owner_strategy,
+               provider='enformion_fallback'):
     """Insert a new job row in 'pending' status. Returns the job id."""
     conn = _get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -96,14 +105,14 @@ def create_job(user_id, filters, building_ids, total_owners_planned,
         cur.execute(
             """
             INSERT INTO bulk_enrich_jobs
-                (user_id, status, owner_strategy, filters_json, building_ids,
+                (user_id, status, owner_strategy, provider, filters_json, building_ids,
                  total_properties, total_owners_planned,
                  cost_per_lookup, estimated_max_cost, is_admin)
-            VALUES (%s, 'pending', %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, 'pending', %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
-                user_id, owner_strategy, json.dumps(filters or {}), list(building_ids),
+                user_id, owner_strategy, provider, json.dumps(filters or {}), list(building_ids),
                 len(building_ids), total_owners_planned,
                 cost_per_lookup, estimated_max_cost, is_admin,
             ),
@@ -235,9 +244,9 @@ def list_recent_jobs_for_user(user_id, limit=10):
     try:
         cur.execute(
             """
-            SELECT id, status, owner_strategy, total_properties, total_owners_planned,
-                   properties_processed, owners_successful, owners_failed, owners_skipped,
-                   estimated_max_cost, total_charged, created_at, completed_at, error_message
+            SELECT id, status, owner_strategy, provider, total_properties, total_owners_planned,
+                   properties_processed, owners_attempted, owners_successful, owners_failed, owners_skipped,
+                   estimated_max_cost, total_charged, is_admin, created_at, completed_at, error_message
             FROM bulk_enrich_jobs
             WHERE user_id = %s
             ORDER BY created_at DESC
@@ -306,6 +315,7 @@ def _run_job(job_id):
     user_id = job['user_id']
     is_admin = job['is_admin']
     owner_strategy = job['owner_strategy']
+    provider = job.get('provider') or 'enformion_fallback'
     building_ids = list(job['building_ids'] or [])
 
     _set_status(job_id, 'running')
@@ -358,7 +368,7 @@ def _run_job(job_id):
             if _check_cancel_requested(job_id):
                 break
             try:
-                success, _data, _msg = enrich_owner(bid, owner['name'], address, user_id)
+                success, _data, _msg = enrich_owner(bid, owner['name'], address, user_id, provider=provider)
                 if success:
                     any_success_for_building = True
                     _increment_counters(job_id, attempted=1, successful=1)

@@ -21,6 +21,37 @@ ENFORMION_AP_PASSWORD = os.getenv('ENFORMION_AP_PASSWORD')
 APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN')
 APIFY_ACTOR_ID = 'vmf6h5lxPAkB1W2gT'  # Skip Trace / TruePeopleSearch actor
 
+# ---------------------------------------------------------------------------
+# Enrichment provider selection + pricing
+# ---------------------------------------------------------------------------
+# Customer rate is what we bill the end user, regardless of which underlying
+# provider we use. Provider cost is what we actually pay the data vendor —
+# only shown to admins so they can monitor margin.
+PROVIDER_ENFORMION = 'enformion'
+PROVIDER_APIFY = 'apify'
+PROVIDER_ENFORMION_FALLBACK = 'enformion_fallback'  # try Enformion, fall back to Apify
+VALID_PROVIDERS = (PROVIDER_ENFORMION, PROVIDER_APIFY, PROVIDER_ENFORMION_FALLBACK)
+
+# Customer-facing batch rate (same regardless of which provider runs the lookup)
+CUSTOMER_COST_PER_LOOKUP = 0.35
+CUSTOMER_MIN_CHARGE = 0.50  # Stripe minimum
+
+# Provider's actual per-lookup cost — overridable via env vars so we don't
+# need a code push if vendor pricing changes.
+ENFORMION_PROVIDER_COST = float(os.getenv('ENFORMION_COST_PER_LOOKUP', '0.35'))
+APIFY_PROVIDER_COST = float(os.getenv('APIFY_COST_PER_LOOKUP', '0.02'))
+
+
+def provider_real_cost_per_lookup(provider):
+    """Return the actual per-lookup cost we pay the upstream vendor for the given
+    provider mode. For the fallback mode we conservatively report the worst case
+    (Enformion's higher cost) since we can't know ahead of time which one a given
+    lookup will hit."""
+    if provider == PROVIDER_APIFY:
+        return APIFY_PROVIDER_COST
+    # enformion or enformion_fallback both potentially hit Enformion
+    return ENFORMION_PROVIDER_COST
+
 
 def get_db_connection():
     """Get database connection"""
@@ -363,29 +394,38 @@ def extract_contact_info(api_response):
     return phones, emails, person_id
 
 
-def enrich_owner(building_id, owner_name, address, user_id):
+def enrich_owner(building_id, owner_name, address, user_id, provider=PROVIDER_ENFORMION_FALLBACK):
     """
-    Perform enrichment lookup and store results
+    Perform enrichment lookup and store results.
+
+    provider:
+      - 'enformion_fallback' (default): try Enformion, fall back to Apify on failure
+      - 'enformion': use Enformion only; do not fall back
+      - 'apify':     use Apify only; do not try Enformion at all
+
     Returns: (success, data, message)
     """
+    if provider not in VALID_PROVIDERS:
+        provider = PROVIDER_ENFORMION_FALLBACK
+
     conn = get_db_connection()
     cur = conn.cursor()
-    
+
     try:
         # Check if already enriched
         cur.execute("""
             SELECT enriched_phones, enriched_emails, enriched_at
             FROM buildings WHERE id = %s
         """, (building_id,))
-        
+
         building = cur.fetchone()
         if building and building['enriched_phones']:
             # Already has data - check if THIS USER has enriched THIS SPECIFIC OWNER
             cur.execute("""
-                SELECT id FROM user_enrichments 
+                SELECT id FROM user_enrichments
                 WHERE user_id = %s AND building_id = %s AND UPPER(owner_name_searched) = UPPER(%s)
             """, (user_id, building_id, owner_name))
-            
+
             if cur.fetchone():
                 # User already paid for this specific owner
                 return True, {
@@ -395,48 +435,61 @@ def enrich_owner(building_id, owner_name, address, user_id):
                 }, "Data already unlocked"
             # Note: Even if building has cached data from another owner's lookup,
             # we still need to call API for this new owner - fall through to API call
-        
+
         # Need to call API
         # Parse the owner name
         first_name, middle_name, last_name = parse_owner_name(owner_name)
-        
+
         if not first_name or not last_name:
             return False, None, "Could not parse owner name - may be a business entity"
-        
+
         # Parse address - only use city/state/zip, NOT street address (improves match rate)
         address_parts = address.split(',') if address else []
         # Skip street address (first part), use city/state/zip only
         address_line2 = ', '.join(address_parts[1:]).strip() if len(address_parts) > 1 else "Brooklyn, NY"
-        
-        # Call API with empty street address - just city/state/zip
-        success, api_response, error = call_enformion_api(
-            first_name, last_name, "", address_line2, middle_name
-        )
-        
-        enrichment_source = 'enformion'
-        
-        # If Enformion fails, try Apify TruePeopleSearch as fallback
-        if not success:
-            print(f"Enformion failed ({error}), trying Apify TruePeopleSearch fallback...")
-            
-            # Parse city/state from address_line2 (e.g., "Brooklyn, NY 11223")
-            city, state, zipcode = None, None, None
-            if address_line2:
-                parts = address_line2.replace(',', ' ').split()
-                if len(parts) >= 2:
-                    city = parts[0]
-                    state = parts[1] if len(parts) > 1 else 'NY'
-                    zipcode = parts[2] if len(parts) > 2 else None
-            
+
+        # Parse city/state/zip out of address_line2 once; used by Apify path(s).
+        city, state, zipcode = None, None, None
+        if address_line2:
+            parts = address_line2.replace(',', ' ').split()
+            if len(parts) >= 2:
+                city = parts[0]
+                state = parts[1] if len(parts) > 1 else 'NY'
+                zipcode = parts[2] if len(parts) > 2 else None
+
+        enrichment_source = None
+        api_response = None
+        error = None
+
+        if provider == PROVIDER_APIFY:
+            # Skip Enformion entirely.
             success, api_response, error = call_apify_truepeoplesearch(
                 first_name, last_name, None, city, state, zipcode
             )
-            
             if success:
                 enrichment_source = 'apify_truepeoplesearch'
             else:
-                return False, None, f"Enrichment API error: {error}"
-        
+                return False, None, f"Apify enrichment error: {error}"
+        else:
+            # Enformion-only or Enformion-with-fallback both start here.
+            success, api_response, error = call_enformion_api(
+                first_name, last_name, "", address_line2, middle_name
+            )
+            if success:
+                enrichment_source = 'enformion'
+            elif provider == PROVIDER_ENFORMION_FALLBACK:
+                print(f"Enformion failed ({error}), trying Apify TruePeopleSearch fallback...")
+                success, api_response, error = call_apify_truepeoplesearch(
+                    first_name, last_name, None, city, state, zipcode
+                )
+                if success:
+                    enrichment_source = 'apify_truepeoplesearch'
+                else:
+                    return False, None, f"Enrichment API error: {error}"
+            else:
+                # Strict Enformion-only mode — surface the failure rather than fall back.
+                return False, None, f"Enformion enrichment error: {error}"
+
         # Extract contact info based on source
         if enrichment_source == 'apify_truepeoplesearch':
             phones, emails, person_id = extract_apify_contact_info(api_response)

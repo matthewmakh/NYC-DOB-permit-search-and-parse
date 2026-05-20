@@ -272,6 +272,43 @@ body {
     letter-spacing: 0.1em;
 }
 
+/* Admin-only provider cost panel */
+.be-admin-cost {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    background: rgba(102, 126, 234, 0.08);
+    border: 1px dashed #667eea;
+    border-radius: 6px;
+}
+.be-admin-cost-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.95rem;
+}
+.be-admin-cost-row.sub {
+    font-size: 0.85rem;
+    color: var(--text-secondary, #aaa);
+    margin-top: 0.2rem;
+}
+.be-admin-cost small {
+    display: block;
+    margin-top: 0.4rem;
+    color: var(--text-secondary, #aaa);
+}
+.be-admin-tag {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #667eea;
+    background: rgba(102, 126, 234, 0.15);
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+}
+
 /* Smart Filters */
 .smart-filters {
     display: grid;
