@@ -11,6 +11,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import json
 import time
+from nameparser import HumanName
 
 # Enformion API Configuration (Primary)
 ENFORMION_API_URL = 'https://devapi.enformion.com/Contact/EnrichPlus'
@@ -65,82 +66,93 @@ def get_db_connection():
     )
 
 
-def parse_owner_name(full_name):
-    """
-    Parse a full name into first, middle, last
-    Handles formats like "SMITH, JOHN" or "JOHN SMITH" or "JOHN T SMITH"
-    Returns (None, None, None) for businesses/entities
-    """
+# Business-entity rejection lists. Tuned for NYC government data quirks
+# (e.g. "CHURCH" is allowed as a last name when in "CHURCH, CHARLOTTE" form).
+# Kept here because generic name-parser libraries don't know about these.
+_STRONG_BUSINESS_INDICATORS = frozenset([
+    'LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'LLP', 'PLLC', 'PC',
+    'COMPANY', 'PROPERTIES', 'REALTY', 'HOLDINGS', 'ENTERPRISES',
+    'INVESTMENTS', 'DEVELOPMENT', 'MANAGEMENT', 'FOUNDATION',
+])
+_WEAK_BUSINESS_INDICATORS = frozenset([
+    'TRUST', 'ESTATE', 'ASSOCIATES', 'PARTNERS', 'PARTNERSHIP',
+    'GROUP', 'CAPITAL', 'FUND',
+    'HOUSING', 'AUTHORITY', 'BANK', 'GRID', 'EDISON', 'UTILITY',
+    'CITY', 'STATE', 'COUNTY', 'FEDERAL', 'MUNICIPAL', 'NATIONAL',
+    'CHURCH', 'TEMPLE', 'SYNAGOGUE', 'MOSQUE', 'CONGREGATION',
+    'SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HOSPITAL', 'MEDICAL',
+    'ASSOCIATION', 'SOCIETY', 'CLUB', 'ORGANIZATION', 'COMMITTEE',
+])
+
+
+def is_business_entity(full_name):
+    """True if the name looks like a company/government/etc. rather than a
+    person. Runs before HumanName since name-parser libraries don't know
+    NYC-specific quirks like 'CHURCH' being a valid last name."""
     if not full_name:
-        return None, None, None
-    
-    # Clean up the name
+        return True
     name = full_name.strip().upper()
-    
-    # Quick checks for obvious non-person patterns
-    if '&' in name:  # Partnership: "SMITH & JONES"
-        return None, None, None
-    if name.startswith('CITY OF') or name.startswith('STATE OF') or name.startswith('COUNTY OF'):
-        return None, None, None
-    if name.startswith('BANK OF') or name.startswith('HEIRS OF') or name.startswith('ESTATE OF'):
-        return None, None, None
-    
-    # Check for business suffixes using word boundaries
-    # Split into words to avoid matching "CO" inside "FRANCO"
+    if '&' in name:
+        return True
+    for prefix in ('CITY OF', 'STATE OF', 'COUNTY OF',
+                   'BANK OF', 'HEIRS OF', 'ESTATE OF'):
+        if name.startswith(prefix):
+            return True
     words = name.replace(',', ' ').replace('.', ' ').split()
-    
-    # If it looks like "LASTNAME, FIRSTNAME" format with just 2 words, 
-    # the first word is likely a last name (even if it matches a keyword)
-    # e.g., "CHURCH, CHARLOTTE" is a person, not "ST MARKS CHURCH"
-    is_lastname_firstname_format = ',' in name and len(words) == 2
-    
-    # Strong business indicators - always reject (legal suffixes, very unlikely last names)
-    strong_indicators = [
-        'LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'LLP', 'PLLC', 'PC',
-        'COMPANY', 'PROPERTIES', 'REALTY', 'HOLDINGS', 'ENTERPRISES',
-        'INVESTMENTS', 'DEVELOPMENT', 'MANAGEMENT', 'FOUNDATION'
-    ]
-    
-    # Weak indicators - only reject if NOT in lastname,firstname format
-    # These could be last names: CHURCH, BANKS, GRANT, TEMPLE, etc.
-    weak_indicators = [
-        'TRUST', 'ESTATE', 'ASSOCIATES', 'PARTNERS', 'PARTNERSHIP',
-        'GROUP', 'CAPITAL', 'FUND',
-        'HOUSING', 'AUTHORITY', 'BANK', 'GRID', 'EDISON', 'UTILITY',
-        'CITY', 'STATE', 'COUNTY', 'FEDERAL', 'MUNICIPAL', 'NATIONAL',
-        'CHURCH', 'TEMPLE', 'SYNAGOGUE', 'MOSQUE', 'CONGREGATION',
-        'SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HOSPITAL', 'MEDICAL',
-        'ASSOCIATION', 'SOCIETY', 'CLUB', 'ORGANIZATION', 'COMMITTEE'
-    ]
-    
-    # Always check strong indicators
-    for word in words:
-        if word in strong_indicators:
-            return None, None, None
-    
-    # Only check weak indicators if it's NOT a simple lastname,firstname format
-    if not is_lastname_firstname_format:
-        for word in words:
-            if word in weak_indicators:
-                return None, None, None
-    
-    # Handle "LAST, FIRST MIDDLE" format
-    if ',' in name:
-        parts = name.split(',', 1)
-        last_name = parts[0].strip()
-        first_parts = parts[1].strip().split()
-        first_name = first_parts[0] if first_parts else None
-        middle_name = first_parts[1] if len(first_parts) > 1 else None
-        return first_name, middle_name, last_name
-    
-    # Handle "FIRST MIDDLE LAST" format
-    parts = name.split()
-    if len(parts) == 1:
-        return parts[0], None, None
-    elif len(parts) == 2:
-        return parts[0], None, parts[1]
-    else:
-        return parts[0], parts[1], parts[-1]
+    # "LASTNAME, FIRSTNAME" with only 2 tokens — the first is a last name
+    # even if it matches a weak indicator (e.g. "CHURCH, CHARLOTTE").
+    is_lastname_firstname = ',' in name and len(words) == 2
+    for w in words:
+        if w in _STRONG_BUSINESS_INDICATORS:
+            return True
+    if not is_lastname_firstname:
+        for w in words:
+            if w in _WEAK_BUSINESS_INDICATORS:
+                return True
+    return False
+
+
+def parse_owner_name(full_name):
+    """Parse a full name into (first, middle, last). Returns (None, None, None)
+    for businesses/entities or unparseable input.
+
+    Uses python-nameparser (HumanName) for the structural parse, which
+    correctly handles suffix tokens (JR/SR/III), multi-word last names
+    ('VAN DER BERG'), hyphenated last names, periods on initials, etc.
+    Our own business-entity filter runs first since HumanName has no concept
+    of LLC/Corp/Authority.
+
+    Values are returned uppercased to match the legacy contract (callers
+    pass them to address-matching code that assumes upper-case)."""
+    if not full_name or is_business_entity(full_name):
+        return None, None, None
+
+    h = HumanName(full_name)
+    first = (h.first or '').strip().upper().rstrip('.') or None
+    middle = (h.middle or '').strip().upper().rstrip('.') or None
+    last = (h.last or '').strip().upper() or None
+
+    # Need both ends to be a person. "BOB" alone, or "LLC" remnants, get
+    # rejected here.
+    if not first or not last:
+        return None, None, None
+
+    return first, middle, last
+
+
+def _parse_with_suffix(full_name):
+    """Variant of parse_owner_name that also returns the suffix (JR/SR/III).
+    Used by canonical_name_key so suffix can participate in dedup."""
+    if not full_name or is_business_entity(full_name):
+        return None
+    h = HumanName(full_name)
+    first = (h.first or '').strip().upper().rstrip('.')
+    last = (h.last or '').strip().upper()
+    if not first or not last:
+        return None
+    middle = (h.middle or '').strip().upper().rstrip('.')
+    suffix = (h.suffix or '').strip().upper().rstrip('.').rstrip(',')
+    return first, middle, last, suffix
 
 
 def call_enformion_api(first_name, last_name, address_line1=None, address_line2=None, middle_name=None):
@@ -629,18 +641,84 @@ def is_sos_agent_title(title):
 
 
 def canonical_name_key(name):
-    """Return (FIRST, LAST) uppercase tuple for dedup comparisons.
-    Returns None if `name` doesn't parse as a person (LLC, blank, etc.).
+    """Return (FIRST, MIDDLE, LAST, SUFFIX) uppercase tuple for dedup, or None
+    if `name` doesn't parse as a person.
 
-    Crucial for collapsing same-person variants like "JIN PEI XIE" vs
-    "XIE, JIN PEI" which a raw uppercase compare would treat as distinct.
+    Middle and suffix are included so distinct people who share first+last
+    aren't accidentally merged (e.g. JOHN ROBERT SMITH vs JOHN DAVID SMITH).
+    The fuzziness — "missing middle = wildcard match" — lives in
+    names_compatible(), not in the key itself.
     """
-    if not name:
-        return None
-    first, _mid, last = parse_owner_name(name)
-    if not first or not last:
-        return None
-    return (first.strip().upper(), last.strip().upper())
+    return _parse_with_suffix(name)
+
+
+def _middle_compatible(ma, mb):
+    """True if two middle-name strings could refer to the same person."""
+    if not ma or not mb:
+        return True                       # missing on either side = wildcard
+    if ma == mb:
+        return True
+    # Initial vs full: "R" matches "ROBERT" (and "R." was stripped upstream).
+    if ma[0] == mb[0] and (len(ma) == 1 or len(mb) == 1):
+        return True
+    return False
+
+
+def names_compatible(a, b):
+    """Are two canonical keys plausibly the same person?
+
+    Rules:
+      - First and last must match exactly.
+      - Suffix (JR/SR/III): empty on either side wildcards; otherwise must
+        match exactly. JOHN SMITH JR and JOHN SMITH SR are kept distinct
+        (father/son), but JOHN SMITH and JOHN SMITH JR collapse since one
+        source often omits the suffix.
+      - Middle: empty wildcards; full names must match; an initial matches
+        any full middle starting with the same letter.
+    """
+    if a is None or b is None:
+        return False
+    fa, ma, la, sa = a
+    fb, mb, lb, sb = b
+    if fa != fb or la != lb:
+        return False
+    if sa and sb and sa != sb:
+        return False
+    return _middle_compatible(ma, mb)
+
+
+def _name_specificity(key):
+    """Higher = more informative name. Used to pick which spelling to keep
+    when collapsing duplicates."""
+    if key is None:
+        return -1
+    _f, m, _l, s = key
+    score = 0
+    if m:
+        score += 10 + len(m)              # middle name >> none; full > initial
+    if s:
+        score += 5
+    return score
+
+
+def _dedup_add_owner(owners, keys, new_key, new_owner):
+    """Append new_owner unless a compatible owner is already in the list.
+    On collision, upgrade the stored entry's NAME (and key) to the more
+    specific spelling, while preserving the original entry's source
+    attribution, recommended flag, and already_enriched state."""
+    for i, existing_key in enumerate(keys):
+        if not names_compatible(new_key, existing_key):
+            continue
+        if _name_specificity(new_key) > _name_specificity(existing_key):
+            # The new candidate has more name info (middle or suffix) — use
+            # its spelling so the actual Enformion lookup is more accurate.
+            # Keep the existing source/recommended fields intact.
+            owners[i]['name'] = new_owner['name']
+            keys[i] = new_key
+        return False
+    keys.append(new_key)
+    owners.append(new_owner)
+    return True
 
 
 def get_available_owners_for_enrichment(building_id, user_id=None):
@@ -653,19 +731,23 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
     cur = conn.cursor()
     
     try:
-        # Look up everything already enriched by THIS user for THIS building so
-        # we can mark duplicates as already_enriched. We canonicalize the names
-        # so e.g. "JIN PEI XIE" already enriched also matches "XIE, JIN PEI".
-        enriched_keys = set()
+        # Pull every enrichment this user has done on this building so we can
+        # flag duplicates as already_enriched. We canonicalize and use
+        # names_compatible(), so "JIN PEI XIE" enriched earlier will match a
+        # later "XIE, JIN PEI" or "JIN XIE".
+        enriched_keys = []
         if user_id:
             cur.execute("""
                 SELECT owner_name_searched FROM user_enrichments
                 WHERE user_id = %s AND building_id = %s
             """, (user_id, building_id))
             for r in cur.fetchall():
-                key = canonical_name_key(r['owner_name_searched'])
-                if key:
-                    enriched_keys.add(key)
+                k = canonical_name_key(r['owner_name_searched'])
+                if k:
+                    enriched_keys.append(k)
+
+        def _is_already_enriched(key):
+            return any(names_compatible(key, ek) for ek in enriched_keys)
 
         cur.execute("""
             SELECT
@@ -683,20 +765,18 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
             return []
 
         owners = []
-        seen_keys = set()
+        keys = []
 
-        # SOS principal — but ONLY if the title says they're an actual principal
-        # (CEO, director, etc.), not a Service-of-Process or Registered Agent.
-        # Agents are just designated mail recipients, not owners; enriching them
-        # gives us a useless phone number for owner outreach.
+        # SOS principal — but ONLY if the title says they're an actual
+        # principal (CEO, director, etc.), not a Service-of-Process or
+        # Registered Agent. Agents are designated mail recipients, not owners.
         sos_name = building['sos_principal_name']
-        sos_title = building.get('sos_principal_title') if hasattr(building, 'get') else building['sos_principal_title']
+        sos_title = building['sos_principal_title']
         if sos_name and not is_sos_agent_title(sos_title):
             key = canonical_name_key(sos_name)
             if key:
-                is_enriched = key in enriched_keys
-                seen_keys.add(key)
-                owners.append({
+                is_enriched = _is_already_enriched(key)
+                _dedup_add_owner(owners, keys, key, {
                     'name': sos_name,
                     'source': 'NY Secretary of State',
                     'title': sos_title,
@@ -705,7 +785,8 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
                     'already_enriched': is_enriched,
                 })
 
-        # Other sources, in source-priority order.
+        # Other sources, in source-priority order. Compatible duplicates
+        # collapse into the SOS row above (or the first one we see).
         source_map = {
             'current_owner_name': 'NYC PLUTO Database',
             'owner_name_rpad': 'Tax Records (RPAD)',
@@ -720,17 +801,11 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
             key = canonical_name_key(name)
             if not key:
                 continue
-            if key in seen_keys:
-                # Same person under a different spelling/order — skip the dupe
-                # so we don't double-charge for the same lookup.
-                continue
-            seen_keys.add(key)
-            is_enriched = key in enriched_keys
-            owners.append({
+            _dedup_add_owner(owners, keys, key, {
                 'name': name,
                 'source': source,
                 'recommended': False,
-                'already_enriched': is_enriched,
+                'already_enriched': _is_already_enriched(key),
             })
 
         return owners
@@ -1218,14 +1293,16 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
             """,
             (user_id, list(building_ids)),
         )
-        # Canonicalize each enriched name once so we can dedup across naming
-        # variants (e.g. "JIN PEI XIE" already enriched also matches "XIE, JIN PEI").
+        # Canonicalize each enriched name once; we keep them as lists rather
+        # than sets so we can run names_compatible() against each one (which
+        # is needed because middle/suffix wildcards mean two distinct keys
+        # may still refer to the same person).
         enriched_by_building = {}
         for r in cur.fetchall():
-            key = canonical_name_key(r['owner_name_searched'])
-            if not key:
+            k = canonical_name_key(r['owner_name_searched'])
+            if not k:
                 continue
-            enriched_by_building.setdefault(r['building_id'], set()).add(key)
+            enriched_by_building.setdefault(r['building_id'], []).append(k)
 
         cur.execute(
             """
@@ -1259,29 +1336,27 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
 
     for row in rows:
         bid = row['id']
-        enriched_keys = enriched_by_building.get(bid, set())
+        enriched_keys = enriched_by_building.get(bid, [])
         sos_title = row['sos_principal_title']
         owners = []
-        seen_keys = set()
+        keys = []
         for field, source, is_sos in source_map:
             name = row[field]
             if not name:
                 continue
-            # Skip the SOS row entirely if the title says it's an agent rather
-            # than an owner (Service of Process / Registered Agent).
+            # Skip the SOS row entirely if the title says it's an agent
+            # (Service of Process / Registered Agent — not an owner).
             if is_sos and is_sos_agent_title(sos_title):
                 continue
             key = canonical_name_key(name)
             if not key:
                 continue
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            owners.append({
+            already = any(names_compatible(key, ek) for ek in enriched_keys)
+            _dedup_add_owner(owners, keys, key, {
                 'name': name,
                 'source': source,
                 'recommended': is_sos,
-                'already_enriched': key in enriched_keys,
+                'already_enriched': already,
             })
         available = [o for o in owners if not o['already_enriched']]
         chosen = filter_owners_by_strategy(available, owner_strategy)
