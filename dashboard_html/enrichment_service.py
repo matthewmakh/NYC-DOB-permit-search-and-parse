@@ -738,15 +738,20 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=PROVIDER_EN
                 return False, None, "No matching records found in our database for this person. They may not be in our data sources."
             return False, None, "No contact information (phone/email) found for this person in our database."
 
-        # Strip the internal extras we attached in call_apify_truepeoplesearch
-        # before persisting; they're not part of the actor's actual output.
+        # Detach the internal extras we attached in call_apify_truepeoplesearch.
+        # CRITICAL: api_response IS one of the items in _apify_all_results
+        # (same dict reference, not a copy). Leaving the back-pointer in
+        # creates a JSON-fatal cycle:
+        #   stored_response -> _all_results -> items[k] -> _apify_all_results
+        #                   -> items -> items[k] -> ...
+        # POPPING from api_response simultaneously removes the back-pointer
+        # from items[k] (same object), breaking the cycle in one shot.
         if isinstance(api_response, dict):
-            stored_response = {k: v for k, v in api_response.items()
-                               if not k.startswith('_apify_')}
-            # Keep the full dataset so we can reanalyze in the future without
-            # re-paying — it's the most valuable thing the actor returned.
-            stored_response['_all_results'] = api_response.get('_apify_all_results', [])
-            stored_response['_query_input'] = api_response.get('_apify_query_input', {})
+            all_results = api_response.pop('_apify_all_results', [])
+            query_input = api_response.pop('_apify_query_input', {})
+            stored_response = dict(api_response)  # shallow copy, now clean
+            stored_response['_all_results'] = all_results
+            stored_response['_query_input'] = query_input
             stored_response['_match_summary'] = match_summary
         else:
             stored_response = api_response
