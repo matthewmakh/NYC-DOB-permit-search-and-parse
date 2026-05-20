@@ -609,6 +609,40 @@ def check_user_enrichment_access(user_id, building_id, owner_name=None):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Owner dedup + SOS agent helpers
+# ---------------------------------------------------------------------------
+# Service-of-Process and Registered Agents are NOT property owners — they're
+# the people designated to receive lawsuits or government mail for an LLC.
+# Enriching them gives us the agent's phone, which is useless for outreach to
+# the real owner. We detect them via the sos_principal_title column populated
+# by step5_enrich_from_sos.py.
+SOS_AGENT_TITLES = frozenset({'SERVICE OF PROCESS AGENT', 'REGISTERED AGENT'})
+
+
+def is_sos_agent_title(title):
+    """True if an SOS principal title indicates a registered/SoP agent rather
+    than an owner (CEO, director, etc.)."""
+    if not title:
+        return False
+    return title.strip().upper() in SOS_AGENT_TITLES
+
+
+def canonical_name_key(name):
+    """Return (FIRST, LAST) uppercase tuple for dedup comparisons.
+    Returns None if `name` doesn't parse as a person (LLC, blank, etc.).
+
+    Crucial for collapsing same-person variants like "JIN PEI XIE" vs
+    "XIE, JIN PEI" which a raw uppercase compare would treat as distinct.
+    """
+    if not name:
+        return None
+    first, _mid, last = parse_owner_name(name)
+    if not first or not last:
+        return None
+    return (first.strip().upper(), last.strip().upper())
+
+
 def get_available_owners_for_enrichment(building_id, user_id=None):
     """
     Get list of owner names that can be enriched for a building
@@ -619,70 +653,88 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
     cur = conn.cursor()
     
     try:
-        # Get already enriched owners for this user
-        enriched_owners = []
+        # Look up everything already enriched by THIS user for THIS building so
+        # we can mark duplicates as already_enriched. We canonicalize the names
+        # so e.g. "JIN PEI XIE" already enriched also matches "XIE, JIN PEI".
+        enriched_keys = set()
         if user_id:
             cur.execute("""
                 SELECT owner_name_searched FROM user_enrichments
                 WHERE user_id = %s AND building_id = %s
             """, (user_id, building_id))
-            enriched_owners = [r['owner_name_searched'].upper() for r in cur.fetchall() if r['owner_name_searched']]
-        
+            for r in cur.fetchall():
+                key = canonical_name_key(r['owner_name_searched'])
+                if key:
+                    enriched_keys.add(key)
+
         cur.execute("""
-            SELECT 
+            SELECT
                 current_owner_name,
                 owner_name_rpad,
                 owner_name_hpd,
                 sos_principal_name,
+                sos_principal_title,
                 ecb_respondent_name
             FROM buildings WHERE id = %s
         """, (building_id,))
-        
+
         building = cur.fetchone()
         if not building:
             return []
-        
+
         owners = []
-        
-        # SOS Principal is recommended (real person behind LLC)
-        if building['sos_principal_name']:
-            first, middle, last = parse_owner_name(building['sos_principal_name'])
-            if first and last:  # Only if it's a person name
-                is_enriched = building['sos_principal_name'].upper() in enriched_owners
+        seen_keys = set()
+
+        # SOS principal — but ONLY if the title says they're an actual principal
+        # (CEO, director, etc.), not a Service-of-Process or Registered Agent.
+        # Agents are just designated mail recipients, not owners; enriching them
+        # gives us a useless phone number for owner outreach.
+        sos_name = building['sos_principal_name']
+        sos_title = building.get('sos_principal_title') if hasattr(building, 'get') else building['sos_principal_title']
+        if sos_name and not is_sos_agent_title(sos_title):
+            key = canonical_name_key(sos_name)
+            if key:
+                is_enriched = key in enriched_keys
+                seen_keys.add(key)
                 owners.append({
-                    'name': building['sos_principal_name'],
+                    'name': sos_name,
                     'source': 'NY Secretary of State',
-                    'recommended': not is_enriched,  # Only recommend if not already enriched
+                    'title': sos_title,
+                    'recommended': not is_enriched,
                     'reason': 'Real person behind LLC',
-                    'already_enriched': is_enriched
+                    'already_enriched': is_enriched,
                 })
-        
-        # Other sources
+
+        # Other sources, in source-priority order.
         source_map = {
             'current_owner_name': 'NYC PLUTO Database',
             'owner_name_rpad': 'Tax Records (RPAD)',
             'owner_name_hpd': 'HPD Registration',
-            'ecb_respondent_name': 'ECB Violations'
+            'ecb_respondent_name': 'ECB Violations',
         }
-        
+
         for field, source in source_map.items():
             name = building[field]
-            if name:
-                # Check if it's a person (not LLC)
-                first, middle, last = parse_owner_name(name)
-                if first and last:
-                    # Check if already added
-                    if not any(o['name'].upper() == name.upper() for o in owners):
-                        is_enriched = name.upper() in enriched_owners
-                        owners.append({
-                            'name': name,
-                            'source': source,
-                            'recommended': False,
-                            'already_enriched': is_enriched
-                        })
-        
+            if not name:
+                continue
+            key = canonical_name_key(name)
+            if not key:
+                continue
+            if key in seen_keys:
+                # Same person under a different spelling/order — skip the dupe
+                # so we don't double-charge for the same lookup.
+                continue
+            seen_keys.add(key)
+            is_enriched = key in enriched_keys
+            owners.append({
+                'name': name,
+                'source': source,
+                'recommended': False,
+                'already_enriched': is_enriched,
+            })
+
         return owners
-        
+
     finally:
         cur.close()
         conn.close()
@@ -1166,19 +1218,20 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
             """,
             (user_id, list(building_ids)),
         )
+        # Canonicalize each enriched name once so we can dedup across naming
+        # variants (e.g. "JIN PEI XIE" already enriched also matches "XIE, JIN PEI").
         enriched_by_building = {}
         for r in cur.fetchall():
-            if not r['owner_name_searched']:
+            key = canonical_name_key(r['owner_name_searched'])
+            if not key:
                 continue
-            enriched_by_building.setdefault(r['building_id'], set()).add(
-                r['owner_name_searched'].upper()
-            )
+            enriched_by_building.setdefault(r['building_id'], set()).add(key)
 
         cur.execute(
             """
             SELECT id, address,
                    current_owner_name, owner_name_rpad, owner_name_hpd,
-                   sos_principal_name, ecb_respondent_name
+                   sos_principal_name, sos_principal_title, ecb_respondent_name
             FROM buildings
             WHERE id = ANY(%s)
             """,
@@ -1189,6 +1242,8 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
         cur.close()
         conn.close()
 
+    # (field, source label, is_sos_principal) — only the SOS row needs the
+    # agent-vs-principal title check.
     source_map = [
         ('sos_principal_name', 'NY Secretary of State', True),
         ('current_owner_name', 'NYC PLUTO Database', False),
@@ -1204,25 +1259,29 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
 
     for row in rows:
         bid = row['id']
-        enriched_upper = enriched_by_building.get(bid, set())
+        enriched_keys = enriched_by_building.get(bid, set())
+        sos_title = row['sos_principal_title']
         owners = []
-        seen_upper = set()
+        seen_keys = set()
         for field, source, is_sos in source_map:
             name = row[field]
             if not name:
                 continue
-            first, _mid, last = parse_owner_name(name)
-            if not first or not last:
+            # Skip the SOS row entirely if the title says it's an agent rather
+            # than an owner (Service of Process / Registered Agent).
+            if is_sos and is_sos_agent_title(sos_title):
                 continue
-            upper = name.upper()
-            if upper in seen_upper:
+            key = canonical_name_key(name)
+            if not key:
                 continue
-            seen_upper.add(upper)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             owners.append({
                 'name': name,
                 'source': source,
                 'recommended': is_sos,
-                'already_enriched': upper in enriched_upper,
+                'already_enriched': key in enriched_keys,
             })
         available = [o for o in owners if not o['already_enriched']]
         chosen = filter_owners_by_strategy(available, owner_strategy)

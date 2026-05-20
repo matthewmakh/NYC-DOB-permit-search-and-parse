@@ -266,21 +266,35 @@ def process_sos_result(result: SOSBusinessResult) -> Dict:
             'sos_formation_date': None,
         }
     
-    # Find the best person to use (prefer CEO, then registered agent, then SOP agent)
+    # Pick the most useful person for owner outreach.
+    # Service-of-Process and Registered Agents are NOT the owner — they're
+    # designated mail recipients (often a lawyer or registered-agent service).
+    # The bug we used to have: get_individuals()[0] was returning whichever
+    # individual happened to come back first, often the SoP agent, so the
+    # building profile would show "C/O LARRY ENTE — Service of Process Agent"
+    # as the recommended owner.
+    AGENT_TITLES = {'Service of Process Agent', 'Registered Agent'}
+
+    individuals = result.get_individuals()  # real-person names, any title
+    ceo = result.get_ceo()                  # may be None
+
     principal = None
-    
-    # First try to get an individual (real person, not a company)
-    individuals = result.get_individuals()
-    if individuals:
+    # 1. CEO who is an actual individual — best signal.
+    if ceo and ceo in individuals:
+        principal = ceo
+    # 2. Any non-agent individual (e.g. Director / Manager / Officer).
+    if principal is None:
+        for p in individuals:
+            if p.title not in AGENT_TITLES:
+                principal = p
+                break
+    # 3. Last-resort fallbacks: an agent individual, then any person at all
+    #    (might be a company name). Better to surface SOMETHING than nothing,
+    #    but the title will mark it so downstream code can skip enrichment.
+    if principal is None and individuals:
         principal = individuals[0]
-    elif result.people:
-        # Fall back to first person even if it's a company
-        # Prefer CEO over agents
-        ceo = result.get_ceo()
-        if ceo:
-            principal = ceo
-        else:
-            principal = result.people[0]
+    if principal is None and result.people:
+        principal = ceo or result.people[0]
     
     return {
         'sos_principal_name': principal.full_name if principal else None,

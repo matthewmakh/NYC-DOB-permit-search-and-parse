@@ -9,6 +9,15 @@ let buildingData = null;
 // UTILITY FUNCTIONS
 // ============================================================================
 
+// Service-of-Process / Registered Agents are NOT the property owner — they're
+// the contact designated to receive legal mail. Mirrors the server-side check
+// in enrichment_service.is_sos_agent_title().
+const SOS_AGENT_TITLES = new Set(['SERVICE OF PROCESS AGENT', 'REGISTERED AGENT']);
+function isSosAgentTitle(title) {
+    if (!title) return false;
+    return SOS_AGENT_TITLES.has(String(title).trim().toUpperCase());
+}
+
 /**
  * Format number as currency with commas and dollar sign
  */
@@ -306,18 +315,22 @@ function renderHeroSection() {
     // Show SOS data first if available (most valuable intel)
     if (sos_data && sos_data.principal_name) {
         const sosItem = document.createElement('div');
-        sosItem.className = 'owner-item sos-highlight';
-        
-        // Check if it's a real person (not LLC/agent)
-        const isRealPerson = !sos_data.principal_name.includes('LLC') && 
+        const isAgent = isSosAgentTitle(sos_data.principal_title);
+        // Real-person signal: a person-shaped name AND not an agent title.
+        const isRealPerson = !isAgent &&
+                            !sos_data.principal_name.includes('LLC') &&
                             !sos_data.principal_name.includes('C/O') &&
                             !sos_data.principal_name.includes('ATTN') &&
                             !sos_data.principal_name.includes('CORP');
-        
+        // Tone down the yellow highlight when the SOS hit is just an agent —
+        // they're not the owner, so we shouldn't make them look like the answer.
+        sosItem.className = 'owner-item sos-highlight' + (isAgent ? ' sos-agent' : '');
+
         sosItem.innerHTML = `
             <span class="owner-source sos-source">
                 🔍 NY Secretary of State
                 ${isRealPerson ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
+                ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">⚠️ AGENT</span>' : ''}
             </span>
             <span class="owner-name sos-name">${sos_data.principal_name}</span>
             ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
@@ -991,19 +1004,22 @@ function renderOwnersTab() {
     
     // SOS Data - Real Person Behind LLC (PREMIUM SECTION)
     if (sos_data && sos_data.principal_name) {
-        const isRealPerson = !sos_data.principal_name.includes('LLC') && 
+        const isAgent = isSosAgentTitle(sos_data.principal_title);
+        const isRealPerson = !isAgent &&
+                            !sos_data.principal_name.includes('LLC') &&
                             !sos_data.principal_name.includes('C/O') &&
                             !sos_data.principal_name.includes('ATTN') &&
                             !sos_data.principal_name.includes('CORP');
-        
+
         html += `
-        <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}">
-            <h4>🔍 Real Person Behind LLC</h4>
+        <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}${isAgent ? ' sos-agent' : ''}">
+            <h4>🔍 ${isAgent ? 'SOS — Service Agent (not the owner)' : 'Real Person Behind LLC'}</h4>
             <div class="sos-card">
                 <div class="sos-main">
                     <div class="sos-principal-name">${sos_data.principal_name}</div>
                     ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
                     ${isRealPerson ? '<span class="real-person-badge-large">✓ REAL PERSON IDENTIFIED</span>' : ''}
+                    ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">⚠️ AGENT — not the owner</span>' : ''}
                 </div>
                 <div class="sos-details">
                     <div class="sos-detail-row">
