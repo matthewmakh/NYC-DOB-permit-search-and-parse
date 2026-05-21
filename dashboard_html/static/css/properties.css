@@ -272,13 +272,39 @@ body {
     letter-spacing: 0.1em;
 }
 
-/* Admin-only provider cost panel */
+/* Admin-only provider cost panel — collapsed by default via <details>/<summary>
+   so a customer on a screen-share doesn't see the upstream vendor cost. */
 .be-admin-cost {
     margin: 0.75rem 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+}
+.be-admin-cost[open] {
     padding: 0.75rem 1rem;
     background: rgba(102, 126, 234, 0.08);
     border: 1px dashed #667eea;
-    border-radius: 6px;
+}
+.be-admin-cost > summary {
+    list-style: none;            /* hide default triangle (Firefox + others) */
+    cursor: pointer;
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #aaa);
+    border: 1px dashed rgba(102, 126, 234, 0.5);
+    border-radius: 4px;
+    user-select: none;
+}
+.be-admin-cost > summary::-webkit-details-marker { display: none; }  /* Safari/Chrome */
+.be-admin-cost > summary::marker { content: ''; }                    /* Firefox */
+.be-admin-cost > summary:hover {
+    color: #667eea;
+    border-color: #667eea;
+}
+.be-admin-cost[open] > summary {
+    margin: -0.25rem 0 0.5rem -0.25rem;  /* pull back inside the padded box */
 }
 .be-admin-cost-row {
     display: flex;

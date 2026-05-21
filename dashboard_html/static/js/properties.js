@@ -1013,19 +1013,24 @@ async function refreshBulkEnrichEstimate() {
         const startBtnCostStr = data.is_admin ? 'FREE for admin' : `up to ${customerMaxStr}`;
 
         // Admin-only: real upstream cost to the developer.
+        // Wrapped in <details> so it stays collapsed by default — the admin
+        // can click to reveal it, but on customer screen-shares the actual
+        // vendor cost stays hidden behind a neutral "Admin info" chip.
         let adminCostHtml = '';
         if (data.is_admin && data.provider_cost_per_lookup !== undefined) {
             const providerLabel = ({
                 'enformion': 'Enformion',
                 'apify': 'Apify TruePeopleSearch',
                 'enformion_fallback': 'Enformion → Apify fallback',
+                'apify_fallback': 'Apify → Enformion fallback',
             })[data.provider] || data.provider;
             const realUnit = data.provider_cost_per_lookup;
             const realMax = data.provider_max_cost || 0;
             adminCostHtml = `
-                <div class="be-admin-cost">
+                <details class="be-admin-cost">
+                    <summary>🔒 Admin info (click to reveal)</summary>
                     <div class="be-admin-cost-row">
-                        <span>🔒 Admin-only — real provider cost (${providerLabel}):</span>
+                        <span>Real provider cost (${providerLabel}):</span>
                         <strong>$${realMax.toFixed(2)}</strong>
                     </div>
                     <div class="be-admin-cost-row sub">
@@ -1033,7 +1038,7 @@ async function refreshBulkEnrichEstimate() {
                         <span>$${realUnit.toFixed(4)} × ${formatNumber(data.total_owners)}</span>
                     </div>
                     <small>You (admin) are not charged. This is what the upstream vendor bills.</small>
-                </div>
+                </details>
             `;
         }
 
@@ -1179,13 +1184,14 @@ function renderBulkEnrichProgress(jobId, initialData) {
         </div>
 
         ${isAdmin ? `
-            <div class="be-admin-cost" id="be-admin-cost-live">
+            <details class="be-admin-cost" id="be-admin-cost-live">
+                <summary>🔒 Admin info (click to reveal)</summary>
                 <div class="be-admin-cost-row">
-                    <span>🔒 Real provider cost so far (${providerLabel}, $${adminUnitCost.toFixed(4)}/lookup):</span>
+                    <span>Real provider cost so far (${providerLabel}, $${adminUnitCost.toFixed(4)}/lookup):</span>
                     <strong id="be-admin-cost-val">$0.00</strong>
                 </div>
                 <small>You (admin) are not charged. This is the actual vendor cost as enrichments complete.</small>
-            </div>
+            </details>
         ` : ''}
 
         <p id="be-charge-msg" style="margin: 0.5rem 0;"></p>
