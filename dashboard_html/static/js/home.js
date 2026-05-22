@@ -128,7 +128,15 @@ async function performSearch() {
         console.log('Search returned', results.length, 'results');
         
         if (results.length === 0) {
-            showNotification('No results found. Try a different search term or check your spelling.', 'info');
+            // Not in our DB. If the input looks like a property address
+            // (digits + street name) we can run the full free enrichment
+            // pipeline to pull it in. Owner names like "JOHN SMITH" don't
+            // qualify — there's nothing to look up.
+            if (looksLikePropertyQuery(query)) {
+                offerAutoAddProperty(query);
+            } else {
+                showNotification('No results found. Try a different search term or check your spelling.', 'info');
+            }
         } else if (results.length === 1) {
             // Single result - go directly to property page
             window.location.href = `/property/${results[0].bbl}`;
@@ -143,6 +151,134 @@ async function performSearch() {
         searchBtn.innerHTML = originalText;
         searchBtn.disabled = false;
     }
+}
+
+/**
+ * Heuristic: does this look like a property address rather than an owner name?
+ * Must start with at least one digit (the house number) and have a non-digit
+ * word after it (the street). "141 WYONA STREET" yes, "JOHN SMITH" no.
+ */
+function looksLikePropertyQuery(query) {
+    if (!query) return false;
+    const trimmed = query.trim();
+    return /^\d+[A-Z0-9\-]*\s+\S+/i.test(trimmed);
+}
+
+/**
+ * Show a modal asking whether to run a full free-enrichment lookup on a
+ * property that isn't yet in our database. On confirm, kicks off the
+ * /api/property/auto-add request and redirects to the new building page.
+ */
+function offerAutoAddProperty(query) {
+    // Remove any existing modal first.
+    const existing = document.getElementById('autoAddModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'autoAddModal';
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 10000;
+    `;
+    modal.innerHTML = `
+        <div style="background: #1e1e2f; color: #fff; padding: 1.75rem 2rem;
+                    border-radius: 12px; max-width: 480px; width: 92%;
+                    box-shadow: 0 12px 40px rgba(0,0,0,0.5);">
+            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.2rem;">
+                🔍 Property not in our database yet
+            </h3>
+            <p style="margin: 0 0 1rem 0; color: #cbd0e0; font-size: 0.95rem;">
+                We can run a full lookup on <strong>${escapeHtml(query)}</strong>
+                using NYC's public data: PLUTO, RPAD, HPD, ACRIS, tax liens,
+                and NY Secretary of State. Takes about 10&ndash;20 seconds.
+            </p>
+            <p style="margin: 0 0 1.25rem 0; color: #8b92a8; font-size: 0.85rem;">
+                Free &mdash; no contact enrichment runs unless you click Enrich
+                on the resulting page.
+            </p>
+            <div id="autoAddStatus" style="display: none; margin-bottom: 1rem;
+                 padding: 0.75rem; background: rgba(102,126,234,0.1);
+                 border-radius: 6px; font-size: 0.88rem;"></div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                <button id="autoAddCancel" style="padding: 0.6rem 1.2rem;
+                        background: transparent; color: #cbd0e0;
+                        border: 1px solid #555; border-radius: 6px;
+                        cursor: pointer;">Cancel</button>
+                <button id="autoAddConfirm" style="padding: 0.6rem 1.2rem;
+                        background: linear-gradient(135deg, #667eea, #764ba2);
+                        color: #fff; border: none; border-radius: 6px;
+                        font-weight: 600; cursor: pointer;">
+                    Look up this property
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('autoAddCancel').addEventListener('click', () => {
+        modal.remove();
+    });
+    document.getElementById('autoAddConfirm').addEventListener('click', () => {
+        runAutoAdd(query, modal);
+    });
+}
+
+async function runAutoAdd(query, modal) {
+    const statusEl = document.getElementById('autoAddStatus');
+    const confirmBtn = document.getElementById('autoAddConfirm');
+    const cancelBtn = document.getElementById('autoAddCancel');
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving address and running enrichment&hellip;';
+    confirmBtn.disabled = true;
+    confirmBtn.style.opacity = '0.5';
+    cancelBtn.disabled = true;
+
+    try {
+        const resp = await fetch('/api/property/auto-add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({query}),
+        });
+        const data = await resp.json();
+
+        if (!data.success) {
+            statusEl.innerHTML = `<strong>Couldn't look it up:</strong> ${escapeHtml(data.error || 'unknown error')}`;
+            statusEl.style.background = 'rgba(220, 38, 38, 0.15)';
+            confirmBtn.disabled = false;
+            confirmBtn.style.opacity = '1';
+            cancelBtn.disabled = false;
+            return;
+        }
+
+        // Show a brief success state with the per-step report so the user
+        // knows what actually came back before we redirect.
+        const reportLines = Object.entries(data.report || {})
+            .map(([step, status]) => `<li><strong>${step}</strong>: ${escapeHtml(String(status))}</li>`)
+            .join('');
+        statusEl.innerHTML = `
+            <strong>✓ Done</strong> — BBL ${data.bbl}. Redirecting&hellip;
+            <ul style="margin: 0.5rem 0 0 1rem; padding: 0; font-size: 0.82rem; color: #aab;">
+                ${reportLines}
+            </ul>
+        `;
+        statusEl.style.background = 'rgba(34,197,94,0.12)';
+        setTimeout(() => {
+            window.location.href = `/property/${data.bbl}`;
+        }, 1200);
+    } catch (e) {
+        statusEl.innerHTML = `<strong>Request failed:</strong> ${escapeHtml(String(e))}`;
+        statusEl.style.background = 'rgba(220, 38, 38, 0.15)';
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = '1';
+        cancelBtn.disabled = false;
+    }
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**

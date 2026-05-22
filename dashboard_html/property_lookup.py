@@ -1,0 +1,407 @@
+"""
+Auto-add a property to the buildings table from a search query.
+
+Triggered from the home-page search bar when the user enters an address
+or BBL that isn't yet in our `buildings` table. Runs every FREE NYC /
+state enrichment step in sequence:
+
+  - NYC Geoclient v2 (address -> BBL, BIN, lat/lon)
+  - NYC PLUTO Socrata (building class, units, year built, owner of record)
+  - NYC RPAD Socrata (tax-record owner)
+  - NYC HPD Registrations (multi-unit owner registration)
+  - NYC ACRIS (deed/mortgage history, sale price, recent transactions)
+  - NYC DOF Tax Delinquency + ECB violations + DOB violations
+  - NY Secretary of State (real person behind an LLC owner)
+
+All of the above are free public APIs. Paid contact enrichment
+(Apify / Enformion) is INTENTIONALLY skipped here — those only run when
+a user explicitly clicks Enrich on the building profile.
+
+Each step is wrapped in its own try/except so one failure can't kill the
+whole lookup. The orchestrator returns a status dict listing which steps
+succeeded and which failed; the caller can show a partial-success page.
+"""
+
+import os
+import re
+import sys
+import logging
+import psycopg2
+import psycopg2.extras
+import requests
+
+# The pipeline step modules live at the repo root, not under dashboard_html/,
+# so we need to put the repo root on sys.path before importing them.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from step2_enrich_from_pluto import (
+    get_pluto_data_for_bbl,
+    get_rpad_data_for_bbl,
+    get_hpd_data_for_bbl,
+)
+from step3_enrich_from_acris import (
+    get_acris_full_history,
+    save_transactions_and_parties,
+    update_buildings_table as acris_update_buildings,
+)
+from step4_enrich_from_tax_liens import (
+    enrich_building as fetch_tax_lien_data,
+    update_building_tax_lien_data,
+)
+from step5_enrich_from_sos import (
+    get_best_llc_name,
+    process_sos_result,
+)
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Input parsing — accept a BBL, a borough+address, or an address
+# ---------------------------------------------------------------------------
+
+NYC_APP_ID = os.getenv('NYC_GEOCLIENT_APP_ID')
+
+# Geoclient borough names it'll accept verbatim (case-insensitive).
+_BOROUGH_TOKENS = {
+    'MANHATTAN', 'BROOKLYN', 'QUEENS', 'BRONX', 'STATEN ISLAND', 'STATEN',
+}
+# Canonical borough names mapped to Geoclient's expected input.
+_BOROUGH_ALIASES = {
+    'NEW YORK': 'MANHATTAN',
+    'NYC': 'MANHATTAN',
+    'BX': 'BRONX',
+    'BK': 'BROOKLYN',
+    'SI': 'STATEN ISLAND',
+}
+_BBL_RE = re.compile(r'^\s*(\d{10})\s*$')
+
+
+def _normalize_bbl(query):
+    """If `query` is a 10-digit BBL (with or without dashes), return the
+    bare 10-digit form; else None. Accepts both '3053170021' and
+    '3-05317-0021' forms (the dashed form is how NYC officially prints BBLs).
+    """
+    if not query:
+        return None
+    stripped = re.sub(r'[\s\-]', '', query)
+    m = _BBL_RE.match(stripped)
+    return m.group(1) if m else None
+
+
+def _detect_borough(address):
+    """Pull a borough name out of an address string, normalizing aliases.
+    Returns the Geoclient-friendly borough or None.
+    """
+    if not address:
+        return None
+    up = address.upper()
+    for alias, canonical in _BOROUGH_ALIASES.items():
+        if alias in up:
+            return canonical
+    # Order matters: 'STATEN ISLAND' must be checked before 'STATEN' alone.
+    for tok in ['STATEN ISLAND', 'MANHATTAN', 'BROOKLYN', 'QUEENS', 'BRONX']:
+        if tok in up:
+            return tok
+    return None
+
+
+def _parse_house_and_street(address):
+    """Split '141 WYONA STREET, BROOKLYN, NY 11207' into ('141','WYONA STREET').
+    Returns (None, None) on failure. We can't rely on a comma since some
+    users type bare addresses like '141 WYONA STREET BROOKLYN NY'.
+    """
+    if not address:
+        return None, None
+    # Strip any trailing borough/city/state/zip so we just have street.
+    cleaned = address.split(',')[0].strip()
+    # House number can include digits, letters, and dashes (Queens-style
+    # addresses like "47-22 47TH AVE" are common in Woodside, Astoria, etc.).
+    # The character class must include digits AFTER the leading run.
+    m = re.match(r'^\s*(\d[\dA-Z\-]*)\s+(.+?)\s*$', cleaned, re.IGNORECASE)
+    if not m:
+        return None, None
+    return m.group(1), m.group(2)
+
+
+def resolve_address_to_property(query):
+    """Resolve a search query into an address/BBL bundle via Geoclient v2.
+
+    Returns a dict with at least {'bbl': '...'} on success, None on failure.
+    Free public API. The Geoclient v2 response already includes BBL, BIN,
+    canonical street name, latitude, longitude — we use them all so the
+    INSERT can populate as many `buildings` columns as possible.
+    """
+    if not NYC_APP_ID:
+        log.warning("NYC_GEOCLIENT_APP_ID not set; cannot resolve addresses")
+        return None
+
+    house, street = _parse_house_and_street(query)
+    if not house or not street:
+        return None
+
+    borough = _detect_borough(query)
+    if not borough:
+        return None  # Geoclient v2 requires a borough (or zip — we don't try zip yet)
+
+    try:
+        resp = requests.get(
+            'https://api.nyc.gov/geoclient/v2/address',
+            params={'houseNumber': house, 'street': street, 'borough': borough},
+            headers={'subscription-key': NYC_APP_ID},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log.warning(f"Geoclient request failed: {e}")
+        return None
+
+    if resp.status_code != 200:
+        log.warning(f"Geoclient {resp.status_code}: {resp.text[:200]}")
+        return None
+
+    addr = (resp.json() or {}).get('address') or {}
+    bbl = addr.get('bbl')
+    if not bbl or len(str(bbl)) != 10:
+        return None
+
+    # Build a canonical "{house} {street}, {borough}, NY {zip}" string for
+    # the buildings.address column.
+    pretty_street = addr.get('firstStreetNameNormalized') or street
+    canonical = f"{addr.get('houseNumber') or house} {pretty_street}".strip().upper()
+    parts = [canonical]
+    city = addr.get('uspsPreferredCityName') or borough
+    parts.append(city.upper())
+    zip5 = addr.get('zipCode')
+    parts.append(f"NY {zip5}" if zip5 else 'NY')
+    pretty_address = ', '.join(parts)
+
+    return {
+        'bbl': str(bbl),
+        'bin': addr.get('buildingIdentificationNumber') or None,
+        'latitude': addr.get('latitude'),
+        'longitude': addr.get('longitude'),
+        'address': pretty_address,
+        'borough': borough.title(),
+        'block': addr.get('bblTaxBlock'),
+        'lot': addr.get('bblTaxLot'),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Building row creation + enrichment orchestration
+# ---------------------------------------------------------------------------
+
+def _ensure_building_row(conn, lookup):
+    """Find or create the buildings row keyed by `lookup['bbl']`.
+    Returns (building_id, created_flag)."""
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM buildings WHERE bbl = %s", (lookup['bbl'],))
+    row = cur.fetchone()
+    if row:
+        cur.close()
+        return row[0], False
+    cur.execute("""
+        INSERT INTO buildings (bbl, address, borough, block, lot, bin, last_updated)
+        VALUES (%(bbl)s, %(address)s, %(borough)s, %(block)s, %(lot)s, %(bin)s, NOW())
+        RETURNING id
+    """, lookup)
+    new_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    return new_id, True
+
+
+def _apply_dict_update(conn, building_id, columns_to_values):
+    """Run `UPDATE buildings SET k=v,... WHERE id=%s` ignoring None values.
+    Returns the count of columns actually updated.
+    """
+    updates = {k: v for k, v in columns_to_values.items() if v is not None}
+    if not updates:
+        return 0
+    cur = conn.cursor()
+    set_clause = ', '.join(f"{k} = %s" for k in updates.keys())
+    cur.execute(
+        f"UPDATE buildings SET {set_clause}, last_updated = NOW() WHERE id = %s",
+        list(updates.values()) + [building_id],
+    )
+    conn.commit()
+    cur.close()
+    return len(updates)
+
+
+def _run_pluto(conn, building_id, bbl):
+    data = get_pluto_data_for_bbl(bbl)
+    if not data:
+        return 'no data'
+    # Use the PLUTO ownername if the building row doesn't already have one.
+    pluto_fields = {
+        'current_owner_name': data.get('ownername'),
+        'building_class': data.get('bldgclass'),
+        'land_use': data.get('landuse'),
+        'residential_units': data.get('unitsres'),
+        'total_units': data.get('unitstotal'),
+        'year_built': data.get('yearbuilt'),
+        'year_altered': data.get('yearalter1'),
+        'num_floors': data.get('numfloors'),
+        'building_sqft': data.get('bldgarea'),
+        'lot_sqft': data.get('lotarea'),
+        'assessed_land_value': data.get('assessland'),
+        'assessed_total_value': data.get('assesstot'),
+    }
+    n = _apply_dict_update(conn, building_id, pluto_fields)
+    return f'{n} fields updated'
+
+
+def _run_rpad(conn, building_id, bbl):
+    data = get_rpad_data_for_bbl(bbl)
+    if not data:
+        return 'no data'
+    n = _apply_dict_update(conn, building_id, {
+        'owner_name_rpad': data.get('owner'),
+    })
+    return f'{n} fields updated'
+
+
+def _run_hpd(conn, building_id, bbl):
+    data = get_hpd_data_for_bbl(bbl)
+    if not data:
+        return 'no data'
+    n = _apply_dict_update(conn, building_id, {
+        'owner_name_hpd': data.get('ownername'),
+        'hpd_registration_id': data.get('registrationid'),
+    })
+    return f'{n} fields updated'
+
+
+def _run_acris(conn, building_id, bbl):
+    transactions = get_acris_full_history(bbl)
+    if not transactions:
+        return 'no transactions'
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # The step3 helpers expect a RealDictCursor; mirror that contract.
+    primary_deed, primary_mortgage = save_transactions_and_parties(
+        cur, building_id, bbl, transactions,
+    )
+    acris_update_buildings(cur, building_id, transactions, primary_deed, primary_mortgage)
+    conn.commit()
+    cur.close()
+    return f'{len(transactions)} transactions'
+
+
+def _run_tax_liens(conn, building_id, bbl):
+    data = fetch_tax_lien_data(building_id, bbl)
+    if not data:
+        return 'no data'
+    cur = conn.cursor()
+    update_building_tax_lien_data(cur, building_id, data)
+    conn.commit()
+    cur.close()
+    return 'updated'
+
+
+def _run_sos(conn, building_id, bbl):
+    """LLC -> real person via NY Secretary of State. Skipped if no LLC name
+    is present on the row yet (e.g. PLUTO returned a real-person owner)."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT current_owner_name, owner_name_rpad, owner_name_hpd
+          FROM buildings WHERE id = %s
+    """, (building_id,))
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        return 'no building row'
+
+    llc_name, source = get_best_llc_name(dict(row))
+    if not llc_name:
+        return 'no LLC name'
+
+    # Import here so the heavy async lookup module isn't pulled in at
+    # module-load time for callers who don't need SOS.
+    from ny_sos_lookup import lookup_businesses
+    results = lookup_businesses([llc_name], concurrency=1, timeout=20)
+    sos_result = results.get(llc_name)
+    if not sos_result or not getattr(sos_result, 'found', False):
+        return f'no match for {llc_name!r}'
+
+    sos_fields = process_sos_result(sos_result)
+    n = _apply_dict_update(conn, building_id, sos_fields)
+    return f'{n} fields updated (source={source})'
+
+
+# Each step is named for the status report. Ordered so that PLUTO/RPAD/HPD
+# populate the owner-name fields before SOS reads them to look up the LLC.
+_ENRICHMENT_STEPS = [
+    ('pluto',     _run_pluto),
+    ('rpad',      _run_rpad),
+    ('hpd',       _run_hpd),
+    ('acris',     _run_acris),
+    ('tax_liens', _run_tax_liens),
+    ('sos',       _run_sos),
+]
+
+
+def run_free_enrichment(conn, building_id, bbl):
+    """Run every free enrichment step against the given building. Returns
+    a dict {step_name: 'ok|failed|skipped reason', ...} for the caller to
+    render. Never raises — each step is isolated."""
+    report = {}
+    for name, fn in _ENRICHMENT_STEPS:
+        try:
+            report[name] = fn(conn, building_id, bbl)
+        except Exception as e:
+            log.exception(f"{name} enrichment failed for bbl={bbl}")
+            report[name] = f'error: {e}'
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Top-level entry point used by the Flask route
+# ---------------------------------------------------------------------------
+
+def auto_add_property(conn, query):
+    """Main entry point. Resolve the query, ensure a buildings row exists,
+    run every free enrichment step. Returns:
+
+      {
+        'success': bool,
+        'error': str | None,
+        'bbl': str | None,
+        'building_id': int | None,
+        'already_existed': bool,
+        'report': {step_name: status, ...},
+      }
+    """
+    if not query or not query.strip():
+        return {'success': False, 'error': 'empty query'}
+
+    bbl = _normalize_bbl(query)
+    if bbl:
+        # User pasted a raw BBL. We don't have an address — Geoclient
+        # requires house+street, not BBL, so we INSERT a minimal row with
+        # just the BBL and let PLUTO fill in the rest.
+        lookup = {'bbl': bbl, 'address': None, 'borough': None,
+                  'block': None, 'lot': None, 'bin': None}
+    else:
+        lookup = resolve_address_to_property(query)
+        if not lookup:
+            return {
+                'success': False,
+                'error': ('Could not resolve that address to a NYC property. '
+                          'Try including the borough (e.g. "BROOKLYN") '
+                          'or paste the 10-digit BBL directly.'),
+            }
+
+    building_id, created = _ensure_building_row(conn, lookup)
+    report = run_free_enrichment(conn, building_id, lookup['bbl'])
+
+    return {
+        'success': True,
+        'error': None,
+        'bbl': lookup['bbl'],
+        'building_id': building_id,
+        'already_existed': not created,
+        'report': report,
+    }

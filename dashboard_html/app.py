@@ -2431,6 +2431,39 @@ def api_search():
         return jsonify([])
 
 
+@app.route('/api/property/auto-add', methods=['POST'])
+def api_auto_add_property():
+    """Look up a property that isn't in our DB yet and run every free
+    enrichment step (PLUTO, RPAD, HPD, ACRIS, tax liens, SOS) so the user
+    can see a populated building profile. Paid contact enrichment is NOT
+    triggered — Apify/Enformion only fire when a user clicks Enrich.
+
+    Body: {"query": "141 WYONA STREET, BROOKLYN, NY 11207"}  or a 10-digit BBL.
+    Returns: {success, bbl, building_id, already_existed, report}
+    """
+    try:
+        from property_lookup import auto_add_property
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'lookup module unavailable: {e}'}), 500
+
+    data = request.get_json(silent=True) or {}
+    query = (data.get('query') or '').strip()
+    if not query:
+        return jsonify({'success': False, 'error': 'query is required'}), 400
+
+    conn = get_db_connection()
+    try:
+        result = auto_add_property(conn, query)
+        status = 200 if result.get('success') else 422
+        return jsonify(result), status
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/suggest')
 def api_suggest():
     """
