@@ -3,90 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Property Intelligence - NYC Real Estate Intel</title>
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/properties.css">
+    <title>Properties — NYC Real Estate Intel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
+            <a href="/" class="nav-brand">
+                <span class="brand-mark">RE</span>
+                NYC Real Estate Intel
+            </a>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link">🏗️ Construction</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link active">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
+                <a href="/properties" class="nav-link active">Properties</a>
+                <a href="/contractors" class="nav-link">Contractors</a>
             </div>
             <div class="nav-actions">
                 <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
-                    <i class="fas fa-phone"></i> Bulk Enrich
+                    <i class="fas fa-phone"></i> Bulk enrich
                 </button>
                 <button class="btn btn-primary" id="exportBtn">
                     <i class="fas fa-download"></i> Export
                 </button>
+                <a href="/auth/logout" class="btn btn-icon" title="Log out">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
             </div>
         </div>
     </nav>
 
-    <!-- Main Container -->
     <div class="main-container">
-        <!-- Sidebar Filters -->
+        <!-- Sidebar filters -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <h2>🔍 Advanced Filters</h2>
-                <button class="btn-clear" id="clearFiltersBtn">Clear All</button>
+                <h2>Filters</h2>
+                <button class="btn-clear" id="clearFiltersBtn">Clear all</button>
             </div>
 
-            <!-- Universal Search -->
             <div class="filter-section">
-                <h3>🔎 Universal Search</h3>
-                <input type="text" id="universalSearch" class="filter-input" 
-                    placeholder="Address, BBL, Owner, ZIP...">
+                <h3>Search</h3>
+                <input type="text" id="universalSearch" class="filter-input"
+                    placeholder="Address, BBL, owner, ZIP">
             </div>
 
-            <!-- Owner Search -->
             <div class="filter-section">
-                <h3>👤 Owner Search</h3>
-                <input type="text" id="ownerSearch" class="filter-input" 
-                    placeholder="Search by owner name...">
-                <small class="filter-hint">Click property to see full portfolio</small>
+                <h3>Owner</h3>
+                <input type="text" id="ownerSearch" class="filter-input"
+                    placeholder="Owner name">
+                <small class="filter-hint">Click a property's owner to see their full portfolio.</small>
             </div>
 
-            <!-- Value Range -->
             <div class="filter-section">
-                <h3>💵 Assessed Value</h3>
+                <h3>Assessed value</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minValue" class="filter-input" placeholder="Min ($)">
-                    <input type="number" id="maxValue" class="filter-input" placeholder="Max ($)">
+                    <input type="number" id="minValue" class="filter-input" placeholder="Min $">
+                    <input type="number" id="maxValue" class="filter-input" placeholder="Max $">
                 </div>
             </div>
 
-            <!-- Sale Price Range -->
             <div class="filter-section">
-                <h3>🏷️ Sale Price</h3>
+                <h3>Sale price</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minSalePrice" class="filter-input" placeholder="Min ($)">
-                    <input type="number" id="maxSalePrice" class="filter-input" placeholder="Max ($)">
+                    <input type="number" id="minSalePrice" class="filter-input" placeholder="Min $">
+                    <input type="number" id="maxSalePrice" class="filter-input" placeholder="Max $">
                 </div>
             </div>
 
-            <!-- Sale Date Range -->
             <div class="filter-section">
-                <h3>📅 Sale Date</h3>
+                <h3>Sale date</h3>
                 <div class="range-inputs">
                     <input type="date" id="saleDateFrom" class="filter-input">
                     <input type="date" id="saleDateTo" class="filter-input">
                 </div>
             </div>
 
-            <!-- Borough Filter -->
             <div class="filter-section">
-                <h3>🗺️ Borough</h3>
+                <h3>Borough</h3>
                 <div id="boroughFilter" class="borough-checkboxes">
                     <label class="checkbox-label borough-cb-label">
                         <input type="checkbox" class="borough-cb" value="1"> Manhattan
@@ -104,64 +100,57 @@
                         <input type="checkbox" class="borough-cb" value="5"> Staten Island
                     </label>
                 </div>
-                <small class="filter-hint">Leave all unchecked to include every borough</small>
+                <small class="filter-hint">Leave all unchecked to include every borough.</small>
             </div>
 
-            <!-- Property Type (Residential/Commercial) -->
             <div class="filter-section">
-                <h3>🏠 Property Type</h3>
+                <h3>Property type</h3>
                 <select id="propertyType" class="filter-select">
-                    <option value="">All Types</option>
+                    <option value="">All types</option>
                     <option value="residential">Residential</option>
                     <option value="commercial">Commercial</option>
-                    <option value="mixed">Mixed Use</option>
+                    <option value="mixed">Mixed use</option>
                 </select>
-                <small class="filter-hint">Filter by property category</small>
             </div>
 
-            <!-- Building Class -->
             <div class="filter-section">
-                <h3>🏢 Building Class</h3>
-                <input type="text" id="buildingClass" class="filter-input" 
-                    placeholder="e.g., A, B, C, D">
-                <small class="filter-hint">NYC building classification code</small>
+                <h3>Building class</h3>
+                <input type="text" id="buildingClass" class="filter-input"
+                    placeholder="e.g. A, B, C, D">
+                <small class="filter-hint">NYC building classification code.</small>
             </div>
 
-            <!-- Unit Range -->
             <div class="filter-section">
-                <h3>🏠 Units</h3>
+                <h3>Units</h3>
                 <div class="range-inputs">
                     <input type="number" id="minUnits" class="filter-input" placeholder="Min">
                     <input type="number" id="maxUnits" class="filter-input" placeholder="Max">
                 </div>
             </div>
 
-            <!-- Permit Activity -->
             <div class="filter-section">
-                <h3>🏗️ Permit Activity</h3>
+                <h3>Permit activity</h3>
                 <label class="checkbox-label">
                     <input type="checkbox" id="withPermits">
                     Only properties with permits
                 </label>
-                <input type="number" id="minPermits" class="filter-input" 
-                    placeholder="Min permit count">
-                
-                <!-- Permit Type Filter -->
-                <label class="filter-label" style="margin-top: 12px;">Permit Type</label>
+                <input type="number" id="minPermits" class="filter-input"
+                    placeholder="Min permit count" style="margin-top: 8px;">
+
+                <label class="filter-label" style="margin-top: 12px;">Permit type</label>
                 <select id="permitType" class="filter-select">
-                    <option value="">All Types</option>
-                    <option value="EW">EW - Equipment Work</option>
-                    <option value="PL">PL - Plumbing</option>
-                    <option value="EQ">EQ - Equipment</option>
-                    <option value="AL">AL - Alteration</option>
-                    <option value="NB">NB - New Building</option>
-                    <option value="SG">SG - Sign</option>
-                    <option value="DM">DM - Demolition</option>
-                    <option value="FO">FO - Foundation</option>
+                    <option value="">All types</option>
+                    <option value="EW">EW — Equipment Work</option>
+                    <option value="PL">PL — Plumbing</option>
+                    <option value="EQ">EQ — Equipment</option>
+                    <option value="AL">AL — Alteration</option>
+                    <option value="NB">NB — New Building</option>
+                    <option value="SG">SG — Sign</option>
+                    <option value="DM">DM — Demolition</option>
+                    <option value="FO">FO — Foundation</option>
                 </select>
-                
-                <!-- Recent Permit Filter -->
-                <label class="filter-label" style="margin-top: 12px;">Recent Permits</label>
+
+                <label class="filter-label" style="margin-top: 12px;">Recent permits</label>
                 <select id="recentPermitDays" class="filter-select">
                     <option value="">Any time</option>
                     <option value="3">Last 3 days</option>
@@ -172,34 +161,24 @@
                     <option value="180">Last 6 months</option>
                     <option value="365">Last year</option>
                     <option value="730">Last 2 years</option>
-                    <option value="custom">Custom...</option>
+                    <option value="custom">Custom&hellip;</option>
                 </select>
-                <input type="number" id="recentPermitCustomDays" class="filter-input" 
-                    placeholder="# of days" style="display: none; margin-top: 8px;" min="1" max="3650">
+                <input type="number" id="recentPermitCustomDays" class="filter-input"
+                    placeholder="Number of days" style="display: none; margin-top: 8px;" min="1" max="3650">
             </div>
 
-            <!-- Financing -->
             <div class="filter-section">
-                <h3>🏦 Financing Ratio</h3>
+                <h3>Financing ratio</h3>
                 <div class="range-inputs">
-                    <input type="number" id="financingMin" class="filter-input" 
-                        placeholder="Min (%)" min="0" max="100">
-                    <input type="number" id="financingMax" class="filter-input" 
-                        placeholder="Max (%)" min="0" max="100">
+                    <input type="number" id="financingMin" class="filter-input"
+                        placeholder="Min %" min="0" max="100">
+                    <input type="number" id="financingMax" class="filter-input"
+                        placeholder="Max %" min="0" max="100">
                 </div>
             </div>
 
-            <!-- Cash Purchase Filter -->
             <div class="filter-section">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="cashOnly">
-                    💵 Cash purchases only
-                </label>
-            </div>
-
-            <!-- HPD Violations -->
-            <div class="filter-section">
-                <h3>⚠️ HPD Violations</h3>
+                <h3>HPD violations</h3>
                 <select id="violationsFilter" class="filter-select">
                     <option value="">Any</option>
                     <option value="true">Has violations</option>
@@ -207,71 +186,60 @@
                 </select>
             </div>
 
-            <!-- Enrichable Owner Filter -->
             <div class="filter-section">
                 <label class="checkbox-label">
-                    <input type="checkbox" id="hasEnrichableOwner">
-                    📞 Has enrichable owner
+                    <input type="checkbox" id="cashOnly">
+                    Cash purchases only
                 </label>
-                <small class="filter-hint">Properties with a person name (not LLC) that can be looked up</small>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="hasEnrichableOwner">
+                    Has enrichable owner
+                </label>
+                <small class="filter-hint">Enrichable owners are person names (not LLCs) that can be looked up.</small>
             </div>
         </aside>
 
-        <!-- Main Content -->
+        <!-- Main content -->
         <main class="content">
-            <!-- Stats Dashboard -->
             <section class="stats-dashboard">
                 <div class="stat-card">
-                    <div class="stat-icon">🏢</div>
-                    <div class="stat-content">
-                        <div class="stat-label">Total Properties</div>
-                        <div class="stat-value" id="statTotal">0</div>
-                    </div>
+                    <div class="stat-label">Total properties</div>
+                    <div class="stat-value" id="statTotal">&ndash;</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">💰</div>
-                    <div class="stat-content">
-                        <div class="stat-label">Total Value</div>
-                        <div class="stat-value" id="statValue">$0</div>
-                    </div>
+                    <div class="stat-label">Total value</div>
+                    <div class="stat-value" id="statValue">&ndash;</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">💵</div>
-                    <div class="stat-content">
-                        <div class="stat-label">Cash Purchases</div>
-                        <div class="stat-value" id="statCash">0</div>
-                    </div>
+                    <div class="stat-label">Cash purchases</div>
+                    <div class="stat-value" id="statCash">&ndash;</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">🆕</div>
-                    <div class="stat-content">
-                        <div class="stat-label">Recent Sales (90d)</div>
-                        <div class="stat-value" id="statRecent">0</div>
-                    </div>
+                    <div class="stat-label">Sales, last 90 days</div>
+                    <div class="stat-value" id="statRecent">&ndash;</div>
                 </div>
             </section>
 
-            <!-- Controls Bar -->
             <div class="controls-bar">
                 <div class="results-info">
                     <span id="resultsCount">0 properties</span>
                 </div>
                 <div class="controls-right">
-                    <label>Sort by:</label>
+                    <label for="sortBy">Sort</label>
                     <select id="sortBy" class="control-select">
-                        <option value="sale_date">Sale Date</option>
-                        <option value="value">Assessed Value</option>
-                        <option value="sale_price">Sale Price</option>
+                        <option value="sale_date">Sale date</option>
+                        <option value="value">Assessed value</option>
+                        <option value="sale_price">Sale price</option>
                         <option value="address">Address</option>
                         <option value="owner">Owner</option>
-                        <option value="permits">Permit Count</option>
+                        <option value="permits">Permit count</option>
                         <option value="units">Units</option>
                     </select>
                     <select id="sortOrder" class="control-select">
-                        <option value="desc">High to Low</option>
-                        <option value="asc">Low to High</option>
+                        <option value="desc">High to low</option>
+                        <option value="asc">Low to high</option>
                     </select>
-                    <label>Per page:</label>
+                    <label for="perPage">Per page</label>
                     <select id="perPage" class="control-select">
                         <option value="25">25</option>
                         <option value="50" selected>50</option>
@@ -281,141 +249,128 @@
                 </div>
             </div>
 
-            <!-- Properties Grid -->
-            <div id="propertiesContainer" class="properties-grid">
-                <!-- Property cards will be inserted here -->
-            </div>
+            <div id="propertiesContainer" class="properties-grid"></div>
 
-            <!-- Pagination -->
-            <div class="pagination" id="pagination">
-                <!-- Pagination controls will be inserted here -->
-            </div>
+            <div class="pagination" id="pagination"></div>
 
-            <!-- Loading State -->
             <div id="loadingState" class="loading-state" style="display: none;">
                 <i class="fas fa-spinner fa-spin"></i>
-                <p>Loading properties...</p>
+                <p>Loading properties&hellip;</p>
             </div>
 
-            <!-- No Results -->
             <div id="noResults" class="no-results" style="display: none;">
                 <i class="fas fa-search"></i>
-                <p>No properties found matching your criteria</p>
-                <button class="btn btn-secondary" onclick="clearFilters()">Clear Filters</button>
+                <p>No properties match your filters.</p>
+                <button class="btn btn-secondary" onclick="clearFilters()">Clear filters</button>
             </div>
         </main>
     </div>
 
-    <!-- Owner Portfolio Modal -->
+    <!-- Owner portfolio modal -->
     <div id="portfolioModal" class="modal" style="display: none;">
         <div class="modal-content portfolio-modal">
             <div class="modal-header">
-                <h2 id="portfolioOwnerName">Owner Portfolio</h2>
-                <button class="modal-close" onclick="closePortfolioModal()">×</button>
+                <h2 id="portfolioOwnerName">Owner portfolio</h2>
+                <button class="modal-close" onclick="closePortfolioModal()">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="portfolio-stats">
                     <div class="portfolio-stat">
-                        <div class="portfolio-stat-label">Total Properties</div>
+                        <div class="portfolio-stat-label">Properties</div>
                         <div class="portfolio-stat-value" id="portfolioCount">0</div>
                     </div>
                     <div class="portfolio-stat">
-                        <div class="portfolio-stat-label">Total Value</div>
+                        <div class="portfolio-stat-label">Total value</div>
                         <div class="portfolio-stat-value" id="portfolioValue">$0</div>
                     </div>
                     <div class="portfolio-stat">
-                        <div class="portfolio-stat-label">Total Units</div>
+                        <div class="portfolio-stat-label">Total units</div>
                         <div class="portfolio-stat-value" id="portfolioUnits">0</div>
                     </div>
                     <div class="portfolio-stat">
-                        <div class="portfolio-stat-label">Cash Purchases</div>
+                        <div class="portfolio-stat-label">Cash purchases</div>
                         <div class="portfolio-stat-value" id="portfolioCash">0</div>
                     </div>
                 </div>
-                <div id="portfolioProperties" class="portfolio-list">
-                    <!-- Portfolio properties will be inserted here -->
-                </div>
+                <div id="portfolioProperties" class="portfolio-list"></div>
             </div>
         </div>
     </div>
 
-    <!-- Export Modal -->
+    <!-- Export modal -->
     <div id="exportModal" class="modal" style="display: none;">
         <div class="modal-content export-modal">
             <div class="modal-header">
-                <h2>📥 Export Properties</h2>
-                <button class="modal-close" onclick="closeExportModal()">×</button>
+                <h2>Export properties</h2>
+                <button class="modal-close" onclick="closeExportModal()">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="export-info">
-                    <p><strong id="exportCount">0</strong> properties match your current filters</p>
-                    <p class="export-limit-note">Maximum 10,000 properties per export</p>
+                    <p><strong id="exportCount">0</strong> properties match your current filters.</p>
+                    <p class="export-limit-note">Maximum 10,000 properties per export.</p>
                 </div>
-                
+
                 <div class="export-fields">
-                    <h4>Select fields to export:</h4>
+                    <h4>Fields to export</h4>
                     <div class="field-groups">
                         <div class="field-group">
-                            <h5>📍 Property Info</h5>
+                            <h5>Property</h5>
                             <label><input type="checkbox" name="export_field" value="address" checked> Address</label>
                             <label><input type="checkbox" name="export_field" value="bbl" checked> BBL</label>
                             <label><input type="checkbox" name="export_field" value="borough" checked> Borough</label>
-                            <label><input type="checkbox" name="export_field" value="zip_code"> Zip Code</label>
-                            <label><input type="checkbox" name="export_field" value="building_class"> Building Class</label>
-                            <label><input type="checkbox" name="export_field" value="year_built"> Year Built</label>
+                            <label><input type="checkbox" name="export_field" value="zip_code"> ZIP code</label>
+                            <label><input type="checkbox" name="export_field" value="building_class"> Building class</label>
+                            <label><input type="checkbox" name="export_field" value="year_built"> Year built</label>
                             <label><input type="checkbox" name="export_field" value="units"> Units</label>
                         </div>
                         <div class="field-group">
-                            <h5>👤 Owner Info</h5>
-                            <label><input type="checkbox" name="export_field" value="owner_name" checked> Owner Name</label>
-                            <label><input type="checkbox" name="export_field" value="owner_phone"> Enriched Owner Phone (unlocked only)</label>
-                            <label><input type="checkbox" name="export_field" value="owner_email"> Enriched Owner Email (unlocked only)</label>
-                            <label><input type="checkbox" name="export_field" value="owner_address"> Owner Address</label>
+                            <h5>Owner</h5>
+                            <label><input type="checkbox" name="export_field" value="owner_name" checked> Owner name</label>
+                            <label><input type="checkbox" name="export_field" value="owner_phone"> Enriched phone (unlocked only)</label>
+                            <label><input type="checkbox" name="export_field" value="owner_email"> Enriched email (unlocked only)</label>
+                            <label><input type="checkbox" name="export_field" value="owner_address"> Owner address</label>
                         </div>
                         <div class="field-group">
-                            <h5>📞 Permit Contacts</h5>
-                            <label><input type="checkbox" name="export_field" value="all_contacts"> All Contacts (Name, Role, Phone)</label>
-                            <label><input type="checkbox" name="export_field" value="all_contact_phones"> All Contact Phones</label>
-                            <label><input type="checkbox" name="export_field" value="contact_names"> Contact Names Only</label>
-                            <label><input type="checkbox" name="export_field" value="enriched_permit_contacts"> Enriched Permit Contacts (unlocked)</label>
+                            <h5>Permit contacts</h5>
+                            <label><input type="checkbox" name="export_field" value="all_contacts"> All contacts (name, role, phone)</label>
+                            <label><input type="checkbox" name="export_field" value="all_contact_phones"> All contact phones</label>
+                            <label><input type="checkbox" name="export_field" value="contact_names"> Contact names only</label>
+                            <label><input type="checkbox" name="export_field" value="enriched_permit_contacts"> Enriched contacts (unlocked)</label>
                         </div>
                         <div class="field-group">
-                            <h5>💰 Financial</h5>
-                            <label><input type="checkbox" name="export_field" value="assessed_value" checked> Assessed Value</label>
-                            <label><input type="checkbox" name="export_field" value="sale_price" checked> Sale Price</label>
-                            <label><input type="checkbox" name="export_field" value="sale_date" checked> Sale Date</label>
-                            <label><input type="checkbox" name="export_field" value="is_cash_purchase"> Cash Purchase</label>
+                            <h5>Financial</h5>
+                            <label><input type="checkbox" name="export_field" value="assessed_value" checked> Assessed value</label>
+                            <label><input type="checkbox" name="export_field" value="sale_price" checked> Sale price</label>
+                            <label><input type="checkbox" name="export_field" value="sale_date" checked> Sale date</label>
+                            <label><input type="checkbox" name="export_field" value="is_cash_purchase"> Cash purchase</label>
                         </div>
                         <div class="field-group">
-                            <h5>🏗️ Activity</h5>
-                            <label><input type="checkbox" name="export_field" value="permit_count"> Permit Count</label>
-                            <label><input type="checkbox" name="export_field" value="violation_count"> Violation Count</label>
+                            <h5>Activity</h5>
+                            <label><input type="checkbox" name="export_field" value="permit_count"> Permit count</label>
+                            <label><input type="checkbox" name="export_field" value="violation_count"> Violation count</label>
                         </div>
                     </div>
                 </div>
-                
-                <!-- Enrichment Add-on Section -->
+
                 <div class="export-enrichment-section">
                     <div class="enrichment-toggle">
                         <label class="enrichment-checkbox">
                             <input type="checkbox" id="exportEnrichContacts" onchange="updateEnrichmentEstimate()">
-                            <span class="checkbox-label">
-                                📞 <strong>Enrich contractor contacts</strong> (+$0.35/property)
-                            </span>
+                            <span><strong>Enrich contractor contacts</strong> (+$0.35/property)</span>
                         </label>
                         <p class="enrichment-description">
-                            Look up phone numbers and emails for permit applicants/contractors.
-                            Only charged for new enrichments - previously unlocked contacts are free.
+                            Looks up phone numbers and emails for permit applicants and contractors.
+                            Only new enrichments are charged — previously unlocked contacts are free.
                         </p>
                     </div>
                     <div id="enrichmentEstimate" class="enrichment-estimate" style="display: none;">
-                        <div class="estimate-loading">Calculating enrichment cost...</div>
+                        <div class="estimate-loading">Calculating enrichment cost&hellip;</div>
                     </div>
                 </div>
-                
+
                 <div class="export-actions">
                     <button class="btn btn-secondary" onclick="closeExportModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="downloadExport()">
+                    <button class="btn btn-primary" id="exportDownloadBtn" onclick="downloadExport()">
                         <i class="fas fa-download"></i> Download CSV
                     </button>
                 </div>

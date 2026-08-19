@@ -20,7 +20,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeSearch();
     loadMarketStats();
     initializeExamples();
-    initializeNavigation();
 });
 
 // =========================
@@ -176,41 +175,24 @@ function offerAutoAddProperty(query) {
 
     const modal = document.createElement('div');
     modal.id = 'autoAddModal';
-    modal.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-        display: flex; align-items: center; justify-content: center;
-        z-index: 10000;
-    `;
+    modal.className = 'modal';
+    modal.style.display = 'block';
     modal.innerHTML = `
-        <div style="background: #1e1e2f; color: #fff; padding: 1.75rem 2rem;
-                    border-radius: 12px; max-width: 480px; width: 92%;
-                    box-shadow: 0 12px 40px rgba(0,0,0,0.5);">
-            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.2rem;">
-                🔍 Property not in our database yet
-            </h3>
-            <p style="margin: 0 0 1rem 0; color: #cbd0e0; font-size: 0.95rem;">
+        <div class="modal-content autoadd-modal-content">
+            <h3>Property not in our database yet</h3>
+            <p>
                 We can run a full lookup on <strong>${escapeHtml(query)}</strong>
                 using NYC's public data: PLUTO, RPAD, HPD, ACRIS, tax liens,
                 and NY Secretary of State. Takes about 10&ndash;20 seconds.
             </p>
-            <p style="margin: 0 0 1.25rem 0; color: #8b92a8; font-size: 0.85rem;">
+            <p class="fineprint">
                 Free &mdash; no contact enrichment runs unless you click Enrich
                 on the resulting page.
             </p>
-            <div id="autoAddStatus" style="display: none; margin-bottom: 1rem;
-                 padding: 0.75rem; background: rgba(102,126,234,0.1);
-                 border-radius: 6px; font-size: 0.88rem;"></div>
-            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
-                <button id="autoAddCancel" style="padding: 0.6rem 1.2rem;
-                        background: transparent; color: #cbd0e0;
-                        border: 1px solid #555; border-radius: 6px;
-                        cursor: pointer;">Cancel</button>
-                <button id="autoAddConfirm" style="padding: 0.6rem 1.2rem;
-                        background: linear-gradient(135deg, #667eea, #764ba2);
-                        color: #fff; border: none; border-radius: 6px;
-                        font-weight: 600; cursor: pointer;">
-                    Look up this property
-                </button>
+            <div id="autoAddStatus" class="autoadd-status"></div>
+            <div class="autoadd-actions">
+                <button id="autoAddCancel" class="btn btn-secondary">Cancel</button>
+                <button id="autoAddConfirm" class="btn btn-primary">Look up this property</button>
             </div>
         </div>
     `;
@@ -229,9 +211,9 @@ async function runAutoAdd(query, modal) {
     const confirmBtn = document.getElementById('autoAddConfirm');
     const cancelBtn = document.getElementById('autoAddCancel');
     statusEl.style.display = 'block';
+    statusEl.classList.remove('error', 'success');
     statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving address and running enrichment&hellip;';
     confirmBtn.disabled = true;
-    confirmBtn.style.opacity = '0.5';
     cancelBtn.disabled = true;
 
     try {
@@ -244,9 +226,8 @@ async function runAutoAdd(query, modal) {
 
         if (!data.success) {
             statusEl.innerHTML = `<strong>Couldn't look it up:</strong> ${escapeHtml(data.error || 'unknown error')}`;
-            statusEl.style.background = 'rgba(220, 38, 38, 0.15)';
+            statusEl.classList.add('error');
             confirmBtn.disabled = false;
-            confirmBtn.style.opacity = '1';
             cancelBtn.disabled = false;
             return;
         }
@@ -257,28 +238,19 @@ async function runAutoAdd(query, modal) {
             .map(([step, status]) => `<li><strong>${step}</strong>: ${escapeHtml(String(status))}</li>`)
             .join('');
         statusEl.innerHTML = `
-            <strong>✓ Done</strong> — BBL ${data.bbl}. Redirecting&hellip;
-            <ul style="margin: 0.5rem 0 0 1rem; padding: 0; font-size: 0.82rem; color: #aab;">
-                ${reportLines}
-            </ul>
+            <strong>Done</strong> — BBL ${data.bbl}. Redirecting&hellip;
+            <ul>${reportLines}</ul>
         `;
-        statusEl.style.background = 'rgba(34,197,94,0.12)';
+        statusEl.classList.add('success');
         setTimeout(() => {
             window.location.href = `/property/${data.bbl}`;
         }, 1200);
     } catch (e) {
         statusEl.innerHTML = `<strong>Request failed:</strong> ${escapeHtml(String(e))}`;
-        statusEl.style.background = 'rgba(220, 38, 38, 0.15)';
+        statusEl.classList.add('error');
         confirmBtn.disabled = false;
-        confirmBtn.style.opacity = '1';
         cancelBtn.disabled = false;
     }
-}
-
-function escapeHtml(s) {
-    return String(s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**
@@ -290,47 +262,31 @@ function showNotification(message, type = 'info') {
     if (!container) {
         container = document.createElement('div');
         container.id = 'notificationContainer';
-        container.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px;';
+        container.className = 'toast-stack';
         document.body.appendChild(container);
     }
-    
+
     const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    
-    const colors = {
-        info: { bg: '#e3f2fd', border: '#2196f3', text: '#1565c0' },
-        warning: { bg: '#fff3e0', border: '#ff9800', text: '#e65100' },
-        error: { bg: '#ffebee', border: '#f44336', text: '#c62828' },
-        success: { bg: '#e8f5e9', border: '#4caf50', text: '#2e7d32' }
+    notification.className = `toast toast-${type}`;
+
+    const icons = {
+        info: 'info-circle',
+        warning: 'exclamation-triangle',
+        error: 'exclamation-circle',
+        success: 'check-circle'
     };
-    
-    const color = colors[type] || colors.info;
-    
-    notification.style.cssText = `
-        background: ${color.bg};
-        border: 1px solid ${color.border};
-        color: ${color.text};
-        padding: 12px 20px;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        font-size: 14px;
-        max-width: 350px;
-        animation: slideIn 0.3s ease;
-    `;
-    
+
     notification.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <i class="fas fa-${type === 'error' ? 'exclamation-circle' : type === 'warning' ? 'exclamation-triangle' : type === 'success' ? 'check-circle' : 'info-circle'}"></i>
-            <span>${message}</span>
-        </div>
+        <i class="fas fa-${icons[type] || icons.info}"></i>
+        <span>${escapeHtml(message)}</span>
     `;
-    
+
     container.appendChild(notification);
-    
+
     // Auto-remove after 5 seconds
     setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => notification.remove(), 300);
+        notification.classList.add('leaving');
+        setTimeout(() => notification.remove(), 250);
     }, 5000);
 }
 
@@ -339,66 +295,54 @@ async function fetchSuggestions(query) {
     
     // Show loading state
     suggestions.innerHTML = `
-        <div class="suggestion-item" style="justify-content: center; padding: 1rem;">
+        <div class="suggestion-note">
             <div class="inline-loading">
                 <div class="spinner spinner-sm"></div>
-                <span>Searching...</span>
+                <span>Searching&hellip;</span>
             </div>
         </div>
     `;
     suggestions.classList.add('active');
-    
+
     try {
         const response = await fetch(`/api/suggest?q=${encodeURIComponent(query)}&limit=8`);
-        
+
         if (!response.ok) {
             throw new Error('Suggestion fetch failed');
         }
-        
+
         const results = await response.json();
-        
+
         if (results.length === 0) {
             suggestions.innerHTML = `
-                <div class="suggestion-item" style="justify-content: center; padding: 1rem; color: var(--text-muted);">
-                    <i class="fas fa-search" style="margin-right: 0.5rem;"></i>
-                    No results found - press Enter to search all data
+                <div class="suggestion-note">
+                    No matches yet &mdash; press Enter to search all data
                 </div>
             `;
             return;
         }
-        
+
         // Render suggestions - SANITIZED to prevent XSS
         suggestions.innerHTML = results.map(result => `
             <div class="suggestion-item" onclick="selectSuggestion('${escapeHtml(result.bbl)}')">
-                <div style="display: flex; justify-content: space-between; align-items: start;">
-                    <div style="flex: 1;">
-                        <div style="font-weight: 600; color: var(--text-primary);">
-                            ${escapeHtml(result.address || 'Address Unknown')}
-                        </div>
-                        <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <span>${escapeHtml(result.owner || 'Owner unknown')}</span>
-                            <span style="color: var(--border-color);">•</span>
-                            <span>BBL: ${formatBBL(result.bbl)}</span>
-                            ${result.match_type ? `
-                                <span style="background: var(--primary-light); color: var(--primary); padding: 0.125rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.75rem; font-weight: 600;">
-                                    ${escapeHtml(result.match_type)}
-                                </span>
-                            ` : ''}
-                        </div>
-                    </div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; margin-left: 1rem;">
-                        ${parseInt(result.permits) || 0} permits
+                <div>
+                    <div class="suggestion-title">${escapeHtml(result.address || 'Address unknown')}</div>
+                    <div class="suggestion-meta">
+                        <span>${escapeHtml(result.owner || 'Owner unknown')}</span>
+                        <span>&middot;</span>
+                        <span>BBL ${formatBBL(result.bbl)}</span>
+                        ${result.match_type ? `<span class="suggestion-chip">${escapeHtml(result.match_type)}</span>` : ''}
                     </div>
                 </div>
+                <div class="suggestion-count">${parseInt(result.permits) || 0} permits</div>
             </div>
         `).join('');
-        
+
         suggestions.classList.add('active');
     } catch (error) {
         console.error('Suggestion fetch error:', error);
         suggestions.innerHTML = `
-            <div class="suggestion-item" style="justify-content: center; padding: 1rem; color: var(--text-muted);">
-                <i class="fas fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>
+            <div class="suggestion-note">
                 Error loading suggestions
             </div>
         `;
@@ -450,21 +394,21 @@ async function loadMarketStats() {
     try {
         const response = await fetch('/api/market-stats');
         const stats = await response.json();
-        
+
         // Update stat displays with animation
-        animateNumber('activePermits', stats.activePermits || 1968);
-        animateNumber('recentSales', stats.recentSales || 1141);
-        animateNumber('totalProperties', stats.totalProperties || 1361);
-        animateNumber('qualifiedLeads', stats.qualifiedLeads || 937);
-        
+        animateNumber('activePermits', stats.activePermits || 0);
+        animateNumber('recentSales', stats.recentSales || 0);
+        animateNumber('totalProperties', stats.totalProperties || 0);
+        animateNumber('qualifiedLeads', stats.qualifiedLeads || 0);
+
         state.stats = stats;
     } catch (error) {
         console.error('Failed to load market stats:', error);
-        // Use fallback values
-        animateNumber('activePermits', 1968);
-        animateNumber('recentSales', 1141);
-        animateNumber('totalProperties', 1361);
-        animateNumber('qualifiedLeads', 937);
+        // Don't show made-up numbers if the API is down
+        statElements.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.textContent = '—';
+        });
     }
 }
 
@@ -492,27 +436,6 @@ function animateNumber(elementId, targetValue) {
     }
     
     requestAnimationFrame(update);
-}
-
-// =========================
-// NAVIGATION
-// =========================
-
-function initializeNavigation() {
-    const savedListsBtn = document.getElementById('savedListsBtn');
-    const settingsBtn = document.getElementById('settingsBtn');
-    
-    if (savedListsBtn) {
-        savedListsBtn.addEventListener('click', () => {
-            alert('Saved Lists feature coming soon!');
-        });
-    }
-    
-    if (settingsBtn) {
-        settingsBtn.addEventListener('click', () => {
-            alert('Settings feature coming soon!');
-        });
-    }
 }
 
 // =========================

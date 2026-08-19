@@ -188,28 +188,29 @@ function renderProperties() {
                 <div class="property-header">
                     <div>
                         <div class="property-address">${escapeHtml(property.address || 'Address N/A')}</div>
-                        <div class="property-bbl">BBL: ${formatBBL(property.bbl)}</div>
+                        <div class="property-bbl">${formatBBL(property.bbl)}</div>
                     </div>
                     ${assessedValue > 0 ? `
-                        <div class="property-value-badge">
-                            $${formatNumber(assessedValue)}
+                        <div class="property-value">
+                            <div class="property-value-amount">$${formatNumber(assessedValue)}</div>
+                            <div class="property-value-label">Assessed</div>
                         </div>
                     ` : ''}
                 </div>
-                
+
                 <div class="property-owner" onclick="event.stopPropagation(); viewOwnerPortfolio('${escapeHtml(owner)}')">
                     <div class="owner-label">Owner</div>
                     <div class="owner-name">${escapeHtml(owner)}</div>
                 </div>
-                
+
                 ${contractorName || contractorPhone ? `
                     <div class="property-contractor">
-                        <div class="contractor-label">📋 Permit Contact</div>
+                        <div class="contractor-label">Permit contact</div>
                         ${contractorName ? `<div class="contractor-name">${escapeHtml(contractorName)}</div>` : ''}
-                        ${contractorPhone ? `<a href="tel:${contractorPhone}" class="contractor-phone" onclick="event.stopPropagation();">📞 ${contractorPhone}</a>` : ''}
+                        ${contractorPhone ? `<a href="tel:${contractorPhone}" class="contractor-phone" onclick="event.stopPropagation();">${contractorPhone}</a>` : ''}
                     </div>
                 ` : ''}
-                
+
                 <div class="property-details">
                     ${property.units ? `
                         <div class="detail-item">
@@ -219,34 +220,34 @@ function renderProperties() {
                     ` : ''}
                     ${property.year_built ? `
                         <div class="detail-item">
-                            <div class="detail-label">Year Built</div>
+                            <div class="detail-label">Built</div>
                             <div class="detail-value">${property.year_built}</div>
                         </div>
                     ` : ''}
                     ${salePrice > 0 ? `
                         <div class="detail-item">
-                            <div class="detail-label">Last Sale</div>
+                            <div class="detail-label">Last sale</div>
                             <div class="detail-value">$${formatNumber(salePrice)}</div>
                         </div>
                     ` : ''}
                     ${property.sale_date ? `
                         <div class="detail-item">
-                            <div class="detail-label">Sale Date</div>
+                            <div class="detail-label">Sale date</div>
                             <div class="detail-value">${formatDate(property.sale_date)}</div>
                         </div>
                     ` : ''}
                 </div>
-                
+
                 <div class="property-badges">
-                    ${property.is_cash_purchase ? '<span class="badge badge-cash">💵 Cash Purchase</span>' : ''}
-                    ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">✓ ACRIS Data</span>' : ''}
-                    ${permitCount > 0 ? `<span class="badge badge-permits">🏗️ ${permitCount} Permit${permitCount > 1 ? 's' : ''}</span>` : ''}
-                    ${violationCount > 0 ? `<span class="badge badge-violations">⚠️ ${violationCount} Violation${violationCount > 1 ? 's' : ''}</span>` : ''}
+                    ${property.is_cash_purchase ? '<span class="badge badge-cash">Cash purchase</span>' : ''}
+                    ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">ACRIS</span>' : ''}
+                    ${permitCount > 0 ? `<span class="badge badge-permits">${permitCount} permit${permitCount > 1 ? 's' : ''}</span>` : ''}
+                    ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} violation${violationCount > 1 ? 's' : ''}</span>` : ''}
                 </div>
-                
+
                 <div class="property-actions">
                     <button class="btn-view" onclick="event.stopPropagation(); viewProperty('${property.bbl}')">
-                        <i class="fas fa-eye"></i> View Details
+                        View details
                     </button>
                     <button class="btn-portfolio" onclick="event.stopPropagation(); viewOwnerPortfolio('${escapeHtml(owner)}')" title="View owner's portfolio">
                         <i class="fas fa-building"></i>
@@ -598,11 +599,11 @@ async function downloadExport() {
         }
         
         params.append('enrich_contacts', 'true');
-        
+
         // Show loading indicator
-        const exportBtn = document.querySelector('.modal-footer .btn-primary');
-        const originalText = exportBtn.textContent;
-        exportBtn.textContent = 'Enriching & Exporting...';
+        const exportBtn = document.getElementById('exportDownloadBtn');
+        const originalText = exportBtn.innerHTML;
+        exportBtn.textContent = 'Enriching & exporting…';
         exportBtn.disabled = true;
         
         try {
@@ -632,7 +633,7 @@ async function downloadExport() {
         } catch (error) {
             alert('Export failed: ' + error.message);
         } finally {
-            exportBtn.textContent = originalText;
+            exportBtn.innerHTML = originalText;
             exportBtn.disabled = false;
         }
     } else {
@@ -679,11 +680,12 @@ function showPortfolioModal(data) {
             <div class="property-header">
                 <div>
                     <div class="property-address">${escapeHtml(prop.address || 'Address N/A')}</div>
-                    <div class="property-bbl">BBL: ${formatBBL(prop.bbl)}</div>
+                    <div class="property-bbl">${formatBBL(prop.bbl)}</div>
                 </div>
                 ${prop.assessed_total_value ? `
-                    <div class="property-value-badge">
-                        $${formatNumber(prop.assessed_total_value)}
+                    <div class="property-value">
+                        <div class="property-value-amount">$${formatNumber(prop.assessed_total_value)}</div>
+                        <div class="property-value-label">Assessed</div>
                     </div>
                 ` : ''}
             </div>
@@ -696,13 +698,13 @@ function showPortfolioModal(data) {
                 ` : ''}
                 ${prop.sale_price ? `
                     <div class="detail-item">
-                        <div class="detail-label">Purchase Price</div>
+                        <div class="detail-label">Purchase price</div>
                         <div class="detail-value">$${formatNumber(prop.sale_price)}</div>
                     </div>
                 ` : ''}
                 ${prop.sale_date ? `
                     <div class="detail-item">
-                        <div class="detail-label">Purchase Date</div>
+                        <div class="detail-label">Purchase date</div>
                         <div class="detail-value">${formatDate(prop.sale_date)}</div>
                     </div>
                 ` : ''}
@@ -892,12 +894,12 @@ async function showBulkEnrichModal() {
     modal.innerHTML = `
         <div class="modal-content bulk-enrich-modal-content">
             <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-            <h2>📞 Bulk Owner Enrichment</h2>
+            <h2>Bulk owner enrichment</h2>
             <p class="modal-subtitle">Enriches every property matching your current filters
                 (<strong>${formatNumber(totalFiltered)}</strong> total, not just this page).</p>
 
             <div class="be-strategy">
-                <h4>👥 Which owners to enrich per property</h4>
+                <h4>Which owners to enrich per property</h4>
                 <label>
                     <input type="radio" name="be-strategy" value="recommended" checked>
                     <strong>Recommended</strong> &mdash; 1 owner per property
@@ -954,7 +956,7 @@ function renderProviderSelectorIfAdmin(data) {
     block.dataset.rendered = '1';
     block.innerHTML = `
         <div class="be-strategy">
-            <h4>🔌 Enrichment provider <span class="be-admin-tag">admin only</span></h4>
+            <h4>Enrichment provider <span class="be-admin-tag">admin only</span></h4>
             <label>
                 <input type="radio" name="be-provider" value="enformion_fallback" ${current === 'enformion_fallback' ? 'checked' : ''}>
                 <strong>Enformion → Apify fallback</strong> (default)
@@ -1028,7 +1030,7 @@ async function refreshBulkEnrichEstimate() {
             const realMax = data.provider_max_cost || 0;
             adminCostHtml = `
                 <details class="be-admin-cost">
-                    <summary>🔒 Admin info (click to reveal)</summary>
+                    <summary>Admin info (click to reveal)</summary>
                     <div class="be-admin-cost-row">
                         <span>Real provider cost (${providerLabel}):</span>
                         <strong>$${realMax.toFixed(2)}</strong>
@@ -1059,7 +1061,7 @@ async function refreshBulkEnrichEstimate() {
             </div>
 
             <div class="cost-breakdown">
-                <h4>💰 Cost ${data.is_admin ? '<small style="font-weight:normal;">(customer rate — admin is not charged)</small>' : ''}</h4>
+                <h4>Cost ${data.is_admin ? '<small style="font-weight:normal;">(customer rate — admin is not charged)</small>' : ''}</h4>
                 <div class="math-display">
                     <p>${formatNumber(data.total_owners)} owners × ${customerPerStr} = <strong>${customerMaxStr}</strong></p>
                 </div>
@@ -1073,7 +1075,7 @@ async function refreshBulkEnrichEstimate() {
 
             ${data.requires_typed_confirmation ? `
                 <div class="be-confirm-block">
-                    ⚠️ This run will charge up to <strong>${customerMaxStr}</strong>.
+                    This run will charge up to <strong>${customerMaxStr}</strong>.
                     Type <code>CONFIRM</code> to authorize.
                     <input type="text" id="be-confirm-input" class="be-confirm-input"
                            placeholder="Type CONFIRM" autocomplete="off">
@@ -1088,7 +1090,7 @@ async function refreshBulkEnrichEstimate() {
         }
 
         startBtn.disabled = false;
-        startBtn.textContent = `🚀 Enrich ${formatNumber(data.total_owners)} owners (${startBtnCostStr})`;
+        startBtn.textContent = `Enrich ${formatNumber(data.total_owners)} owners (${startBtnCostStr})`;
         startBtn.onclick = startBulkEnrichJob;
 
         if (data.requires_typed_confirmation) {
@@ -1160,7 +1162,7 @@ function renderBulkEnrichProgress(jobId, initialData) {
 
     content.innerHTML = `
         <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-        <h2>📞 Bulk Enrichment Running</h2>
+        <h2>Bulk enrichment running</h2>
         <p class="modal-subtitle">
             Job #${jobId} &middot; ${formatNumber(props)} properties &middot;
             ${formatNumber(planned)} owners (${strategy}) &middot;
@@ -1185,7 +1187,7 @@ function renderBulkEnrichProgress(jobId, initialData) {
 
         ${isAdmin ? `
             <details class="be-admin-cost" id="be-admin-cost-live">
-                <summary>🔒 Admin info (click to reveal)</summary>
+                <summary>Admin info (click to reveal)</summary>
                 <div class="be-admin-cost-row">
                     <span>Real provider cost so far (${providerLabel}, $${adminUnitCost.toFixed(4)}/lookup):</span>
                     <strong id="be-admin-cost-val">$0.00</strong>
@@ -1264,13 +1266,13 @@ function finalizeBulkEnrichUI(job) {
     if (closeBtn) closeBtn.style.display = 'inline-block';
 
     let headline;
-    if (job.status === 'completed') headline = `✅ Completed. Charged $${(job.total_charged || 0).toFixed(2)}.`;
-    else if (job.status === 'cancelled') headline = `⏹ Cancelled. Charged $${(job.total_charged || 0).toFixed(2)} for ${formatNumber(job.owners_successful || 0)} completed lookups.`;
-    else headline = `❌ Failed: ${job.error_message || 'unknown error'}`;
+    if (job.status === 'completed') headline = `Completed. Charged $${(job.total_charged || 0).toFixed(2)}.`;
+    else if (job.status === 'cancelled') headline = `Cancelled. Charged $${(job.total_charged || 0).toFixed(2)} for ${formatNumber(job.owners_successful || 0)} completed lookups.`;
+    else headline = `Failed: ${job.error_message || 'unknown error'}`;
 
     if (txt) txt.textContent = headline;
     if (chargeMsg && job.error_message) {
-        chargeMsg.innerHTML = `<small style="color: #ff9800;">${job.error_message}</small>`;
+        chargeMsg.innerHTML = `<small style="color: var(--amber, #925e04);">${job.error_message}</small>`;
     }
 }
 
@@ -1310,7 +1312,7 @@ async function updateEnrichmentEstimate() {
     }
     
     estimateDiv.style.display = 'block';
-    estimateDiv.innerHTML = '<div class="estimate-loading">⏳ Calculating enrichment cost...</div>';
+    estimateDiv.innerHTML = '<div class="estimate-loading">Calculating enrichment cost…</div>';
     
     try {
         // Build query params from current filters
@@ -1339,40 +1341,40 @@ async function updateEnrichmentEstimate() {
         estimateDiv.innerHTML = `
             <div class="estimate-result">
                 <div class="estimate-row">
-                    <span>Properties to export:</span>
+                    <span>Properties to export</span>
                     <strong>${formatNumber(data.total_properties)}</strong>
                 </div>
                 <div class="estimate-row">
-                    <span>Properties with contacts:</span>
+                    <span>Properties with contacts</span>
                     <strong>${formatNumber(data.properties_with_contacts)}</strong>
                 </div>
                 <div class="estimate-row">
-                    <span>Total enrichable contacts:</span>
+                    <span>Total enrichable contacts</span>
                     <strong>${formatNumber(data.total_contacts)}</strong>
                 </div>
-                <div class="estimate-row">
-                    <span style="color: #27ae60;">✓ Already unlocked (free):</span>
+                <div class="estimate-row unlocked">
+                    <span>Already unlocked (free)</span>
                     <strong>${formatNumber(data.already_unlocked)}</strong>
                 </div>
-                <div class="estimate-row" style="color: #e67e22;">
-                    <span>⚡ New enrichments (charged):</span>
+                <div class="estimate-row charged">
+                    <span>New enrichments (charged)</span>
                     <strong>${formatNumber(data.need_enrichment)}</strong>
                 </div>
                 <div class="estimate-row estimate-total">
-                    <span>${isAdmin ? 'Admin - Free:' : 'Total cost:'}:</span>
+                    <span>${isAdmin ? 'Admin — free' : 'Total cost'}</span>
                     <strong>${isAdmin ? 'FREE' : '$' + cost.toFixed(2)}</strong>
                 </div>
                 ${!isAdmin && data.need_enrichment > 0 ? `
                     <p class="estimate-note">
-                        <small>💡 $${data.cost_per_contact.toFixed(2)} per new contact (${data.need_enrichment} × $${data.cost_per_contact.toFixed(2)} = $${cost.toFixed(2)})</small>
+                        <small>$${data.cost_per_contact.toFixed(2)} per new contact (${data.need_enrichment} × $${data.cost_per_contact.toFixed(2)} = $${cost.toFixed(2)})</small>
                     </p>
                 ` : ''}
-                ${isAdmin ? '<p class="estimate-note"><small>🔑 Admin access - all enrichments are free</small></p>' : ''}
+                ${isAdmin ? '<p class="estimate-note"><small>Admin access — all enrichments are free</small></p>' : ''}
             </div>
         `;
     } catch (error) {
         console.error('Enrichment estimate error:', error);
-        estimateDiv.innerHTML = '<div class="estimate-error">❌ Failed to calculate estimate: ' + error.message + '</div>';
+        estimateDiv.innerHTML = '<div class="estimate-error">Failed to calculate estimate: ' + escapeHtml(error.message) + '</div>';
     }
 }
 
@@ -1389,5 +1391,3 @@ window.closeBulkEnrichModal = closeBulkEnrichModal;
 window.cancelBulkEnrichJob = cancelBulkEnrichJob;
 window.startBulkEnrichJob = startBulkEnrichJob;
 window.updateEnrichmentEstimate = updateEnrichmentEstimate;
-
-console.log('🏢 Properties Intelligence loaded');

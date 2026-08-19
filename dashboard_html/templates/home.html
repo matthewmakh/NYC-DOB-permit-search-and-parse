@@ -3,54 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NYC Real Estate Intelligence Platform</title>
-    <link rel="stylesheet" href="/static/css/main.css">
+    <title>NYC Real Estate Intel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
+            <a href="/" class="nav-brand">
+                <span class="brand-mark">RE</span>
+                NYC Real Estate Intel
+            </a>
             <div class="nav-links">
                 <a href="/" class="nav-link active">Home</a>
-                <a href="/construction" class="nav-link">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
-                {% if user and user.is_admin %}
-                <a href="/admin/activity" class="nav-link">🔐 Activity</a>
-                {% endif %}
+                <a href="/properties" class="nav-link">Properties</a>
+                <a href="/contractors" class="nav-link">Contractors</a>
             </div>
             <div class="nav-actions">
-                <button class="btn btn-secondary" id="savedListsBtn">
-                    <i class="fas fa-bookmark"></i> My Lists
-                </button>
-                <a href="/auth/logout" class="btn btn-icon" title="Logout">
+                <a href="/auth/logout" class="btn btn-icon" title="Log out">
                     <i class="fas fa-sign-out-alt"></i>
                 </a>
             </div>
         </div>
     </nav>
 
-    <!-- Hero Section with Search -->
     <section class="hero">
-        <div class="hero-content">
-            <h2 class="hero-title">Everything you need to know about any NYC property</h2>
-            <p class="hero-subtitle">Search by address, BBL, or owner name to get comprehensive property intelligence</p>
-            
-            <!-- Universal Search Bar -->
+        <div class="hero-inner">
+            <h1 class="hero-title">Know any building in New York</h1>
+            <p class="hero-subtitle">Permits, ownership, sales history, and violations across the five boroughs. Search by address, BBL, or owner name.</p>
+
             <div class="search-container">
                 <div class="search-bar-large">
                     <i class="fas fa-search search-icon"></i>
-                    <input 
-                        type="text" 
-                        id="universalSearch" 
-                        class="search-input-large" 
-                        placeholder="Enter address, BBL (e.g., 1-00234-0056), or owner name..."
+                    <input
+                        type="text"
+                        id="universalSearch"
+                        class="search-input-large"
+                        placeholder="Address, BBL (e.g. 1-00234-0056), or owner name"
                         autocomplete="off"
                     >
                     <button class="btn btn-primary search-btn" id="searchBtn">Search</button>
@@ -58,169 +50,61 @@
                 <div id="searchSuggestions" class="search-suggestions"></div>
             </div>
 
-            <!-- Quick Examples -->
             <div class="search-examples">
-                <span>Try:</span>
+                <span>Try</span>
                 <a href="#" class="example-link" data-search="123 Main Street, Manhattan">123 Main Street, Manhattan</a>
-                <a href="#" class="example-link" data-search="1-00234-0056">BBL: 1-00234-0056</a>
+                <a href="#" class="example-link" data-search="1-00234-0056">BBL 1-00234-0056</a>
                 <a href="#" class="example-link" data-search="ABC Realty LLC">ABC Realty LLC</a>
             </div>
         </div>
     </section>
 
-    <!-- Market Snapshot -->
-    <section class="market-snapshot">
+    <section class="stats-band">
         <div class="container">
-            <h3 class="section-title">📊 Market Snapshot</h3>
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="stat-icon">🏗️</div>
-                    <div class="stat-content">
-                        <div class="stat-value" id="activePermits">0</div>
-                        <div class="stat-label">Total Permits</div>
-                        <div class="stat-change positive">Since 2000</div>
-                    </div>
+            <div class="stats-band-grid">
+                <div class="band-stat">
+                    <div class="stat-value" id="activePermits">&ndash;</div>
+                    <div class="stat-label">Permits issued since 2000</div>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-icon">💰</div>
-                    <div class="stat-content">
-                        <div class="stat-value" id="recentSales">0</div>
-                        <div class="stat-label">Sales (Last 30 Days)</div>
-                        <div class="stat-change">$2.4B Volume</div>
-                    </div>
+                <div class="band-stat">
+                    <div class="stat-value" id="recentSales">&ndash;</div>
+                    <div class="stat-label">Deeds recorded, last 30 days</div>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-icon">🏢</div>
-                    <div class="stat-content">
-                        <div class="stat-value" id="totalProperties">1,361</div>
-                        <div class="stat-label">Properties Tracked</div>
-                        <div class="stat-change">15% ACRIS enriched</div>
-                    </div>
+                <div class="band-stat">
+                    <div class="stat-value" id="totalProperties">&ndash;</div>
+                    <div class="stat-label">Buildings tracked</div>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-icon">👥</div>
-                    <div class="stat-content">
-                        <div class="stat-value" id="qualifiedLeads">0</div>
-                        <div class="stat-label">Qualified Leads</div>
-                        <div class="stat-change positive">622 mobile contacts</div>
-                    </div>
+                <div class="band-stat">
+                    <div class="stat-value" id="qualifiedLeads">&ndash;</div>
+                    <div class="stat-label">Permit filings on record</div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Quick Access Cards -->
-    <section class="quick-access">
+    <section class="browse">
         <div class="container">
-            <h3 class="section-title">🎯 What are you looking for?</h3>
-            <div class="access-grid">
-                <!-- Construction Intel -->
-                <div class="access-card" onclick="location.href='/construction'">
-                    <div class="card-icon">🏗️</div>
-                    <h4 class="card-title">Active Construction Projects</h4>
-                    <p class="card-description">Find permits, project pipelines, and contractor opportunities</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">1,968 Permits</span>
-                        <span class="stat-pill">937 with Contacts</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
-
-                <!-- Investment Opportunities -->
-                <div class="access-card" onclick="location.href='/investments'">
-                    <div class="card-icon">💰</div>
-                    <h4 class="card-title">Investment Opportunities</h4>
-                    <p class="card-description">Recent sales, market trends, and seller leads</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">9,775 Seller Leads</span>
-                        <span class="stat-pill">1,141 Recent Deeds</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
-
-                <!-- Property Intelligence -->
-                <div class="access-card" onclick="location.href='/properties'">
-                    <div class="card-icon">🏢</div>
-                    <h4 class="card-title">Property Database</h4>
-                    <p class="card-description">Comprehensive property data with owner intelligence</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">1,361 Buildings</span>
-                        <span class="stat-pill">94% Enriched</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
-
-                <!-- Market Analytics -->
-                <div class="access-card" onclick="location.href='/analytics'">
-                    <div class="card-icon">📊</div>
-                    <h4 class="card-title">Market Analytics</h4>
-                    <p class="card-description">Trends, hot zones, and neighborhood insights</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">5 Boroughs</span>
-                        <span class="stat-pill">Real-time Data</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
-
-                <!-- Owner Intelligence -->
-                <div class="access-card" onclick="location.href='/owners'">
-                    <div class="card-icon">👥</div>
-                    <h4 class="card-title">Owner Intelligence</h4>
-                    <p class="card-description">Track owners, portfolios, and investment patterns</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">1,283 Owners</span>
-                        <span class="stat-pill">Multi-property tracking</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
-
-                <!-- Advanced Search -->
-                <div class="access-card" onclick="location.href='/search'">
-                    <div class="card-icon">🔍</div>
-                    <h4 class="card-title">Advanced Search</h4>
-                    <p class="card-description">Bulk queries, custom filters, and data exports</p>
-                    <div class="card-stats">
-                        <span class="stat-pill">Power Tools</span>
-                        <span class="stat-pill">CSV Export</span>
-                    </div>
-                    <div class="card-arrow">→</div>
-                </div>
+            <div class="section-label">Browse</div>
+            <div class="browse-grid">
+                <a href="/properties" class="browse-card">
+                    <h3>Properties</h3>
+                    <p>Filter the full building database by owner, value, sales, permit activity, financing, and violations. Drill into any property's ownership and transaction history.</p>
+                    <span class="card-cta">Browse properties <i class="fas fa-arrow-right"></i></span>
+                </a>
+                <a href="/contractors" class="browse-card">
+                    <h3>Contractors</h3>
+                    <p>Every contractor pulling permits in NYC, ranked by job volume, active work, and project value. See each firm's full permit and building history.</p>
+                    <span class="card-cta">Browse contractors <i class="fas fa-arrow-right"></i></span>
+                </a>
             </div>
         </div>
     </section>
 
-    <!-- Hot Activity Feed -->
-    <section class="activity-feed">
+    <footer class="site-footer">
         <div class="container">
-            <h3 class="section-title">🔥 Hot Right Now</h3>
-            <div class="feed-container">
-                <div class="feed-item">
-                    <div class="feed-icon">🏗️</div>
-                    <div class="feed-content">
-                        <div class="feed-title">Williamsburg: 23 new permits filed</div>
-                        <div class="feed-meta">Average value: $1.2M • Last 7 days</div>
-                    </div>
-                    <button class="btn btn-sm btn-outline">Explore</button>
-                </div>
-                <div class="feed-item">
-                    <div class="feed-icon">💰</div>
-                    <div class="feed-content">
-                        <div class="feed-title">LIC: $45M sale - 210 unit building</div>
-                        <div class="feed-meta">703 Washington Corp • 2 days ago</div>
-                    </div>
-                    <button class="btn btn-sm btn-outline">View Details</button>
-                </div>
-                <div class="feed-item">
-                    <div class="feed-icon">📈</div>
-                    <div class="feed-content">
-                        <div class="feed-title">Upper West Side: 5 major developments starting</div>
-                        <div class="feed-meta">Combined 450+ units • This month</div>
-                    </div>
-                    <button class="btn btn-sm btn-outline">See Projects</button>
-                </div>
-            </div>
+            Data sources: NYC DOB permits, PLUTO, ACRIS, HPD, NY Department of State.
         </div>
-    </section>
+    </footer>
 
     <script src="/static/js/home.js"></script>
 </body>

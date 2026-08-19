@@ -3,90 +3,79 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contractor Directory - NYC Real Estate Intel</title>
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/contractors.css">
+    <title>Contractors — NYC Real Estate Intel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
+            <a href="/" class="nav-brand">
+                <span class="brand-mark">RE</span>
+                NYC Real Estate Intel
+            </a>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link active">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
+                <a href="/properties" class="nav-link">Properties</a>
+                <a href="/contractors" class="nav-link active">Contractors</a>
             </div>
             <div class="nav-actions">
-                <button class="btn btn-primary" id="exportBtn">
-                    <i class="fas fa-download"></i> Export
-                </button>
+                <a href="/auth/logout" class="btn btn-icon" title="Log out">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
             </div>
         </div>
     </nav>
 
-    <!-- Page Header -->
-    <div class="page-header">
-        <div class="header-content">
-            <div class="header-text">
-                <h1>👷 Contractor Directory</h1>
-                <p>Search and analyze NYC contractors by their work history and portfolio</p>
-            </div>
-            <div class="header-stats">
-                <div class="stat-card">
-                    <div class="stat-value" id="totalContractors">-</div>
-                    <div class="stat-label">Total Contractors</div>
+    <div class="container">
+        <div class="page-head">
+            <div class="page-head-row">
+                <div>
+                    <h1>Contractors</h1>
+                    <p>Every contractor pulling permits in NYC, with their work history and portfolio.</p>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="activeContractors">-</div>
-                    <div class="stat-label">Active (90 days)</div>
+                <div class="head-metric">
+                    <div class="stat-value" id="totalContractors">&ndash;</div>
+                    <div class="stat-label">Contractors</div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Main Container -->
-    <div class="main-container">
-        <!-- Search and Filters -->
         <div class="search-section">
             <div class="search-bar">
                 <i class="fas fa-search"></i>
-                <input type="text" id="contractorSearch" placeholder="Search contractor name or license number..." />
-                <button class="btn-clear" id="clearSearch" style="display: none;">
+                <input type="text" id="contractorSearch" placeholder="Search by contractor name or license number" />
+                <button class="btn-clear" id="clearSearch" style="display: none;" title="Clear search">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
-            
+
             <div class="filter-controls">
                 <div class="filter-group">
-                    <label for="sortBy">Sort By:</label>
+                    <label for="sortBy">Sort</label>
                     <select id="sortBy" class="filter-select">
-                        <option value="total_jobs">Total Jobs</option>
-                        <option value="active_jobs">Active Jobs</option>
-                        <option value="total_value">Total Project Value</option>
-                        <option value="largest_project">Largest Project</option>
+                        <option value="total_jobs">Total jobs</option>
+                        <option value="active_jobs">Active jobs</option>
+                        <option value="total_value">Total project value</option>
+                        <option value="largest_project">Largest project</option>
                     </select>
                 </div>
-                
+
                 <div class="filter-group">
-                    <label for="sortOrder">Order:</label>
+                    <label for="sortOrder">Order</label>
                     <select id="sortOrder" class="filter-select">
-                        <option value="desc">High to Low</option>
-                        <option value="asc">Low to High</option>
+                        <option value="desc">High to low</option>
+                        <option value="asc">Low to high</option>
                     </select>
                 </div>
             </div>
         </div>
 
-        <!-- Contractors Grid -->
         <div id="contractorsGrid" class="contractors-grid">
-            <!-- Skeleton loading placeholders -->
+            <!-- Skeleton placeholders shown while the first page loads -->
             <div class="skeleton-card">
                 <div class="skeleton-header">
                     <div class="skeleton-avatar"></div>
@@ -179,7 +168,6 @@
             </div>
         </div>
 
-        <!-- Pagination -->
         <div id="pagination" class="pagination" style="display: none;">
             <button id="prevPage" class="btn-pagination">
                 <i class="fas fa-chevron-left"></i> Previous
