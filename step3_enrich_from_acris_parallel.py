@@ -18,6 +18,7 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
 from step3_enrich_from_acris import (
     DATABASE_URL, enrich_building_from_acris, get_document_ids_for_bbl,
 )

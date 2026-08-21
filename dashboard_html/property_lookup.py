@@ -30,11 +30,12 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-# The pipeline step modules live at the repo root, not under dashboard_html/,
-# so we need to put the repo root on sys.path before importing them.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# The shared data modules live in this same directory (dashboard_html/), so
+# the dashboard service deploys self-contained on Railway (whose root
+# directory setting is dashboard_html — the repo root doesn't exist there).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from step2_enrich_from_pluto import (
     get_pluto_data_for_bbl,

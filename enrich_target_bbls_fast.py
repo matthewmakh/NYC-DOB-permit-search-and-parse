@@ -15,6 +15,8 @@ import psycopg2.extras
 import requests
 from dotenv import load_dotenv
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
+
 # Load environment
 if os.path.exists('.env'):
     load_dotenv('.env')

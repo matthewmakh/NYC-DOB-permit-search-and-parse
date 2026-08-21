@@ -58,6 +58,7 @@ VERBOSE_LOGGING = False  # Set to True for local debugging, False for Railway
 # The fetch helpers live in step2_enrich_from_pluto — one implementation,
 # with the corrected open/closed logic, distinct-complaint counting, and
 # the extra PLUTO/HPD fields. This wrapper only adds concurrency.
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
 from step2_enrich_from_pluto import (  # noqa: E402
     get_pluto_data_for_bbl,
     get_rpad_data_for_bbl,

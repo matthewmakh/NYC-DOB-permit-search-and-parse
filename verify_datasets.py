@@ -2,6 +2,7 @@
 import sys
 import json
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
 from socrata_client import SocrataClient, DATASETS, bbl_parts, soql_quote, where_block_lot, load_party_roles
 
 GOLDEN_BBL = sys.argv[1] if len(sys.argv) > 1 else '1008350041'

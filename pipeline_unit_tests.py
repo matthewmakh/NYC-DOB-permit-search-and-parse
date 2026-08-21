@@ -22,6 +22,7 @@ from datetime import date
 
 os.environ.setdefault('DATABASE_URL', 'postgresql://test:test@localhost/test')
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
 import socrata_client
 from socrata_client import (
     SocrataClient, bbl_parts, soql_quote, in_clause, where_block_lot,

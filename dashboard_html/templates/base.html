@@ -4,37 +4,30 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}NYC Real Estate Intel{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
+            <a href="/" class="nav-brand">
+                <span class="brand-mark">RE</span>
+                NYC Real Estate Intel
+            </a>
             <div class="nav-links">
                 <a href="/" class="nav-link {% if active_page == 'home' %}active{% endif %}">Home</a>
-                <a href="/construction" class="nav-link {% if active_page == 'construction' %}active{% endif %}">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">👷 Contractors</a>
-                <a href="/investments" class="nav-link {% if active_page == 'investments' %}active{% endif %}">💰 Investments</a>
-                <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">🏢 Properties</a>
-                <a href="/analytics" class="nav-link {% if active_page == 'analytics' %}active{% endif %}">📊 Analytics</a>
-                {% if user and user.is_admin %}
-                <a href="/admin/activity" class="nav-link {% if active_page == 'admin' %}active{% endif %}">🔐 Activity</a>
-                {% endif %}
+                <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">Properties</a>
+                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">Contractors</a>
             </div>
             <div class="nav-actions">
-                {% block nav_actions %}
-                <button class="btn btn-primary" id="exportBtn">
-                    <i class="fas fa-download"></i> Export
-                </button>
-                <a href="/auth/logout" class="btn btn-outline logout-btn" title="Logout">
+                {% block nav_actions %}{% endblock %}
+                <a href="/auth/logout" class="btn btn-icon" title="Log out">
                     <i class="fas fa-sign-out-alt"></i>
                 </a>
-                {% endblock %}
             </div>
         </div>
     </nav>

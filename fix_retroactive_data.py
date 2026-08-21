@@ -38,6 +38,8 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
+
 sys.stdout.reconfigure(line_buffering=True)
 
 load_dotenv()
