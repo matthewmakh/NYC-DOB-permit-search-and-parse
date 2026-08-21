@@ -49,7 +49,7 @@ re-enrichment, which is what keeps sale data from going stale.
 ## Offline tests
 
 ```bash
-python test_pipeline_units.py    # 50 assertions, no network/DB needed
+python pipeline_unit_tests.py    # 50 assertions, no network/DB needed
 ```
 
 ## Notes
