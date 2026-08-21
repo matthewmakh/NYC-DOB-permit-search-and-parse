@@ -232,20 +232,22 @@ def call_enformion_api(first_name, last_name, address_line1=None, address_line2=
         'galaxy-search-type': 'DevAPIContactEnrichPlus'
     }
     
-    # Build proper address - Enformion needs city/state in AddressLine2
-    # Default to Brooklyn, NY if no address_line2 provided
-    city_state = address_line2.strip() if address_line2 else "Brooklyn, NY"
-    
-    # Use "Address" (singular object) NOT "Addresses" (array) - API requires this format
+    # Build proper address - Enformion wants city/state in AddressLine2.
+    # If the caller doesn't know the city, send the name WITHOUT an address
+    # block: a fabricated default city ("Brooklyn, NY") used to bias paid
+    # lookups toward the wrong same-named person.
     payload = {
         "FirstName": first_name or "",
         "MiddleName": middle_name or "",
         "LastName": last_name or "",
-        "Address": {
-            "AddressLine1": address_line1 or "",
-            "AddressLine2": city_state
-        }
     }
+    city_state = address_line2.strip() if address_line2 else None
+    if address_line1 or city_state:
+        # Use "Address" (singular object) NOT "Addresses" (array) - API requires this format
+        payload["Address"] = {
+            "AddressLine1": address_line1 or "",
+            "AddressLine2": city_state or "",
+        }
     
     print(f"Enformion API call: {ENFORMION_API_URL}")
     print(f"Payload: {payload}")

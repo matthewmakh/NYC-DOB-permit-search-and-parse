@@ -25,10 +25,12 @@ import os
 import sys
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+
+from socrata_client import SocrataClient, where_block_lot
 
 # Force unbuffered output for Railway logging
 sys.stdout.reconfigure(line_buffering=True)
@@ -52,70 +54,100 @@ if not DATABASE_URL:
     
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# NYC Open Data API endpoints
-TAX_DELINQUENCY_API = "https://data.cityofnewyork.us/resource/9rz4-mjek.json"
-ECB_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/6bgk-3dad.json"
-DOB_VIOLATIONS_API = "https://data.cityofnewyork.us/resource/3h2n-5cm9.json"
-
 # Configuration
 API_DELAY = float(os.getenv('API_DELAY', '0.1'))  # Reduced since we're parallelizing
 BUILDING_BATCH_SIZE = int(os.getenv('BUILDING_BATCH_SIZE', '500'))
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '10'))  # Parallel threads
 
+# A lien-sale notice older than this is history, not a live distress signal.
+# The lien sale runs roughly annually (and skipped 2022-2024 entirely), so
+# 24 months keeps the most recent full cycle in scope.
+LIEN_RECENCY_MONTHS = int(os.getenv('LIEN_RECENCY_MONTHS', '24'))
+
 # Thread-safe counter for progress tracking
 progress_lock = Lock()
 stats_lock = Lock()
 
+_client = None
 
-def parse_bbl(bbl):
-    """Parse 10-digit BBL into components"""
-    boro = bbl[0]
-    block_padded = bbl[1:6]  # Keep leading zeros for ECB/DOB APIs
-    lot_padded = bbl[6:10]   # Keep leading zeros
-    block = str(int(bbl[1:6]))  # Remove leading zeros for tax API
-    lot = str(int(bbl[6:10]))
-    return boro, block, lot, block_padded, lot_padded
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = SocrataClient()
+    return _client
+
+
+def _parse_cycle_date(value):
+    """The lien-sale list's cycle column shows up in a few formats depending
+    on vintage ('2024-12-17T00:00:00.000', 'December 2017', '12/17/2024')."""
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%B %Y', '%b %Y', '%Y'):
+        try:
+            return datetime.strptime(text[:10] if fmt == '%Y-%m-%d' else text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def get_tax_delinquency_data(bbl):
     """
-    Check if property is on tax delinquency list
+    Lien-sale notice status for a property, scoped to the MOST RECENT sale
+    cycle. Being on a 2017 notice list says nothing about today — the flag
+    is only set when the latest cycle this lot appears on is recent.
     Returns (data_dict, error_message) tuple
     """
     try:
-        boro, block, lot, _, _ = parse_bbl(bbl)
-        
-        params = {
-            "$where": f"borough='{boro}' AND block='{block}' AND lot='{lot}'",
-            "$limit": 100  # Get all notices
-        }
-        
-        response = requests.get(TAX_DELINQUENCY_API, params=params, timeout=10)
-        response.raise_for_status()
+        client = _get_client()
+        where = where_block_lot('borough', 'block', 'lot', bbl)
+        data = client.get('tax_lien_sale', **{'$where': where, '$limit': 500})
         time.sleep(API_DELAY)
-        
-        data = response.json()
-        
+
+        empty = {
+            'has_tax_delinquency': False,
+            'tax_delinquency_count': 0,
+            'tax_delinquency_water_only': False,
+            'tax_delinquency_latest_date': None,
+        }
         if not data:
-            return {
-                'has_tax_delinquency': False,
-                'tax_delinquency_count': 0,
-                'tax_delinquency_water_only': False
-            }, None
-        
-        # Check if any notice is NOT water-only
+            return empty, None
+
+        # Find the cycle column for this dataset vintage and date each row.
+        cycle_col = None
+        for candidate in ('month', 'cycle', 'cycle_date', 'sale_date', 'asofdate'):
+            if candidate in data[0]:
+                cycle_col = candidate
+                break
+
+        dated = [(_parse_cycle_date(r.get(cycle_col)) if cycle_col else None, r) for r in data]
+        parseable = [(d, r) for d, r in dated if d is not None]
+
+        if parseable:
+            latest_date = max(d for d, _ in parseable)
+            latest_rows = [r for d, r in parseable if d == latest_date]
+            cutoff = date.today() - timedelta(days=LIEN_RECENCY_MONTHS * 30)
+            is_current = latest_date >= cutoff
+        else:
+            # Cycle column missing/unparseable: fall back to flagging (old
+            # behavior) rather than silently hiding real delinquencies.
+            latest_date = None
+            latest_rows = data
+            is_current = True
+
         has_non_water = any(
-            record.get('water_debt_only', 'NO').upper() == 'NO' 
-            for record in data
+            (r.get('water_debt_only') or 'NO').upper() == 'NO' for r in latest_rows
         )
-        
+
         result = {
-            'has_tax_delinquency': True,
-            'tax_delinquency_count': len(data),
-            'tax_delinquency_water_only': not has_non_water  # TRUE only if ALL are water
+            'has_tax_delinquency': is_current,
+            'tax_delinquency_count': len(latest_rows) if is_current else 0,
+            'tax_delinquency_water_only': is_current and not has_non_water,
+            'tax_delinquency_latest_date': latest_date,
         }
         return result, None
-        
+
     except Exception as e:
         return None, f"Tax delinquency API error: {str(e)}"
 
@@ -126,19 +158,13 @@ def get_ecb_violations_data(bbl):
     Returns (data_dict, error_message) tuple
     """
     try:
-        boro, _, _, block_padded, lot_padded = parse_bbl(bbl)
-        
-        params = {
-            "$where": f"boro='{boro}' AND block='{block_padded}' AND lot='{lot_padded}'",
-            "$order": "issue_date DESC",  # Most recent first
-            "$limit": 500  # Get many violations
-        }
-        
-        response = requests.get(ECB_VIOLATIONS_API, params=params, timeout=10)
-        response.raise_for_status()
+        # Padding-agnostic block/lot filter: matches whichever form (zero-
+        # padded or stripped) this dataset stores, without extra calls.
+        data = _get_client().get_all('ecb_violations', page_size=1000, max_rows=10000, **{
+            "$where": where_block_lot('boro', 'block', 'lot', bbl),
+            "$order": "issue_date DESC",
+        })
         time.sleep(API_DELAY)
-        
-        data = response.json()
         
         if not data:
             return {
@@ -226,33 +252,32 @@ def get_dob_violations_data(bbl):
     Returns (data_dict, error_message) tuple
     """
     try:
-        boro, block, lot, _, _ = parse_bbl(bbl)
-        
-        params = {
-            "$where": f"boro='{boro}' AND block='{block}' AND lot='{lot}'",
-            "$limit": 500
-        }
-        
-        response = requests.get(DOB_VIOLATIONS_API, params=params, timeout=10)
-        response.raise_for_status()
+        data = _get_client().get_all('dob_violations', page_size=1000, max_rows=10000, **{
+            "$where": where_block_lot('boro', 'block', 'lot', bbl),
+        })
         time.sleep(API_DELAY)
-        
-        data = response.json()
-        
+
         if not data:
             return {
                 'dob_violation_count': 0,
                 'dob_open_violations': 0
             }, None
-        
-        # Count open violations (not resolved/certified)
+
+        # violation_category literally says ACTIVE or DISMISSED — use it
+        # instead of guessing from free-text disposition comments. Fall back
+        # to the old heuristic only when the category is absent.
         open_violations = 0
         for record in data:
-            disposition = record.get('disposition_comments', '').upper()
+            category = (record.get('violation_category') or '').upper()
+            if category:
+                if 'ACTIVE' in category:
+                    open_violations += 1
+                continue
+            disposition = (record.get('disposition_comments') or '').upper()
             if disposition and ('RESOLVE' in disposition or 'CERTIF' in disposition):
-                continue  # Closed
+                continue
             open_violations += 1
-        
+
         result = {
             'dob_violation_count': len(data),
             'dob_open_violations': open_violations
@@ -276,7 +301,8 @@ def enrich_building(building_id, bbl):
         tax_data = {
             'has_tax_delinquency': False,
             'tax_delinquency_count': 0,
-            'tax_delinquency_water_only': False
+            'tax_delinquency_water_only': False,
+            'tax_delinquency_latest_date': None
         }
     
     # Get ECB violations (these can become liens)
@@ -341,6 +367,16 @@ def update_building_tax_lien_data(cursor, building_id, data):
             tax_lien_last_checked = %(tax_lien_last_checked)s
         WHERE id = %(building_id)s
     """, {**data, 'building_id': building_id})
+
+    # Post-migration column; skip cleanly on databases that predate it.
+    cursor.execute("SAVEPOINT lien_date")
+    try:
+        cursor.execute("""
+            UPDATE buildings SET tax_delinquency_latest_date = %s WHERE id = %s
+        """, (data.get('tax_delinquency_latest_date'), building_id))
+        cursor.execute("RELEASE SAVEPOINT lien_date")
+    except psycopg2.Error:
+        cursor.execute("ROLLBACK TO SAVEPOINT lien_date")
 
 
 def process_single_building(building, position, total):
