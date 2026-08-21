@@ -1,0 +1,9 @@
+# Minimal dependency set for the data-pipeline scripts run from the repo root
+# (migrate_add_intel_signals, fix_retroactive_data, verify_datasets,
+#  step2-step6, sync_recent_sales). Deliberately excludes the scraper /
+# streamlit stack in requirements.txt so a pipeline run installs in seconds
+# and does not depend on selenium-wire, undetected-chromedriver, or streamlit.
+psycopg2-binary>=2.9.10
+python-dotenv>=1.0.1
+requests>=2.31.0
+httpx>=0.27.0

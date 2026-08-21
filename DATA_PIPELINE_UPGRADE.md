@@ -15,6 +15,29 @@ and adds nine new signal sources. **Order matters** — follow the steps.
 | V-fixes | DOB/ECB queries are padding-agnostic; DOB open-violations use `violation_category`; HPD open-violations use `violationstatus` (matches the live endpoint); HPD complaints count distinct complaints, paginated; BIS permit sync matches filing OR issuance date; Enformion no longer defaults unknown cities to "Brooklyn, NY". |
 | New data | PLUTO FAR/zoning/lat-lon, HPD owner mailing address + agent, ACRIS references/remarks + open-mortgage/free-and-clear, HPD litigation, marshal evictions, DOF exemptions, Speculation Watch List, DOB complaints, Certificates of Occupancy, FISP facades, LL84/LL97, DOF rolling sales. |
 
+## Environment setup
+
+Use **Python 3.12** — the same version Railway runs (`runtime.txt` pins
+`python-3.12.0`). `psycopg2-binary` has no prebuilt wheel for 3.14, so pip
+tries to compile it from source and fails on a CPython private API that was
+removed (`_PyInterpreterState_Get`).
+
+```bash
+cd ~/nyc-intel
+deactivate 2>/dev/null
+rm -rf venv
+command -v python3.12 >/dev/null || brew install python@3.12
+python3.12 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements-pipeline.txt
+```
+
+`requirements-pipeline.txt` is the minimal set the pipeline scripts need
+(psycopg2, dotenv, requests, httpx). The full `requirements.txt` also drags
+in streamlit / selenium / selenium-wire, which the pipeline does not use and
+which are the slowest and most fragile part of that install.
+
 ## Deploy order
 
 ```bash
