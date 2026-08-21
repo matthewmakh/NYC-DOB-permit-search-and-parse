@@ -148,13 +148,23 @@ def main():
     if not results['step5']:
         print_warning("Step 5 failed - continuing to geocoding")
     
-    # ===== STEP 6: Geocode Permits =====
-    print_step(6, "Geocode Permits (Latitude/Longitude)")
+    # ===== STEP 6: Distress / compliance / freshness signals =====
+    print_step(6, "Enrich Distress & Compliance Signals")
+    results['step6'] = run_script(
+        'step6_enrich_signals.py',
+        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales'
+    )
+
+    if not results['step6']:
+        print_warning("Step 6 failed - continuing to geocoding")
+
+    # ===== STEP 7: Geocode Permits =====
+    print_step(7, "Geocode Permits (Latitude/Longitude)")
     results['geocode'] = run_script(
         'geocode_permits.py',
         'Add geographic coordinates for mapping'
     )
-    
+
     if not results['geocode']:
         print_warning("Geocoding failed - pipeline otherwise complete")
     
