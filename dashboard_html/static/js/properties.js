@@ -30,8 +30,10 @@ const state = {
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false
+        hasEnrichableOwner: false,
+        play: null
     },
+    plays: [],
     sort: {
         by: 'sale_date',
         order: 'desc'
@@ -47,10 +49,130 @@ const state = {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initializeEventListeners();
+    loadPlays();
     loadStats();
     loadProperties();
     checkResumableBulkEnrichJob();
 });
+
+// ==========================================
+// PREBUILT PLAYS
+// ==========================================
+
+async function loadPlays() {
+    try {
+        const res = await fetch('/api/properties/plays');
+        const data = await res.json();
+        if (!data.success || !data.plays || !data.plays.length) return;
+        state.plays = data.plays;
+        renderPlayCards();
+        document.getElementById('playsSection').style.display = 'block';
+    } catch (e) {
+        console.warn('Plays unavailable:', e);
+    }
+}
+
+function renderPlayCards() {
+    const row = document.getElementById('playsRow');
+    row.innerHTML = state.plays.map(play => `
+        <button class="play-card ${state.filters.play === play.id ? 'active' : ''}"
+                onclick="togglePlay('${play.id}')">
+            <div class="play-card-top">
+                <span class="play-name">${escapeHtml(play.name)}</span>
+                <span class="play-count">${formatNumber(play.count)}</span>
+            </div>
+            <div class="play-desc">${escapeHtml(play.description)}</div>
+            <span class="play-audience play-audience-${play.audience}">${
+                play.audience === 'both' ? 'investors + contractors' : play.audience}</span>
+        </button>
+    `).join('');
+}
+
+function togglePlay(playId) {
+    if (state.filters.play === playId) {
+        state.filters.play = null;
+    } else {
+        state.filters.play = playId;
+        const play = state.plays.find(p => p.id === playId);
+        if (play && play.recommended_sort) {
+            applyRecommendedSort(play.recommended_sort);
+        }
+    }
+    state.pagination.page = 1;
+    renderPlayCards();
+    renderPlayGuide();
+    loadProperties();
+}
+
+// Signal sorts (unused FAR, CO date) only exist once a play recommends
+// them — add the <option> on demand so the select stays clean otherwise.
+const EXTRA_SORT_LABELS = { unused_far: 'Unused FAR', co_date: 'CO date' };
+
+function applyRecommendedSort(rec) {
+    const sortSelect = document.getElementById('sortBy');
+    if (!Array.from(sortSelect.options).some(o => o.value === rec.by)) {
+        if (!EXTRA_SORT_LABELS[rec.by]) return;
+        const opt = document.createElement('option');
+        opt.value = rec.by;
+        opt.textContent = EXTRA_SORT_LABELS[rec.by];
+        sortSelect.appendChild(opt);
+    }
+    sortSelect.value = rec.by;
+    state.sort.by = rec.by;
+    document.getElementById('sortOrder').value = rec.order;
+    state.sort.order = rec.order;
+}
+
+function renderPlayGuide() {
+    const guide = document.getElementById('playGuide');
+    const play = state.plays.find(p => p.id === state.filters.play);
+    if (!play) {
+        guide.style.display = 'none';
+        guide.innerHTML = '';
+        return;
+    }
+
+    let html = `
+        <div class="play-guide-head">
+            <div>
+                <h3>${escapeHtml(play.name)}</h3>
+                <p>${escapeHtml(play.description)}</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="togglePlay('${play.id}')">Clear play</button>
+        </div>
+    `;
+
+    if (play.playbook) {
+        const pb = play.playbook;
+        html += `
+            <div class="playbook">
+                <p class="playbook-what">${escapeHtml(pb.what)}</p>
+                <div class="playbook-ways">
+                    ${pb.ways.map(w => `
+                        <div class="playbook-way">
+                            <h4>${escapeHtml(w.title)}</h4>
+                            <p>${escapeHtml(w.body)}</p>
+                        </div>
+                    `).join('')}
+                </div>
+                <h4 class="playbook-steps-title">How to run it</h4>
+                <ol class="playbook-steps">
+                    ${pb.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+                </ol>
+                <div class="playbook-caution">${escapeHtml(pb.caution)}</div>
+            </div>
+        `;
+    } else if (play.how_to_use && play.how_to_use.length) {
+        html += `
+            <ol class="playbook-steps">
+                ${play.how_to_use.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+            </ol>
+        `;
+    }
+
+    guide.innerHTML = html;
+    guide.style.display = 'block';
+}
 
 async function checkResumableBulkEnrichJob() {
     try {
@@ -131,7 +253,8 @@ async function loadProperties() {
         if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
         if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
         if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
-        
+        if (state.filters.play) params.append('play', state.filters.play);
+
         // Add sort and pagination
         params.append('sort_by', state.sort.by);
         params.append('sort_order', state.sort.order);
@@ -243,6 +366,7 @@ function renderProperties() {
                     ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">ACRIS</span>' : ''}
                     ${permitCount > 0 ? `<span class="badge badge-permits">${permitCount} permit${permitCount > 1 ? 's' : ''}</span>` : ''}
                     ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} violation${violationCount > 1 ? 's' : ''}</span>` : ''}
+                    ${signalBadges(property)}
                 </div>
 
                 <div class="property-actions">
@@ -256,6 +380,44 @@ function renderProperties() {
             </div>
         `;
     }).join('');
+}
+
+// Badges for the signal columns (only present in API responses once the
+// signals migration has run — each guard tolerates their absence).
+function signalBadges(p) {
+    const badges = [];
+    if (p.on_speculation_watch_list) {
+        badges.push('<span class="badge badge-speculation">Speculation list</span>');
+    }
+    if (p.unused_far >= 1) {
+        const buildable = p.lot_sqft ? ` (~${formatNumber(Math.round(p.unused_far * p.lot_sqft))} sqft)` : '';
+        badges.push(`<span class="badge badge-upside">+${Number(p.unused_far).toFixed(1)} FAR${buildable}</span>`);
+    }
+    if (p.is_free_and_clear && p.acris_total_transactions > 0) {
+        badges.push('<span class="badge badge-equity">Free &amp; clear</span>');
+    }
+    if (p.has_senior_exemption) {
+        badges.push('<span class="badge badge-equity">Senior exemption</span>');
+    }
+    if (p.litigation_open_count > 0) {
+        badges.push(`<span class="badge badge-violations">${p.litigation_open_count} open case${p.litigation_open_count > 1 ? 's' : ''}</span>`);
+    }
+    if (p.eviction_count > 0) {
+        badges.push(`<span class="badge badge-violations">${p.eviction_count} eviction${p.eviction_count > 1 ? 's' : ''}</span>`);
+    }
+    if (p.has_tax_delinquency) {
+        badges.push('<span class="badge badge-violations">Lien-sale notice</span>');
+    }
+    if (p.latest_co_date) {
+        const coDate = new Date(p.latest_co_date);
+        if (!isNaN(coDate) && (Date.now() - coDate.getTime()) < 200 * 86400000) {
+            badges.push(`<span class="badge badge-permits">CO ${formatDate(p.latest_co_date)}</span>`);
+        }
+    }
+    if (p.fisp_status && /^(UNSAFE|SWARMP)/i.test(p.fisp_status)) {
+        badges.push(`<span class="badge badge-violations">FISP ${escapeHtml(p.fisp_status.split(' ')[0])}</span>`);
+    }
+    return badges.join('');
 }
 
 function renderPagination() {
@@ -580,11 +742,12 @@ async function downloadExport() {
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
     if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
-    
+    if (state.filters.play) params.append('play', state.filters.play);
+
     // Add sort
     params.append('sort_by', state.sort.by);
     params.append('sort_order', state.sort.order);
-    
+
     // Add selected fields
     params.append('fields', fields.join(','));
     
@@ -760,12 +923,15 @@ function resetFilters() {
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false
+        hasEnrichableOwner: false,
+        play: null
     };
 }
 
 function clearFilters() {
     resetFilters();
+    renderPlayCards();
+    renderPlayGuide();
     
     // Clear all form inputs
     document.getElementById('universalSearch').value = '';
@@ -875,6 +1041,7 @@ function buildBulkEnrichFiltersPayload() {
     if (f.financingMin) payload.financing_min = f.financingMin;
     if (f.financingMax) payload.financing_max = f.financingMax;
     if (f.hasEnrichableOwner) payload.has_enrichable_owner = true;
+    if (f.play) payload.play = f.play;
     return payload;
 }
 
@@ -1386,6 +1553,7 @@ window.closeExportModal = closeExportModal;
 window.downloadExport = downloadExport;
 window.goToPage = goToPage;
 window.clearFilters = clearFilters;
+window.togglePlay = togglePlay;
 window.showBulkEnrichModal = showBulkEnrichModal;
 window.closeBulkEnrichModal = closeBulkEnrichModal;
 window.cancelBulkEnrichJob = cancelBulkEnrichJob;

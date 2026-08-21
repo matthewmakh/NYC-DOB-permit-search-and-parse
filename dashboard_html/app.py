@@ -2817,6 +2817,16 @@ def _resolve_filter_building_ids(args, limit=None):
     where_clauses = []
     params = []
 
+    # Prebuilt play — bulk enrichment over a play targets exactly the
+    # play's building set. Unknown/unavailable plays raise so the caller
+    # surfaces the error instead of silently enriching everything.
+    play_id = str(g('play', default='') or '').strip()
+    if play_id:
+        play_where, play_error = _resolve_play_where(play_id)
+        if play_error:
+            raise ValueError(play_error)
+        where_clauses.append(play_where)
+
     if search:
         is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
         if is_zip_search:
@@ -2942,6 +2952,88 @@ def _resolve_filter_building_ids(args, limit=None):
         return [r['id'] for r in cur.fetchall()]
 
 
+# ---------------------------------------------------------------------------
+# Prebuilt filter "plays" (see plays.py). A play is a server-defined WHERE
+# fragment over the signal columns; plays are only offered when the columns
+# from migrate_add_intel_signals.py exist, so pre-migration databases just
+# show fewer plays.
+# ---------------------------------------------------------------------------
+
+_buildings_columns_cache = {'at': 0.0, 'cols': set()}
+
+
+def _buildings_columns():
+    """Column names on buildings, cached for 5 minutes."""
+    now = time.time()
+    if now - _buildings_columns_cache['at'] > 300:
+        try:
+            with DatabaseConnection() as cur:
+                cur.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'buildings'
+                """)
+                _buildings_columns_cache['cols'] = {r['column_name'] for r in cur.fetchall()}
+                _buildings_columns_cache['at'] = now
+        except Exception as e:
+            print(f"buildings-columns probe failed: {e}")
+    return _buildings_columns_cache['cols']
+
+
+def _resolve_play_where(play_id):
+    """(where_fragment, error) for a ?play= param. Empty play_id -> (None, None)."""
+    if not play_id:
+        return None, None
+    from plays import get_play
+    play = get_play(play_id, _buildings_columns())
+    if not play:
+        return None, f"Unknown or unavailable play: {play_id}"
+    return play['where'], None
+
+
+# Extra buildings columns returned to the list UI when the signals
+# migration has run (property cards render badges from whichever arrive).
+_SIGNAL_SELECT_COLUMNS = [
+    'unused_far', 'zoning_district', 'is_free_and_clear', 'has_open_mortgage',
+    'has_senior_exemption', 'has_disabled_exemption',
+    'on_speculation_watch_list', 'speculation_watch_date',
+    'litigation_open_count', 'eviction_count',
+    'has_tax_delinquency', 'tax_delinquency_latest_date',
+    'latest_co_date', 'latest_co_type', 'fisp_status',
+    'll97_covered_estimated', 'energy_star_score',
+]
+
+
+def _signal_select_sql():
+    cols = _buildings_columns()
+    return ''.join(f", b.{c}" for c in _SIGNAL_SELECT_COLUMNS if c in cols)
+
+
+@app.route('/api/properties/plays')
+@cache.cached(timeout=600)
+def api_property_plays():
+    """Prebuilt plays available on this database, with live match counts."""
+    from plays import available_plays, public_play
+    try:
+        plays_list = available_plays(_buildings_columns())
+        counts = {}
+        if plays_list:
+            count_exprs = ', '.join(
+                f"COUNT(*) FILTER (WHERE {p['where']}) AS c{i}"
+                for i, p in enumerate(plays_list)
+            )
+            with DatabaseConnection() as cur:
+                cur.execute(f"SELECT {count_exprs} FROM buildings b", ())
+                row = cur.fetchone()
+                counts = {p['id']: row[f'c{i}'] for i, p in enumerate(plays_list)}
+        return jsonify({
+            'success': True,
+            'plays': [dict(public_play(p), count=counts.get(p['id'], 0)) for p in plays_list],
+        })
+    except Exception as e:
+        print(f"Plays API error: {e}")
+        return jsonify({'success': False, 'error': str(e), 'plays': []}), 500
+
+
 @app.route('/api/properties')
 @cache.cached(timeout=300, query_string=True)
 def api_properties():
@@ -2998,10 +3090,17 @@ def api_properties():
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
-            
+
+            # Prebuilt play (server-defined WHERE fragment; see plays.py)
+            play_where, play_error = _resolve_play_where(request.args.get('play', '').strip())
+            if play_error:
+                return jsonify({'success': False, 'error': play_error}), 400
+
             # Build WHERE clauses
             where_clauses = []
             params = []
+            if play_where:
+                where_clauses.append(play_where)
         
             # Text search across multiple fields
             if search:
@@ -3198,8 +3297,15 @@ def api_properties():
                 'sale_date': 'b.sale_date',
                 'sale_price': 'b.sale_price',
                 'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
-                'permits': 'pc.permit_count'
+                'permits': 'pc.permit_count',
+                'units': 'b.total_units'
             }
+            # Signal-column sorts, offered only once the migration has run
+            available_cols = _buildings_columns()
+            if 'unused_far' in available_cols:
+                valid_sort_columns['unused_far'] = 'b.unused_far'
+            if 'latest_co_date' in available_cols:
+                valid_sort_columns['co_date'] = 'b.latest_co_date'
             sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
             sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
         
@@ -3250,6 +3356,7 @@ def api_properties():
                     b.acris_deed_count,
                     b.acris_mortgage_count,
                     b.acris_total_transactions,
+                    b.lot_sqft{_signal_select_sql()},
                     COALESCE(pc.permit_count, 0) as permit_count,
                     pcon.contractor_name,
                     pcon.contractor_phone,
@@ -3442,20 +3549,27 @@ def api_properties_export():
             financing_max = request.args.get('financing_max', type=float)
             sort_by = request.args.get('sort_by', 'sale_date')
             sort_order = request.args.get('sort_order', 'desc').lower()
-            
+
+            # Prebuilt play — exporting a play exports exactly the play's set
+            play_where, play_error = _resolve_play_where(request.args.get('play', '').strip())
+            if play_error:
+                return jsonify({'success': False, 'error': play_error}), 400
+
             # Build WHERE clauses
             where_clauses = []
             params = []
-            
+            if play_where:
+                where_clauses.append(play_where)
+
             if search:
                 # Check if search looks like a zip code (5 digits starting with 1)
                 is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
-                
+
                 if is_zip_search:
                     # Search by zip code - join with permits table
                     where_clauses.append("""(
-                        b.address ILIKE %s OR 
-                        b.bbl LIKE %s OR 
+                        b.address ILIKE %s OR
+                        b.bbl LIKE %s OR
                         b.current_owner_name ILIKE %s OR
                         b.owner_name_rpad ILIKE %s OR
                         b.owner_name_hpd ILIKE %s OR

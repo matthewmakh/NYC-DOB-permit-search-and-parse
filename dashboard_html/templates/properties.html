@@ -201,6 +201,18 @@
 
         <!-- Main content -->
         <main class="content">
+            <!-- Prebuilt plays: goal-named filters over the signal columns.
+                 Populated by JS from /api/properties/plays; hidden until
+                 the signals migration has run. -->
+            <section id="playsSection" class="plays-section" style="display: none;">
+                <div class="plays-head">
+                    <h2>Plays</h2>
+                    <p>Prebuilt filters, each named for the goal. Pick one, work the list.</p>
+                </div>
+                <div id="playsRow" class="plays-row"></div>
+                <div id="playGuide" class="play-guide" style="display: none;"></div>
+            </section>
+
             <section class="stats-dashboard">
                 <div class="stat-card">
                     <div class="stat-label">Total properties</div>
