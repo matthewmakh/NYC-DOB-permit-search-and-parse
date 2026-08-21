@@ -62,15 +62,12 @@ function initializeDirectoryPage() {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     });
-    
+
     document.getElementById('nextPage').addEventListener('click', () => {
         currentPage++;
         loadContractors();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     });
-    
-    // Export button
-    document.getElementById('exportBtn').addEventListener('click', exportContractors);
 }
 
 async function loadContractors() {
@@ -128,15 +125,15 @@ function displayContractors(contractors) {
     
     if (contractors.length === 0) {
         grid.innerHTML = `
-            <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px;">
-                <i class="fas fa-search" style="font-size: 4em; color: #ccc; margin-bottom: 20px;"></i>
-                <h3 style="color: #666;">No contractors found</h3>
-                <p style="color: #999;">Try adjusting your search criteria</p>
+            <div class="grid-empty">
+                <i class="fas fa-search"></i>
+                <h3>No contractors found</h3>
+                <p>Try adjusting your search criteria</p>
             </div>
         `;
         return;
     }
-    
+
     grid.innerHTML = contractors.map(contractor => `
         <div class="contractor-card" data-contractor-name="${escapeHtml(contractor.contractor_name)}">
             <div class="contractor-header">
@@ -146,22 +143,19 @@ function displayContractors(contractors) {
                 <div class="contractor-info">
                     <h3>${escapeHtml(contractor.contractor_name)}</h3>
                     ${contractor.license ? `
-                        <div class="contractor-license">
-                            <i class="fas fa-id-card"></i>
-                            License: ${escapeHtml(contractor.license)}
-                        </div>
+                        <div class="contractor-license">License ${escapeHtml(contractor.license)}</div>
                     ` : ''}
                 </div>
             </div>
-            
+
             <div class="contractor-stats">
                 <div class="contractor-stat">
                     <div class="contractor-stat-value">${contractor.total_jobs}</div>
-                    <div class="contractor-stat-label">Total Jobs</div>
+                    <div class="contractor-stat-label">Total jobs</div>
                 </div>
                 <div class="contractor-stat">
                     <div class="contractor-stat-value">${contractor.active_jobs}</div>
-                    <div class="contractor-stat-label">Active Jobs</div>
+                    <div class="contractor-stat-label">Active</div>
                 </div>
                 <div class="contractor-stat">
                     <div class="contractor-stat-value">${contractor.unique_properties}</div>
@@ -169,10 +163,10 @@ function displayContractors(contractors) {
                 </div>
                 <div class="contractor-stat">
                     <div class="contractor-stat-value">${formatCurrency(contractor.largest_project)}</div>
-                    <div class="contractor-stat-label">Largest Project</div>
+                    <div class="contractor-stat-label">Largest</div>
                 </div>
             </div>
-            
+
             <div class="contractor-meta">
                 <span>
                     <i class="fas fa-calendar"></i>
@@ -180,7 +174,7 @@ function displayContractors(contractors) {
                 </span>
                 <span>
                     <i class="fas fa-tools"></i>
-                    ${contractor.job_types ? contractor.job_types.substring(0, 20) + '...' : 'N/A'}
+                    ${contractor.job_types ? escapeHtml(truncate(contractor.job_types, 24)) : 'N/A'}
                 </span>
             </div>
         </div>
@@ -509,6 +503,11 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function truncate(text, maxLength) {
+    if (!text) return '';
+    return text.length > maxLength ? text.substring(0, maxLength) + '…' : text;
+}
+
 function debounce(func, wait) {
     let timeout;
     return function executedFunction(...args) {
@@ -522,17 +521,16 @@ function debounce(func, wait) {
 }
 
 function showError(container, message) {
-    // Find the profile container or create error in the provided container
+    // Inline styles so this renders correctly on both the directory page
+    // (app.css) and the contractor profile page (main.css).
     const errorHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; background: white; border-radius: 16px; margin: 40px auto; max-width: 600px;">
-            <div style="width: 80px; height: 80px; background: linear-gradient(135deg, #ff4757 0%, #ff6348 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 24px;">
-                <i class="fas fa-exclamation-circle" style="font-size: 2.5em; color: white;"></i>
-            </div>
-            <h2 style="color: #1a1a1a; margin: 0 0 12px 0;">Error</h2>
-            <p style="color: #666; font-size: 1.1em; margin: 0;">${escapeHtml(message)}</p>
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px 20px; background: #fff; border: 1px solid #e5e5e0; border-radius: 14px; margin: 40px auto; max-width: 520px; text-align: center;">
+            <i class="fas fa-exclamation-circle" style="font-size: 1.8em; color: #bb3a2e; margin-bottom: 14px;"></i>
+            <h2 style="color: #1a1a17; font-size: 1.1em; margin: 0 0 8px 0;">Something went wrong</h2>
+            <p style="color: #55554f; font-size: 0.95em; margin: 0;">${escapeHtml(message)}</p>
         </div>
     `;
-    
+
     // If we're on the profile page, show in main content area
     const profileMain = document.querySelector('.profile-main');
     if (profileMain) {
@@ -541,9 +539,3 @@ function showError(container, message) {
         container.innerHTML = errorHTML;
     }
 }
-
-function exportContractors() {
-    alert('Export functionality coming soon!');
-}
-
-console.log('Contractors module loaded successfully');
