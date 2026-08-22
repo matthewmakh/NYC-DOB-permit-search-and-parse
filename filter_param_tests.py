@@ -312,6 +312,152 @@ check('permit-contact provider guard rejects an organization before opening the 
                               'AMERICAN MORTGAGE EXPRESS CORP.', 'owner',
                               None, None, None, 1)[0], False)
 
+print('— Apify owner-match safety —')
+check('server maps NYC borough code 4 to Queens',
+      E.resolve_owner_search_location(
+          {'address': '18423 CAMBRIDGE RD', 'borough': '4', 'zip_code': '11432'},
+          '18423 CAMBRIDGE RD, 4, NY 11432'),
+      ('18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432'))
+check('server also accepts an already textual borough',
+      E.resolve_owner_search_location(
+          {'address': '18423 CAMBRIDGE RD', 'borough': 'Queens',
+           'zip_code': '11432'}),
+      ('18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432'))
+
+class _ApifyAddressCursor:
+    def __init__(self, rows):
+        self.rows = rows
+        self.executed = False
+    def execute(self, _sql, _params):
+        self.executed = True
+    def fetchall(self):
+        return self.rows
+
+sos_location, sos_location_source = E._best_owner_search_location(
+    _ApifyAddressCursor([]), 9, {
+        'address': '18423 CAMBRIDGE RD', 'borough': '4', 'zip_code': '11432',
+        'sale_buyer_primary': None,
+        'sos_principal_name': 'JANE Q OWNER',
+        'sos_principal_street': '10 Corporate Plaza',
+        'sos_principal_city': 'Albany', 'sos_principal_state': 'NY',
+        'sos_principal_zip': '12207',
+    }, 'JANE OWNER')
+check('SOS principal lookup uses the person mailing address', sos_location,
+      ('10 Corporate Plaza', 'ALBANY', 'NY', '12207'))
+check('SOS principal lookup records its location source', sos_location_source,
+      'sos_principal_address')
+
+acris_cursor = _ApifyAddressCursor([{
+    'party_name': 'MAKHARADZE, SAMANTHA',
+    'address_1': '55 OWNER MAILING RD', 'city': 'GARDEN CITY',
+    'state': 'NY', 'zip_code': '11530-1234',
+}])
+acris_location, acris_location_source = E._best_owner_search_location(
+    acris_cursor, 9, {
+        'address': '18423 CAMBRIDGE RD', 'borough': '4', 'zip_code': '11432',
+        'sale_buyer_primary': 'MAKHARADZE, SAMANTHA',
+        'sos_principal_name': None,
+    }, 'SAMANTHA MAKHARADZE')
+check('ACRIS grantee lookup uses the deed mailing address', acris_location,
+      ('55 OWNER MAILING RD', 'GARDEN CITY', 'NY', '11530'))
+check('ACRIS grantee lookup records its location source', acris_location_source,
+      'acris_grantee_address')
+apify_input = E._build_apify_run_input(
+    'SAMANTHA', 'MAKHARADZE', street_address='18423 CAMBRIDGE RD',
+    city='QUEENS', state='NY', zipcode='11432', max_results=50)
+check('Apify name query uses the name field',
+      apify_input['name'], ['SAMANTHA MAKHARADZE; QUEENS, NY 11432'])
+check('Apify address query uses street_citystatezip, not name',
+      apify_input['street_citystatezip'],
+      ['18423 CAMBRIDGE RD; QUEENS, NY 11432'])
+check('Apify max_results is capped to actor maximum', apify_input['max_results'], 10)
+
+correct_person = {
+    'Search Option': 'Name Search', 'Input Given': 'SAMANTHA MAKHARADZE',
+    'First Name': 'Samantha', 'Last Name': 'Makharadze',
+    'Street Address': '184-23 Cambridge Road', 'Address Locality': 'Jamaica',
+    'Address Region': 'NY', 'Postal Code': '11432',
+    'Phone-1': '(718) 555-0101', 'Person Link': 'person-correct',
+}
+wrong_resident = {
+    'Search Option': 'Address Search', 'First Name': 'Alex', 'Last Name': 'Tenant',
+    'Street Address': '184-23 Cambridge Rd', 'Address Locality': 'Jamaica',
+    'Address Region': 'NY', 'Postal Code': '11432',
+    'Phone-1': '(718) 555-9999', 'Phone-1 Last Reported': 'August 2026',
+    'Person Link': 'person-tenant',
+}
+best, evidence, error = E._pick_best_apify_item(
+    [wrong_resident, correct_person], 'SAMANTHA', 'MAKHARADZE',
+    '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')
+check('newest-phone address resident cannot beat the named owner',
+      best['Person Link'], 'person-correct')
+check('ZIP/street evidence produces high confidence', evidence['confidence'], 'high')
+check('verified selection has no error', error, None)
+
+unrelated_same_name = {
+    'Search Option': 'Name Search', 'First Name': 'Samantha',
+    'Last Name': 'Makharadze', 'Street Address': '1 Ocean Ave',
+    'Address Locality': 'Miami', 'Address Region': 'FL', 'Postal Code': '33101',
+    'Phone-1': '(305) 555-0101', 'Person Link': 'person-florida',
+}
+check('same name with no property-location evidence is rejected',
+      E._pick_best_apify_item(
+          [unrelated_same_name], 'SAMANTHA', 'MAKHARADZE',
+          '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')[0], None)
+
+moved_owner = {
+    **unrelated_same_name,
+    'Person Link': 'person-moved',
+    'Previous Addresses': [{
+        'streetAddress': '184-23 Cambridge Rd', 'addressLocality': 'Jamaica',
+        'addressRegion': 'NY', 'postalCode': '11432',
+    }],
+}
+moved_best, moved_evidence, _ = E._pick_best_apify_item(
+    [moved_owner], 'SAMANTHA', 'MAKHARADZE',
+    '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')
+check('historical property address can verify a moved owner',
+      moved_best['Person Link'], 'person-moved')
+check('historical match is labeled previous',
+      moved_evidence['address_kind'], 'previous')
+
+ambiguous = {**correct_person, 'Person Link': 'person-second',
+             'Phone-1': '(718) 555-0202'}
+check('equally strong distinct identities are rejected as ambiguous',
+      E._pick_best_apify_item(
+          [correct_person, ambiguous], 'SAMANTHA', 'MAKHARADZE',
+          '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')[0], None)
+address_ambiguous = {**ambiguous, 'Search Option': 'Address Search'}
+check('search mode does not break a true identity tie',
+      E._pick_best_apify_item(
+          [correct_person, address_ambiguous], 'SAMANTHA', 'MAKHARADZE',
+          '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')[0], None)
+
+contact_fixture = {
+    'Phone-1': '(718) 555-0101',
+    'Phone-2': '1-718-555-0101',  # duplicate country-code spelling
+    'Phone-3': '123',             # malformed
+    'Email-1': 'Owner@Example.com',
+    'Email-2': 'owner@example.com',  # case-insensitive duplicate
+    'Email-3': 'not-an-email',
+}
+phones, emails, _ = E.extract_apify_contact_info(contact_fixture)
+check('Apify duplicate and malformed phones are dropped',
+      [p['number'] for p in phones], ['(718) 555-0101'])
+check('Apify does not claim provider phones are independently validated',
+      phones[0]['is_valid'], None)
+check('Apify duplicate and malformed emails are dropped',
+      [e['email'] for e in emails], ['Owner@Example.com'])
+
+profile_js = open(os.path.join(os.path.dirname(__file__),
+                               'dashboard_html/static/js/building_profile.js')).read()
+confirm_enrich_source = profile_js.split('async function confirmEnrich', 1)[1].split(
+    '// ============================================================================', 1)[0]
+check('single-property request no longer sends a client-built address',
+      'address: fullAddress' in confirm_enrich_source, False)
+check('single-property request no longer defaults unknown boroughs to Brooklyn',
+      "borough || 'Brooklyn'" in confirm_enrich_source, False)
+
 enrichable_sql = A._enrichable_owner_sql()
 check('SQL prefilter includes deed grantees',
       'b.sale_buyer_primary' in enrichable_sql, True)

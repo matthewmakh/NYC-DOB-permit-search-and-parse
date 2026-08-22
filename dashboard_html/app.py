@@ -5854,8 +5854,7 @@ def api_enrich_owner():
     
     POST body: {
         building_id: int,
-        owner_name: string,
-        address: string
+        owner_name: string
     }
     """
     try:
@@ -5866,14 +5865,13 @@ def api_enrich_owner():
         )
         from stripe_service import charge_enrichment_fee
         
-        data = request.get_json()
-        print(f"Enrichment request data: {data}")
+        data = request.get_json() or {}
         
         building_id = data.get('building_id')
         owner_name = data.get('owner_name')
+        # Backward-compatible fallback only. enrich_owner resolves the
+        # authoritative street/borough/ZIP from building_id.
         address = data.get('address', '')
-        
-        print(f"Building ID: {building_id}, Owner: {owner_name}, Address: {address}")
         
         if not building_id or not owner_name:
             return jsonify({'success': False, 'error': 'Building ID and owner name required'}), 400

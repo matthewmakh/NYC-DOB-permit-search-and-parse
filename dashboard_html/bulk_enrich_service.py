@@ -346,35 +346,15 @@ def _run_job(job_id):
             _increment_counters(job_id, properties_processed=1, skipped=len(available))
             continue
 
-        # Fetch address once per building
-        address = ""
-        try:
-            conn = _get_conn()
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(
-                """
-                SELECT b.address, p.zip_code
-                FROM buildings b
-                LEFT JOIN permits p ON b.bbl = p.bbl
-                WHERE b.id = %s
-                LIMIT 1
-                """,
-                (bid,),
-            )
-            row = cur.fetchone()
-            cur.close()
-            conn.close()
-            if row:
-                address = f"{row['address']}, NY {row.get('zip_code') or ''}".strip().strip(',')
-        except Exception as e:
-            print(f"[bulk_enrich job {job_id}] address lookup failed for building {bid}: {e}")
-
         any_success_for_building = False
         for owner in chosen:
             if _check_cancel_requested(job_id):
                 break
             try:
-                success, _data, _msg = enrich_owner(bid, owner['name'], address, user_id, provider=provider)
+                # enrich_owner resolves authoritative street/borough/ZIP from
+                # the building row; no client/worker-composed address needed.
+                success, _data, _msg = enrich_owner(
+                    bid, owner['name'], '', user_id, provider=provider)
                 if success:
                     any_success_for_building = True
                     _increment_counters(job_id, attempted=1, successful=1)

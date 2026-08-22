@@ -771,26 +771,15 @@ async function confirmEnrich(buildingId) {
     btn.textContent = 'Processing...';
     
     try {
-        // Build full address with borough/city info
-        const building = buildingData.building;
-        let fullAddress = building.address || '';
-        
-        // Append borough/city info if available
-        const borough = building.borough || '';
-        const zipCode = building.zip_code || building.zipcode || '';
-        if (borough || zipCode) {
-            fullAddress += `, ${borough || 'Brooklyn'}, NY ${zipCode}`.trim();
-        } else {
-            fullAddress += ', Brooklyn, NY';  // Default to Brooklyn
-        }
-        
+        // The server resolves street/borough/ZIP from building_id. Do not
+        // compose location here: building.borough is the numeric NYC code,
+        // not a city name, and client-provided addresses are not authoritative.
         const response = await fetch('/api/enrichment/enrich', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 building_id: buildingId,
-                owner_name: owner.name,
-                address: fullAddress
+                owner_name: owner.name
             })
         });
         
