@@ -437,6 +437,88 @@ else:
         except Exception as exc:  # noqa: BLE001
             check(label, str(exc), 'parses')
 
+print('— contractor names survive the template and the router —')
+with A.app.test_request_context():
+    from flask import render_template
+    rendered = render_template('contractor_profile.html',
+                               contractor_name='T&S HOME IMPROVEMENT INC')
+check('ampersand reaches JS unescaped',
+      'const CONTRACTOR_NAME = "T\\u0026S HOME IMPROVEMENT INC"' in rendered, True)
+check('no HTML entity inside the JS string',
+      'CONTRACTOR_NAME = "T&amp;S' in rendered, False)
+
+adapter = A.app.url_map.bind('localhost')
+check('slash in contractor name routes',
+      adapter.match('/contractor/D/B/A BUILDERS CORP')[0], 'contractor_profile')
+check('api route takes slash names too',
+      adapter.match('/api/contractor/A/C MECHANICAL')[0], 'api_contractor_profile')
+
+print('— address resolution candidates —')
+import property_lookup as PL  # noqa: E402
+
+check('zip pulled from tail', PL._detect_zip('18423 cambridge rd 11432'), '11432')
+check('zip+4 collapses to five', PL._detect_zip('90 BEDFORD ST 10014-4384'), '10014')
+check('no zip means none', PL._detect_zip('18423 cambridge rd'), None)
+check('queens hyphen guess added',
+      PL._house_number_candidates('18423'), ['18423', '184-23'])
+check('short numbers stay as typed', PL._house_number_candidates('141'), ['141'])
+check('already hyphenated left alone',
+      PL._house_number_candidates('184-23'), ['184-23'])
+
+_calls = []
+
+
+def _fake_geoclient(path, params):
+    _calls.append((path, dict(params)))
+    if path == 'search' and params['input'] == '184-23 cambridge rd':
+        return {'results': [{'status': 'EXACT_MATCH', 'response': {
+            'bbl': '4098765432', 'buildingIdentificationNumber': '4123456',
+            'houseNumber': '184-23', 'firstStreetNameNormalized': 'CAMBRIDGE ROAD',
+            'firstBoroughName': 'QUEENS', 'zipCode': '11432',
+            'latitude': 40.71, 'longitude': -73.79,
+            'bblTaxBlock': '09876', 'bblTaxLot': '0032',
+        }}]}
+    return {}
+
+
+PL._geoclient_get, _real_get = _fake_geoclient, PL._geoclient_get
+PL.NYC_APP_ID, _real_app_id = 'test-key', PL.NYC_APP_ID
+try:
+    lookup, reason = PL.resolve_address_to_property('18423 cambridge rd')
+    check('borough-less address resolves via search', (lookup or {}).get('bbl'), '4098765432')
+    check('borough comes back from the match', (lookup or {}).get('borough'), 'Queens')
+    check('canonical address assembled',
+          (lookup or {}).get('address'), '184-23 CAMBRIDGE ROAD, QUEENS, NY 11432')
+    check('no /address call without borough or zip',
+          [c for c in _calls if c[0] == 'address'], [])
+    check('as-typed form tried before the hyphen guess',
+          [c[1]['input'] for c in _calls if c[0] == 'search'],
+          ['18423 cambridge rd', '184-23 cambridge rd'])
+
+    _calls.clear()
+    lookup, reason = PL.resolve_address_to_property('18423 cambridge rd 11432')
+    check('zip routes to the strict endpoint first',
+          _calls[0], ('address', {'houseNumber': '18423',
+                                  'street': 'cambridge rd', 'zip': '11432'})),
+    check('zip stripped from street', 'cambridge rd' in _calls[0][1]['street'], True)
+
+    _calls.clear()
+    lookup, reason = PL.resolve_address_to_property('gibberish with no number')
+    check('non-address rejected with guidance', 'street address' in (reason or ''), True)
+
+    lookup, reason = PL.resolve_address_to_property('999 NOWHERE LANE')
+    check('no match names the query in the reason', '999 NOWHERE LANE' in (reason or ''), True)
+finally:
+    PL._geoclient_get = _real_get
+    PL.NYC_APP_ID = _real_app_id
+
+PL.NYC_APP_ID = None
+try:
+    lookup, reason = PL.resolve_address_to_property('141 WYONA ST, BROOKLYN')
+    check('missing api key is said out loud', 'NYC_GEOCLIENT_APP_ID' in (reason or ''), True)
+finally:
+    PL.NYC_APP_ID = _real_app_id
+
 print()
 print('=' * 50)
 print(f'{passed} passed, {failed} failed')

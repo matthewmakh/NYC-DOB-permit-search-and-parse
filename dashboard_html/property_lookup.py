@@ -123,42 +123,36 @@ def _parse_house_and_street(address):
     return m.group(1), m.group(2)
 
 
-def resolve_address_to_property(query):
-    """Resolve a search query into an address/BBL bundle via Geoclient v2.
+_ZIP_RE = re.compile(r'\b(\d{5})(?:-\d{4})?\s*$')
 
-    Returns a dict with at least {'bbl': '...'} on success, None on failure.
-    Free public API. The Geoclient v2 response already includes BBL, BIN,
-    canonical street name, latitude, longitude — we use them all so the
-    INSERT can populate as many `buildings` columns as possible.
+
+def _detect_zip(address):
+    """Pull a trailing ZIP code out of an address string, or None. A ZIP can
+    stand in for the borough on Geoclient's /address endpoint, which is how
+    '184-23 91ST AVE 11432' resolves without the word QUEENS in it."""
+    if not address:
+        return None
+    m = _ZIP_RE.search(address.strip())
+    return m.group(1) if m else None
+
+
+def _house_number_candidates(house):
+    """The house number as typed, plus the Queens hyphenated reading.
+
+    Queens addresses are officially '184-23' style, but people type '18423'.
+    Geoclient usually normalizes this itself, so the plain form goes first
+    and the hyphenated guess is only a retry.
     """
-    if not NYC_APP_ID:
-        log.warning("NYC_GEOCLIENT_APP_ID not set; cannot resolve addresses")
-        return None
+    candidates = [house]
+    if house and house.isdigit() and 4 <= len(house) <= 6:
+        candidates.append(f"{house[:-2]}-{house[-2:]}")
+    return candidates
 
-    house, street = _parse_house_and_street(query)
-    if not house or not street:
-        return None
 
-    borough = _detect_borough(query)
-    if not borough:
-        return None  # Geoclient v2 requires a borough (or zip — we don't try zip yet)
-
-    try:
-        resp = requests.get(
-            'https://api.nyc.gov/geoclient/v2/address',
-            params={'houseNumber': house, 'street': street, 'borough': borough},
-            headers={'subscription-key': NYC_APP_ID},
-            timeout=10,
-        )
-    except requests.RequestException as e:
-        log.warning(f"Geoclient request failed: {e}")
-        return None
-
-    if resp.status_code != 200:
-        log.warning(f"Geoclient {resp.status_code}: {resp.text[:200]}")
-        return None
-
-    addr = (resp.json() or {}).get('address') or {}
+def _lookup_from_geoclient_address(addr, house, street, borough):
+    """Shape one Geoclient address response into our lookup bundle, or None
+    if it carries no usable BBL. Both /address and /search responses use
+    this same field vocabulary."""
     bbl = addr.get('bbl')
     if not bbl or len(str(bbl)) != 10:
         return None
@@ -168,8 +162,10 @@ def resolve_address_to_property(query):
     pretty_street = addr.get('firstStreetNameNormalized') or street
     canonical = f"{addr.get('houseNumber') or house} {pretty_street}".strip().upper()
     parts = [canonical]
-    city = addr.get('uspsPreferredCityName') or borough
-    parts.append(city.upper())
+    resolved_borough = (addr.get('firstBoroughName') or borough or '').upper() or None
+    city = addr.get('uspsPreferredCityName') or resolved_borough or ''
+    if city:
+        parts.append(city.upper())
     zip5 = addr.get('zipCode')
     parts.append(f"NY {zip5}" if zip5 else 'NY')
     pretty_address = ', '.join(parts)
@@ -180,10 +176,97 @@ def resolve_address_to_property(query):
         'latitude': addr.get('latitude'),
         'longitude': addr.get('longitude'),
         'address': pretty_address,
-        'borough': borough.title(),
+        'borough': resolved_borough.title() if resolved_borough else None,
         'block': addr.get('bblTaxBlock'),
         'lot': addr.get('bblTaxLot'),
     }
+
+
+def _geoclient_get(path, params):
+    """One Geoclient call. Returns the parsed JSON dict, or None on any
+    transport/HTTP failure (logged, never raised — a retry with the next
+    candidate should still run)."""
+    try:
+        resp = requests.get(
+            f'https://api.nyc.gov/geoclient/v2/{path}',
+            params=params,
+            headers={'subscription-key': NYC_APP_ID},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log.warning(f"Geoclient {path} request failed: {e}")
+        return None
+    if resp.status_code != 200:
+        log.warning(f"Geoclient {path} {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        return resp.json() or {}
+    except ValueError:
+        return None
+
+
+def resolve_address_to_property(query):
+    """Resolve a search query into an address/BBL bundle via Geoclient v2.
+
+    Returns (lookup_dict, None) on success or (None, reason) on failure —
+    the reason is user-facing, so it says what to try next.
+
+    Free public API. The Geoclient v2 response already includes BBL, BIN,
+    canonical street name, latitude, longitude — we use them all so the
+    INSERT can populate as many `buildings` columns as possible.
+
+    Resolution order:
+      1. /address with borough (when the query names one) or ZIP
+      2. /search with the free-form query — Geoclient tries all boroughs
+    Each step also retries with the Queens hyphenated house number
+    ('18423' -> '184-23') since that's the official form.
+    """
+    if not NYC_APP_ID:
+        log.warning("NYC_GEOCLIENT_APP_ID not set; cannot resolve addresses")
+        return None, ('Address lookup is not configured on this server '
+                      '(NYC_GEOCLIENT_APP_ID is missing). You can still '
+                      'paste the 10-digit BBL directly.')
+
+    house, street = _parse_house_and_street(query)
+    if not house or not street:
+        return None, ('That doesn\'t look like a street address. Use '
+                      '"HOUSE NUMBER STREET, BOROUGH" (e.g. "141 WYONA '
+                      'STREET, BROOKLYN") or paste the 10-digit BBL.')
+
+    borough = _detect_borough(query)
+    zip5 = _detect_zip(query)
+
+    # Strip a ZIP that got glued onto the street ("cambridge rd 11432").
+    if zip5 and street.upper().endswith(zip5):
+        street = street[:-len(zip5)].rstrip(' ,')
+
+    if borough or zip5:
+        for house_form in _house_number_candidates(house):
+            params = {'houseNumber': house_form, 'street': street}
+            if borough:
+                params['borough'] = borough
+            else:
+                params['zip'] = zip5
+            data = _geoclient_get('address', params)
+            addr = (data or {}).get('address') or {}
+            lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
+            if lookup:
+                return lookup, None
+
+    # No borough/ZIP in the query, or the strict lookup missed: let
+    # Geoclient's single-field search try every borough.
+    for house_form in _house_number_candidates(house):
+        free_form = f"{house_form} {street}"
+        data = _geoclient_get('search', {'input': free_form})
+        for result in (data or {}).get('results') or []:
+            addr = result.get('response') or {}
+            lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
+            if lookup:
+                return lookup, None
+
+    return None, (f'Could not match "{query}" to a NYC property. '
+                  'Try adding the borough (e.g. "QUEENS") or the ZIP code, '
+                  'or paste the 10-digit BBL directly.')
 
 
 # ---------------------------------------------------------------------------
@@ -402,14 +485,9 @@ def auto_add_property(conn, query):
         lookup = {'bbl': bbl, 'address': None, 'borough': None,
                   'block': None, 'lot': None, 'bin': None}
     else:
-        lookup = resolve_address_to_property(query)
+        lookup, reason = resolve_address_to_property(query)
         if not lookup:
-            return {
-                'success': False,
-                'error': ('Could not resolve that address to a NYC property. '
-                          'Try including the borough (e.g. "BROOKLYN") '
-                          'or paste the 10-digit BBL directly.'),
-            }
+            return {'success': False, 'error': reason}
 
     building_id, created = _ensure_building_row(conn, lookup)
     report = run_free_enrichment(conn, building_id, lookup['bbl'])
