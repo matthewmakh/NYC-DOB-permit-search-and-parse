@@ -4,6 +4,8 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
+    "cronSchedule": "0 1 * * *",
+    "startCommand": "python -u permit_scraper_api.py --dob-now-only --days 14",
     "restartPolicyType": "NEVER"
   }
 }

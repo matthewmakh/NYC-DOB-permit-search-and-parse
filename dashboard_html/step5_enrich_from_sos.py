@@ -247,9 +247,10 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
     1. sale_buyer_primary (ACRIS) - grantee on the most recent recorded deed,
        the legally authoritative current owner
     2. current_owner_name (PLUTO) - refreshed annually
-    3. owner_name_rpad (Tax) - the RPAD open-data extract's newest vintage is
+    3. owner_name_hpd (HPD) - selected from owner-class registrations rather
+       than agent/officer-only rows
+    4. owner_name_rpad (Tax) - the RPAD open-data extract's newest vintage is
        FY2018/19 (verified live 2026-08), so these names can be years stale
-    4. owner_name_hpd (HPD) - registered managing owner, often an officer
 
     Skips:
     - Names that look like individuals (not LLCs/Corps)
@@ -257,8 +258,8 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
     sources = [
         ('sale_buyer_primary', building.get('sale_buyer_primary')),
         ('current_owner_name', building.get('current_owner_name')),
-        ('owner_name_rpad', building.get('owner_name_rpad')),
         ('owner_name_hpd', building.get('owner_name_hpd')),
+        ('owner_name_rpad', building.get('owner_name_rpad')),
     ]
     
     for source_field, name in sources:

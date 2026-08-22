@@ -4,6 +4,7 @@
  */
 
 let buildingData = null;
+let ownerHistoryFilter = 'all';
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -16,6 +17,22 @@ const SOS_AGENT_TITLES = new Set(['SERVICE OF PROCESS AGENT', 'REGISTERED AGENT'
 function isSosAgentTitle(title) {
     if (!title) return false;
     return SOS_AGENT_TITLES.has(String(title).trim().toUpperCase());
+}
+
+function isDeedDocument(docType) {
+    return String(docType || '').toUpperCase().includes('DEED');
+}
+
+// Display-only fallback for older cached API responses. New responses carry
+// the server's stricter entity_kind/is_person classification, and the server
+// remains the final authority before any paid enrichment request.
+function looksLikeHumanName(name) {
+    const value = String(name || '').trim();
+    if (!value || /[0-9;&]/.test(value)) return false;
+    const organizationTerms = /\b(LLC|INC(?:ORPORATED)?|CORP(?:ORATION)?|LTD|LIMITED|COMPANY|BANK|BANC|MORTGAGE|LENDING|FINANCIAL|FINANCE|FUNDING|SERVICING|TRUST|TRUSTEE|FUND|ASSOCIATION|AUTHORITY|CREDIT\s+UNION|FANNIE\s+MAE|FREDDIE\s+MAC|MERS)\b/i;
+    if (organizationTerms.test(value)) return false;
+    const words = value.replace(',', ' ').split(/\s+/).filter(Boolean);
+    return words.length >= 2 && words.length <= 7;
 }
 
 /**
@@ -126,7 +143,7 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                 <div class="license-permit-item">
                     <div class="permit-item-header">
                         <a href="/property/${permit.bbl}" class="permit-address">${permit.address || 'Unknown Address'}</a>
-                        <span class="permit-date-small">${permit.issue_date ? new Date(permit.issue_date).toLocaleDateString() : 'No date'}</span>
+                        <span class="permit-date-small">${permit.issue_date ? formatDate(permit.issue_date) : 'No date'}</span>
                     </div>
                     <div class="permit-item-details">
                         <span class="permit-type-badge">${permit.job_type || 'Permit'}</span>
@@ -221,6 +238,7 @@ function updateTabBadges() {
     
     // Owners badge - count of owner sources
     const ownerCount = [
+        building.sale_buyer_primary,
         building.current_owner_name,
         building.owner_name_rpad,
         building.owner_name_hpd,
@@ -322,8 +340,9 @@ function renderHeroSection() {
     ownerSourcesEl.innerHTML = '';
     
     const sourceLabels = {
+        'acris': 'ACRIS Latest Deed Grantee',
         'pluto': 'NYC PLUTO Database',
-        'rpad': 'Real Property Assessment (Tax Records)',
+        'rpad': 'Historical RPAD Assessment (through FY2018/19)',
         'hpd': 'HPD Registered Owner',
         'ecb': 'ECB Violation Respondent'
     };
@@ -333,11 +352,10 @@ function renderHeroSection() {
         const sosItem = document.createElement('div');
         const isAgent = isSosAgentTitle(sos_data.principal_title);
         // Real-person signal: a person-shaped name AND not an agent title.
-        const isRealPerson = !isAgent &&
-                            !sos_data.principal_name.includes('LLC') &&
-                            !sos_data.principal_name.includes('C/O') &&
-                            !sos_data.principal_name.includes('ATTN') &&
-                            !sos_data.principal_name.includes('CORP');
+        const isMismatch = sos_data.entity_match === 'mismatch';
+        const isRealPerson = !isAgent && !isMismatch &&
+            (sos_data.is_person === true ||
+             (sos_data.is_person === undefined && looksLikeHumanName(sos_data.principal_name)));
         // Tone down the yellow highlight when the SOS hit is just an agent —
         // they're not the owner, so we shouldn't make them look like the answer.
         // The registered entity may not be the company any of our owner
@@ -345,7 +363,6 @@ function renderHeroSection() {
         // without checking. A mismatch means these people run some OTHER
         // company, so the row is demoted and called out rather than shown as
         // the answer.
-        const isMismatch = sos_data.entity_match === 'mismatch';
         sosItem.className = 'owner-item sos-highlight'
             + (isAgent ? ' sos-agent' : '')
             + (isMismatch ? ' sos-mismatch' : '');
@@ -353,7 +370,7 @@ function renderHeroSection() {
         sosItem.innerHTML = `
             <span class="owner-source sos-source">
                 NY Secretary of State
-                ${isRealPerson && !isMismatch ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
+                ${isRealPerson ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
                 ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">AGENT</span>' : ''}
                 ${isMismatch ? '<span class="mismatch-badge" title="The registered company does not match any owner name on record for this property">UNVERIFIED</span>' : ''}
             </span>
@@ -406,7 +423,7 @@ function renderGlanceStrip() {
     const tiles = [
         { label: 'Assessed value',
           value: building.assessed_total_value ? formatLargeNumber(building.assessed_total_value) : '—' },
-        { label: building.sale_date ? `Last sale · ${new Date(building.sale_date).getFullYear()}` : 'Last sale',
+        { label: building.sale_date ? `Last sale · ${String(building.sale_date).slice(0, 4)}` : 'Last sale',
           value: building.sale_price ? formatLargeNumber(building.sale_price) : '—' },
         { label: 'Financing',
           value: building.is_cash_purchase ? 'Cash'
@@ -547,7 +564,7 @@ function addEnrichOwnerButton(container) {
                         ${btnText}
                         <span class="enrich-cost">${cost} each${batchDisplay}</span>
                     </button>
-                    <p class="enrich-note">${enrichmentData.available_owners.length} owner(s) available to lookup</p>
+                    <p class="enrich-note">${enrichmentData.available_owners.length} verified human candidate(s) available to look up</p>
                 </div>
             `;
         }
@@ -695,20 +712,21 @@ function showEnrichModal(buildingId) {
     
     modal.innerHTML = `
         <div class="modal-content enrich-modal-content">
-            <span class="modal-close" onclick="closeEnrichModal()">&times;</span>
+            <button type="button" class="modal-close" aria-label="Close owner enrichment" onclick="closeEnrichModal()">&times;</button>
             <h2>Get Owner Contact Information</h2>
-            <p class="modal-subtitle">Select an owner to lookup their phone and email</p>
+            <p class="modal-subtitle">Only confident human names associated with this property are eligible. Companies, banks, trusts, and agents are never sent to the paid lookup.</p>
             
             ${enrichedHtml}
             
             <div class="owner-selection">
-                <h4>Available to Enrich (${availableOwners.length})</h4>
+                <h4>Human candidates (${availableOwners.length})</h4>
                 ${availableOwners.map((owner, idx) => `
                     <label class="owner-option ${owner.recommended ? 'recommended' : ''}">
                         <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
                         <div class="owner-option-content">
                             <span class="owner-option-name">${owner.name}</span>
                             <span class="owner-option-source">${owner.source}</span>
+                            <span class="real-person-badge">PERSON</span>
                             ${owner.recommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                             ${owner.reason ? `<span class="owner-option-reason">${owner.reason}</span>` : ''}
                         </div>
@@ -1076,7 +1094,7 @@ function renderOverviewTab() {
         </div>
         <div class="stat-item">
             <div class="stat-value">${stats.years_owned ? stats.years_owned + ' yrs' : 'N/A'}</div>
-            <div class="stat-label">Current Ownership</div>
+            <div class="stat-label">Years Owned</div>
         </div>
     `;
     
@@ -1163,14 +1181,24 @@ function renderFinancialsTab() {
     }
     
     // Mortgage Information
-    if (building.mortgage_amount) {
+    if (building.mortgage_amount && building.has_open_mortgage) {
         html += `
         <div class="financial-card">
-            <h4>Current Mortgage</h4>
+            <h4>Open Mortgage Instrument</h4>
             <div class="financial-rows">
-                <div class="fin-row"><span>Amount:</span><span>$${formatNumber(building.mortgage_amount)}</span></div>
+                <div class="fin-row"><span>Recorded amount:</span><span>$${formatNumber(building.mortgage_amount)}</span></div>
                 ${building.mortgage_date ? `<div class="fin-row"><span>Date:</span><span>${formatDate(building.mortgage_date)}</span></div>` : ''}
                 ${building.mortgage_lender_primary ? `<div class="fin-row"><span>Lender:</span><span>${building.mortgage_lender_primary}</span></div>` : ''}
+                <div class="fin-row"><span>Status:</span><span>Apparently open in ACRIS</span></div>
+            </div>
+        </div>`;
+    } else if (building.is_free_and_clear) {
+        html += `
+        <div class="financial-card">
+            <h4>Mortgage Status</h4>
+            <div class="financial-rows">
+                <div class="fin-row"><span>Status:</span><span>No open mortgage found</span></div>
+                ${building.last_satisfaction_date ? `<div class="fin-row"><span>Last satisfaction:</span><span>${formatDate(building.last_satisfaction_date)}</span></div>` : ''}
             </div>
         </div>`;
     }
@@ -1227,7 +1255,7 @@ function renderFinancialsTab() {
 // ============================================================================
 
 function renderOwnersTab() {
-    const { owners, parties, sos_data } = buildingData;
+    const { owners, owner_classifications = {}, parties, sos_data } = buildingData;
     const container = document.getElementById('owners-content');
     
     let html = '<div class="owners-list">';
@@ -1235,21 +1263,25 @@ function renderOwnersTab() {
     // SOS Data - Real Person Behind LLC (PREMIUM SECTION)
     if (sos_data && sos_data.principal_name) {
         const isAgent = isSosAgentTitle(sos_data.principal_title);
-        const isRealPerson = !isAgent &&
-                            !sos_data.principal_name.includes('LLC') &&
-                            !sos_data.principal_name.includes('C/O') &&
-                            !sos_data.principal_name.includes('ATTN') &&
-                            !sos_data.principal_name.includes('CORP');
+        const isEntityMismatch = sos_data.entity_match === 'mismatch';
+        const isRealPerson = !isAgent && !isEntityMismatch &&
+            (sos_data.is_person === true ||
+             (sos_data.is_person === undefined && looksLikeHumanName(sos_data.principal_name)));
+        const sosHeading = isAgent ? 'SOS — Service Agent (not the owner)'
+            : isEntityMismatch ? 'SOS Contact — Entity Mismatch'
+            : isRealPerson ? 'Real Person Behind Owner Entity'
+            : 'SOS Principal Record';
 
         html += `
-        <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}${isAgent ? ' sos-agent' : ''}">
-            <h4>${isAgent ? 'SOS — Service Agent (not the owner)' : 'Real Person Behind LLC'}</h4>
+        <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}${(isAgent || isEntityMismatch) ? ' sos-agent' : ''}">
+            <h4>${sosHeading}</h4>
             <div class="sos-card">
                 <div class="sos-main">
                     <div class="sos-principal-name">${sos_data.principal_name}</div>
                     ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
                     ${isRealPerson ? '<span class="real-person-badge-large">REAL PERSON IDENTIFIED</span>' : ''}
                     ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">AGENT — not the owner</span>' : ''}
+                    ${isEntityMismatch ? '<span class="agent-badge-large" title="The SOS company did not match any recorded owner entity">ENTITY MISMATCH — excluded from enrichment</span>' : ''}
                 </div>
                 <div class="sos-details">
                     <div class="sos-detail-row">
@@ -1285,21 +1317,26 @@ function renderOwnersTab() {
     html += '<div class="current-owners">';
     
     const sourceInfo = {
+        'acris': { label: 'ACRIS Latest Deed Grantee', icon: '' },
         'pluto': { label: 'NYC PLUTO Database', icon: '' },
-        'rpad': { label: 'Tax Assessment Records', icon: '' },
+        'rpad': { label: 'Historical RPAD Assessment (through FY2018/19)', icon: '' },
         'hpd': { label: 'HPD Registered Owner', icon: '' },
         'ecb': { label: 'ECB Violation Respondent', icon: '' }
     };
     
     Object.entries(owners).forEach(([source, name]) => {
         if (name) {
-            const info = sourceInfo[source];
+            const info = sourceInfo[source] || { label: source, icon: '' };
+            const classification = owner_classifications[source] || {};
+            const kind = classification.entity_kind ||
+                (looksLikeHumanName(name) ? 'person' : 'unknown');
             html += `
             <div class="owner-source-card">
                 <div class="owner-source-icon">${info.icon}</div>
                 <div class="owner-source-info">
                     <div class="owner-source-label">${info.label}</div>
                     <div class="owner-source-name">${name}</div>
+                    <span class="entity-kind-badge entity-${kind}">${kind === 'person' ? 'Person' : kind === 'organization' ? 'Organization' : kind === 'multiple' ? 'Multiple parties' : 'Unclassified'}</span>
                 </div>
             </div>`;
         }
@@ -1307,33 +1344,92 @@ function renderOwnersTab() {
     
     html += '</div>';
     
-    // Historical Owners (from ACRIS parties)
-    if (parties && parties.length > 0) {
-        const buyers = parties.filter(p => p.party_type === 'buyer');
-        const sellers = parties.filter(p => p.party_type === 'seller');
-        
-        if (sellers.length > 0) {
-            html += '<h4>Previous Owners (ACRIS History)</h4>';
-            html += '<div class="historical-owners">';
-            
-            // Get unique sellers
-            const uniqueSellers = [...new Set(sellers.map(s => s.party_name))];
-            uniqueSellers.slice(0, 10).forEach(sellerName => {
-                const sellerData = sellers.find(s => s.party_name === sellerName);
-                html += `
-                <div class="historical-owner-card">
-                    <div class="ho-name">${sellerName}</div>
-                    ${sellerData.recorded_date ? `<div class="ho-date">Sold: ${formatDate(sellerData.recorded_date)}</div>` : ''}
-                    ${sellerData.address_1 ? `<div class="ho-address">${sellerData.address_1}, ${sellerData.city}, ${sellerData.state} ${sellerData.zip_code}</div>` : ''}
-                </div>`;
-            });
-            
-            html += '</div>';
-        }
+    const deedOwners = getPriorDeedOwners(parties || []);
+    if (deedOwners.length > 0) {
+        const peopleCount = deedOwners.filter(owner => owner.is_person).length;
+        html += `
+            <div class="ownership-history-header">
+                <div>
+                    <h4>Prior Deed Owners</h4>
+                    <p>Grantors on recorded deeds only. Mortgage lenders and loan assignees are excluded.</p>
+                </div>
+                <div class="owner-history-filter" role="group" aria-label="Filter prior deed owners">
+                    <button type="button" data-owner-filter="all" aria-pressed="true" onclick="setOwnerHistoryFilter('all')">
+                        All owners <span>${deedOwners.length}</span>
+                    </button>
+                    <button type="button" data-owner-filter="people" aria-pressed="false" onclick="setOwnerHistoryFilter('people')">
+                        People only <span>${peopleCount}</span>
+                    </button>
+                </div>
+            </div>
+            <div class="historical-owners" id="historical-owners-list"></div>`;
     }
     
     html += '</div>';
     container.innerHTML = html;
+    setOwnerHistoryFilter(ownerHistoryFilter);
+}
+
+function getPriorDeedOwners(parties) {
+    const seen = new Set();
+    return parties
+        .filter(party => party.party_type === 'seller' &&
+            (party.is_ownership_party === true ||
+             (party.is_ownership_party === undefined && isDeedDocument(party.doc_type))))
+        .filter(party => {
+            const key = `${String(party.party_name || '').trim().toUpperCase()}|${party.document_id || party.recorded_date || ''}`;
+            if (!party.party_name || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .map(party => ({
+            ...party,
+            entity_kind: party.entity_kind ||
+                (looksLikeHumanName(party.party_name) ? 'person' : 'unknown'),
+            is_person: party.is_person === true ||
+                (party.is_person === undefined && looksLikeHumanName(party.party_name)),
+        }));
+}
+
+function setOwnerHistoryFilter(filter) {
+    ownerHistoryFilter = filter === 'people' ? 'people' : 'all';
+    document.querySelectorAll('[data-owner-filter]').forEach(button => {
+        const selected = button.dataset.ownerFilter === ownerHistoryFilter;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-pressed', String(selected));
+    });
+    renderPriorDeedOwners();
+}
+
+function renderPriorDeedOwners() {
+    const container = document.getElementById('historical-owners-list');
+    if (!container || !buildingData) return;
+    const allOwners = getPriorDeedOwners(buildingData.parties || []);
+    const owners = ownerHistoryFilter === 'people'
+        ? allOwners.filter(owner => owner.is_person)
+        : allOwners;
+
+    if (!owners.length) {
+        container.innerHTML = '<div class="no-data owner-filter-empty">No people were confidently identified in the deed-owner history.</div>';
+        return;
+    }
+
+    container.innerHTML = owners.slice(0, 50).map(owner => {
+        const address = [owner.address_1, owner.address_2, owner.city,
+                         owner.state, owner.zip_code].filter(Boolean).join(', ');
+        const kindLabel = owner.is_person ? 'Person'
+            : owner.entity_kind === 'organization' ? 'Organization'
+            : owner.entity_kind === 'multiple' ? 'Multiple parties' : 'Unclassified';
+        return `
+            <div class="historical-owner-card">
+                <div class="ho-main">
+                    <div class="ho-name">${owner.party_name}</div>
+                    <span class="entity-kind-badge entity-${owner.entity_kind}">${kindLabel}</span>
+                </div>
+                ${owner.recorded_date ? `<div class="ho-date">Deed recorded: ${formatDate(owner.recorded_date)}</div>` : ''}
+                ${address ? `<div class="ho-address">${address}</div>` : ''}
+            </div>`;
+    }).join('');
 }
 
 // ============================================================================
@@ -1392,6 +1488,9 @@ function renderTransactionsTab() {
         const buyers = txnParties.filter(p => p.party_type === 'buyer');
         const sellers = txnParties.filter(p => p.party_type === 'seller');
         const lenders = txnParties.filter(p => p.party_type === 'lender');
+        const borrowers = txnParties.filter(p => p.party_type === 'borrower');
+        const assignors = txnParties.filter(p => p.party_type === 'assignor');
+        const assignees = txnParties.filter(p => p.party_type === 'assignee');
         
         html += `
         <div class="transaction-card" data-doc-type="${txn.doc_type}" data-amount="${txn.doc_amount || 0}">
@@ -1414,6 +1513,15 @@ function renderTransactionsTab() {
         }
         if (lenders.length > 0) {
             html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => l.party_name).join(', ') + '</div>';
+        }
+        if (borrowers.length > 0) {
+            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => p.party_name).join(', ') + '</div>';
+        }
+        if (assignors.length > 0) {
+            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => p.party_name).join(', ') + '</div>';
+        }
+        if (assignees.length > 0) {
+            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => p.party_name).join(', ') + '</div>';
         }
         
         html += '</div>';
@@ -1474,6 +1582,9 @@ function filterTransactions() {
         const buyers = txnParties.filter(p => p.party_type === 'buyer');
         const sellers = txnParties.filter(p => p.party_type === 'seller');
         const lenders = txnParties.filter(p => p.party_type === 'lender');
+        const borrowers = txnParties.filter(p => p.party_type === 'borrower');
+        const assignors = txnParties.filter(p => p.party_type === 'assignor');
+        const assignees = txnParties.filter(p => p.party_type === 'assignee');
         
         html += `
         <div class="transaction-card" data-doc-type="${txn.doc_type}" data-amount="${txn.doc_amount || 0}">
@@ -1496,6 +1607,15 @@ function filterTransactions() {
         }
         if (lenders.length > 0) {
             html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => l.party_name).join(', ') + '</div>';
+        }
+        if (borrowers.length > 0) {
+            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => p.party_name).join(', ') + '</div>';
+        }
+        if (assignors.length > 0) {
+            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => p.party_name).join(', ') + '</div>';
+        }
+        if (assignees.length > 0) {
+            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => p.party_name).join(', ') + '</div>';
         }
         
         html += '</div>';
@@ -1759,15 +1879,7 @@ function showPermitDetails(index) {
  */
 function buildEnrichButton(permit, contactName, contactType, licenseNumber = null, licenseType = null, existingPhone = null) {
     if (!contactName) return '';
-    
-    // Check if this looks like a person name (not a business)
-    const businessIndicators = ['LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'COMPANY', 'PROPERTIES', 'REALTY'];
-    const upperName = contactName.toUpperCase();
-    const isLikelyBusiness = businessIndicators.some(ind => upperName.includes(ind));
-    
-    if (isLikelyBusiness) {
-        return ''; // Don't show enrich button for businesses
-    }
+    if (!looksLikeHumanName(contactName)) return '';
     
     const bbl = buildingData?.building?.bbl || BBL;
     const buildingId = buildingData?.building?.id;
@@ -1981,8 +2093,8 @@ async function showLicenseInfo(licenseNumber, licenseType) {
         if (displayPermits.length > 0) {
             permitsHtml = '<div class="license-permits-list"><h4>Recent Permits</h4>';
             displayPermits.forEach(p => {
-                const dateStr = p.issue_date ? new Date(p.issue_date).toLocaleDateString() : 
-                               (p.filing_date ? 'Filed ' + new Date(p.filing_date).toLocaleDateString() : 'No date');
+                const dateStr = p.issue_date ? formatDate(p.issue_date) :
+                               (p.filing_date ? 'Filed ' + formatDate(p.filing_date) : 'No date');
                 permitsHtml += `
                     <div class="license-permit-item">
                         <div class="permit-item-header">
@@ -2500,7 +2612,7 @@ function renderActivityTab() {
     }
     
     // Pills, not emoji: the event's type is what the reader filters on.
-    const typeLabels = { permit: 'Permit', transaction: 'Deed / loan', violation: 'Violation' };
+    const typeLabels = { permit: 'Permit', transaction: 'Property record', violation: 'Violation' };
 
     let html = '<div class="activity-timeline">';
 
@@ -2509,7 +2621,9 @@ function renderActivityTab() {
         html += `
         <div class="activity-item" data-event-type="${type}">
             <div class="activity-date">${formatDate(event.date)}</div>
-            <span class="activity-pill pill-${type}">${typeLabels[type] || type}</span>
+            <span class="activity-pill pill-${type}">${type === 'transaction' && event.document_type
+                ? getDocTypeLabel(event.document_type)
+                : (typeLabels[type] || type)}</span>
             <div class="activity-content">
                 <div class="activity-title">${event.title}</div>
                 <div class="activity-description">${event.description}</div>
@@ -2732,17 +2846,22 @@ async function unlockPermitContact(enrichmentId) {
 
 function formatDate(dateStr) {
     if (!dateStr) return 'Unknown';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    // PostgreSQL DATE values arrive as YYYY-MM-DD. JavaScript interprets
+    // that form as midnight UTC, which renders as the previous day in NYC.
+    const text = String(dateStr);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(text)
+        ? new Date(`${text}T12:00:00`)
+        : new Date(text);
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
+    });
 }
 
 function formatPermitDate(permit) {
     if (permit.issue_date) {
-        const date = new Date(permit.issue_date);
-        return 'Issued: ' + date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        return 'Issued: ' + formatDate(permit.issue_date);
     } else if (permit.filing_date) {
-        const date = new Date(permit.filing_date);
-        return 'Filed: ' + date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        return 'Filed: ' + formatDate(permit.filing_date);
     }
     return 'No Date';
 }
@@ -2763,6 +2882,7 @@ function getDocTypeLabel(docType) {
         'DEED': 'Deed Transfer',
         'DEEDO': 'Deed (Other)',
         'MTGE': 'Mortgage',
+        'M&CON': 'Mortgage & Consolidation',
         'AGMT': 'Agreement',
         'SAT': 'Satisfaction of Mortgage',
         'SATF': 'Satisfaction (Full)',

@@ -96,6 +96,16 @@ def main():
     
     # Track success/failure
     results = {}
+
+    # ===== STEP 0: Safe additive schema migrations =====
+    print_step(0, "Apply Additive Data-Freshness Migrations")
+    results['migrations'] = run_script(
+        'migrate_add_freshness_and_jobs.py',
+        'Create source-specific freshness clocks and durable enrichment queue'
+    )
+    if not results['migrations']:
+        print_error("Migration failed - cannot safely continue")
+        sys.exit(1)
     
     # ===== STEP 1: Link Permits to Buildings =====
     print_step(1, "Link Permits to Buildings (BBL Generation)")
@@ -118,6 +128,16 @@ def main():
     if not results['step2']:
         print_warning("Step 2 failed - continuing to next steps")
     
+    # Flag every tracked property touched by a recently-recorded deed before
+    # the normal ACRIS stale-row selection runs.
+    print_step('2b', "Detect Recent ACRIS Activity")
+    results['recent_sales'] = run_script(
+        'sync_recent_sales.py',
+        'Flag properties with recent deeds, mortgages, assignments, or satisfactions'
+    )
+    if not results['recent_sales']:
+        print_warning("Recent-sale detection failed - continuing with stale-window refresh")
+
     # ===== STEP 3: Enrich from ACRIS =====
     print_step(3, "Enrich from ACRIS (Transaction History)")
     results['step3'] = run_script(
@@ -167,6 +187,15 @@ def main():
 
     if not results['geocode']:
         print_warning("Geocoding failed - pipeline otherwise complete")
+
+    # ===== STEP 8: Recover auto-add work interrupted by web-worker restarts =====
+    print_step(8, "Process Durable Property Enrichment Queue")
+    results['property_jobs'] = run_script(
+        'process_property_enrichment_jobs.py',
+        'Recover and finish auto-add enrichment jobs left by web workers'
+    )
+    if not results['property_jobs']:
+        print_warning("Property enrichment queue processing failed")
     
     # ===== SUMMARY =====
     end_time = datetime.now()
@@ -184,7 +213,7 @@ def main():
         print(f"  {step:12} {status}")
     
     # Overall status
-    critical_steps = ['step1', 'step2']  # Must succeed
+    critical_steps = ['migrations', 'step1', 'step2']  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
     
     if critical_failed:

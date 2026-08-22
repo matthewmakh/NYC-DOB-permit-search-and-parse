@@ -20,6 +20,7 @@ import os
 import sys
 import requests
 import time
+from datetime import datetime
 from dotenv import load_dotenv
 
 from socrata_client import SocrataClient, soql_quote, bbl_parts
@@ -105,6 +106,8 @@ def get_pluto_data_for_bbl(bbl):
 
         result = {
             'owner_name': record.get('ownername'),
+            'address': record.get('address'),
+            'bin': record.get('bin'),
             'building_class': record.get('bldgclass'),
             'land_use': record.get('landuse'),
             'residential_units': _num(record.get('unitsres'), int) or 0,
@@ -227,8 +230,9 @@ def get_hpd_data_for_bbl(bbl):
         reg_id = registration[0].get('registrationid')
         result['hpd_registration_id'] = reg_id
 
-        # 2. All contacts for the registration in one call. Owner name comes
-        # from HeadOfficer > CorporateOwner > IndividualOwner; we also keep
+        # 2. All contacts for the registration in one call. Explicit owner
+        # contact types outrank officers: a HeadOfficer is a corporate role,
+        # not proof that the person owns the property. We also keep
         # the managing agent and site manager, and the owner's mailing
         # address.
         if reg_id:
@@ -239,18 +243,23 @@ def get_hpd_data_for_bbl(bbl):
             for c in contacts:
                 by_type.setdefault((c.get('type') or '').strip(), []).append(c)
 
-            for contact_type in ('HeadOfficer', 'CorporateOwner', 'IndividualOwner'):
-                for c in by_type.get(contact_type, []):
-                    name = _contact_name(c)
-                    if name:
-                        result['owner_name_hpd'] = name
-                        result['hpd_owner_business_address'] = _contact_address(c)
-                        result['hpd_owner_business_city'] = (c.get('businesscity') or '').strip() or None
-                        result['hpd_owner_business_state'] = (c.get('businessstate') or '').strip() or None
-                        result['hpd_owner_business_zip'] = (c.get('businesszip') or '').strip() or None
-                        break
-                if result['owner_name_hpd']:
-                    break
+            owner_contacts = []
+            for contact_type in ('CorporateOwner', 'IndividualOwner', 'JointOwner'):
+                owner_contacts.extend(by_type.get(contact_type, []))
+            if not owner_contacts:
+                owner_contacts = by_type.get('HeadOfficer', [])
+
+            owner_names = []
+            for c in owner_contacts:
+                name = _contact_name(c)
+                if name and name not in owner_names:
+                    owner_names.append(name)
+                if name and result['hpd_owner_business_address'] is None:
+                    result['hpd_owner_business_address'] = _contact_address(c)
+                    result['hpd_owner_business_city'] = (c.get('businesscity') or '').strip() or None
+                    result['hpd_owner_business_state'] = (c.get('businessstate') or '').strip() or None
+                    result['hpd_owner_business_zip'] = (c.get('businesszip') or '').strip() or None
+            result['owner_name_hpd'] = ' & '.join(owner_names) or None
 
             for c in by_type.get('Agent', []):
                 result['hpd_agent_name'] = _contact_name(c)
@@ -328,6 +337,10 @@ def enrich_buildings_from_pluto():
     print("🏢 Step 2: Tri-Source Building Enrichment (PLUTO + RPAD + HPD)")
     print("=" * 70)
     
+    available = _buildings_columns(cur)
+    freshness_column = ('property_last_enriched'
+                        if 'property_last_enriched' in available else 'last_updated')
+
     # Rotating refresh: EVERY building goes stale after 30 days, not just
     # ones missing owner data — that old gating meant violation/complaint
     # counts froze forever once a building had an owner name. Work is
@@ -335,14 +348,15 @@ def enrich_buildings_from_pluto():
     # stays short and the whole portfolio rotates in ~portfolio/limit days.
     # Never-enriched buildings jump the queue.
     batch_limit = int(os.getenv('STEP2_BATCH_LIMIT', '4000'))
-    cur.execute("""
+    cur.execute(f"""
         SELECT id, bbl, address
         FROM buildings
         WHERE bbl IS NOT NULL
-        AND (last_updated IS NULL OR last_updated < NOW() - INTERVAL '30 days')
+        AND ({freshness_column} IS NULL
+             OR {freshness_column} < NOW() - INTERVAL '30 days')
         ORDER BY (current_owner_name IS NULL AND owner_name_rpad IS NULL
                   AND owner_name_hpd IS NULL) DESC,
-                 last_updated ASC NULLS FIRST
+                 {freshness_column} ASC NULLS FIRST
         LIMIT %s
     """, (batch_limit,))
 
@@ -405,32 +419,33 @@ def enrich_buildings_from_pluto():
             if has_hpd:
                 sources.append("HPD")
             
-            if sources:
-                print(f"   ✓ Already enriched ({' + '.join(sources)})")
-                already_enriched += 1
-            else:
-                print(f"   ℹ️  No data found in any source - marking as attempted")
-                # Mark as attempted to avoid re-querying on future runs
-                try:
+            print(f"   ✓ Sources checked; no new rows"
+                  + (f" (existing: {' + '.join(sources)})" if sources else ""))
+            try:
+                if 'property_last_enriched' in available:
                     cur.execute("""
                         UPDATE buildings
-                        SET last_updated = CURRENT_TIMESTAMP
+                        SET property_last_attempted = CURRENT_TIMESTAMP,
+                            property_last_enriched = CURRENT_TIMESTAMP,
+                            property_last_error = NULL,
+                            last_updated = CURRENT_TIMESTAMP
                         WHERE id = %s
                     """, (building_id,))
-                    conn.commit()
-                except Exception as e:
-                    print(f"   ❌ Database error: {e}")
+                else:
+                    cur.execute("""
+                        UPDATE buildings SET last_updated = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (building_id,))
+                conn.commit()
+                already_enriched += 1
+            except Exception as e:
+                conn.rollback()
+                print(f"   ❌ Database error: {e}")
                 failed += 1
-            continue
-        
-        # Skip if errors occurred
-        if pluto_error or rpad_error or hpd_error:
-            failed += 1
             continue
         
         # Build update query dynamically. Optional (post-migration) columns
         # are written only when they exist so the script runs either way.
-        available = _buildings_columns(cur)
         update_parts = []
         update_values = []
 
@@ -445,6 +460,10 @@ def enrich_buildings_from_pluto():
         # PLUTO data (corporate ownership + geometry + zoning headroom)
         if pluto_data:
             add_field("current_owner_name", pluto_data['owner_name'])
+            if pluto_data.get('address'):
+                add_field("address", pluto_data['address'])
+            if pluto_data.get('bin'):
+                add_field("bin", pluto_data['bin'])
             add_field("building_class", pluto_data['building_class'])
             add_field("land_use", pluto_data['land_use'])
             add_field("residential_units", pluto_data['residential_units'])
@@ -503,8 +522,23 @@ def enrich_buildings_from_pluto():
             if hpd_data['hpd_total_complaints'] > 0:
                 print(f"      📋 Complaints: {hpd_data['hpd_open_complaints']} open / {hpd_data['hpd_total_complaints']} total")
         
-        # Execute update
-        update_parts.append("last_updated = CURRENT_TIMESTAMP")
+        # Source-specific freshness prevents ACRIS, SOS, or a failed request
+        # from making property ownership look fresh for another 30 days.
+        errors = [e for e in (pluto_error, rpad_error, hpd_error) if e]
+        add_optional("property_last_attempted", datetime.now())
+        add_optional("property_last_error", '; '.join(errors) if errors else None)
+        if not errors:
+            add_optional("property_last_enriched", datetime.now())
+            update_parts.append("last_updated = CURRENT_TIMESTAMP")
+        elif 'property_last_enriched' not in available:
+            # On pre-migration databases do not advance the shared timestamp
+            # after a partial failure; the next run should retry promptly.
+            failed += 1
+
+        if not update_parts:
+            failed += 1
+            continue
+
         update_values.append(building_id)
         
         query = f"""
@@ -517,6 +551,8 @@ def enrich_buildings_from_pluto():
             cur.execute(query, update_values)
             conn.commit()
             enriched += 1
+            if errors:
+                failed += 1
         except Exception as e:
             print(f"   ❌ Database error: {e}")
             conn.rollback()

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Recent-sales sync — the staleness fixer.
+Recent-ACRIS sync — the staleness fixer.
 
 The per-building ACRIS refresh only re-checks each building every 30 days,
-so a sale recorded yesterday can sit invisible for weeks. This script works
-the other way around: it sweeps ALL deeds recorded citywide in the last
-LOOKBACK_DAYS (via the pre-filtered "ACRIS DEEDs" view), maps them to BBLs
+so a deed, mortgage, assignment, or satisfaction recorded yesterday can sit
+invisible for weeks. This script works the other way around: it sweeps ALL
+ACRIS documents recorded citywide in the last LOOKBACK_DAYS, maps them to BBLs
 through the Legals dataset, and immediately flags matching buildings for
 re-enrichment so the nightly pipeline refreshes them on its next run.
 
@@ -56,16 +56,16 @@ def main():
     client = SocrataClient()
     since = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime('%Y-%m-%dT00:00:00')
 
-    print(f"Recent-sales sync: deeds recorded since {since[:10]}")
+    print(f"Recent-ACRIS sync: documents recorded since {since[:10]}")
 
-    # 1. Every deed recorded citywide in the window (pre-filtered view of
-    #    the ACRIS master, so no doc_type filtering needed).
-    deeds = client.get_all('acris_deeds_view', page_size=1000, max_rows=200000, **{
-        '$select': 'document_id,recorded_datetime,document_amt',
+    # 1. Every recorded document in the window. Limiting this to deeds made
+    #    new mortgages and satisfactions remain stale for up to 30 days.
+    documents = client.get_all('acris_master', page_size=1000, max_rows=300000, **{
+        '$select': 'document_id,doc_type,recorded_datetime',
         '$where': f"recorded_datetime >= '{since}'",
     })
-    doc_ids = sorted({d['document_id'] for d in deeds if d.get('document_id')})
-    print(f"   {len(doc_ids)} deeds recorded citywide")
+    doc_ids = sorted({d['document_id'] for d in documents if d.get('document_id')})
+    print(f"   {len(doc_ids)} ACRIS documents recorded citywide")
     if not doc_ids:
         return
 
@@ -94,7 +94,7 @@ def main():
 
     print(f"   ✅ {tracked} of those BBLs are in our database; "
           f"{flagged} flagged for re-enrichment on the next pipeline run")
-    print(f"   ℹ️  {len(bbls) - tracked} recently-sold properties are NOT tracked yet "
+    print(f"   ℹ️  {len(bbls) - tracked} recently-active properties are NOT tracked yet "
           f"(potential lead-source expansion)")
 
 

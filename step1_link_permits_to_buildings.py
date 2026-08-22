@@ -35,11 +35,12 @@ if not DATABASE_URL:
     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 
-def derive_bbl_from_permit(block, lot, permit_no=None):
+def derive_bbl_from_permit(block, lot, permit_no=None, borough=None):
     """
     Create BBL from block and lot
     BBL format: BBBBBLLLL where B is borough code (1-5), block is 5 digits, lot is 4 digits
-    Borough is extracted from the first character of the permit number
+    Borough is taken from the permit's borough field when available, then
+    from the permit number prefix. Ambiguous rows are left unlinked.
     """
     if not block or not lot:
         return None
@@ -63,9 +64,16 @@ def derive_bbl_from_permit(block, lot, permit_no=None):
         'S': '5',  # Staten Island alternate
     }
     
-    # Extract borough code from permit number (first character)
-    borough_code = "3"  # Default to Brooklyn
-    if permit_no and len(permit_no) > 0:
+    borough_names = {
+        'MANHATTAN': '1', 'BRONX': '2', 'BROOKLYN': '3',
+        'QUEENS': '4', 'STATEN ISLAND': '5', 'RICHMOND': '5',
+    }
+    borough_text = str(borough or '').strip().upper()
+    borough_code = borough_names.get(borough_text)
+    if not borough_code and borough_text in {'1', '2', '3', '4', '5'}:
+        borough_code = borough_text
+
+    if not borough_code and permit_no and len(permit_no) > 0:
         first_char = permit_no[0].upper()
         # Check if it's already a numeric code (1-5)
         if first_char in ['1', '2', '3', '4', '5']:
@@ -73,9 +81,10 @@ def derive_bbl_from_permit(block, lot, permit_no=None):
         # Check if it's a letter code (M, X, B, Q, R, S)
         elif first_char in letter_to_number:
             borough_code = letter_to_number[first_char]
-        else:
-            print(f"⚠️ Invalid borough code in permit {permit_no}: {first_char}")
-            borough_code = "3"  # Fallback to Brooklyn
+
+    if not borough_code:
+        print(f"⚠️ Cannot determine borough for permit {permit_no}; leaving BBL unset")
+        return None
     
     # Pad block to 5 digits, lot to 4 digits
     block_padded = block.zfill(5)
@@ -117,7 +126,7 @@ def link_permits_to_buildings():
     # Phase 1: Derive BBL for permits with block/lot but no BBL
     print("\n📊 Phase 1: Deriving BBLs from block/lot...", flush=True)
     cur.execute("""
-        SELECT id, permit_no, address, block, lot, bin
+        SELECT id, permit_no, address, borough, block, lot, bin
         FROM permits
         WHERE block IS NOT NULL 
         AND lot IS NOT NULL 
@@ -129,7 +138,8 @@ def link_permits_to_buildings():
     
     derived_count = 0
     for permit in permits_to_derive:
-        bbl = derive_bbl_from_permit(permit['block'], permit['lot'], permit['permit_no'])
+        bbl = derive_bbl_from_permit(
+            permit['block'], permit['lot'], permit['permit_no'], permit['borough'])
         if bbl:
             cur.execute("UPDATE permits SET bbl = %s WHERE id = %s", (bbl, permit['id']))
             derived_count += 1
@@ -161,11 +171,11 @@ def link_permits_to_buildings():
     for building in buildings_to_create:
         try:
             cur.execute("""
-                INSERT INTO buildings (bbl, address, block, lot, bin, last_updated)
-                VALUES (%s, %s, %s, %s, %s, NULL)
+                INSERT INTO buildings (bbl, address, borough, block, lot, bin, last_updated)
+                VALUES (%s, %s, %s, %s, %s, %s, NULL)
                 ON CONFLICT (bbl) DO NOTHING
-            """, (building['bbl'], building['address'], building['block'], 
-                  building['lot'], building['bin']))
+            """, (building['bbl'], building['address'], building['bbl'][0],
+                  building['block'], building['lot'], building['bin']))
             buildings_created += 1
             
             if buildings_created % 100 == 0:
@@ -176,10 +186,33 @@ def link_permits_to_buildings():
             continue
     
     conn.commit()
+
+    # Phase 3: actually link the rows. Older versions created buildings but
+    # never populated permits.building_id despite this script's name and
+    # documentation. Keep compatibility with databases that predate that
+    # optional column.
+    cur.execute("""
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'permits' AND column_name = 'building_id'
+    """)
+    permits_have_building_id = cur.fetchone() is not None
+    linked_by_id = 0
+    if permits_have_building_id:
+        cur.execute("""
+            UPDATE permits p
+            SET building_id = b.id
+            FROM buildings b
+            WHERE p.bbl = b.bbl
+              AND p.building_id IS DISTINCT FROM b.id
+        """)
+        linked_by_id = cur.rowcount
+        conn.commit()
     
     print(f"\n✅ Complete!")
     print(f"   Buildings created: {buildings_created}")
     print(f"   BBLs derived: {derived_count}")
+    if permits_have_building_id:
+        print(f"   Permit rows linked by building_id: {linked_by_id}")
     
     # Show summary stats
     cur.execute("SELECT COUNT(DISTINCT bbl) FROM buildings WHERE bbl IS NOT NULL")

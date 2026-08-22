@@ -389,7 +389,7 @@ def _ensure_building_row(conn, lookup):
         return row[0], False
     cur.execute("""
         INSERT INTO buildings (bbl, address, borough, block, lot, bin, last_updated)
-        VALUES (%(bbl)s, %(address)s, %(borough)s, %(block)s, %(lot)s, %(bin)s, NOW())
+        VALUES (%(bbl)s, %(address)s, %(borough)s, %(block)s, %(lot)s, %(bin)s, NULL)
         RETURNING id
     """, lookup)
     new_id = cur.fetchone()[0]
@@ -408,7 +408,7 @@ def _apply_dict_update(conn, building_id, columns_to_values):
     cur = conn.cursor()
     set_clause = ', '.join(f"{k} = %s" for k in updates.keys())
     cur.execute(
-        f"UPDATE buildings SET {set_clause}, last_updated = NOW() WHERE id = %s",
+        f"UPDATE buildings SET {set_clause} WHERE id = %s",
         list(updates.values()) + [building_id],
     )
     conn.commit()
@@ -425,6 +425,8 @@ def _run_pluto(conn, building_id, bbl):
         return 'no data'
     n = _apply_dict_update(conn, building_id, {
         'current_owner_name': data.get('owner_name'),
+        'address': data.get('address'),
+        'bin': data.get('bin'),
         'building_class': data.get('building_class'),
         'land_use': data.get('land_use'),
         'residential_units': data.get('residential_units'),
@@ -504,6 +506,8 @@ def _run_tax_liens(conn, building_id, bbl):
     update_building_tax_lien_data(cur, building_id, data)
     conn.commit()
     cur.close()
+    if data.get('_errors'):
+        return 'partial; error: ' + '; '.join(data['_errors'])
     return 'updated'
 
 
@@ -586,6 +590,37 @@ def run_free_enrichment(conn, building_id, bbl):
                 conn.rollback()
             except Exception:
                 pass
+
+    # PLUTO/RPAD/HPD share one property-source freshness clock. Only a clean
+    # pass advances it; partial API failures remain immediately retryable.
+    property_errors = [report[name] for name in ('pluto', 'rpad', 'hpd')
+                       if report.get(name, '').startswith('error:')]
+    try:
+        cur = conn.cursor()
+        cur.execute("SAVEPOINT property_freshness")
+        try:
+            cur.execute("""
+                UPDATE buildings
+                SET property_last_attempted = CURRENT_TIMESTAMP,
+                    property_last_enriched = CASE WHEN %s THEN CURRENT_TIMESTAMP
+                                                  ELSE property_last_enriched END,
+                    property_last_error = %s,
+                    last_updated = CASE WHEN %s THEN CURRENT_TIMESTAMP
+                                        ELSE last_updated END
+                WHERE id = %s
+            """, (not property_errors,
+                  '; '.join(property_errors)[:1000] if property_errors else None,
+                  not property_errors, building_id))
+            cur.execute("RELEASE SAVEPOINT property_freshness")
+        except psycopg2.Error:
+            cur.execute("ROLLBACK TO SAVEPOINT property_freshness")
+        conn.commit()
+        cur.close()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     return report
 
 
@@ -593,18 +628,155 @@ def run_free_enrichment(conn, building_id, bbl):
 # Top-level entry point used by the Flask route
 # ---------------------------------------------------------------------------
 
-def _enrich_in_background(connect, building_id, bbl):
-    """Run the free enrichment on its own thread and its own connection.
+def _enqueue_enrichment_job(conn, building_id, bbl):
+    """Persist auto-add work before returning the web response."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SAVEPOINT enqueue_property")
+        try:
+            cur.execute("""
+                INSERT INTO property_enrichment_jobs
+                    (building_id, bbl, status, attempts, available_at,
+                     locked_at, last_error, updated_at)
+                VALUES (%s, %s, 'queued', 0, CURRENT_TIMESTAMP,
+                        NULL, NULL, CURRENT_TIMESTAMP)
+                ON CONFLICT (building_id) DO UPDATE
+                SET bbl = EXCLUDED.bbl,
+                    status = CASE
+                        WHEN property_enrichment_jobs.status = 'running'
+                         AND property_enrichment_jobs.locked_at >
+                             NOW() - INTERVAL '20 minutes'
+                        THEN 'running' ELSE 'queued' END,
+                    attempts = CASE
+                        WHEN property_enrichment_jobs.status = 'running'
+                         AND property_enrichment_jobs.locked_at >
+                             NOW() - INTERVAL '20 minutes'
+                        THEN property_enrichment_jobs.attempts ELSE 0 END,
+                    available_at = CURRENT_TIMESTAMP,
+                    locked_at = CASE
+                        WHEN property_enrichment_jobs.status = 'running'
+                         AND property_enrichment_jobs.locked_at >
+                             NOW() - INTERVAL '20 minutes'
+                        THEN property_enrichment_jobs.locked_at ELSE NULL END,
+                    last_error = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            """, (building_id, bbl))
+            job_id = cur.fetchone()[0]
+            cur.execute("RELEASE SAVEPOINT enqueue_property")
+            conn.commit()
+            return job_id
+        except psycopg2.Error:
+            # Compatibility during a rolling deploy before the additive
+            # migration runs. The caller temporarily uses the direct path.
+            cur.execute("ROLLBACK TO SAVEPOINT enqueue_property")
+            conn.commit()
+            return None
+    finally:
+        cur.close()
 
-    The web request that started it has already returned — running the six
-    enrichment steps inline held a sync gunicorn worker for 10-120s, and
-    with only two workers that turned into edge 502s for everyone whenever
-    the database was busy. A daemon thread dying with the worker is fine:
-    the nightly cron re-enriches whatever was left half-done.
-    """
+
+def _finish_enrichment_job(conn, job_id, report=None, error=None):
+    report_errors = []
+    for name, value in (report or {}).items():
+        if isinstance(value, str) and 'error:' in value:
+            report_errors.append(f'{name}: {value}')
+    message = error or '; '.join(report_errors)
+    cur = conn.cursor()
+    if message:
+        cur.execute("""
+            UPDATE property_enrichment_jobs
+            SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'queued' END,
+                available_at = CURRENT_TIMESTAMP
+                    + (LEAST(attempts, 5) * INTERVAL '5 minutes'),
+                locked_at = NULL, last_error = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (message[:2000], job_id))
+    else:
+        cur.execute("""
+            UPDATE property_enrichment_jobs
+            SET status = 'completed', locked_at = NULL, last_error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (job_id,))
+    conn.commit()
+    cur.close()
+
+
+def process_enrichment_job(connect, job_id):
+    """Claim and process one durable job. Safe if two workers race."""
+    conn = connect()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            UPDATE property_enrichment_jobs
+            SET status = 'running', attempts = attempts + 1,
+                locked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND status = 'queued'
+              AND available_at <= CURRENT_TIMESTAMP
+            RETURNING building_id, bbl
+        """, (job_id,))
+        job = cur.fetchone()
+        conn.commit()
+        cur.close()
+        if not job:
+            return None
+        report = run_free_enrichment(conn, job['building_id'], job['bbl'])
+        _finish_enrichment_job(conn, job_id, report=report)
+        print(f"[auto-add] enrichment report for {job['bbl']}: {report}", flush=True)
+        return report
+    except Exception as exc:
+        try:
+            conn.rollback()
+            _finish_enrichment_job(conn, job_id, error=str(exc))
+        except Exception:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def process_queued_enrichment_jobs(connect, limit=25):
+    """Recover expired worker leases and drain ready jobs."""
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE property_enrichment_jobs
+            SET status = 'queued', locked_at = NULL,
+                available_at = CURRENT_TIMESTAMP,
+                last_error = COALESCE(last_error, 'worker lease expired'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'running'
+              AND locked_at < NOW() - INTERVAL '20 minutes'
+        """)
+        cur.execute("""
+            SELECT id FROM property_enrichment_jobs
+            WHERE status = 'queued' AND available_at <= CURRENT_TIMESTAMP
+            ORDER BY created_at LIMIT %s
+        """, (limit,))
+        job_ids = [row[0] for row in cur.fetchall()]
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    for queued_job_id in job_ids:
+        try:
+            process_enrichment_job(connect, queued_job_id)
+        except Exception:
+            log.exception('queued property enrichment failed for job=%s', queued_job_id)
+    return len(job_ids)
+
+
+def _enrich_in_background(connect, building_id, bbl, job_id=None):
+    """Start a best-effort worker for work already persisted in the queue."""
     def run():
         conn = None
         try:
+            if job_id is not None:
+                process_enrichment_job(connect, job_id)
+                return
             conn = connect()
             report = run_free_enrichment(conn, building_id, bbl)
             # print, not log: Railway shows stdout, and this report is the
@@ -652,8 +824,9 @@ def auto_add_property(connect, query, background=True):
         # User pasted a raw BBL. We don't have an address — Geoclient
         # requires house+street, not BBL, so we INSERT a minimal row with
         # just the BBL and let PLUTO fill in the rest.
-        lookup = {'bbl': bbl, 'address': None, 'borough': None,
-                  'block': None, 'lot': None, 'bin': None}
+        lookup = {'bbl': bbl, 'address': None, 'borough': bbl[0],
+                  'block': bbl[1:6].lstrip('0') or '0',
+                  'lot': bbl[6:10].lstrip('0') or '0', 'bin': None}
         resolved_note = 'accepted as a raw BBL'
     else:
         lookup, reason = resolve_address_to_property(query)
@@ -666,7 +839,8 @@ def auto_add_property(connect, query, background=True):
         building_id, created = _ensure_building_row(conn, lookup)
 
         if background:
-            _enrich_in_background(connect, building_id, lookup['bbl'])
+            job_id = _enqueue_enrichment_job(conn, building_id, lookup['bbl'])
+            _enrich_in_background(connect, building_id, lookup['bbl'], job_id)
             return {
                 'success': True,
                 'error': None,

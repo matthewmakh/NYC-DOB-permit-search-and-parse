@@ -239,13 +239,25 @@ def clean_phone(phone: Any) -> Optional[str]:
     return trunc(str(phone), 50)  # Keep original if invalid, just truncate
 
 
+_EMPTY_OWNER_NAMES = {'N/A', 'NA', 'NOT APPLICABLE', 'NONE', 'PR', '-'}
+
+
+def clean_owner_business(value: Any) -> Optional[str]:
+    """Drop DOB placeholder codes that otherwise masquerade as owners."""
+    cleaned = str(value or '').strip()
+    return None if not cleaned or cleaned.upper() in _EMPTY_OWNER_NAMES else cleaned
+
+
 # =============================================================================
 # EXPECTED FIELD MAPPINGS (for validation)
 # =============================================================================
 
 # Keys we expect from each API and their criticality
 BIS_EXPECTED_KEYS = {
-    'critical': ['job__'],  # filing_date OR issuance_date - checked separately
+    # PERMIT_SI_NO is NYC's declared row identifier. Job # identifies the
+    # filing and can legitimately repeat for several separately-issued work
+    # permits.
+    'critical': ['permit_si_no'],  # filing_date OR issuance_date checked separately
     'important': ['borough', 'block', 'lot', 'bin__', 'house__', 'street_name', 
                   'permit_status', 'job_type', 'gis_latitude', 'gis_longitude'],
     'optional': ['filing_date', 'issuance_date', 'job_start_date', 'expiration_date', 'zip_code', 'community_board',
@@ -262,7 +274,7 @@ FILINGS_EXPECTED_KEYS = {
 }
 
 APPROVED_EXPECTED_KEYS = {
-    'critical': ['job_filing_number', 'issued_date'],  # work_permit as fallback
+    'critical': ['work_permit', 'issued_date'],
     'important': ['borough', 'block', 'lot', 'bin', 'house_no', 'street_name',
                   'permit_status', 'work_type', 'latitude', 'longitude'],
     'optional': ['expired_date', 'zip_code', 'community_board', 'c_b_no',
@@ -311,18 +323,19 @@ def validate_record(record: Dict, expected_keys: Dict, source_name: str) -> List
     
     # Validate permit_no derivation
     if source_name == 'BIS':
-        permit_no = record.get('job__')
+        permit_no = record.get('permit_si_no')
         if not permit_no:
-            permit_no = f"{record.get('bin__', '')}_{record.get('issuance_date', '')}"
-        if not permit_no or permit_no == '_':
+            permit_no = '_'.join(str(record.get(field) or '') for field in (
+                'job__', 'job_doc___', 'work_type', 'permit_sequence__'))
+        if not permit_no or permit_no == '___':
             warnings.append("❌ permit_no would be empty/invalid")
     elif source_name == 'DOB NOW Filings':
         if not record.get('job_filing_number'):
             warnings.append("❌ job_filing_number missing")
     elif source_name == 'DOB NOW Approved':
-        permit_no = record.get('job_filing_number') or record.get('work_permit')
+        permit_no = record.get('work_permit')
         if not permit_no or permit_no in ('Permit is no', 'Permit is not yet issued'):
-            warnings.append("❌ No valid permit_no (job_filing_number or work_permit)")
+            warnings.append("❌ No valid work_permit")
     
     # Validate date fields - BIS uses MDY format, DOB NOW uses ISO
     date_fields = ['filing_date', 'issued_date', 'expired_date', 'job_start_date', 'expiration_date', 'issuance_date']
@@ -471,10 +484,6 @@ def run_debug_mode():
             # Find first record with valid permit_no
             valid_record = None
             for rec in approved_records:
-                permit_no = rec.get('job_filing_number')
-                if permit_no and permit_no not in ('Permit is no', 'Permit is not yet issued'):
-                    valid_record = rec
-                    break
                 permit_no = rec.get('work_permit')
                 if permit_no and permit_no not in ('Permit is no', 'Permit is not yet issued'):
                     valid_record = rec
@@ -615,7 +624,7 @@ class NYCOpenDataClient:
         'superintendent_business_name', 'owner_s_business_type', 'non_profit',
         'owner_s_business_name', 'owner_s_first_name', 'owner_s_last_name',
         'owner_s_house__', 'owner_s_house_street_name', 'city', 'state',
-        'owner_s_zip_code', 'owner_s_phone__', 'dobrundate', 'permit_si_no',
+        'owner_s_zip_code', 'dobrundate', 'permit_si_no',
         'gis_council_district', 'gis_census_tract', 'gis_nta_name',
         'gis_latitude', 'gis_longitude'
     ]
@@ -645,18 +654,26 @@ class NYCOpenDataClient:
         try:
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-            start_formatted = start_dt.strftime('%Y-%m-%dT00:00:00')
-            end_formatted = end_dt.strftime('%Y-%m-%dT23:59:59')
         except ValueError:
-            print(f"❌ Invalid date format. Use YYYY-MM-DD")
-            return []
+            raise ValueError("Invalid date format. Use YYYY-MM-DD")
+        if end_dt < start_dt:
+            raise ValueError("End date must be on or after start date")
+
+        # BIS publishes these fields as MM/DD/YYYY *text*, not timestamps.
+        # ISO comparisons silently return zero rows. Match the explicit date
+        # strings; this is exact and remains safe across month/year boundaries.
+        date_values = []
+        current = start_dt
+        while current <= end_dt:
+            date_values.append(f"'{current.strftime('%m/%d/%Y')}'")
+            current += timedelta(days=1)
+        dates_in = ','.join(date_values)
         
         # Match on filing OR issuance date: the product keys on issue_date,
         # and a permit filed months ago but issued inside the sync window
         # would never be picked up by a filing_date-only filter.
         where_clauses = [
-            f"((filing_date >= '{start_formatted}' AND filing_date <= '{end_formatted}') "
-            f"OR (issuance_date >= '{start_formatted}' AND issuance_date <= '{end_formatted}'))"
+            f"(filing_date in ({dates_in}) OR issuance_date in ({dates_in}))"
         ]
 
         if permit_type:
@@ -682,8 +699,7 @@ class NYCOpenDataClient:
             print(f"   Fetched {len(data)} permits (offset: {offset})")
             return data
         except requests.exceptions.RequestException as e:
-            print(f"❌ API Error: {e}")
-            return []
+            raise RuntimeError(f"BIS API request failed: {e}") from e
     
     def fetch_all_permits(
         self,
@@ -745,11 +761,12 @@ class DOBNowFilingsClient:
     # Fields we actually use
     SELECT_FIELDS = [
         'job_filing_number', 'job_type', 'filing_date', 'filing_status',
+        'current_status_date', 'job_description',
         'bin', 'house_no', 'street_name', 'borough', 'block', 'lot',
         'building_type', 'initial_cost', 'postcode', 'zip', 'commmunity_board',
         'existing_stories', 'proposed_no_of_stories', 'existing_dwelling_units',
-        'proposed_dwelling_units', 'owner_s_business_name', 'owner_s_street_name',
-        'city', 'state', 'applicant_first_name', 'applicant_last_name',
+        'proposed_dwelling_units', 'owner_s_business_name', 'owner_first_name',
+        'owner_last_name', 'owner_type', 'applicant_first_name', 'applicant_last_name',
         'applicant_license', 'council_district', 'census_tract', 'nta',
         'latitude', 'longitude', 'bbl'
     ]
@@ -776,8 +793,12 @@ class DOBNowFilingsClient:
         if not end_date:
             end_date = start_date
         
+        # A filing can be years old while its status changes today. Querying
+        # only filing_date made those changes invisible forever after the
+        # seven-day ingestion window closed.
         where_clauses = [
-            f"filing_date >= '{start_date}T00:00:00' AND filing_date <= '{end_date}T23:59:59'"
+            f"((filing_date >= '{start_date}T00:00:00' AND filing_date <= '{end_date}T23:59:59') "
+            f"OR (current_status_date >= '{start_date}T00:00:00' AND current_status_date <= '{end_date}T23:59:59'))"
         ]
         
         if job_type:
@@ -789,7 +810,7 @@ class DOBNowFilingsClient:
             '$where': ' AND '.join(where_clauses),
             '$limit': limit,
             '$offset': offset,
-            '$order': 'filing_date DESC, job_filing_number ASC'
+            '$order': 'current_status_date DESC, job_filing_number ASC'
         }
         
         if use_select:
@@ -802,8 +823,7 @@ class DOBNowFilingsClient:
             print(f"   [DOB NOW Filings] Fetched {len(data)} records (offset: {offset})")
             return data
         except requests.exceptions.RequestException as e:
-            print(f"❌ DOB NOW Filings API Error: {e}")
-            return []
+            raise RuntimeError(f"DOB NOW Filings API request failed: {e}") from e
 
 
 class DOBNowApprovedClient:
@@ -812,9 +832,11 @@ class DOBNowApprovedClient:
     # Fields we actually use
     SELECT_FIELDS = [
         'job_filing_number', 'work_permit', 'work_type', 'issued_date', 'expired_date',
+        'sequence_number', 'tracking_number',
         'bin', 'house_no', 'street_name', 'borough', 'block', 'lot',
         'permit_status', 'job_description', 'zip_code', 'community_board', 'c_b_no',
-        'owner_business_name', 'applicant_business_name', 'applicant_first_name',
+        'owner_business_name', 'owner_name', 'owner_street_address', 'owner_city',
+        'owner_state', 'owner_zip_code', 'applicant_business_name', 'applicant_first_name',
         'applicant_last_name', 'permittee_s_license_type', 'applicant_license',
         'council_district', 'census_tract', 'nta', 'latitude', 'longitude', 'bbl'
     ]
@@ -867,8 +889,7 @@ class DOBNowApprovedClient:
             print(f"   [DOB NOW Approved] Fetched {len(data)} records (offset: {offset})")
             return data
         except requests.exceptions.RequestException as e:
-            print(f"❌ DOB NOW Approved API Error: {e}")
-            return []
+            raise RuntimeError(f"DOB NOW Approved API request failed: {e}") from e
 
 
 # =============================================================================
@@ -894,13 +915,15 @@ BIS_COLUMNS = [
     'council_district', 'census_tract', 'nta_name', 'api_source', 'api_last_updated'
 ]
 
-# Column order for DOB NOW filings (33 columns - subset)
+# Column order for DOB NOW filings (owner mailing address is not published by
+# this dataset; city/state/zip belong to the applicant and must not be stored
+# as the owner's address).
 FILINGS_COLUMNS = [
     'permit_no', 'job_type', 'filing_date', 'bin', 'address', 'applicant',
     'block', 'lot', 'filing_status', 'work_description', 'job_number', 'bbl',
     'latitude', 'longitude', 'borough', 'house_number', 'street_name', 'zip_code',
     'community_board', 'bldg_type', 'stories', 'total_units', 'owner_business_name',
-    'owner_street_name', 'owner_city', 'owner_state', 'owner_zip_code',
+    'owner_first_name', 'owner_last_name', 'owner_business_type',
     'council_district', 'census_tract', 'nta_name', 'permittee_license_number',
     'api_source', 'api_last_updated'
 ]
@@ -930,11 +953,14 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
     
     for p in permits:
         try:
-            # Get permit_no (required)
-            permit_no = p.get('job__')
+            owner_business = clean_owner_business(p.get('owner_s_business_name'))
+            # NYC declares PERMIT_SI_NO as this dataset's row identifier. A
+            # job filing can have several work permits, so job__ is not unique.
+            permit_no = p.get('permit_si_no')
             if not permit_no:
-                permit_no = f"{p.get('bin__', '')}_{p.get('issuance_date', '')}"
-            if not permit_no or permit_no == '_':
+                permit_no = '_'.join(str(p.get(field) or '') for field in (
+                    'job__', 'job_doc___', 'work_type', 'permit_sequence__'))
+            if not permit_no or permit_no == '___':
                 skipped += 1
                 continue
             
@@ -953,7 +979,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
             # Applicant
             applicant = (
                 p.get('permittee_s_business_name') or 
-                p.get('owner_s_business_name') or 
+                owner_business or
                 f"{p.get('owner_s_first_name', '')} {p.get('owner_s_last_name', '')}".strip() or
                 None
             )
@@ -1023,7 +1049,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
                 trunc(p.get('superintendent_business_name'), 255),
                 trunc(p.get('owner_s_business_type'), 100),
                 trunc(p.get('non_profit'), 20),
-                trunc(p.get('owner_s_business_name'), 255),
+                trunc(owner_business, 255),
                 trunc(p.get('owner_s_first_name'), 100),
                 trunc(p.get('owner_s_last_name'), 100),
                 trunc(p.get('owner_s_house__'), 50),
@@ -1031,7 +1057,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
                 trunc(p.get('city'), 100),
                 trunc(p.get('state'), 20),
                 trunc(p.get('owner_s_zip_code'), 15),
-                trunc(p.get('owner_s_phone__'), 50),
+                None,  # BIS does not publish an owner phone field
                 dob_run,  # dob_run_date (parsed above)
                 trunc(p.get('permit_si_no'), 50),
                 trunc(p.get('gis_council_district'), 20),
@@ -1068,6 +1094,7 @@ def prepare_rows_dob_now_filings(filings: List[Dict]) -> Tuple[List[tuple], int]
     
     for f in filings:
         try:
+            owner_business = clean_owner_business(f.get('owner_s_business_name'))
             permit_no = f.get('job_filing_number')
             if not permit_no:
                 skipped += 1
@@ -1079,7 +1106,7 @@ def prepare_rows_dob_now_filings(filings: List[Dict]) -> Tuple[List[tuple], int]
             # Applicant
             applicant = (
                 f"{f.get('applicant_first_name', '')} {f.get('applicant_last_name', '')}".strip() or
-                f.get('owner_s_business_name') or
+                owner_business or
                 None
             )
             
@@ -1091,6 +1118,8 @@ def prepare_rows_dob_now_filings(filings: List[Dict]) -> Tuple[List[tuple], int]
                 work_desc_parts.append(f"Building: {f.get('building_type')}")
             if f.get('initial_cost'):
                 work_desc_parts.append(f"Est. Cost: ${f.get('initial_cost')}")
+            if f.get('job_description'):
+                work_desc_parts.append(str(f.get('job_description')).strip())
             work_description = ', '.join(work_desc_parts) if work_desc_parts else None
             
             # BBL (provided directly)
@@ -1121,11 +1150,10 @@ def prepare_rows_dob_now_filings(filings: List[Dict]) -> Tuple[List[tuple], int]
                 trunc(f.get('building_type'), 50),
                 trunc(f.get('existing_stories') or f.get('proposed_no_of_stories'), 20),
                 trunc(f.get('existing_dwelling_units') or f.get('proposed_dwelling_units'), 20),
-                trunc(f.get('owner_s_business_name'), 255),
-                trunc(f.get('owner_s_street_name'), 255),
-                trunc(f.get('city'), 100),
-                trunc(f.get('state'), 20),
-                trunc(f.get('zip'), 15),
+                trunc(owner_business, 255),
+                trunc(f.get('owner_first_name'), 100),
+                trunc(f.get('owner_last_name'), 100),
+                trunc(f.get('owner_type'), 100),
                 trunc(f.get('council_district'), 20),
                 trunc(f.get('census_tract'), 20),
                 trunc(f.get('nta'), 255),
@@ -1161,13 +1189,36 @@ def prepare_rows_dob_now_approved(permits: List[Dict]) -> Tuple[List[tuple], int
     
     for p in permits:
         try:
-            # Use job_filing_number to update existing filing records
-            permit_no = p.get('job_filing_number')
-            if not permit_no or permit_no == 'Permit is no':
-                permit_no = p.get('work_permit')
+            owner_business = clean_owner_business(p.get('owner_business_name'))
+            # One job filing can issue multiple work permits. The actual work
+            # permit is the durable identity; using job_filing_number here
+            # collapsed those permits into one row and moved amounts/statuses
+            # between unrelated work types.
+            permit_no = p.get('work_permit')
             if not permit_no or permit_no == 'Permit is not yet issued':
                 skipped += 1
                 continue
+
+            owner_name = (p.get('owner_name') or '').strip()
+            owner_first = owner_last = None
+            if owner_name and not owner_business:
+                if ',' in owner_name:
+                    last, first = (part.strip() for part in owner_name.split(',', 1))
+                    owner_first, owner_last = first or None, last or None
+                else:
+                    parts = owner_name.split()
+                    if len(parts) == 1:
+                        owner_first = parts[0]
+                    elif parts:
+                        owner_first, owner_last = parts[0], ' '.join(parts[1:])
+
+            owner_address = (p.get('owner_street_address') or '').strip()
+            owner_house = None
+            owner_street = owner_address or None
+            if owner_address:
+                address_parts = owner_address.split(maxsplit=1)
+                if len(address_parts) == 2 and any(ch.isdigit() for ch in address_parts[0]):
+                    owner_house, owner_street = address_parts
             
             # Build address
             address = f"{p.get('house_no', '')} {p.get('street_name', '')}".strip() or None
@@ -1206,21 +1257,21 @@ def prepare_rows_dob_now_approved(permits: List[Dict]) -> Tuple[List[tuple], int
                 trunc(p.get('zip_code'), 15),
                 trunc(p.get('community_board') or p.get('c_b_no'), 3),
                 # Owner fields
-                trunc(p.get('owner_business_name'), 255),
-                trunc(p.get('owner_first_name'), 100),
-                trunc(p.get('owner_last_name'), 100),
-                trunc(p.get('owner_business_type'), 100),
-                trunc(p.get('owner_house_number'), 50),
-                trunc(p.get('owner_street_name'), 255),
+                trunc(owner_business, 255),
+                trunc(owner_first, 100),
+                trunc(owner_last, 100),
+                None,
+                trunc(owner_house, 50),
+                trunc(owner_street, 255),
                 trunc(p.get('owner_city'), 100),
                 trunc(p.get('owner_state'), 20),
                 trunc(p.get('owner_zip_code'), 15),
-                trunc(p.get('owner_phone'), 50),
+                None,
                 # Permittee fields
-                trunc(p.get('permittee_first_name'), 100),
-                trunc(p.get('permittee_last_name'), 100),
-                trunc(p.get('permittee_business_name'), 255),
-                trunc(p.get('permittee_phone'), 50),
+                trunc(p.get('applicant_first_name'), 100),
+                trunc(p.get('applicant_last_name'), 100),
+                trunc(p.get('applicant_business_name'), 255),
+                None,
                 trunc(p.get('permittee_license_type'), 50),
                 trunc(p.get('permittee_license_number') or p.get('applicant_license'), 50),
                 # Location fields
@@ -1287,12 +1338,7 @@ class PermitDatabase:
             INSERT INTO permits ({columns})
             VALUES %s
             ON CONFLICT (permit_no) DO UPDATE SET
-                permit_status = EXCLUDED.permit_status,
-                exp_date = EXCLUDED.exp_date,
-                filing_date = EXCLUDED.filing_date,
-                proposed_job_start = EXCLUDED.proposed_job_start,
-                filing_status = EXCLUDED.filing_status,
-                api_last_updated = EXCLUDED.api_last_updated
+                {self._update_assignments(BIS_COLUMNS)}
         """
         
         return self._chunked_upsert(sql, rows, "BIS")
@@ -1311,9 +1357,7 @@ class PermitDatabase:
             INSERT INTO permits ({columns})
             VALUES %s
             ON CONFLICT (permit_no) DO UPDATE SET
-                filing_status = EXCLUDED.filing_status,
-                filing_date = EXCLUDED.filing_date,
-                api_last_updated = EXCLUDED.api_last_updated
+                {self._update_assignments(FILINGS_COLUMNS)}
         """
         
         return self._chunked_upsert(sql, rows, "DOB NOW Filings")
@@ -1332,19 +1376,21 @@ class PermitDatabase:
             INSERT INTO permits ({columns})
             VALUES %s
             ON CONFLICT (permit_no) DO UPDATE SET
-                permit_status = COALESCE(EXCLUDED.permit_status, permits.permit_status),
-                issue_date = COALESCE(EXCLUDED.issue_date, permits.issue_date),
-                exp_date = COALESCE(EXCLUDED.exp_date, permits.exp_date),
-                work_type = COALESCE(EXCLUDED.work_type, permits.work_type),
-                work_description = COALESCE(EXCLUDED.work_description, permits.work_description),
-                api_source = CASE 
-                    WHEN EXCLUDED.issue_date IS NOT NULL THEN 'dob_now_approved'
-                    ELSE permits.api_source
-                END,
-                api_last_updated = EXCLUDED.api_last_updated
+                {self._update_assignments(APPROVED_COLUMNS)}
         """
         
         return self._chunked_upsert(sql, rows, "DOB NOW Approved")
+
+    @staticmethod
+    def _update_assignments(columns: List[str]) -> str:
+        """Mirror the latest source row, including authoritative clears.
+
+        Each permit identity now belongs to one source, so a source NULL may
+        legitimately clear a stale owner/status value.
+        """
+        return ',\n                '.join(
+            f"{column} = EXCLUDED.{column}"
+            for column in columns if column != 'permit_no')
     
     def _chunked_upsert(self, sql: str, rows: List[tuple], source_name: str) -> Tuple[int, int]:
         """
@@ -1576,11 +1622,15 @@ def run_api_scraper(
         if total_fetched > 0:
             print(f"   ⚡ Speed: {total_fetched / total_time:.1f} records/sec")
         print("=" * 80)
+        if total_failed_chunks:
+            raise RuntimeError(
+                f"Permit ingestion incomplete: {total_failed_chunks} database chunk(s) failed")
     
     except Exception as e:
         print(f"\n❌ Scraper error: {e}")
         import traceback
         traceback.print_exc()
+        raise
     
     finally:
         db.close()
@@ -1633,9 +1683,7 @@ WHERE api_source IS NOT NULL
 GROUP BY api_source
 ORDER BY api_source;
 
--- 3. Verify update behavior: Approved updates existing filing rows
--- Find permit_no that appear in both filings and approved (via api_source history)
--- and check if issue_date is populated after approved runs
+-- 3. Verify approved work permits keep their own identities
 SELECT 
     p.permit_no,
     p.api_source,
@@ -1646,7 +1694,7 @@ SELECT
 FROM permits p
 WHERE p.api_source = 'dob_now_approved'
   AND p.issue_date IS NOT NULL
-  AND p.filing_date IS NOT NULL
+  AND p.permit_no <> p.job_number
 ORDER BY p.api_last_updated DESC
 LIMIT 20;
 

@@ -23,7 +23,7 @@ Fixes vs. the previous version:
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -31,7 +31,8 @@ from dotenv import load_dotenv
 
 from socrata_client import (
     SocrataClient, SocrataError, bbl_parts, soql_quote,
-    load_party_roles, party_role, is_deed, is_mortgage, is_satisfaction,
+    load_party_roles, party_role, is_deed, is_ownership_party,
+    is_mortgage, is_satisfaction,
 )
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -55,6 +56,7 @@ if not DATABASE_URL:
 # make the purchase "financed".
 CASH_WINDOW_BEFORE_DAYS = 5
 CASH_WINDOW_AFTER_DAYS = 90
+ACRIS_LOGIC_VERSION = 4  # also separates loan assignments from deed ownership
 
 _client = None
 
@@ -114,21 +116,32 @@ def get_document_ids_for_bbl(bbl):
 
 
 def _reference_counterpart_field(client):
-    """Find the column that names the referenced document.
-
-    The live dataset (verified 2026-08) has no document-id counterpart at
-    all — it links documents by CRFN via `reference_by_crfn_` (trailing
-    underscore included), with reel/page columns for pre-CRFN filings.
-    An id-shaped column is still preferred if Socrata ever restores one.
-    """
+    """Preferred counterpart column (compatibility helper for tests/tools)."""
     cols = client.get_columns('acris_references')
-    for col in sorted(cols):
-        if col.startswith('reference') and 'doc' in col and 'id' in col:
-            return col
+    # CRFN is the populated link for modern satisfactions in the live data.
+    # A document-id column also exists now, but choosing it exclusively drops
+    # valid CRFN-only satisfaction rows.
     for col in sorted(cols):
         if col.startswith('reference') and 'crfn' in col:
             return col
+    for col in sorted(cols):
+        if col.startswith('reference') and 'doc' in col and 'id' in col:
+            return col
     return 'reference_by_crfn_'
+
+
+def _reference_counterpart_fields(client):
+    """Every modern reference link field present in the dataset.
+
+    NYC uses CRFN for many satisfactions and document_id for some other
+    relationships. Both may be present on the schema while only one is
+    populated on a given row, so querying/processing only one is lossy.
+    """
+    cols = client.get_columns('acris_references')
+    fields = [col for col in sorted(cols)
+              if col.startswith('reference')
+              and (('crfn' in col) or ('doc' in col and 'id' in col))]
+    return fields or ['reference_by_crfn_']
 
 
 def get_acris_full_history(bbl):
@@ -159,7 +172,7 @@ def get_acris_full_history(bbl):
     # master rows carry. Pre-2003 reel/page references have no CRFN and are
     # skipped — those mortgages simply stay "status unknown" rather than
     # wrongly "open".
-    ref_field = _reference_counterpart_field(client)
+    ref_fields = _reference_counterpart_fields(client)
     crfn_to_doc = {}
     for m in masters:
         crfn = (m.get('crfn') or '').strip()
@@ -168,21 +181,19 @@ def get_acris_full_history(bbl):
 
     ref_rows = []
     try:
-        if 'crfn' in ref_field:
-            ref_rows.extend(client.get_batched(
-                'acris_references', 'document_id', doc_ids,
-                select=f'document_id,{ref_field}'))
-            if crfn_to_doc:
+        select_fields = 'document_id,' + ','.join(ref_fields)
+        ref_rows.extend(client.get_batched(
+            'acris_references', 'document_id', doc_ids,
+            select=select_fields))
+        for ref_field in ref_fields:
+            if 'crfn' in ref_field and crfn_to_doc:
                 ref_rows.extend(client.get_batched(
                     'acris_references', ref_field, sorted(crfn_to_doc),
-                    select=f'document_id,{ref_field}'))
-        else:
-            ref_rows.extend(client.get_batched(
-                'acris_references', 'document_id', doc_ids,
-                select=f'document_id,{ref_field}'))
-            ref_rows.extend(client.get_batched(
-                'acris_references', ref_field, doc_ids,
-                select=f'document_id,{ref_field}'))
+                    select=select_fields))
+            elif 'crfn' not in ref_field:
+                ref_rows.extend(client.get_batched(
+                    'acris_references', ref_field, doc_ids,
+                    select=select_fields))
     except SocrataError as e:
         print(f"      ⚠️ References fetch failed (non-fatal): {e}")
 
@@ -256,19 +267,20 @@ def get_acris_full_history(bbl):
     references = []
     for row in ref_rows:
         a = row.get('document_id')
-        b = (row.get(ref_field) or '').strip()
-        crfn = ''
-        if 'crfn' in ref_field:
-            crfn = b
-            b = crfn_to_doc.get(b)
-        if not a or not b or a == b or (a, b) in seen:
-            continue
-        seen.add((a, b))
-        references.append({
-            'document_id': a,
-            'referenced_document_id': b,
-            'crfn': crfn or row.get('crfn', ''),
-        })
+        for ref_field in ref_fields:
+            b = (row.get(ref_field) or '').strip()
+            crfn = ''
+            if 'crfn' in ref_field:
+                crfn = b
+                b = crfn_to_doc.get(b)
+            if not a or not b or a == b or (a, b) in seen:
+                continue
+            seen.add((a, b))
+            references.append({
+                'document_id': a,
+                'referenced_document_id': b,
+                'crfn': crfn or row.get('crfn', ''),
+            })
 
     return {'transactions': transactions, 'references': references}
 
@@ -278,6 +290,12 @@ def get_acris_full_history(bbl):
 # ---------------------------------------------------------------------------
 
 def _txn_date(t):
+    """Recording order controls what is newest in the public record."""
+    return t['recorded_date'] or t['doc_date']
+
+
+def _instrument_date(t):
+    """Document date is better for purchase-window comparisons."""
     return t['doc_date'] or t['recorded_date']
 
 
@@ -286,8 +304,15 @@ def find_primary_deed(transactions):
     return max(deeds, key=_txn_date) if deeds else None
 
 
-def find_primary_mortgage(transactions):
-    mortgages = [t for t in transactions if is_mortgage(t['doc_type']) and _txn_date(t)]
+def find_primary_mortgage(transactions, open_ids=None):
+    """Newest apparently-open principal mortgage instrument.
+
+    Assignments and generic agreements can move or modify a debt but do not
+    establish a new principal balance, so they never become the summary.
+    """
+    mortgages = [t for t in transactions
+                 if is_mortgage(t['doc_type']) and _txn_date(t)
+                 and (open_ids is None or t['document_id'] in open_ids)]
     return max(mortgages, key=_txn_date) if mortgages else None
 
 
@@ -298,8 +323,9 @@ def find_purchase_mortgage(transactions, sale_date):
     lo = sale_date - timedelta(days=CASH_WINDOW_BEFORE_DAYS)
     hi = sale_date + timedelta(days=CASH_WINDOW_AFTER_DAYS)
     candidates = [t for t in transactions
-                  if is_mortgage(t['doc_type']) and _txn_date(t) and lo <= _txn_date(t) <= hi]
-    return min(candidates, key=lambda t: abs((_txn_date(t) - sale_date).days)) if candidates else None
+                  if is_mortgage(t['doc_type']) and _instrument_date(t)
+                  and lo <= _instrument_date(t) <= hi]
+    return min(candidates, key=lambda t: abs((_instrument_date(t) - sale_date).days)) if candidates else None
 
 
 def derive_mortgage_status(transactions, references):
@@ -319,15 +345,76 @@ def derive_mortgage_status(transactions, references):
         if b in mortgage_ids and is_satisfaction(doc_types.get(a, '')):
             satisfied.add(b)
 
-    open_ids = mortgage_ids - satisfied
-    sat_dates = [_txn_date(t) for t in transactions
-                 if is_satisfaction(t['doc_type']) and _txn_date(t)]
+    transactions_by_id = {t['document_id']: t for t in transactions}
+
+    # Resolve debt chains, not every historical instrument in a chain. ACRIS
+    # assignments/agreements often reference several generations of the same
+    # loan, and a Mortgage & Consolidation directly references its predecessor.
+    # Treating each referenced MTGE as independently open produced "3 open
+    # mortgages" for the screenshot property even though the later M&CON is
+    # the single current chain.
+    parent = {doc_id: doc_id for doc_id in mortgage_ids}
+
+    def find(doc_id):
+        while parent[doc_id] != doc_id:
+            parent[doc_id] = parent[parent[doc_id]]
+            doc_id = parent[doc_id]
+        return doc_id
+
+    def union(left, right):
+        root_left, root_right = find(left), find(right)
+        if root_left != root_right:
+            parent[root_right] = root_left
+
+    mortgages_by_link_document = {}
+    for ref in references:
+        a, b = ref['document_id'], ref['referenced_document_id']
+        if a in mortgage_ids and b in mortgage_ids:
+            union(a, b)
+        if a in mortgage_ids and b in doc_types and not is_satisfaction(doc_types[b]):
+            mortgages_by_link_document.setdefault(b, set()).add(a)
+        if b in mortgage_ids and a in doc_types and not is_satisfaction(doc_types[a]):
+            mortgages_by_link_document.setdefault(a, set()).add(b)
+    for linked_ids in mortgages_by_link_document.values():
+        linked_ids = list(linked_ids)
+        for other in linked_ids[1:]:
+            union(linked_ids[0], other)
+
+    components = {}
+    for mortgage_id in mortgage_ids:
+        components.setdefault(find(mortgage_id), []).append(mortgage_id)
+
+    # The newest principal instrument is the terminal state of each connected
+    # debt chain. A satisfaction of that terminal M&CON closes its predecessors
+    # too; a satisfaction of an older predecessor must not close a later
+    # consolidation. This also keeps primary-mortgage selection on the current
+    # instrument instead of an unsatisfied historical link in the same chain.
+    terminal_ids = {
+        max(ids, key=lambda doc_id: (
+            _txn_date(transactions_by_id[doc_id]) or date.min,
+            doc_id,
+        ))
+        for ids in components.values()
+    }
+    trackable_ids = {
+        doc_id for doc_id in terminal_ids
+        if (transactions_by_id.get(doc_id, {}).get('crfn') or '').strip()
+    }
+    # Reel-era terminal loans have no CRFN counterpart in the current
+    # References dataset. Their status is unknown, not "open".
+    unknown_ids = terminal_ids - trackable_ids
+    open_ids = trackable_ids - satisfied
+    open_chain_count = len(open_ids)
+    sat_dates = [_instrument_date(t) for t in transactions
+                 if is_satisfaction(t['doc_type']) and _instrument_date(t)]
     return {
         'mortgage_count': len(mortgage_ids),
         'satisfied_ids': satisfied,
-        'open_mortgage_count': len(open_ids),
-        'has_open_mortgage': bool(open_ids),
-        'is_free_and_clear': len(open_ids) == 0,
+        'open_ids': open_ids,
+        'unknown_ids': unknown_ids,
+        'open_mortgage_count': open_chain_count,
+        'has_open_mortgage': bool(open_chain_count),
+        'is_free_and_clear': bool(mortgage_ids) and not open_ids and not unknown_ids,
         'last_satisfaction_date': max(sat_dates) if sat_dates else None,
     }
 
@@ -336,7 +423,8 @@ def derive_mortgage_status(transactions, references):
 # Persistence
 # ---------------------------------------------------------------------------
 
-def save_transactions_and_parties(cur, building_id, bbl, transactions):
+def save_transactions_and_parties(cur, building_id, bbl, transactions,
+                                  primary_mortgage_id=None):
     """Replace stored history for this building. Returns (primary_deed,
     primary_mortgage) for the buildings-table summary."""
     if not transactions:
@@ -346,7 +434,8 @@ def save_transactions_and_parties(cur, building_id, bbl, transactions):
     cur.execute("DELETE FROM acris_transactions WHERE building_id = %s", (building_id,))
 
     primary_deed = find_primary_deed(transactions)
-    primary_mortgage = find_primary_mortgage(transactions)
+    primary_mortgage = next(
+        (t for t in transactions if t['document_id'] == primary_mortgage_id), None)
     has_remarks_col = table_has_column(cur, 'acris_transactions', 'remarks')
 
     for transaction in transactions:
@@ -388,9 +477,10 @@ def save_transactions_and_parties(cur, building_id, bbl, transactions):
         for p in transaction['parties']:
             if not p['name'] or p['role'] == 'other':
                 continue
-            # Sellers with a mailing address are outreach leads ("previous
-            # owners campaign") — now actually the sellers.
-            is_lead = p['role'] == 'seller' and bool(p['address1'])
+            # Only a grantor/seller on a DEED is a previous property owner.
+            # An assignment's assignor can be a bank transferring the loan.
+            is_lead = (is_ownership_party(transaction['doc_type'], p['role'])
+                       and p['role'] == 'seller' and bool(p['address1']))
             cur.execute("""
                 INSERT INTO acris_parties (
                     building_id, transaction_id, party_type, party_name,
@@ -433,6 +523,8 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
     sale_price = sale_date = sale_recorded_date = sale_crfn = None
     sale_buyer_primary = sale_seller_primary = sale_percent_transferred = None
     is_cash_purchase = False
+    financing_ratio = None
+    days_since_sale = None
 
     if primary_deed:
         sale_price = primary_deed['doc_amount'] if primary_deed['doc_amount'] > 0 else None
@@ -441,11 +533,19 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         sale_crfn = primary_deed['crfn']
         sale_percent_transferred = primary_deed['percent_transferred']
         if primary_deed['buyers']:
-            sale_buyer_primary = primary_deed['buyers'][0]['name']
+            sale_buyer_primary = '; '.join(dict.fromkeys(
+                p['name'] for p in primary_deed['buyers'] if p.get('name')))[:255] or None
         if primary_deed['sellers']:
-            sale_seller_primary = primary_deed['sellers'][0]['name']
-        # B3: cash means no mortgage recorded around the purchase itself.
-        is_cash_purchase = find_purchase_mortgage(transactions, sale_date) is None
+            sale_seller_primary = '; '.join(dict.fromkeys(
+                p['name'] for p in primary_deed['sellers'] if p.get('name')))[:255] or None
+        # B3: cash/LTV refer to financing at the purchase, not a later refi.
+        purchase_mortgage = find_purchase_mortgage(transactions, sale_date)
+        is_cash_purchase = purchase_mortgage is None
+        if sale_price and sale_price > 0:
+            financing_ratio = (0 if is_cash_purchase else
+                               purchase_mortgage['doc_amount'] / sale_price)
+        if sale_date:
+            days_since_sale = max((date.today() - sale_date).days, 0)
 
     mortgage_amount = mortgage_date = mortgage_lender_primary = mortgage_crfn = None
     if primary_mortgage:
@@ -453,7 +553,8 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         mortgage_date = primary_mortgage['doc_date'] or primary_mortgage['recorded_date']
         mortgage_crfn = primary_mortgage['crfn']
         if primary_mortgage['lenders']:
-            mortgage_lender_primary = primary_mortgage['lenders'][0]['name']
+            mortgage_lender_primary = '; '.join(dict.fromkeys(
+                p['name'] for p in primary_mortgage['lenders'] if p.get('name')))[:255] or None
 
     cur.execute("""
         UPDATE buildings
@@ -462,7 +563,8 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
             sale_percent_transferred = %s, sale_crfn = %s,
             mortgage_amount = %s, mortgage_date = %s,
             mortgage_lender_primary = %s, mortgage_crfn = %s,
-            is_cash_purchase = %s,
+            is_cash_purchase = %s, financing_ratio = %s,
+            days_since_sale = %s,
             acris_total_transactions = %s, acris_deed_count = %s,
             acris_mortgage_count = %s, acris_satisfaction_count = %s,
             acris_last_enriched = CURRENT_TIMESTAMP,
@@ -472,7 +574,7 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         sale_price, sale_date, sale_recorded_date,
         sale_buyer_primary, sale_seller_primary, sale_percent_transferred, sale_crfn,
         mortgage_amount, mortgage_date, mortgage_lender_primary, mortgage_crfn,
-        is_cash_purchase,
+        is_cash_purchase, financing_ratio, days_since_sale,
         len(transactions), deed_count, mortgage_count, satisfaction_count,
         building_id,
     ))
@@ -505,8 +607,12 @@ def enrich_building_from_acris(conn, building_id, bbl):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         if transactions:
-            primary_deed, primary_mortgage = save_transactions_and_parties(
-                cur, building_id, bbl, transactions)
+            status = derive_mortgage_status(transactions, history['references'])
+            primary_mortgage = find_primary_mortgage(
+                transactions, status['open_ids'])
+            primary_deed, _stored_primary_mortgage = save_transactions_and_parties(
+                cur, building_id, bbl, transactions,
+                primary_mortgage['document_id'] if primary_mortgage else None)
             save_references(cur, building_id, bbl, history['references'])
             update_buildings_table(cur, building_id, transactions,
                                    primary_deed, primary_mortgage,
@@ -518,6 +624,14 @@ def enrich_building_from_acris(conn, building_id, bbl):
                     last_updated = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (building_id,))
+        if table_has_column(cur, 'buildings', 'acris_last_attempted'):
+            cur.execute("""
+                UPDATE buildings
+                SET acris_last_attempted = CURRENT_TIMESTAMP,
+                    acris_last_error = NULL,
+                    acris_logic_version = %s
+                WHERE id = %s
+            """, (ACRIS_LOGIC_VERSION, building_id))
         conn.commit()
     finally:
         cur.close()
@@ -535,14 +649,20 @@ def enrich_buildings_from_acris():
     print("Step 3: ACRIS Enrichment (batched, role-correct)")
     print("=" * 70)
 
-    cur.execute("""
+    logic_version_filter = (
+        "OR acris_logic_version < %s"
+        if table_has_column(cur, 'buildings', 'acris_logic_version') else ""
+    )
+    params = (ACRIS_LOGIC_VERSION,) if logic_version_filter else ()
+    cur.execute(f"""
         SELECT id, bbl, address, current_owner_name
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (acris_last_enriched IS NULL
-             OR acris_last_enriched < NOW() - INTERVAL '30 days')
+             OR acris_last_enriched < NOW() - INTERVAL '30 days'
+             {logic_version_filter})
         ORDER BY id
-    """)
+    """, params)
     buildings = cur.fetchall()
     print(f"\n📊 Found {len(buildings)} buildings to enrich")
 
@@ -552,13 +672,7 @@ def enrich_buildings_from_acris():
         conn.close()
         return
 
-    enriched = no_data = failed = skipped_unchanged = 0
-    # ACRIS_FORCE_REFRESH=1 bypasses the unchanged-count skip — used after
-    # the retroactive B1 repair so lender rows and equity signals backfill
-    # even though document counts haven't changed.
-    force = os.getenv('ACRIS_FORCE_REFRESH') == '1'
-    if force:
-        print("   ⚠️  ACRIS_FORCE_REFRESH=1 — reprocessing every building")
+    enriched = no_data = failed = 0
 
     for i, building in enumerate(buildings, 1):
         bbl = building['bbl']
@@ -566,27 +680,6 @@ def enrich_buildings_from_acris():
         print(f"\n🔍 [{i}/{len(buildings)}] BBL {bbl} — {building['address']}")
 
         try:
-            # Cheap change detection: skip the full fetch when the document
-            # count matches what we already stored.
-            doc_ids = get_document_ids_for_bbl(bbl)
-            cur.execute("""
-                SELECT COUNT(DISTINCT document_id) AS existing_count
-                FROM acris_transactions WHERE building_id = %s
-            """, (building_id,))
-            existing_count = (cur.fetchone() or {}).get('existing_count') or 0
-
-            if not force and existing_count > 0 and len(doc_ids) == existing_count:
-                cur.execute("""
-                    UPDATE buildings
-                    SET acris_last_enriched = CURRENT_TIMESTAMP,
-                        last_updated = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (building_id,))
-                conn.commit()
-                skipped_unchanged += 1
-                print(f"      ⏭️  Unchanged ({existing_count} documents)")
-                continue
-
             count = enrich_building_from_acris(conn, building_id, bbl)
             if count:
                 enriched += 1
@@ -599,13 +692,17 @@ def enrich_buildings_from_acris():
             conn.rollback()
             print(f"   ❌ Error: {e}")
             failed += 1
+            # Never advance acris_last_enriched on failure. Otherwise one
+            # outage suppresses retries for 30 days. Optional diagnostic
+            # columns are populated when the freshness migration is present.
             try:
-                cur.execute("""
-                    UPDATE buildings
-                    SET acris_last_enriched = CURRENT_TIMESTAMP,
-                        last_updated = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (building_id,))
+                if table_has_column(cur, 'buildings', 'acris_last_attempted'):
+                    cur.execute("""
+                        UPDATE buildings
+                        SET acris_last_attempted = CURRENT_TIMESTAMP,
+                            acris_last_error = %s
+                        WHERE id = %s
+                    """, (str(e)[:1000], building_id))
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -614,8 +711,7 @@ def enrich_buildings_from_acris():
 
     print("\n" + "=" * 70)
     print("✅ ACRIS Enrichment Complete")
-    print(f"   Enriched: {enriched} · Unchanged: {skipped_unchanged} · "
-          f"No data: {no_data} · Failed: {failed}")
+    print(f"   Enriched: {enriched} · No data: {no_data} · Failed: {failed}")
 
     cur.execute("""
         SELECT COUNT(*) AS total,

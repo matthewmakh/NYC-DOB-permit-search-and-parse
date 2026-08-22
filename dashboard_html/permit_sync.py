@@ -53,7 +53,7 @@ SELECT_FIELDS = [
     'superintendent_business_name', 'owner_s_business_type', 'non_profit',
     'owner_s_business_name', 'owner_s_first_name', 'owner_s_last_name',
     'owner_s_house__', 'owner_s_house_street_name', 'city', 'state',
-    'owner_s_zip_code', 'owner_s_phone__', 'dobrundate', 'permit_si_no',
+    'owner_s_zip_code', 'dobrundate', 'permit_si_no',
     'gis_council_district', 'gis_census_tract', 'gis_nta_name',
     'gis_latitude', 'gis_longitude'
 ]
@@ -121,6 +121,12 @@ def safe_float(val: Any) -> Optional[float]:
         return None
 
 
+def clean_owner_business(value: Any) -> Optional[str]:
+    cleaned = str(value or '').strip()
+    placeholders = {'N/A', 'NA', 'NOT APPLICABLE', 'NONE', 'PR', '-'}
+    return None if not cleaned or cleaned.upper() in placeholders else cleaned
+
+
 def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
     """Copy of permit_scraper_api.prepare_rows_bis — see module docstring."""
     rows = []
@@ -129,10 +135,14 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
 
     for p in permits:
         try:
-            permit_no = p.get('job__')
+            owner_business = clean_owner_business(p.get('owner_s_business_name'))
+            # PERMIT_SI_NO is NYC's row identifier; job__ repeats when one
+            # filing receives separate permits for multiple work types.
+            permit_no = p.get('permit_si_no')
             if not permit_no:
-                permit_no = f"{p.get('bin__', '')}_{p.get('issuance_date', '')}"
-            if not permit_no or permit_no == '_':
+                permit_no = '_'.join(str(p.get(field) or '') for field in (
+                    'job__', 'job_doc___', 'work_type', 'permit_sequence__'))
+            if not permit_no or permit_no == '___':
                 skipped += 1
                 continue
 
@@ -146,7 +156,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
 
             applicant = (
                 p.get('permittee_s_business_name') or
-                p.get('owner_s_business_name') or
+                owner_business or
                 f"{p.get('owner_s_first_name', '')} {p.get('owner_s_last_name', '')}".strip() or
                 None
             )
@@ -214,7 +224,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
                 trunc(p.get('superintendent_business_name'), 255),
                 trunc(p.get('owner_s_business_type'), 100),
                 trunc(p.get('non_profit'), 20),
-                trunc(p.get('owner_s_business_name'), 255),
+                trunc(owner_business, 255),
                 trunc(p.get('owner_s_first_name'), 100),
                 trunc(p.get('owner_s_last_name'), 100),
                 trunc(p.get('owner_s_house__'), 50),
@@ -222,7 +232,7 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
                 trunc(p.get('city'), 100),
                 trunc(p.get('state'), 20),
                 trunc(p.get('owner_s_zip_code'), 15),
-                trunc(p.get('owner_s_phone__'), 50),
+                None,  # BIS does not publish an owner phone field
                 dob_run,
                 trunc(p.get('permit_si_no'), 50),
                 trunc(p.get('gis_council_district'), 20),
@@ -285,12 +295,8 @@ def sync_permits_for_bbl(conn, bbl: str) -> int:
         INSERT INTO permits ({columns})
         VALUES %s
         ON CONFLICT (permit_no) DO UPDATE SET
-            permit_status = EXCLUDED.permit_status,
-            exp_date = EXCLUDED.exp_date,
-            filing_date = EXCLUDED.filing_date,
-            proposed_job_start = EXCLUDED.proposed_job_start,
-            filing_status = EXCLUDED.filing_status,
-            api_last_updated = EXCLUDED.api_last_updated
+            {', '.join(f"{column} = EXCLUDED.{column}"
+                       for column in BIS_COLUMNS if column != 'permit_no')}
     """
     cur = conn.cursor()
     try:

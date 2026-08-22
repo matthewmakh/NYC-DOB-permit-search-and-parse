@@ -264,6 +264,61 @@ check('a C/O-tailed owner name exact-matches the clean registration',
                              ['65 SPRING REALTY LLC C/O FOX MGMT'])[0],
       'exact')
 
+print('— human vs organization classification —')
+screenshot_entities = [
+    'US BANK TRUST NATIONAL ASSOCIATION',
+    'RCF 2 ACQUISITION TRUST',
+    'LSF9 MASTER PARTICIPATION TRUST',
+    'FEDERAL NATIONAL MORTGAGE ASSOCIATION',
+    'AMERICAN MORTGAGE EXPRESS CORP.',
+]
+check('screenshot banks and trusts are organizations',
+      [E.classify_party_name(name)['entity_kind'] for name in screenshot_entities],
+      ['organization'] * len(screenshot_entities))
+check('known bank aliases without legal suffixes are organizations',
+      [E.classify_party_name(name)['is_person'] for name in
+       ('FANNIE MAE', 'FREDDIE MAC', 'WELLS FARGO', 'JPMORGAN CHASE')],
+      [False, False, False, False])
+check('normal person formats remain enrichable',
+      [E.classify_party_name(name)['is_person'] for name in
+       ('MAKHARADZE, SAMANTHA', 'Michael Makharadze', 'CHURCH, CHARLOTTE')],
+      [True, True, True])
+check('care-of text is removed before human classification',
+      E.classify_party_name('JANE DOE C/O ACME LLC')['entity_kind'], 'person')
+check('joined parties are not sent as one person',
+      E.classify_party_name('JANE DOE; JOHN DOE')['entity_kind'], 'multiple')
+check('AND-joined names are not treated as one human',
+      E.classify_party_name('JANE DOE AND JOHN DOE')['entity_kind'], 'multiple')
+check('pipeline-joined deed names split safely',
+      E.split_candidate_names('DOE, JANE; DOE, JOHN'), ['DOE, JANE', 'DOE, JOHN'])
+check('organization does not produce an enrichment key',
+      E.canonical_name_key('US BANK TRUST NATIONAL ASSOCIATION'), None)
+mixed_candidates = [
+    {'name': 'US BANK TRUST NATIONAL ASSOCIATION', 'is_person': True,
+     'source': 'legacy row'},
+    {'name': 'MAKHARADZE, SAMANTHA', 'is_person': True,
+     'source': 'ACRIS Latest Deed Grantee'},
+]
+check('bulk strategy reclassifies and drops incorrectly tagged organizations',
+      [o['name'] for o in E.filter_owners_by_strategy(mixed_candidates, 'all')],
+      ['MAKHARADZE, SAMANTHA'])
+check('recommended strategy picks the remaining human candidate',
+      [o['name'] for o in E.filter_owners_by_strategy(mixed_candidates, 'recommended')],
+      ['MAKHARADZE, SAMANTHA'])
+check('owner provider guard rejects an organization before opening the database',
+      E.enrich_owner(1, 'US BANK TRUST NATIONAL ASSOCIATION', '', 1)[0], False)
+check('permit-contact provider guard rejects an organization before opening the database',
+      E.enrich_permit_contact('4099660080', 1, 1,
+                              'AMERICAN MORTGAGE EXPRESS CORP.', 'owner',
+                              None, None, None, 1)[0], False)
+
+enrichable_sql = A._enrichable_owner_sql()
+check('SQL prefilter includes deed grantees',
+      'b.sale_buyer_primary' in enrichable_sql, True)
+check('SQL prefilter rejects mortgage organizations and SOS agents',
+      ('MORTGAGE' in enrichable_sql and 'SERVICE OF PROCESS AGENT' in enrichable_sql),
+      True)
+
 print('— normalizer parity with the scraper —')
 try:
     import ny_sos_lookup as S
@@ -339,10 +394,10 @@ else:
           S5.get_best_llc_name({'current_owner_name': 'PLUTO LLC',
                                 'owner_name_rpad': 'OLD RPAD LLC'}),
           ('PLUTO LLC', 'current_owner_name'))
-    check('RPAD still beats HPD',
+    check('owner-class HPD beats the frozen RPAD extract',
           S5.get_best_llc_name({'owner_name_rpad': 'OLD RPAD LLC',
                                 'owner_name_hpd': 'HPD LLC'}),
-          ('OLD RPAD LLC', 'owner_name_rpad'))
+          ('HPD LLC', 'owner_name_hpd'))
     check('individual buyer falls through to the next LLC',
           S5.get_best_llc_name({'sale_buyer_primary': 'JIN PEI XIE',
                                 'current_owner_name': 'PLUTO LLC'}),
@@ -604,16 +659,17 @@ theirs, _ = SCRAPER.prepare_rows_bis([dict(_fixture)])
 check('fixture row maps identically (minus timestamp)',
       ours[0][:-1], theirs[0][:-1])
 check('mapped bbl assembled from parts', ours[0][14], '4099660080')
-check('permit_no comes from the job number', ours[0][0], '440776739')
+check('permit_no comes from NYC row identifier', ours[0][0], '3899021')
 check('issue date parsed from issuance_date', str(ours[0][2]), '2024-03-05')
 
 check('lot matches across paddings',
       [PS._lot_matches({'lot': v}, '80') for v in ('00080', '80', '080', '81')],
       [True, True, True, False])
-check('permit_no falls back to bin+date',
-      PS.prepare_rows_bis([{'bin__': '4213565', 'issuance_date': '01/02/2024',
+check('missing row id falls back to a work-permit composite',
+      PS.prepare_rows_bis([{'job__': '440776739', 'job_doc___': '01',
+                            'work_type': 'PL', 'permit_sequence__': '02',
                             'borough': 'QUEENS', 'block': '9966', 'lot': '80'}])[0][0][0],
-      '4213565_01/02/2024')
+      '440776739_01_PL_02')
 
 print()
 print('=' * 50)

@@ -1546,7 +1546,8 @@ function openBuildingDetail(buildingId) {
     document.getElementById('buildingDetailBBL').textContent = `BBL: ${building.bbl || 'N/A'}`;
     
     // Owner badge - show the best available owner
-    const ownerName = building.owner_name_hpd || building.current_owner_name || building.owner_name_rpad || 'Unknown Owner';
+    const ownerName = building.sale_buyer_primary || building.current_owner_name ||
+        building.owner_name_hpd || building.owner_name_rpad || 'Unknown Owner';
     document.getElementById('buildingDetailOwner').textContent = ownerName;
 
     // Property Overview
@@ -1797,7 +1798,7 @@ async function loadNearbyBuildings(building) {
                 <span class="distance-badge">${nb.distance.toFixed(2)} mi</span>
             </div>
             <div class="nearby-details">
-                ${nb.current_owner_name || nb.owner_name_rpad || nb.owner_name_hpd || 'Owner unknown'}
+                ${nb.sale_buyer_primary || nb.current_owner_name || nb.owner_name_hpd || nb.owner_name_rpad || 'Owner unknown'}
             </div>
             <div class="nearby-meta">
                 ${nb.residential_units ? `<span>🏠 ${nb.residential_units} units</span>` : ''}
@@ -2189,4 +2190,3 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-

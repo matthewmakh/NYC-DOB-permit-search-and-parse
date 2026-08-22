@@ -95,19 +95,63 @@ def get_db_connection():
 # (e.g. "CHURCH" is allowed as a last name when in "CHURCH, CHARLOTTE" form).
 # Kept here because generic name-parser libraries don't know about these.
 _STRONG_BUSINESS_INDICATORS = frozenset([
-    'LLC', 'INC', 'CORP', 'LTD', 'CO', 'LP', 'LLP', 'PLLC', 'PC',
+    'LLC', 'INC', 'INCORPORATED', 'CORP', 'CORPORATION', 'LTD',
+    'LIMITED', 'CO', 'COMPANY', 'LP', 'LLP', 'PLLC', 'PC', 'PLC',
+    'BANCORP', 'FSB', 'TRUSTEE', 'NOMINEE',
     'COMPANY', 'PROPERTIES', 'REALTY', 'HOLDINGS', 'ENTERPRISES',
-    'INVESTMENTS', 'DEVELOPMENT', 'MANAGEMENT', 'FOUNDATION',
+    'INVESTMENTS', 'DEVELOPMENT', 'MANAGEMENT', 'FOUNDATION', 'SERVICING',
+    'FUNDING', 'MORTGAGE', 'LENDING', 'FINANCIAL', 'FINANCE',
 ])
 _WEAK_BUSINESS_INDICATORS = frozenset([
     'TRUST', 'ESTATE', 'ASSOCIATES', 'PARTNERS', 'PARTNERSHIP',
     'GROUP', 'CAPITAL', 'FUND',
-    'HOUSING', 'AUTHORITY', 'BANK', 'GRID', 'EDISON', 'UTILITY',
+    'HOUSING', 'AUTHORITY', 'BANK', 'BANC', 'GRID', 'EDISON', 'UTILITY',
     'CITY', 'STATE', 'COUNTY', 'FEDERAL', 'MUNICIPAL', 'NATIONAL',
     'CHURCH', 'TEMPLE', 'SYNAGOGUE', 'MOSQUE', 'CONGREGATION',
     'SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HOSPITAL', 'MEDICAL',
     'ASSOCIATION', 'SOCIETY', 'CLUB', 'ORGANIZATION', 'COMMITTEE',
+    'DEPARTMENT', 'ADMINISTRATION', 'AGENCY', 'BOARD', 'DISTRICT',
+    'CREDIT', 'SAVINGS', 'INSURANCE', 'PARTICIPATION', 'ACQUISITION',
+    'SERVICES', 'CONSULTING', 'CONSTRUCTION', 'CONTRACTING', 'BUILDERS',
+    'ARCHITECTS', 'ENGINEERS', 'CONTROLS', 'INSTITUTE', 'MINISTRIES',
 ])
+
+_KNOWN_ORGANIZATION_NAMES = frozenset({
+    'FANNIE MAE', 'FREDDIE MAC', 'GINNIE MAE',
+    'MERS', 'MORTGAGE ELECTRONIC REGISTRATION SYSTEMS',
+    'FEDERAL NATIONAL MORTGAGE ASSOCIATION',
+    'FEDERAL HOME LOAN MORTGAGE CORPORATION',
+    'SECRETARY OF HOUSING AND URBAN DEVELOPMENT',
+    'WELLS FARGO', 'JPMORGAN CHASE', 'CITIBANK', 'CITIGROUP',
+    'BANK OF AMERICA', 'US BANK', 'U S BANK',
+})
+
+_ORGANIZATION_PHRASES = (
+    'NATIONAL ASSOCIATION', 'CREDIT UNION', 'SAVINGS BANK',
+    'SAVINGS AND LOAN', 'TRUST COMPANY', 'HOME LOANS', 'LOAN SERVICING',
+    'MORTGAGE SERVICING', 'MASTER PARTICIPATION', 'AS TRUSTEE',
+    'SUCCESSOR TRUSTEE', 'BOARD OF MANAGERS', 'UNITED STATES OF AMERICA',
+    'NEW YORK CITY', 'CITY OF NEW YORK', 'STATE OF NEW YORK',
+)
+
+
+def _clean_identity_name(value):
+    """Remove mailing instructions without changing the identity itself."""
+    name = re.sub(r'\s+', ' ', str(value or '')).strip()
+    return re.sub(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', '', name,
+                  flags=re.IGNORECASE).strip(' ,')
+
+
+def split_candidate_names(value):
+    """Split only delimiters the pipeline itself uses for separate parties.
+
+    Commas remain untouched because ACRIS commonly publishes LAST, FIRST.
+    Ampersands/AND remain grouped because a joint-name string cannot safely be
+    turned into two people without knowing which surname applies to whom.
+    """
+    parts = [_clean_identity_name(part) for part in
+             re.split(r'\s*;\s*|[\r\n]+', str(value or ''))]
+    return list(dict.fromkeys(part for part in parts if part))
 
 
 def is_business_entity(full_name):
@@ -116,14 +160,29 @@ def is_business_entity(full_name):
     NYC-specific quirks like 'CHURCH' being a valid last name."""
     if not full_name:
         return True
-    name = full_name.strip().upper()
+    name = _clean_identity_name(full_name).upper()
+    if not name:
+        return True
+    if len(split_candidate_names(full_name)) > 1:
+        return True  # multiple parties are not one enrichable human identity
     if '&' in name:
         return True
     for prefix in ('CITY OF', 'STATE OF', 'COUNTY OF',
                    'BANK OF', 'HEIRS OF', 'ESTATE OF'):
         if name.startswith(prefix):
             return True
-    words = name.replace(',', ' ').replace('.', ' ').split()
+    normalized = re.sub(r'[^A-Z0-9]+', ' ', name).strip()
+    if normalized in _KNOWN_ORGANIZATION_NAMES:
+        return True
+    if any(phrase in normalized for phrase in _ORGANIZATION_PHRASES):
+        return True
+    if re.search(r'\d', name):
+        return True
+    words = normalized.split()
+    # Common financial suffixes appear punctuated as N.A.; tokenization turns
+    # that into N A. In this context it is not a person's middle initials.
+    if len(words) >= 3 and words[-2:] == ['N', 'A']:
+        return True
     # "LASTNAME, FIRSTNAME" with only 2 tokens — the first is a last name
     # even if it matches a weak indicator (e.g. "CHURCH, CHARLOTTE").
     is_lastname_firstname = ',' in name and len(words) == 2
@@ -135,6 +194,39 @@ def is_business_entity(full_name):
             if w in _WEAK_BUSINESS_INDICATORS:
                 return True
     return False
+
+
+def classify_party_name(full_name):
+    """Classify one party name for display and paid-enrichment safeguards.
+
+    Returns a small JSON-safe dict. `unknown` is deliberately not treated as
+    a person: false negatives are cheaper than paying to search for a bank,
+    trust, joint-owner string, or malformed government record.
+    """
+    names = split_candidate_names(full_name)
+    if not names:
+        return {'entity_kind': 'unknown', 'is_person': False,
+                'classification_reason': 'empty name'}
+    if len(names) > 1:
+        return {'entity_kind': 'multiple', 'is_person': False,
+                'classification_reason': 'multiple parties in one field'}
+    name = names[0]
+    if re.search(r'\b(?:AND|ET\s+AL|ET\s+UX|ET\s+VIR)\b', name,
+                 flags=re.IGNORECASE):
+        return {'entity_kind': 'multiple', 'is_person': False,
+                'classification_reason': 'joint or multiple party notation'}
+    if is_business_entity(name):
+        return {'entity_kind': 'organization', 'is_person': False,
+                'classification_reason': 'organization or legal-entity terms'}
+    parsed = HumanName(name)
+    first = (parsed.first or '').strip()
+    last = (parsed.last or '').strip()
+    token_count = len(re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)?", name))
+    if first and last and 2 <= token_count <= 7:
+        return {'entity_kind': 'person', 'is_person': True,
+                'classification_reason': 'person-shaped first and last name'}
+    return {'entity_kind': 'unknown', 'is_person': False,
+            'classification_reason': 'not a confident single-person name'}
 
 
 def parse_owner_name(full_name):
@@ -149,10 +241,11 @@ def parse_owner_name(full_name):
 
     Values are returned uppercased to match the legacy contract (callers
     pass them to address-matching code that assumes upper-case)."""
-    if not full_name or is_business_entity(full_name):
+    cleaned_name = _clean_identity_name(full_name)
+    if not cleaned_name or not classify_party_name(cleaned_name)['is_person']:
         return None, None, None
 
-    h = HumanName(full_name)
+    h = HumanName(cleaned_name)
     first = (h.first or '').strip().upper().rstrip('.') or None
     middle = (h.middle or '').strip().upper().rstrip('.') or None
     last = (h.last or '').strip().upper() or None
@@ -220,9 +313,10 @@ def parse_nyc_address(address):
 def _parse_with_suffix(full_name):
     """Variant of parse_owner_name that also returns the suffix (JR/SR/III).
     Used by canonical_name_key so suffix can participate in dedup."""
-    if not full_name or is_business_entity(full_name):
+    cleaned_name = _clean_identity_name(full_name)
+    if not cleaned_name or not classify_party_name(cleaned_name)['is_person']:
         return None
-    h = HumanName(full_name)
+    h = HumanName(cleaned_name)
     first = (h.first or '').strip().upper().rstrip('.')
     last = (h.last or '').strip().upper()
     if not first or not last:
@@ -660,6 +754,12 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None):
 
     Returns: (success, data, message)
     """
+    classification = classify_party_name(owner_name)
+    if not classification['is_person']:
+        return (False, None,
+                f"Enrichment is limited to human names; classified as "
+                f"{classification['entity_kind']}")
+
     if provider is None or provider not in VALID_PROVIDERS:
         provider = DEFAULT_PROVIDER
 
@@ -1111,8 +1211,7 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
                 sos_principal_name,
                 sos_principal_title,
                 sos_entity_name,
-                sale_buyer_primary,
-                ecb_respondent_name
+                sale_buyer_primary
             FROM buildings WHERE id = %s
         """, (building_id,))
 
@@ -1136,7 +1235,10 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
             [building['current_owner_name'], building['owner_name_rpad'],
              building['owner_name_hpd'], building['sale_buyer_primary']],
         )
-        if sos_name and not is_sos_agent_title(sos_title) and sos_match != 'mismatch':
+        sos_classification = classify_party_name(sos_name)
+        if (sos_classification['is_person']
+                and not is_sos_agent_title(sos_title)
+                and sos_match != 'mismatch'):
             key = canonical_name_key(sos_name)
             if key:
                 is_enriched = _is_already_enriched(key)
@@ -1144,6 +1246,7 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
                     'name': sos_name,
                     'source': 'NY Secretary of State',
                     'title': sos_title,
+                    **sos_classification,
                     'recommended': not is_enriched,
                     'reason': 'Real person behind LLC',
                     'already_enriched': is_enriched,
@@ -1152,25 +1255,27 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
         # Other sources, in source-priority order. Compatible duplicates
         # collapse into the SOS row above (or the first one we see).
         source_map = {
+            'sale_buyer_primary': 'ACRIS Latest Deed Grantee',
             'current_owner_name': 'NYC PLUTO Database',
-            'owner_name_rpad': 'Tax Records (RPAD)',
             'owner_name_hpd': 'HPD Registration',
-            'ecb_respondent_name': 'ECB Violations',
+            'owner_name_rpad': 'Historical Tax Records (RPAD)',
         }
 
         for field, source in source_map.items():
-            name = building[field]
-            if not name:
-                continue
-            key = canonical_name_key(name)
-            if not key:
-                continue
-            _dedup_add_owner(owners, keys, key, {
-                'name': name,
-                'source': source,
-                'recommended': False,
-                'already_enriched': _is_already_enriched(key),
-            })
+            for name in split_candidate_names(building[field]):
+                classification = classify_party_name(name)
+                if not classification['is_person']:
+                    continue
+                key = canonical_name_key(name)
+                if not key:
+                    continue
+                _dedup_add_owner(owners, keys, key, {
+                    'name': name,
+                    'source': source,
+                    **classification,
+                    'recommended': False,
+                    'already_enriched': _is_already_enriched(key),
+                })
 
         return owners
 
@@ -1282,6 +1387,12 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
     Access should be granted by app.py ONLY after successful charge.
     Set grant_access=True for admin users or after charge succeeds.
     """
+    classification = classify_party_name(contact_name)
+    if not classification['is_person']:
+        return (False, None,
+                f"Enrichment is limited to human names; classified as "
+                f"{classification['entity_kind']}")
+
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -1619,19 +1730,32 @@ def filter_owners_by_strategy(owners, strategy):
     """Given the list returned by get_available_owners_for_enrichment, pick which ones
     to actually enrich based on the user's chosen strategy.
 
+    Normal callers pass preclassified rows; this function reclassifies them
+    so background jobs remain safe if a legacy or future caller does not.
+
     - 'recommended': the SOS principal (real person behind an LLC) if available,
-      otherwise the first non-SOS owner. Returns at most one owner.
-    - 'all': returns every distinct owner unchanged.
+      otherwise the first listed human. Returns at most one person.
+    - 'all': returns every distinct human candidate unchanged.
     """
     if not owners:
         return []
+    # Defense in depth for workers and future callers. Candidate builders
+    # already filter names, but no selection strategy may turn an incorrectly
+    # tagged legacy row into a paid organization lookup.
+    people = []
+    for owner in owners:
+        classification = classify_party_name(owner.get('name'))
+        if classification['is_person']:
+            people.append({**owner, **classification})
+    if not people:
+        return []
     if strategy == OWNER_STRATEGY_ALL:
-        return owners
+        return people
     # Default to 'recommended'
-    sos = next((o for o in owners if o.get('source') == 'NY Secretary of State'), None)
+    sos = next((o for o in people if o.get('source') == 'NY Secretary of State'), None)
     if sos:
         return [sos]
-    return [owners[0]]
+    return [people[0]]
 
 
 def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
@@ -1672,7 +1796,8 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
             """
             SELECT id, address,
                    current_owner_name, owner_name_rpad, owner_name_hpd,
-                   sos_principal_name, sos_principal_title, ecb_respondent_name
+                   sos_principal_name, sos_principal_title, sos_entity_name,
+                   sale_buyer_primary
             FROM buildings
             WHERE id = ANY(%s)
             """,
@@ -1687,10 +1812,10 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
     # agent-vs-principal title check.
     source_map = [
         ('sos_principal_name', 'NY Secretary of State', True),
+        ('sale_buyer_primary', 'ACRIS Latest Deed Grantee', False),
         ('current_owner_name', 'NYC PLUTO Database', False),
-        ('owner_name_rpad', 'Tax Records (RPAD)', False),
         ('owner_name_hpd', 'HPD Registration', False),
-        ('ecb_respondent_name', 'ECB Violations', False),
+        ('owner_name_rpad', 'Historical Tax Records (RPAD)', False),
     ]
 
     total_owners = 0
@@ -1702,26 +1827,35 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
         bid = row['id']
         enriched_keys = enriched_by_building.get(bid, [])
         sos_title = row['sos_principal_title']
+        sos_match, _ = entity_match_quality(
+            row['sos_entity_name'],
+            [row['sale_buyer_primary'], row['current_owner_name'],
+             row['owner_name_hpd'], row['owner_name_rpad']],
+        )
         owners = []
         keys = []
         for field, source, is_sos in source_map:
-            name = row[field]
-            if not name:
-                continue
-            # Skip the SOS row entirely if the title says it's an agent
-            # (Service of Process / Registered Agent — not an owner).
-            if is_sos and is_sos_agent_title(sos_title):
-                continue
-            key = canonical_name_key(name)
-            if not key:
-                continue
-            already = any(names_compatible(key, ek) for ek in enriched_keys)
-            _dedup_add_owner(owners, keys, key, {
-                'name': name,
-                'source': source,
-                'recommended': is_sos,
-                'already_enriched': already,
-            })
+            for name in split_candidate_names(row[field]):
+                # Skip the SOS row entirely if the title says it's an agent
+                # (Service of Process / Registered Agent — not an owner).
+                if is_sos and is_sos_agent_title(sos_title):
+                    continue
+                if is_sos and sos_match == 'mismatch':
+                    continue
+                classification = classify_party_name(name)
+                if not classification['is_person']:
+                    continue
+                key = canonical_name_key(name)
+                if not key:
+                    continue
+                already = any(names_compatible(key, ek) for ek in enriched_keys)
+                _dedup_add_owner(owners, keys, key, {
+                    'name': name,
+                    'source': source,
+                    **classification,
+                    'recommended': is_sos,
+                    'already_enriched': already,
+                })
         available = [o for o in owners if not o['already_enriched']]
         chosen = filter_owners_by_strategy(available, owner_strategy)
         if chosen:

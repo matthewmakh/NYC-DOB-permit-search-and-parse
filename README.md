@@ -134,8 +134,12 @@ GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
 # Activate environment
 source venv-permit/bin/activate
 
-# Run permit scraper
-python permit_scraper.py
+# Run the incremental permit scraper
+python permit_scraper_api.py --days 14
+
+# One-time repair after changing DOB NOW permit identity/owner mappings.
+# This is idempotent and can be resumed by rerunning the same command.
+python permit_scraper_api.py --dob-now-only --start 2016-01-01 --end YYYY-MM-DD
 
 # Extract contacts (after scraper)
 python add_permit_contacts.py
@@ -362,6 +366,11 @@ Each step processes in batches and respects API rate limits.
   - `migrate_add_buildings.py`
   - `migrate_add_dual_owner_fields.py`
   - `migrate_add_building_intelligence.py`
+  - `migrate_add_freshness_and_jobs.py`
+
+The master `run_enrichment_pipeline.py` now runs the last additive migration
+itself before enrichment. Its versioned ACRIS refresh rebuilds existing
+property mortgage/ownership summaries after logic changes.
 
 ---
 

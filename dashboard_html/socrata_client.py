@@ -215,8 +215,13 @@ class SocrataError(Exception):
 #   seller / buyer / lender / borrower / other
 
 _ROLE_KEYWORDS = [
-    ('seller',   ('GRANTOR', 'SELLER', 'ASSIGNOR')),
-    ('buyer',    ('GRANTEE', 'BUYER', 'ASSIGNEE')),
+    # Assignments transfer a loan/security interest, not the real property.
+    # Keeping these roles distinct prevents banks in an ASST from appearing
+    # as former owners merely because ASSIGNOR used to bucket as "seller".
+    ('assignor',  ('ASSIGNOR',)),
+    ('assignee',  ('ASSIGNEE',)),
+    ('seller',   ('GRANTOR', 'SELLER')),
+    ('buyer',    ('GRANTEE', 'BUYER')),
     ('borrower', ('MORTGAGOR', 'BORROWER', 'DEBTOR')),
     ('lender',   ('MORTGAGEE', 'LENDER', 'SECURED')),
 ]
@@ -226,9 +231,10 @@ _ROLE_KEYWORDS = [
 _FALLBACK_ROLES = {
     'DEED':  {'1': 'seller', '2': 'buyer'},
     'MTGE':  {'1': 'borrower', '2': 'lender'},
+    'M&CON': {'1': 'borrower', '2': 'lender'},
     'AGMT':  {'1': 'borrower', '2': 'lender'},
     'SAT':   {'1': 'borrower', '2': 'lender'},
-    'ASST':  {'1': 'seller', '2': 'buyer'},
+    'ASST':  {'1': 'assignor', '2': 'assignee'},
     'CNTR':  {'1': 'seller', '2': 'buyer'},
 }
 
@@ -289,9 +295,21 @@ def is_deed(doc_type):
     return 'DEED' in (doc_type or '').upper()
 
 
+def is_ownership_party(doc_type, role):
+    """True only for grantee/grantor roles on a deed instrument.
+
+    ACRIS reuses numeric party types across mortgages, assignments, trusts,
+    agreements, and deeds. Role text alone is therefore not proof that the
+    party ever owned the real property.
+    """
+    return is_deed(doc_type) and role in ('buyer', 'seller')
+
+
 def is_mortgage(doc_type):
     dt = (doc_type or '').upper()
-    return dt == 'MTGE' or dt.startswith('MTGE')
+    # M&CON is NYC's "Mortgage and Consolidation" instrument. Excluding it
+    # made an older, already-satisfied MTGE look like the current loan.
+    return dt == 'M&CON' or dt == 'MTGE' or dt.startswith('MTGE')
 
 
 def is_satisfaction(doc_type):

@@ -296,87 +296,67 @@ def enrich_building(building_id, bbl):
     
     # Get tax delinquency data
     tax_data, tax_error = get_tax_delinquency_data(bbl)
+    errors = []
     if tax_error:
         print(f"      ⚠️  {tax_error}")
-        tax_data = {
-            'has_tax_delinquency': False,
-            'tax_delinquency_count': 0,
-            'tax_delinquency_water_only': False,
-            'tax_delinquency_latest_date': None
-        }
+        errors.append(tax_error)
     
     # Get ECB violations (these can become liens)
     ecb_data, ecb_error = get_ecb_violations_data(bbl)
     if ecb_error:
         print(f"      ⚠️  {ecb_error}")
-        ecb_data = {
-            'ecb_violation_count': 0,
-            'ecb_total_balance': 0,
-            'ecb_open_violations': 0,
-            'ecb_total_penalty': 0,
-            'ecb_amount_paid': 0,
-            'ecb_most_recent_hearing_date': None,
-            'ecb_most_recent_hearing_status': None,
-            'ecb_respondent_name': None,
-            'ecb_respondent_address': None,
-            'ecb_respondent_city': None,
-            'ecb_respondent_zip': None
-        }
+        errors.append(ecb_error)
     
     # Get DOB violations
     dob_data, dob_error = get_dob_violations_data(bbl)
     if dob_error:
         print(f"      ⚠️  {dob_error}")
-        dob_data = {
-            'dob_violation_count': 0,
-            'dob_open_violations': 0
-        }
+        errors.append(dob_error)
     
     # Combine all data
-    result = {
-        **tax_data,
-        **ecb_data,
-        **dob_data,
-        'tax_lien_last_checked': datetime.now()
-    }
+    # A failed source contributes no keys. This preserves the last known good
+    # figures instead of replacing a real balance/violation count with zero.
+    result = {}
+    for data in (tax_data, ecb_data, dob_data):
+        if data:
+            result.update(data)
+    if not errors:
+        result['tax_lien_last_checked'] = datetime.now()
+    result['_errors'] = errors
     
     return result
 
 
 def update_building_tax_lien_data(cursor, building_id, data):
-    """Update building record with tax/lien data"""
-    cursor.execute("""
-        UPDATE buildings 
-        SET 
-            has_tax_delinquency = %(has_tax_delinquency)s,
-            tax_delinquency_count = %(tax_delinquency_count)s,
-            tax_delinquency_water_only = %(tax_delinquency_water_only)s,
-            ecb_violation_count = %(ecb_violation_count)s,
-            ecb_total_balance = %(ecb_total_balance)s,
-            ecb_open_violations = %(ecb_open_violations)s,
-            ecb_total_penalty = %(ecb_total_penalty)s,
-            ecb_amount_paid = %(ecb_amount_paid)s,
-            ecb_most_recent_hearing_date = %(ecb_most_recent_hearing_date)s,
-            ecb_most_recent_hearing_status = %(ecb_most_recent_hearing_status)s,
-            ecb_respondent_name = %(ecb_respondent_name)s,
-            ecb_respondent_address = %(ecb_respondent_address)s,
-            ecb_respondent_city = %(ecb_respondent_city)s,
-            ecb_respondent_zip = %(ecb_respondent_zip)s,
-            dob_violation_count = %(dob_violation_count)s,
-            dob_open_violations = %(dob_open_violations)s,
-            tax_lien_last_checked = %(tax_lien_last_checked)s
-        WHERE id = %(building_id)s
-    """, {**data, 'building_id': building_id})
-
-    # Post-migration column; skip cleanly on databases that predate it.
-    cursor.execute("SAVEPOINT lien_date")
-    try:
-        cursor.execute("""
-            UPDATE buildings SET tax_delinquency_latest_date = %s WHERE id = %s
-        """, (data.get('tax_delinquency_latest_date'), building_id))
-        cursor.execute("RELEASE SAVEPOINT lien_date")
-    except psycopg2.Error:
-        cursor.execute("ROLLBACK TO SAVEPOINT lien_date")
+    """Update only sources that returned successfully."""
+    allowed = {
+        'has_tax_delinquency', 'tax_delinquency_count',
+        'tax_delinquency_water_only',
+        'ecb_violation_count', 'ecb_total_balance', 'ecb_open_violations',
+        'ecb_total_penalty', 'ecb_amount_paid',
+        'ecb_most_recent_hearing_date', 'ecb_most_recent_hearing_status',
+        'ecb_respondent_name', 'ecb_respondent_address',
+        'ecb_respondent_city', 'ecb_respondent_zip',
+        'dob_violation_count', 'dob_open_violations', 'tax_lien_last_checked',
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    assignments = ', '.join(f'{column} = %s' for column in updates)
+    cursor.execute(
+        f"UPDATE buildings SET {assignments} WHERE id = %s",
+        [*updates.values(), building_id],
+    )
+    if 'tax_delinquency_latest_date' in data:
+        cursor.execute("SAVEPOINT lien_date")
+        try:
+            cursor.execute("""
+                UPDATE buildings SET tax_delinquency_latest_date = %s
+                WHERE id = %s
+            """, (data['tax_delinquency_latest_date'], building_id))
+            cursor.execute("RELEASE SAVEPOINT lien_date")
+        except psycopg2.Error:
+            cursor.execute("ROLLBACK TO SAVEPOINT lien_date")
 
 
 def process_single_building(building, position, total):
@@ -404,16 +384,16 @@ def process_single_building(building, position, total):
             
             # Show summary
             indicators = []
-            if data['has_tax_delinquency']:
+            if data.get('has_tax_delinquency'):
                 water_note = " (water only)" if data['tax_delinquency_water_only'] else ""
                 indicators.append(f"Tax Delinquency: {data['tax_delinquency_count']} notices{water_note}")
-            if data['ecb_total_balance'] > 0:
+            if data.get('ecb_total_balance', 0) > 0:
                 indicators.append(f"ECB Balance: ${data['ecb_total_balance']:,.2f}")
-            if data['ecb_open_violations'] > 0:
+            if data.get('ecb_open_violations', 0) > 0:
                 indicators.append(f"ECB Open: {data['ecb_open_violations']}")
-            if data['ecb_respondent_name']:
+            if data.get('ecb_respondent_name'):
                 indicators.append(f"ECB Respondent: {data['ecb_respondent_name']}")
-            if data['dob_open_violations'] > 0:
+            if data.get('dob_open_violations', 0) > 0:
                 indicators.append(f"DOB Open: {data['dob_open_violations']}")
             
             with progress_lock:
@@ -423,7 +403,8 @@ def process_single_building(building, position, total):
                     print(f"   ✓ No issues found")
                 print()
             
-            return {'success': True, 'data': data}
+            return {'success': not data.get('_errors'), 'data': data,
+                    'partial': bool(data.get('_errors'))}
         else:
             with progress_lock:
                 print(f"   ❌ Enrichment failed")
@@ -503,9 +484,9 @@ def main():
                 if result['success']:
                     successful += 1
                     data = result['data']
-                    if data['has_tax_delinquency']:
+                    if data.get('has_tax_delinquency'):
                         with_tax_delinquency += 1
-                    if data['ecb_total_balance'] > 0:
+                    if data.get('ecb_total_balance', 0) > 0:
                         with_ecb_balance += 1
                 else:
                     failed += 1

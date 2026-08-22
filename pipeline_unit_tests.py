@@ -26,7 +26,8 @@ import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
 import socrata_client
 from socrata_client import (
     SocrataClient, bbl_parts, soql_quote, in_clause, where_block_lot,
-    party_role, is_deed, is_mortgage, is_satisfaction, _bucket_label,
+    party_role, is_deed, is_ownership_party, is_mortgage, is_satisfaction,
+    _bucket_label,
 )
 
 PASS = 0
@@ -70,6 +71,10 @@ check("label bucketing: GRANTOR/SELLER -> seller", _bucket_label('GRANTOR/SELLER
 check("label bucketing: GRANTEE/BUYER -> buyer", _bucket_label('GRANTEE/BUYER') == 'buyer')
 check("label bucketing: MORTGAGEE/LENDER -> lender", _bucket_label('MORTGAGEE/LENDER') == 'lender')
 check("label bucketing: MORTGAGOR/BORROWER -> borrower", _bucket_label('MORTGAGOR/BORROWER') == 'borrower')
+check("label bucketing: ASSIGNOR stays a loan-transfer role",
+      _bucket_label('ASSIGNOR/OLD LENDER') == 'assignor')
+check("label bucketing: ASSIGNEE stays a loan-transfer role",
+      _bucket_label('ASSIGNEE/NEW LENDER') == 'assignee')
 
 # Offline fallback path (no control codes available)
 socrata_client._doc_roles_cache = {}
@@ -77,6 +82,14 @@ check("DEED party 1 is the SELLER (was inverted)", party_role('DEED', '1') == 's
 check("DEED party 2 is the BUYER (was inverted)", party_role('DEED', '2') == 'buyer')
 check("MTGE party 2 is the LENDER (was the borrower)", party_role('MTGE', '2') == 'lender')
 check("MTGE party 1 is the borrower", party_role('MTGE', '1') == 'borrower')
+check("M&CON party 2 is the lender", party_role('M&CON', '2') == 'lender')
+check("ASST parties are not labeled property buyers/sellers",
+      party_role('ASST', '1') == 'assignor'
+      and party_role('ASST', '2') == 'assignee')
+check("only deed buyers/sellers are ownership parties",
+      is_ownership_party('DEED', 'seller')
+      and not is_ownership_party('ASST', 'assignor')
+      and not is_ownership_party('MTGE', 'lender'))
 check("Deed variants inherit deed roles", party_role('DEEDO', '1') == 'seller')
 check("Unknown doc types map to other", party_role('ZZZZ', '1') == 'other')
 
@@ -97,7 +110,8 @@ class DocCodeStub:
 roles = socrata_client.load_party_roles(DocCodeStub())
 check("control codes: DEED roles parsed", roles['DEED'] == {'1': 'seller', '2': 'buyer', '3': 'other'})
 check("control codes: MTGE roles parsed", roles['MTGE']['2'] == 'lender')
-check("party_role uses loaded codes", party_role('ASST', '2', roles) == 'buyer')
+check("party_role uses loaded assignment roles",
+      party_role('ASST', '2', roles) == 'assignee')
 socrata_client._doc_roles_cache = None
 
 # ---------------------------------------------------------------------------
@@ -238,6 +252,71 @@ check("reference direction doesn't matter", 'MTG1' in status2['satisfied_ids'])
 check("free and clear once every mortgage is satisfied",
       status2['is_free_and_clear'] is True and status2['has_open_mortgage'] is False)
 
+# Screenshot regression: the 2010 $55k MTGE was satisfied in 2014; the 2019
+# M&CON is the apparently-open principal instrument that belongs in summary.
+screenshot_txns = [
+    {'document_id': 'OLD55', 'doc_type': 'MTGE', 'doc_amount': 55000,
+     'doc_date': date(2010, 11, 26), 'recorded_date': date(2010, 12, 29),
+     'crfn': '2010000434729'},
+    {'document_id': 'SAT55', 'doc_type': 'SAT', 'doc_amount': 0,
+     'doc_date': date(2013, 12, 31), 'recorded_date': date(2014, 1, 9),
+     'crfn': '2014000011264'},
+    {'document_id': 'MCON654', 'doc_type': 'M&CON', 'doc_amount': 654891.10,
+     'doc_date': date(2018, 8, 10), 'recorded_date': date(2019, 6, 18),
+     'crfn': '2019000190676'},
+]
+screenshot_refs = [
+    {'document_id': 'SAT55', 'referenced_document_id': 'OLD55', 'crfn': ''},
+]
+screenshot_status = step3.derive_mortgage_status(screenshot_txns, screenshot_refs)
+screenshot_primary = step3.find_primary_mortgage(
+    screenshot_txns, screenshot_status['open_ids'])
+check("satisfied $55k mortgage is not summarized",
+      screenshot_primary['document_id'] != 'OLD55')
+check("M&CON is recognized as the open principal instrument",
+      screenshot_primary['document_id'] == 'MCON654')
+
+chain_txns = screenshot_txns + [
+    {'document_id': 'OLDER', 'doc_type': 'MTGE', 'doc_amount': 200000,
+     'doc_date': date(2006, 1, 1), 'recorded_date': date(2006, 1, 2),
+     'crfn': '2006000000001'},
+    {'document_id': 'ASSIGN', 'doc_type': 'ASST', 'doc_amount': 0,
+     'doc_date': date(2020, 1, 1), 'recorded_date': date(2020, 1, 2),
+     'crfn': '2020000000001'},
+]
+chain_refs = screenshot_refs + [
+    {'document_id': 'MCON654', 'referenced_document_id': 'OLDER', 'crfn': ''},
+    {'document_id': 'ASSIGN', 'referenced_document_id': 'OLDER', 'crfn': ''},
+    {'document_id': 'ASSIGN', 'referenced_document_id': 'MCON654', 'crfn': ''},
+]
+chain_status = step3.derive_mortgage_status(chain_txns, chain_refs)
+check("linked mortgage generations count as one open debt chain",
+      chain_status['open_mortgage_count'] == 1)
+
+closed_chain_txns = chain_txns + [{
+    'document_id': 'SATMCON', 'doc_type': 'SAT', 'doc_amount': 0,
+    'doc_date': date(2024, 2, 1), 'recorded_date': date(2024, 2, 5),
+    'crfn': '2024000000001',
+}]
+closed_chain_refs = chain_refs + [
+    {'document_id': 'SATMCON', 'referenced_document_id': 'MCON654', 'crfn': ''},
+]
+closed_chain_status = step3.derive_mortgage_status(
+    closed_chain_txns, closed_chain_refs)
+check("satisfying a terminal consolidation closes its predecessor chain",
+      closed_chain_status['open_mortgage_count'] == 0
+      and closed_chain_status['is_free_and_clear'] is True)
+
+legacy_unknown = [{
+    'document_id': 'FT_OLD', 'doc_type': 'MTGE', 'doc_amount': 1,
+    'doc_date': date(1998, 1, 1), 'recorded_date': date(1998, 1, 2), 'crfn': '',
+}]
+legacy_status = step3.derive_mortgage_status(legacy_unknown, [])
+check("reel-era mortgage without reference linkage is status-unknown",
+      legacy_status['unknown_ids'] == {'FT_OLD'}
+      and legacy_status['open_mortgage_count'] == 0
+      and legacy_status['is_free_and_clear'] is False)
+
 # ---------------------------------------------------------------------------
 print("\n— B4: lien-sale cycle scoping —")
 
@@ -288,9 +367,54 @@ result, err = step4.get_tax_delinquency_data('3053170021')
 check("no rows means no delinquency", result['has_tax_delinquency'] is False)
 
 # ---------------------------------------------------------------------------
+print("\n— permit ingestion identities and owner updates —")
+
+import permit_scraper_api as permits_api
+
+all_selected = (set(permits_api.NYCOpenDataClient.SELECT_FIELDS)
+                | set(permits_api.DOBNowFilingsClient.SELECT_FIELDS))
+check("removed invalid NYC Open Data fields",
+      not {'owner_s_phone__', 'owner_s_street_name'} & all_selected)
+
+filing_rows, skipped = permits_api.prepare_rows_dob_now_filings([{
+    'job_filing_number': 'B00000001-I1', 'filing_date': '2026-01-01T00:00:00',
+    'owner_first_name': 'JANE', 'owner_last_name': 'DOE',
+    'owner_type': 'Individual', 'bbl': '3000010001',
+}])
+filing = dict(zip(permits_api.FILINGS_COLUMNS, filing_rows[0]))
+check("DOB NOW individual owner is retained",
+      filing['owner_first_name'] == 'JANE'
+      and filing['owner_last_name'] == 'DOE'
+      and filing['owner_business_type'] == 'Individual')
+
+approved_rows, skipped = permits_api.prepare_rows_dob_now_approved([
+    {'job_filing_number': 'B00000001-I1', 'work_permit': 'B00000001-I1-GC',
+     'issued_date': '2026-01-02T00:00:00', 'owner_name': 'Jane Doe'},
+    {'job_filing_number': 'B00000001-I1', 'work_permit': 'B00000001-I1-PL',
+     'issued_date': '2026-01-03T00:00:00', 'owner_name': 'Jane Doe'},
+])
+approved_ids = [dict(zip(permits_api.APPROVED_COLUMNS, row))['permit_no']
+                for row in approved_rows]
+check("multiple work permits under one filing stay distinct",
+      approved_ids == ['B00000001-I1-GC', 'B00000001-I1-PL'])
+bis_rows, _ = permits_api.prepare_rows_bis([
+    {'job__': '100000001', 'permit_si_no': '7001', 'work_type': 'PL'},
+    {'job__': '100000001', 'permit_si_no': '7002', 'work_type': 'MH'},
+])
+check("BIS work permits under one job stay distinct",
+      [row[0] for row in bis_rows] == ['7001', '7002'])
+assignments = permits_api.PermitDatabase._update_assignments(
+    permits_api.APPROVED_COLUMNS)
+check("upsert refreshes owner fields, not just dates/status",
+      'owner_first_name = EXCLUDED.owner_first_name' in assignments
+      and 'owner_street_name = EXCLUDED.owner_street_name' in assignments)
+
+# ---------------------------------------------------------------------------
 print("\n— doc-type classifiers —")
 check("is_deed matches variants", is_deed('DEED') and is_deed('DEEDO') and not is_deed('MTGE'))
-check("is_mortgage exact family", is_mortgage('MTGE') and not is_mortgage('DEED'))
+check("is_mortgage exact family",
+      is_mortgage('MTGE') and is_mortgage('M&CON') and not is_mortgage('AGMT')
+      and not is_mortgage('DEED'))
 check("is_satisfaction family", is_satisfaction('SAT') and is_satisfaction('SATS') and not is_satisfaction('ASST'))
 
 # ---------------------------------------------------------------------------

@@ -313,7 +313,8 @@ function renderProperties() {
     noResults.style.display = 'none';
     
     container.innerHTML = state.properties.map(property => {
-        const owner = property.current_owner_name || property.owner_name_rpad || property.owner_name_hpd || 'Unknown';
+        const owner = property.sale_buyer_primary || property.current_owner_name ||
+            property.owner_name_hpd || property.owner_name_rpad || 'Unknown';
         const assessedValue = property.assessed_total_value || 0;
         const salePrice = property.sale_price || 0;
         const permitCount = property.permit_count || 0;
@@ -959,22 +960,25 @@ async function showBulkEnrichModal() {
     modal.style.display = 'block';
     modal.innerHTML = `
         <div class="modal-content bulk-enrich-modal-content">
-            <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
-            <h2>Bulk owner enrichment</h2>
-            <p class="modal-subtitle">Enriches every property matching your current filters
-                (<strong>${formatNumber(totalFiltered)}</strong> total, not just this page).</p>
+            <button type="button" class="modal-close" onclick="closeBulkEnrichModal()"
+                    aria-label="Close bulk enrichment">&times;</button>
+            <h2>Bulk people enrichment</h2>
+            <p class="modal-subtitle">Finds contact information only for confident human
+                candidates on every property matching your current filters
+                (<strong>${formatNumber(totalFiltered)}</strong> total, not just this page).
+                Companies, banks, trusts, and registered agents are excluded.</p>
 
             <div class="be-strategy">
-                <h4>Which owners to enrich per property</h4>
+                <h4>Which people to enrich per property</h4>
                 <label>
                     <input type="radio" name="be-strategy" value="recommended" checked>
-                    <strong>Recommended</strong> &mdash; 1 owner per property
-                    (SOS principal if available, otherwise the primary listed owner)
+                    <strong>Best human candidate</strong> &mdash; at most 1 person per property
+                    (matched SOS principal if available, otherwise the highest-priority person)
                 </label>
                 <label>
                     <input type="radio" name="be-strategy" value="all">
-                    <strong>All available owners</strong> &mdash; enriches every distinct
-                    owner name found (SOS + PLUTO + RPAD + HPD). Higher cost.
+                    <strong>All human candidates</strong> &mdash; enriches every distinct
+                    person found across matched SOS, ACRIS deeds, PLUTO, HPD, and RPAD. Higher cost.
                 </label>
             </div>
 
@@ -1117,11 +1121,11 @@ async function refreshBulkEnrichEstimate() {
                     <span class="summary-value">${formatNumber(data.total_properties)}</span>
                 </div>
                 <div class="summary-row">
-                    <span class="summary-label">Properties with enrichable owners:</span>
+                    <span class="summary-label">Properties with human candidates:</span>
                     <span class="summary-value">${formatNumber(data.properties_with_owners)}</span>
                 </div>
                 <div class="summary-row highlight">
-                    <span class="summary-label">Owners to enrich (${strategy}):</span>
+                    <span class="summary-label">People to enrich (${strategy}):</span>
                     <span class="summary-value">${formatNumber(data.total_owners)}</span>
                 </div>
             </div>
@@ -1129,7 +1133,7 @@ async function refreshBulkEnrichEstimate() {
             <div class="cost-breakdown">
                 <h4>Cost ${data.is_admin ? '<small style="font-weight:normal;">(customer rate — admin is not charged)</small>' : ''}</h4>
                 <div class="math-display">
-                    <p>${formatNumber(data.total_owners)} owners × ${customerPerStr} = <strong>${customerMaxStr}</strong></p>
+                    <p>${formatNumber(data.total_owners)} people × ${customerPerStr} = <strong>${customerMaxStr}</strong></p>
                 </div>
                 <p class="cost-note"><small>
                     Only lookups that return data are charged. Batch pricing: ${customerPerStr} per lookup.
@@ -1150,13 +1154,13 @@ async function refreshBulkEnrichEstimate() {
         `;
 
         if (data.total_owners === 0) {
-            startBtn.textContent = 'No owners to enrich';
+            startBtn.textContent = 'No people to enrich';
             startBtn.disabled = true;
             return;
         }
 
         startBtn.disabled = false;
-        startBtn.textContent = `Enrich ${formatNumber(data.total_owners)} owners (${startBtnCostStr})`;
+        startBtn.textContent = `Enrich ${formatNumber(data.total_owners)} people (${startBtnCostStr})`;
         startBtn.onclick = startBulkEnrichJob;
 
         if (data.requires_typed_confirmation) {
@@ -1227,11 +1231,12 @@ function renderBulkEnrichProgress(jobId, initialData) {
     const adminUnitCost = initialData.provider_cost_per_lookup || 0;
 
     content.innerHTML = `
-        <span class="modal-close" onclick="closeBulkEnrichModal()">&times;</span>
+        <button type="button" class="modal-close" onclick="closeBulkEnrichModal()"
+                aria-label="Close bulk enrichment">&times;</button>
         <h2>Bulk enrichment running</h2>
         <p class="modal-subtitle">
             Job #${jobId} &middot; ${formatNumber(props)} properties &middot;
-            ${formatNumber(planned)} owners (${strategy}) &middot;
+            ${formatNumber(planned)} people (${strategy}) &middot;
             provider: <strong>${providerLabel}</strong> &middot;
             customer rate: up to <strong>$${customerMax.toFixed(2)}</strong>
         </p>

@@ -1165,7 +1165,7 @@ def get_building_detail(building_id):
                 }), 404
             
             # Get all permits for this building
-                cur.execute("""
+            cur.execute("""
                 SELECT p.*, 
                        (
                            CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
@@ -3141,6 +3141,42 @@ def _parse_boroughs_param(raw, multi_source=None):
     return out
 
 
+# Coarse SQL prefilter only. The paid-enrichment path always runs the stricter
+# Python classifier as its final authority. Keeping this centralized prevents
+# the property list and bulk-estimate routes from drifting apart.
+_NONPERSON_SQL_PATTERN = (
+    r'(^|[^[:alpha:]])(LLC|INC|INCORPORATED|CORP|CORPORATION|LTD|LIMITED|'
+    r'COMPANY|HOLDINGS|REALTY|PROPERTIES|BANK|BANC|BANCORP|MORTGAGE|LENDING|'
+    r'FINANCE|FINANCIAL|FUNDING|SERVICING|TRUST|TRUSTEE|FUND|ASSOCIATION|'
+    r'AUTHORITY|DEPARTMENT|AGENCY|CREDIT[[:space:]]+UNION|NATIONAL[[:space:]]+'
+    r'ASSOCIATION|FANNIE[[:space:]]+MAE|FREDDIE[[:space:]]+MAC|MERS)'
+    r'([^[:alpha:]]|$)'
+)
+
+
+def _enrichable_owner_sql():
+    """SQL prefilter for rows likely to contain at least one human owner."""
+    fields = [
+        ('b.sos_principal_name',
+         "AND UPPER(COALESCE(b.sos_principal_title, '')) NOT IN "
+         "('SERVICE OF PROCESS AGENT', 'REGISTERED AGENT')"),
+        ('b.sale_buyer_primary', ''),
+        ('b.current_owner_name', ''),
+        ('b.owner_name_hpd', ''),
+        ('b.owner_name_rpad', ''),
+    ]
+    candidates = []
+    for field, extra in fields:
+        candidates.append(f"""(
+            {field} IS NOT NULL
+            AND {field} ~* '[[:alpha:]][[:alpha:]''’.-]+[[:space:],]+[[:alpha:]]'
+            AND {field} !~* '{_NONPERSON_SQL_PATTERN}'
+            AND {field} !~ '[0-9;&]'
+            {extra}
+        )""")
+    return '(\n' + '\nOR '.join(candidates) + '\n)'
+
+
 def _resolve_filter_building_ids(args, limit=None):
     """Return the list of building IDs matching the same filters as /api/properties,
     ignoring pagination. Used by the bulk-enrich endpoints so that 'enrich filtered'
@@ -3266,22 +3302,7 @@ def _resolve_filter_building_ids(args, limit=None):
         )""")
         params.extend([str(recent_permit_days), str(recent_permit_days)])
     if has_enrichable_owner:
-        where_clauses.append("""
-            (
-                (b.sos_principal_name IS NOT NULL
-                 AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                 AND b.sos_principal_name ~ ' ')
-                OR (b.current_owner_name IS NOT NULL
-                    AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                    AND b.current_owner_name ~ ' ')
-                OR (b.owner_name_rpad IS NOT NULL
-                    AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                    AND b.owner_name_rpad ~ ' ')
-                OR (b.owner_name_hpd IS NOT NULL
-                    AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                    AND b.owner_name_hpd ~ ' ')
-            )
-        """)
+        where_clauses.append(_enrichable_owner_sql())
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
@@ -3545,30 +3566,7 @@ def api_properties():
             # Enrichable owner filter - has a person name (not LLC/INC/CORP) with first+last
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
-                # Check if any owner field has a person name (not business, has space for first+last)
-                where_clauses.append("""
-                    (
-                        -- SOS Principal is a person (best source)
-                        (b.sos_principal_name IS NOT NULL
-                         AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.sos_principal_name ~ ' ')
-                        OR
-                        -- Current owner is a person
-                        (b.current_owner_name IS NOT NULL
-                         AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.current_owner_name ~ ' ')
-                        OR
-                        -- RPAD owner is a person
-                        (b.owner_name_rpad IS NOT NULL
-                         AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.owner_name_rpad ~ ' ')
-                        OR
-                        -- HPD owner is a person
-                        (b.owner_name_hpd IS NOT NULL
-                         AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.owner_name_hpd ~ ' ')
-                    )
-                """)
+                where_clauses.append(_enrichable_owner_sql())
 
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -3611,7 +3609,8 @@ def api_properties():
                 'value': 'b.assessed_total_value',
                 'sale_date': 'b.sale_date',
                 'sale_price': 'b.sale_price',
-                'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
+                'owner': ('COALESCE(b.sale_buyer_primary, b.current_owner_name, '
+                          'b.owner_name_hpd, b.owner_name_rpad)'),
                 'permits': 'pc.permit_count',
                 'units': 'b.total_units'
             }
@@ -3968,25 +3967,7 @@ def api_properties_export():
             # Enrichable owner filter
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
-                where_clauses.append("""
-                    (
-                        (b.sos_principal_name IS NOT NULL 
-                         AND b.sos_principal_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.sos_principal_name ~ ' ')
-                        OR
-                        (b.current_owner_name IS NOT NULL 
-                         AND b.current_owner_name !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.current_owner_name ~ ' ')
-                        OR
-                        (b.owner_name_rpad IS NOT NULL 
-                         AND b.owner_name_rpad !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.owner_name_rpad ~ ' ')
-                        OR
-                        (b.owner_name_hpd IS NOT NULL 
-                         AND b.owner_name_hpd !~* '(LLC|INC|CORP|LTD|CO|COMPANY|TRUST|ESTATE)'
-                         AND b.owner_name_hpd ~ ' ')
-                    )
-                """)
+                where_clauses.append(_enrichable_owner_sql())
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -3996,7 +3977,8 @@ def api_properties_export():
                 'value': 'b.assessed_total_value',
                 'sale_price': 'b.sale_price',
                 'address': 'b.address',
-                'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
+                'owner': ('COALESCE(b.sale_buyer_primary, b.current_owner_name, '
+                          'b.owner_name_hpd, b.owner_name_rpad)'),
             }
             order_by_sql = _order_by_sql(
                 request.args, sort_columns, 'sale_date', sort_order)
@@ -4017,7 +3999,8 @@ def api_properties_export():
                     b.building_class,
                     b.year_built,
                     COALESCE(b.total_units, 0) as units,
-                    COALESCE(b.current_owner_name, b.owner_name_rpad, b.owner_name_hpd) as owner_name,
+                    COALESCE(b.sale_buyer_primary, b.current_owner_name,
+                             b.owner_name_hpd, b.owner_name_rpad) as owner_name,
                     COALESCE(b.sos_principal_street, b.ecb_respondent_address) as owner_address,
                     b.assessed_total_value,
                     b.sale_price,
@@ -5374,11 +5357,21 @@ def api_building_profile(bbl):
         
             # ===== 5. OWNER SOURCES (Deduplicate and organize) =====
             owners = {
+                'acris': building['sale_buyer_primary'],
                 'pluto': building['current_owner_name'],
                 'rpad': building['owner_name_rpad'],
                 'hpd': building['owner_name_hpd'],
                 'ecb': building['ecb_respondent_name']
             }
+            try:
+                from enrichment_service import classify_party_name
+                owner_classifications = {
+                    source: classify_party_name(name)
+                    for source, name in owners.items() if name
+                }
+            except Exception as e:
+                print(f"Owner classification failed: {e}")
+                owner_classifications = {}
             
             # ===== 5b. SOS DATA (Real person behind LLC) =====
             sos_data = None
@@ -5398,6 +5391,10 @@ def api_building_profile(bbl):
                     'formation_date': building['sos_formation_date'].isoformat() if building['sos_formation_date'] else None,
                     'last_enriched': building['sos_last_enriched'].isoformat() if building['sos_last_enriched'] else None
                 }
+                try:
+                    sos_data.update(classify_party_name(building['sos_principal_name']))
+                except Exception:
+                    pass
 
                 # Does the registered entity actually correspond to an owner
                 # name we hold for this building? Checked here rather than at
@@ -5521,6 +5518,7 @@ def api_building_profile(bbl):
                     activity_timeline.append({
                         'date': txn['recorded_date'],
                         'type': 'transaction',
+                        'document_type': txn['doc_type'],
                         'icon': icon,
                         'title': f"{txn['doc_type']} - ${txn['doc_amount']:,.0f}" if txn['doc_amount'] else txn['doc_type'],
                         'description': f"Document ID: {txn['document_id']}",
@@ -5619,11 +5617,31 @@ def api_building_profile(bbl):
             # is only a fallback for rows PLUTO hasn't filled yet.
             building_dict['zip_code'] = building_dict.get('zip_code') or property_zip
             building_dict['borough_name'] = borough_name
+            # ACRIS's grantee on the latest deed is the strongest title
+            # assertion we hold. PLUTO and HPD remain visible as corroborating
+            # sources; RPAD is historical (the published dataset ends in
+            # FY2018/19) and is only a last-resort fallback.
+            owner_candidates = [
+                ('ACRIS latest deed grantee', building['sale_buyer_primary']),
+                ('NYC PLUTO', building['current_owner_name']),
+                ('HPD registration', building['owner_name_hpd']),
+                ('Historical RPAD assessment', building['owner_name_rpad']),
+            ]
+            owner_source, resolved_owner = next(
+                ((source, name) for source, name in owner_candidates if name),
+                (None, None),
+            )
+            building_dict['resolved_owner_name'] = resolved_owner
+            building_dict['resolved_owner_source'] = owner_source
             
             # ===== ENRICHMENT DATA (include to speed up button load) =====
             enrichment_info = {'available_owners': [], 'enriched_owners': [], 'already_enriched': False, 'enrichment_data': None, 'cost': 0.50, 'batch_cost': 0.35, 'logged_in': False}
             try:
-                from enrichment_service import parse_owner_name, check_user_enrichment_access, get_available_owners_for_enrichment
+                from enrichment_service import (
+                    parse_owner_name, classify_party_name, split_candidate_names,
+                    check_user_enrichment_access, get_available_owners_for_enrichment,
+                    is_sos_agent_title,
+                )
                 from auth_service import validate_session
                 
                 # Check if user is logged in (try to get user from session without requiring it)
@@ -5678,11 +5696,17 @@ def api_building_profile(bbl):
                     
                     # SOS Principal is recommended (real person behind LLC)
                     if building['sos_principal_name']:
+                        sos_classification = classify_party_name(
+                            building['sos_principal_name'])
                         first, middle, last = parse_owner_name(building['sos_principal_name'])
-                        if first and last:
+                        sos_is_related = (not sos_data or
+                                          sos_data.get('entity_match') != 'mismatch')
+                        if (first and last and sos_is_related and
+                                not is_sos_agent_title(building['sos_principal_title'])):
                             available_owners.append({
                                 'name': building['sos_principal_name'],
                                 'source': 'NY Secretary of State',
+                                **sos_classification,
                                 'recommended': True,
                                 'reason': 'Real person behind LLC',
                                 'already_enriched': False
@@ -5690,21 +5714,22 @@ def api_building_profile(bbl):
                     
                     # Check other owner sources
                     owner_sources = [
+                        ('sale_buyer_primary', 'ACRIS Latest Deed Grantee'),
                         ('current_owner_name', 'NYC PLUTO Database'),
-                        ('owner_name_rpad', 'Tax Records (RPAD)'),
                         ('owner_name_hpd', 'HPD Registration'),
-                        ('ecb_respondent_name', 'ECB Violations')
+                        ('owner_name_rpad', 'Historical Tax Records (RPAD)'),
                     ]
                     
                     for field, source in owner_sources:
-                        name = building_dict.get(field)
-                        if name:
+                        for name in split_candidate_names(building_dict.get(field)):
+                            classification = classify_party_name(name)
                             first, middle, last = parse_owner_name(name)
                             if first and last:
                                 if not any(o['name'].upper() == name.upper() for o in available_owners):
                                     available_owners.append({
                                         'name': name,
                                         'source': source,
+                                        **classification,
                                         'recommended': False,
                                         'already_enriched': False
                                     })
@@ -5716,11 +5741,30 @@ def api_building_profile(bbl):
                 import traceback
                 traceback.print_exc()
         
+            # Keep all ACRIS parties available to the Transactions section,
+            # but annotate which rows actually establish ownership. Numeric
+            # party types and labels are instrument-specific: a bank assigning
+            # a mortgage is not a previous property owner.
+            try:
+                from enrichment_service import classify_party_name
+                from socrata_client import is_ownership_party
+                parties_payload = []
+                for party in parties:
+                    item = dict(party)
+                    item.update(classify_party_name(item.get('party_name')))
+                    item['is_ownership_party'] = is_ownership_party(
+                        item.get('doc_type'), item.get('party_type'))
+                    parties_payload.append(item)
+            except Exception as e:
+                print(f"ACRIS party annotation failed: {e}")
+                parties_payload = [dict(p) for p in parties]
+
             return jsonify({
                 'success': True,
                 'building': building_dict,
                 'building_class_description': building_class_desc,
                 'owners': owners,
+                'owner_classifications': owner_classifications,
                 'sos_data': sos_data,
                 'enrichment': enrichment_info,
                 'risk_assessment': {
@@ -5732,7 +5776,7 @@ def api_building_profile(bbl):
                 },
                 'permits': [dict(p) for p in permits],
                 'transactions': [dict(t) for t in transactions],
-                'parties': [dict(p) for p in parties],
+                'parties': parties_payload,
                 'activity_timeline': activity_timeline[:50],  # Last 50 events
                 'contacts': contacts,
                 'stats': {
@@ -5815,7 +5859,11 @@ def api_enrich_owner():
     }
     """
     try:
-        from enrichment_service import enrich_owner, check_user_enrichment_access
+        from enrichment_service import (
+            enrich_owner, check_user_enrichment_access,
+            classify_party_name, canonical_name_key, names_compatible,
+            get_available_owners_for_enrichment,
+        )
         from stripe_service import charge_enrichment_fee
         
         data = request.get_json()
@@ -5829,6 +5877,14 @@ def api_enrich_owner():
         
         if not building_id or not owner_name:
             return jsonify({'success': False, 'error': 'Building ID and owner name required'}), 400
+
+        classification = classify_party_name(owner_name)
+        if not classification['is_person']:
+            return jsonify({
+                'success': False,
+                'error': ('Contact enrichment is limited to confident human names; '
+                          f"this entry is classified as {classification['entity_kind']}.")
+            }), 400
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
@@ -5844,6 +5900,19 @@ def api_enrich_owner():
                 'charged': False,
                 'message': f'You already enriched {owner_name}'
             })
+
+        # Do not let a crafted request spend money looking up an unrelated
+        # person. The name must still be one of this building's current,
+        # human-only candidates after source/agent/entity checks.
+        requested_key = canonical_name_key(owner_name)
+        related_people = get_available_owners_for_enrichment(building_id, user_id)
+        if not requested_key or not any(
+                names_compatible(requested_key, canonical_name_key(person['name']))
+                for person in related_people):
+            return jsonify({
+                'success': False,
+                'error': 'This person is not a verified owner candidate for the property.'
+            }), 400
         
         # Perform enrichment FIRST (before charging)
         success, data, message = enrich_owner(building_id, owner_name, address, user_id)
@@ -6207,7 +6276,8 @@ def api_enrich_permit_contact():
         from enrichment_service import (
             enrich_permit_contact, 
             check_permit_contact_enrichment,
-            grant_permit_contact_access
+            grant_permit_contact_access,
+            classify_party_name,
         )
         from stripe_service import charge_enrichment_fee
         
@@ -6224,6 +6294,14 @@ def api_enrich_permit_contact():
         
         if not bbl or not contact_name:
             return jsonify({'success': False, 'error': 'BBL and contact_name required'}), 400
+
+        classification = classify_party_name(contact_name)
+        if not classification['is_person']:
+            return jsonify({
+                'success': False,
+                'error': ('Contact enrichment is limited to confident human names; '
+                          f"this entry is classified as {classification['entity_kind']}.")
+            }), 400
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
@@ -7016,4 +7094,3 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_ENV') != 'production'
     print(f"Visit: http://localhost:{port}")
     app.run(debug=debug, host='0.0.0.0', port=port)
-
