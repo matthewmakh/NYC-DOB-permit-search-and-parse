@@ -1107,7 +1107,7 @@ def get_building_contacts(building_id):
             WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
             ORDER BY name, role;
         """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
-        contacts = cur.fetchall()
+            contacts = cur.fetchall()
         
         return jsonify(contacts)
         
@@ -1176,23 +1176,23 @@ def get_seller_leads():
             AND ap.party_name NOT ILIKE '%%funding%%'
         """
         
-        params = []
+            params = []
         
-        # Apply filters
-        if min_sale_price:
-            query += " AND t.doc_amount >= %s"
-            params.append(min_sale_price)
+            # Apply filters
+            if min_sale_price:
+                query += " AND t.doc_amount >= %s"
+                params.append(min_sale_price)
         
-        if state_filter:
-            query += " AND ap.state = %s"
-            params.append(state_filter.upper())
+            if state_filter:
+                query += " AND ap.state = %s"
+                params.append(state_filter.upper())
         
-        query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
-        query += " LIMIT %s"
-        params.append(limit)
+            query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
+            query += " LIMIT %s"
+            params.append(limit)
         
-        cur.execute(query, tuple(params))
-        leads = cur.fetchall()
+            cur.execute(query, tuple(params))
+            leads = cur.fetchall()
         
         # Format leads for frontend
         formatted_leads = []
@@ -1877,21 +1877,21 @@ def export_construction_permits():
             WHERE p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
         """
         
-        params = [days]
+            params = [days]
         
-        if job_types:
-            placeholders = ','.join(['%s'] * len(job_types))
-            query += f" AND p.job_type IN ({placeholders})"
-            params.extend(job_types)
+            if job_types:
+                placeholders = ','.join(['%s'] * len(job_types))
+                query += f" AND p.job_type IN ({placeholders})"
+                params.extend(job_types)
         
-        if borough:
-            query += " AND p.borough = %s"
-            params.append(borough)
+            if borough:
+                query += " AND p.borough = %s"
+                params.append(borough)
         
-        query += " ORDER BY p.issue_date DESC LIMIT 500"
+            query += " ORDER BY p.issue_date DESC LIMIT 500"
         
-        cur.execute(query, tuple(params))
-        permits = cur.fetchall()
+            cur.execute(query, tuple(params))
+            permits = cur.fetchall()
         
         # Create CSV
         si = StringIO()
@@ -3503,7 +3503,7 @@ def api_owner_portfolio(owner_name):
             ORDER BY b.assessed_total_value DESC NULLS LAST
         """, (f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%"))
         
-        properties = cur.fetchall()
+            properties = cur.fetchall()
         
         # Calculate portfolio stats
         total_value = sum(p['assessed_total_value'] or 0 for p in properties)
