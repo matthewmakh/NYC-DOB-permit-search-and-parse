@@ -5,9 +5,17 @@ import multiprocessing
 # Server socket
 bind = f"0.0.0.0:{os.getenv('PORT', 5001)}"
 
-# Worker processes
+# Worker processes.
+#
+# gthread, not sync: with 2 sync workers, any two slow database queries
+# (routine while the enrichment pipeline is loading the same Postgres)
+# pinned the entire site — every other request queued until the edge gave
+# up and answered 502 for us. Threads let one worker keep serving while
+# other requests wait on the database. The connection pool in app.py is a
+# ThreadedConnectionPool to match.
 workers = 2
-worker_class = "sync"
+worker_class = "gthread"
+threads = 8
 worker_connections = 1000
 timeout = 120
 
