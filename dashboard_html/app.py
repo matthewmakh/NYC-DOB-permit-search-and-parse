@@ -2598,17 +2598,24 @@ def api_auto_add_property():
     if not query:
         return jsonify({'success': False, 'error': 'query is required'}), 400
 
-    conn = get_db_connection()
+    # get_db_connection re-raises when the pool can't be rebuilt (DB down /
+    # in recovery), so it must sit inside the try or the user gets a bare
+    # HTML 500 the modal can't explain.
+    conn = None
     try:
+        conn = get_db_connection()
         result = auto_add_property(conn, query)
         status = 200 if result.get('success') else 422
         return jsonify(result), status
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        # Some driver errors stringify to '' — never send an empty reason.
+        message = str(e).strip() or type(e).__name__
+        return jsonify({'success': False, 'error': message}), 500
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 @app.route('/api/suggest')
@@ -4635,7 +4642,9 @@ def contractors_page():
     )
 
 
-@app.route('/contractor/<contractor_name>')
+# path converter: DOB applicant names contain slashes ("A/C", "D/B/A ...")
+# and WSGI decodes %2F before routing, so the default converter 404s them.
+@app.route('/contractor/<path:contractor_name>')
 @login_required
 def contractor_profile(contractor_name):
     """Render contractor profile page"""
@@ -4901,7 +4910,7 @@ def api_contractors_search():
 
 
 
-@app.route('/api/contractor/<contractor_name>')
+@app.route('/api/contractor/<path:contractor_name>')
 @cache.cached(timeout=300)
 def api_contractor_profile(contractor_name):
     """

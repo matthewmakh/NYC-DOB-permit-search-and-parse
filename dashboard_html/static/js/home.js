@@ -222,7 +222,27 @@ async function runAutoAdd(query, modal) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({query}),
         });
-        const data = await resp.json();
+
+        // The answer isn't always our JSON: with the database down the
+        // platform edge answers with its own error body. Blindly .json()ing
+        // that produced the old "unknown error" message.
+        let data = null;
+        try {
+            data = await resp.json();
+        } catch (parseError) {
+            data = null;
+        }
+        if (!data || typeof data.success === 'undefined') {
+            statusEl.innerHTML = `
+                <strong>The lookup service didn't answer</strong>
+                (HTTP ${resp.status}). It may be restarting &mdash; wait a
+                minute and try again.
+            `;
+            statusEl.classList.add('error');
+            confirmBtn.disabled = false;
+            cancelBtn.disabled = false;
+            return;
+        }
 
         if (!data.success) {
             statusEl.innerHTML = `<strong>Couldn't look it up:</strong> ${escapeHtml(data.error || 'unknown error')}`;
