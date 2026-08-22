@@ -5,7 +5,7 @@
 // Global state
 let currentPage = 1;
 let currentSearch = '';
-let currentSort = 'total_jobs';
+let currentSort = [];   // Sort keys in pick order; empty means the API default
 let currentOrder = 'desc';
 let contractorData = null;
 
@@ -19,6 +19,8 @@ if (document.getElementById('contractorSearch')) {
 }
 
 function initializeDirectoryPage() {
+    MultiSelect.init();
+
     // Load initial contractors
     loadContractors();
     
@@ -41,9 +43,9 @@ function initializeDirectoryPage() {
         loadContractors();
     });
     
-    // Sort controls
-    document.getElementById('sortBy').addEventListener('change', (e) => {
-        currentSort = e.target.value;
+    // Sort controls — several keys allowed; later ones break ties.
+    document.getElementById('sortBy').addEventListener('change', () => {
+        currentSort = MultiSelect.values('sortBy');
         currentPage = 1;
         loadContractors();
     });
@@ -96,9 +98,9 @@ async function loadContractors() {
         const params = new URLSearchParams({
             page: currentPage,
             per_page: 50,
-            sort_by: currentSort,
             sort_order: currentOrder
         });
+        currentSort.forEach(key => params.append('sort_by', key));
         
         if (currentSearch) {
             params.append('search', currentSearch);

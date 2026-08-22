@@ -70,19 +70,19 @@
         const selected = instance.getValues();
         const selectedSet = new Set(selected);
 
-        const labels = instance.options
-            .filter(option => selectedSet.has(option.value))
-            .map(option => option.label);
+        const labelFor = new Map(instance.options.map(o => [o.value, o.label]));
+        const labels = selected.map(value => labelFor.get(value)).filter(Boolean);
 
         const valueEl = instance.root.querySelector('.ms-value');
 
         // One pick reads better by name; past that the chips below carry the
-        // names, so the trigger just counts them.
+        // names, so the trigger just counts them. Compact controls have no
+        // room for chips, so they always join the labels instead.
         if (!labels.length) {
             valueEl.textContent = instance.placeholder;
             valueEl.classList.add('is-placeholder');
-        } else if (labels.length === 1) {
-            valueEl.textContent = labels[0];
+        } else if (labels.length === 1 || instance.compact) {
+            valueEl.textContent = labels.join(', ');
             valueEl.classList.remove('is-placeholder');
         } else {
             valueEl.textContent = `${labels.length} selected`;
@@ -113,7 +113,7 @@
         if (!chipsEl) return;
         // A single pick already reads on the trigger; chips earn their space
         // only once the selection is too wide to show there.
-        if (!instance.multiple || labels.length < 2) {
+        if (!instance.multiple || instance.compact || labels.length < 2) {
             chipsEl.innerHTML = '';
             return;
         }
@@ -200,7 +200,9 @@
     }
 
     function setValues(instance, values, options) {
-        const wanted = new Set((values || []).map(String));
+        const ordered = (values || []).map(String);
+        const wanted = new Set(ordered);
+        instance.order = ordered;
         Array.from(instance.select.options).forEach(opt => {
             opt.selected = wanted.has(opt.value);
         });
@@ -254,6 +256,7 @@
         if (!select || select.dataset.msReady === '1') return null;
 
         const multiple = select.multiple;
+        const compact = select.dataset.compact !== undefined;
         const placeholder = select.dataset.placeholder || 'Any';
         // A single-choice control needs its empty option as a real choice;
         // a multi-select expresses "none" by having nothing selected.
@@ -262,6 +265,7 @@
         const root = document.createElement('div');
         root.className = 'ms';
         root.dataset.msFor = select.id || '';
+        if (compact) root.dataset.msCompact = select.dataset.compact || '';
         select.parentNode.insertBefore(root, select);
         root.appendChild(select);
         select.dataset.msReady = '1';
@@ -297,14 +301,31 @@
             root,
             options,
             multiple,
+            compact,
             placeholder,
             id: select.id || `ms-${instances.size}`,
             trigger: root.querySelector('.ms-trigger'),
             panel: root.querySelector('.ms-panel'),
+            // The select is the source of truth for WHICH options are on;
+            // `order` remembers the sequence they were picked in. That matters
+            // for the Sort control, where key order decides the tiebreakers —
+            // selectedOptions alone would always come back in DOM order.
+            order: [],
             getValues() {
-                return Array.from(select.selectedOptions)
+                const selected = Array.from(select.selectedOptions)
                     .map(o => o.value)
                     .filter(v => v !== '');
+                const order = instance.order;
+                // Stable sort, so anything not in `order` keeps its DOM order
+                // at the end (e.g. values set programmatically).
+                return selected.slice().sort((a, b) => {
+                    const ia = order.indexOf(a);
+                    const ib = order.indexOf(b);
+                    if (ia === -1 && ib === -1) return 0;
+                    if (ia === -1) return 1;
+                    if (ib === -1) return -1;
+                    return ia - ib;
+                });
             },
         };
 
@@ -375,6 +396,16 @@
         return instance;
     }
 
+    // Re-read the underlying select. Callers that add an <option> after
+    // enhancement (the play-recommended sort keys) need this to see it.
+    function refresh(instance) {
+        if (!instance) return;
+        instance.options = readOptions(instance.select)
+            .filter(o => instance.multiple ? o.value !== '' : true);
+        instance.root.querySelector('.ms-options').innerHTML = buildPanel(instance);
+        render(instance);
+    }
+
     function initAll(scope) {
         (scope || document).querySelectorAll('select[data-multiselect]').forEach(enhance);
     }
@@ -403,13 +434,25 @@
             const instance = instances.get(id);
             if (instance) setValues(instance, values, options);
         },
+        /** Re-read the select after its <option> list changed. */
+        refresh(id) {
+            refresh(instances.get(id));
+        },
         /** Clear without firing change — for bulk resets that reload once. */
         clear(id) {
             const instance = instances.get(id);
             if (instance) setValues(instance, [], { silent: true });
         },
-        clearAll() {
-            instances.forEach(instance => setValues(instance, [], { silent: true }));
+        /**
+         * Clear every enhanced control, or only those inside `scope`.
+         * Scope it when clearing filters, so the toolbar's sort and per-page
+         * controls keep their defaults.
+         */
+        clearAll(scope) {
+            instances.forEach(instance => {
+                if (scope && !scope.contains(instance.select)) return;
+                setValues(instance, [], { silent: true });
+            });
         },
     };
 })(window);

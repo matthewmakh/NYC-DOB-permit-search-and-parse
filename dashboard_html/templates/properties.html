@@ -83,24 +83,15 @@
 
             <div class="filter-section">
                 <h3>Borough</h3>
-                <div id="boroughFilter" class="borough-checkboxes">
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="1"> Manhattan
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="2"> Bronx
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="3"> Brooklyn
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="4"> Queens
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="5"> Staten Island
-                    </label>
-                </div>
-                <small class="filter-hint">Leave all unchecked to include every borough.</small>
+                <select id="boroughFilter" class="filter-select" multiple
+                    data-multiselect data-placeholder="All boroughs">
+                    <option value="1">Manhattan</option>
+                    <option value="2">Bronx</option>
+                    <option value="3">Brooklyn</option>
+                    <option value="4">Queens</option>
+                    <option value="5">Staten Island</option>
+                </select>
+                <small class="filter-hint">Leave empty to include every borough.</small>
             </div>
 
             <div class="filter-section">
@@ -249,7 +240,8 @@
                 </div>
                 <div class="controls-right">
                     <label for="sortBy">Sort</label>
-                    <select id="sortBy" class="control-select">
+                    <select id="sortBy" class="control-select" multiple
+                        data-multiselect data-compact data-placeholder="Sale date">
                         <option value="sale_date">Sale date</option>
                         <option value="value">Assessed value</option>
                         <option value="sale_price">Sale price</option>
@@ -258,12 +250,14 @@
                         <option value="permits">Permit count</option>
                         <option value="units">Units</option>
                     </select>
-                    <select id="sortOrder" class="control-select">
+                    <select id="sortOrder" class="control-select"
+                        data-multiselect data-compact data-placeholder="High to low">
                         <option value="desc">High to low</option>
                         <option value="asc">Low to high</option>
                     </select>
                     <label for="perPage">Per page</label>
-                    <select id="perPage" class="control-select">
+                    <select id="perPage" class="control-select"
+                        data-multiselect data-compact="narrow" data-placeholder="50">
                         <option value="25">25</option>
                         <option value="50" selected>50</option>
                         <option value="100">100</option>

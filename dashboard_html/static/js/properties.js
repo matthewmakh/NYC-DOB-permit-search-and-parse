@@ -2,6 +2,24 @@
 // Properties Page JavaScript
 // ==========================================
 
+// The API answers in snake_case and does not echo the page size the way the
+// renderer wants it. Without this, totalPages/hasNext/hasPrev come back
+// undefined — which left every pagination button disabled with no page
+// numbers — and perPage was dropped, so the next request silently fell back
+// to the server default.
+function normalizePagination(raw) {
+    const p = raw || {};
+    return {
+        page: p.page || 1,
+        perPage: p.per_page || state.pagination.perPage,
+        totalCount: p.total_count || 0,
+        total_count: p.total_count || 0,
+        totalPages: p.total_pages || 0,
+        hasNext: p.has_next === true,
+        hasPrev: p.has_prev === true,
+    };
+}
+
 // Multi-select filters go on the wire as repeated params
 // (?permit_type=PL&permit_type=EW); the API ORs them together.
 function appendMulti(params, name, values) {
@@ -41,7 +59,7 @@ const state = {
     },
     plays: [],
     sort: {
-        by: 'sale_date',
+        by: [],          // Sort keys in pick order; empty means the API default
         order: 'desc'
     },
     pagination: {
@@ -123,10 +141,13 @@ function applyRecommendedSort(rec) {
         opt.value = rec.by;
         opt.textContent = EXTRA_SORT_LABELS[rec.by];
         sortSelect.appendChild(opt);
+        // The enhanced control read its options at init; let it see the new one.
+        MultiSelect.refresh('sortBy');
     }
-    sortSelect.value = rec.by;
-    state.sort.by = rec.by;
-    document.getElementById('sortOrder').value = rec.order;
+    // A play's recommendation replaces the sort rather than adding to it.
+    MultiSelect.set('sortBy', [rec.by], { silent: true });
+    state.sort.by = [rec.by];
+    MultiSelect.set('sortOrder', [rec.order], { silent: true });
     state.sort.order = rec.order;
 }
 
@@ -263,7 +284,7 @@ async function loadProperties() {
         if (state.filters.play) params.append('play', state.filters.play);
 
         // Add sort and pagination
-        params.append('sort_by', state.sort.by);
+        appendMulti(params, 'sort_by', state.sort.by);
         params.append('sort_order', state.sort.order);
         params.append('page', state.pagination.page);
         params.append('per_page', state.pagination.perPage);
@@ -273,7 +294,7 @@ async function loadProperties() {
         
         if (data.success) {
             state.properties = data.properties;
-            state.pagination = data.pagination;
+            state.pagination = normalizePagination(data.pagination);
             renderProperties();
             renderPagination();
             updateResultsCount();
@@ -554,14 +575,11 @@ function initializeEventListeners() {
     });
     
     // Borough filter (multi-select via checkboxes)
-    document.querySelectorAll('.borough-cb').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const checked = Array.from(document.querySelectorAll('.borough-cb:checked'))
-                .map(el => el.value);
-            state.filters.borough = checked;
-            state.pagination.page = 1;
-            loadProperties();
-        });
+    // Borough (multi-select; empty means every borough)
+    document.getElementById('boroughFilter').addEventListener('change', () => {
+        state.filters.borough = MultiSelect.values('boroughFilter');
+        state.pagination.page = 1;
+        loadProperties();
     });
     
     // Building class (multi-select over class families and specific codes)
@@ -670,8 +688,10 @@ function initializeEventListeners() {
     });
     
     // Sort controls
-    document.getElementById('sortBy').addEventListener('change', (e) => {
-        state.sort.by = e.target.value;
+    // Sort accepts several keys; later ones break ties in earlier ones.
+    document.getElementById('sortBy').addEventListener('change', () => {
+        state.sort.by = MultiSelect.values('sortBy');
+        state.pagination.page = 1;
         loadProperties();
     });
     
@@ -751,7 +771,7 @@ async function downloadExport() {
     if (state.filters.play) params.append('play', state.filters.play);
 
     // Add sort
-    params.append('sort_by', state.sort.by);
+    appendMulti(params, 'sort_by', state.sort.by);
     params.append('sort_order', state.sort.order);
 
     // Add selected fields
@@ -948,9 +968,9 @@ function clearFilters() {
     document.getElementById('maxSalePrice').value = '';
     document.getElementById('saleDateFrom').value = '';
     document.getElementById('saleDateTo').value = '';
-    document.querySelectorAll('.borough-cb').forEach(cb => { cb.checked = false; });
-    // Silent so the single reload below is the only fetch.
-    MultiSelect.clearAll();
+    // Silent so the single reload below is the only fetch. Scoped to the
+    // sidebar so the toolbar's sort and per-page controls keep their values.
+    MultiSelect.clearAll(document.querySelector('.sidebar'));
     document.getElementById('minUnits').value = '';
     document.getElementById('maxUnits').value = '';
     document.getElementById('minPermits').value = '';

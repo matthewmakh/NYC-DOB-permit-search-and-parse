@@ -56,17 +56,21 @@
             <div class="filter-controls">
                 <div class="filter-group">
                     <label for="sortBy">Sort</label>
-                    <select id="sortBy" class="filter-select">
+                    <select id="sortBy" class="filter-select" multiple
+                        data-multiselect data-compact data-placeholder="Total jobs">
                         <option value="total_jobs">Total jobs</option>
                         <option value="active_jobs">Active jobs</option>
                         <option value="total_value">Total project value</option>
                         <option value="largest_project">Largest project</option>
+                        <option value="unique_properties">Properties worked</option>
+                        <option value="most_recent_job">Most recent job</option>
                     </select>
                 </div>
 
                 <div class="filter-group">
                     <label for="sortOrder">Order</label>
-                    <select id="sortOrder" class="filter-select">
+                    <select id="sortOrder" class="filter-select"
+                        data-multiselect data-compact data-placeholder="High to low">
                         <option value="desc">High to low</option>
                         <option value="asc">Low to high</option>
                     </select>
@@ -179,6 +183,7 @@
         </div>
     </div>
 
+    <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/contractors.js"></script>
 </body>
 </html>

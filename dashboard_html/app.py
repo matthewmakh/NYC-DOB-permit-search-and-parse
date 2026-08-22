@@ -2830,6 +2830,27 @@ def _append_category_filters(args, where_clauses, params):
         where_clauses.append('(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)')
 
 
+def _order_by_sql(args, whitelist, default_key, sort_order, tiebreaker=None):
+    """Build an ORDER BY body from a repeatable sort_by param.
+
+    The Sort control is a multi-select: the keys are applied in the order
+    they were picked, so the second key breaks ties in the first. Unknown
+    keys are dropped, and an empty selection falls back to `default_key`.
+
+    `whitelist` maps a public key to a SQL expression — nothing else can
+    reach the query, so the keys are safe to interpolate.
+    """
+    keys = [k for k in _multi_param(args, 'sort_by') if k in whitelist]
+    if not keys:
+        keys = [default_key]
+
+    direction = 'ASC' if str(sort_order).lower() == 'asc' else 'DESC'
+    parts = [f'{whitelist[key]} {direction} NULLS LAST' for key in keys]
+    if tiebreaker:
+        parts.append(tiebreaker)
+    return ', '.join(parts)
+
+
 def _parse_boroughs_param(raw, multi_source=None):
     """Parse the borough query param into a list of valid borough codes.
 
@@ -3128,8 +3149,8 @@ def api_properties():
     - has_violations: true and/or false; both (or neither) means no filter
     - recent_sale_days: Sold within X days
     - financing_min, financing_max: Financing ratio range
-    - sort_by: Field to sort (value, sale_date, address)
-    - sort_order: asc or desc
+    - sort_by: Field(s) to sort by, repeatable; later keys break ties
+    - sort_order: asc or desc, applied to every sort key
     - page: Page number (default 1)
     - per_page: Results per page (default 50, max 200)
     """
@@ -3154,7 +3175,6 @@ def api_properties():
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
-            sort_by = request.args.get('sort_by', 'sale_date')
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
@@ -3347,8 +3367,11 @@ def api_properties():
                 valid_sort_columns['unused_far'] = 'b.unused_far'
             if 'latest_co_date' in available_cols:
                 valid_sort_columns['co_date'] = 'b.latest_co_date'
-            sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
-            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+            # Sort is multi-select: later keys break ties in earlier ones.
+            order_by_sql = _order_by_sql(
+                request.args, valid_sort_columns, 'sale_date', sort_order,
+                tiebreaker='b.id',
+            )
         
             # Get total count
             count_query = f"""
@@ -3416,7 +3439,7 @@ def api_properties():
                 ) pcon ON true
                 {recent_permit_sql}
                 {where_sql}
-                ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
+                ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
             """
         
@@ -3586,7 +3609,6 @@ def api_properties_export():
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
-            sort_by = request.args.get('sort_by', 'sale_date')
             sort_order = request.args.get('sort_order', 'desc').lower()
 
             # Prebuilt play — exporting a play exports exactly the play's set
@@ -3722,8 +3744,8 @@ def api_properties_export():
                 'address': 'b.address',
                 'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
             }
-            sort_col = sort_columns.get(sort_by, 'b.sale_date')
-            sort_dir = 'ASC' if sort_order == 'asc' else 'DESC'
+            order_by_sql = _order_by_sql(
+                request.args, sort_columns, 'sale_date', sort_order)
             
             # Get user's unlocked building IDs
             cur.execute("""
@@ -3753,7 +3775,7 @@ def api_properties_export():
                     (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
                 FROM buildings b
                 WHERE {where_sql}
-                ORDER BY {sort_col} {sort_dir} NULLS LAST
+                ORDER BY {order_by_sql}
                 LIMIT 10000
             """
             
@@ -4402,8 +4424,10 @@ def api_contractors_search():
     
     Query Parameters:
     - search: Contractor name or license search
-    - sort_by: active_jobs, total_jobs, total_value (default: total_jobs)
-    - sort_order: asc or desc (default: desc)
+    - sort_by: active_jobs, total_jobs, total_value, largest_project,
+      unique_properties, most_recent_job — repeatable; later keys break ties
+      (default: total_jobs)
+    - sort_order: asc or desc, applied to every sort key (default: desc)
     - page: Page number (default 1)
     - per_page: Results per page (default 50, max 200)
     """
@@ -4411,7 +4435,6 @@ def api_contractors_search():
         with DatabaseConnection() as cur:
             # Parse query parameters
             search = request.args.get('search', '').strip()
-            sort_by = request.args.get('sort_by', 'total_jobs')
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
@@ -4431,15 +4454,21 @@ def api_contractors_search():
                 search_term = f"%{search}%"
                 search_params = [search_term, search_term, search_term]
             
-            # Determine sort column
-            sort_column = {
-                'active_jobs': 'active_jobs',
-                'total_jobs': 'total_jobs',
-                'total_value': 'total_value',
-                'largest_project': 'largest_project'
-            }.get(sort_by, 'total_jobs')
-            
-            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+            # Sort is multi-select: later keys break ties in earlier ones.
+            order_by_sql = _order_by_sql(
+                request.args,
+                {
+                    'active_jobs': 'active_jobs',
+                    'total_jobs': 'total_jobs',
+                    'total_value': 'total_value',
+                    'largest_project': 'largest_project',
+                    'unique_properties': 'unique_properties',
+                    'most_recent_job': 'most_recent_job',
+                },
+                'total_jobs',
+                sort_order,
+                tiebreaker='contractor_name ASC',
+            )
             
             # Get contractors with aggregated stats
             query = f"""
@@ -4470,7 +4499,7 @@ def api_contractors_search():
                     unique_properties,
                     job_types
                 FROM contractor_stats
-                ORDER BY {sort_column} {sort_direction}
+                ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
             """
             

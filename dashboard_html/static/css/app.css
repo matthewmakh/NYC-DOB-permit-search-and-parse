@@ -592,6 +592,24 @@ button { font-family: inherit; }
     position: relative;
 }
 
+/* Compact variant for the toolbar rows, which size to their content and
+   have no room for a chip list below the control. */
+.ms[data-ms-compact] {
+    width: auto;
+    min-width: 132px;
+    max-width: 260px;
+}
+
+.ms[data-ms-compact="narrow"] {
+    min-width: 76px;
+}
+
+.ms[data-ms-compact] .ms-panel {
+    left: auto;
+    right: 0;
+    min-width: 200px;
+}
+
 .ms > select {
     position: absolute;
     width: 1px;
