@@ -4,10 +4,30 @@
 
 // Global state
 let currentPage = 1;
+let currentPerPage = 50;
 let currentSearch = '';
 let currentSort = [];   // Sort keys in pick order; empty means the API default
 let currentOrder = 'desc';
 let contractorData = null;
+
+// Filters this page owns. The rest — borough, property type, building class,
+// units, value, kind of work, recency, violations — live in SharedFilters and
+// mean exactly what they mean on the properties page.
+let ownFilters = {
+    minJobs: null,
+    maxJobs: null,
+    minActiveJobs: null,
+    minProperties: null,
+    maxProperties: null,
+};
+const OWN_FILTER_PARAMS = {
+    minJobs: 'min_jobs',
+    maxJobs: 'max_jobs',
+    minActiveJobs: 'min_active_jobs',
+    minProperties: 'min_properties',
+    maxProperties: 'max_properties',
+};
+let sharedFilters = {};
 
 // ============================================================================
 // CONTRACTOR DIRECTORY PAGE
@@ -20,38 +40,56 @@ if (document.getElementById('contractorSearch')) {
 
 function initializeDirectoryPage() {
     MultiSelect.init();
+    sharedFilters = SharedFilters.read();
 
-    // Load initial contractors
+    SharedFilters.loadFacets();
     loadContractors();
-    
-    // Search input
-    const searchInput = document.getElementById('contractorSearch');
-    const clearSearchBtn = document.getElementById('clearSearch');
-    
-    searchInput.addEventListener('input', debounce((e) => {
-        currentSearch = e.target.value.trim();
+
+    // Any shared filter changing means a new first page of results.
+    SharedFilters.bind(() => {
+        sharedFilters = SharedFilters.read();
         currentPage = 1;
-        clearSearchBtn.style.display = currentSearch ? 'block' : 'none';
-        loadContractors();
-    }, 500));
-    
-    clearSearchBtn.addEventListener('click', () => {
-        searchInput.value = '';
-        currentSearch = '';
-        currentPage = 1;
-        clearSearchBtn.style.display = 'none';
         loadContractors();
     });
-    
+
+    // Search
+    document.getElementById('contractorSearch').addEventListener('input', debounce((e) => {
+        currentSearch = e.target.value.trim();
+        currentPage = 1;
+        loadContractors();
+    }, 500));
+
+    // Contractor-scale filters
+    Object.keys(OWN_FILTER_PARAMS).forEach(id => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        const apply = () => {
+            const raw = node.value !== '' ? Number(node.value) : null;
+            ownFilters[id] = Number.isFinite(raw) ? raw : null;
+            currentPage = 1;
+            loadContractors();
+        };
+        node.addEventListener('change', apply);
+        node.addEventListener('input', debounce(apply, 600));
+    });
+
+    document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
+
     // Sort controls — several keys allowed; later ones break ties.
     document.getElementById('sortBy').addEventListener('change', () => {
         currentSort = MultiSelect.values('sortBy');
         currentPage = 1;
         loadContractors();
     });
-    
+
     document.getElementById('sortOrder').addEventListener('change', (e) => {
         currentOrder = e.target.value;
+        currentPage = 1;
+        loadContractors();
+    });
+
+    document.getElementById('perPage').addEventListener('change', (e) => {
+        currentPerPage = parseInt(e.target.value, 10) || 50;
         currentPage = 1;
         loadContractors();
     });
@@ -97,14 +135,20 @@ async function loadContractors() {
     try {
         const params = new URLSearchParams({
             page: currentPage,
-            per_page: 50,
+            per_page: currentPerPage,
             sort_order: currentOrder
         });
         currentSort.forEach(key => params.append('sort_by', key));
-        
+
         if (currentSearch) {
             params.append('search', currentSearch);
         }
+
+        SharedFilters.toParams(params, sharedFilters);
+        Object.entries(OWN_FILTER_PARAMS).forEach(([id, param]) => {
+            const value = ownFilters[id];
+            if (value !== null && value !== undefined) params.append(param, value);
+        });
         
         const response = await fetch(`/api/contractors/search?${params}`);
         const data = await response.json();
@@ -113,6 +157,14 @@ async function loadContractors() {
             displayContractors(data.contractors);
             updatePagination(data.pagination);
             updateHeaderStats(data.pagination.total);
+            // The hero metric already carries the total; the toolbar only
+            // says which page of it you are looking at.
+            const count = document.getElementById('resultsCount');
+            if (count) {
+                count.textContent = data.pagination.pages > 1
+                    ? `Page ${data.pagination.page} of ${formatNumber(data.pagination.pages)}`
+                    : '';
+            }
         } else {
             showError(grid, data.error || 'Failed to load contractors');
         }
@@ -120,6 +172,37 @@ async function loadContractors() {
         console.error('Error loading contractors:', error);
         showError(grid, 'Network error. Please try again.');
     }
+}
+
+// What kind of work this contractor actually does, biggest category first.
+// The API resolves it across work_type / permit_type / job_type, so a trade
+// that only populates one of those still reads properly.
+function renderWorkMix(contractor) {
+    const mix = contractor.work_mix || [];
+    if (!mix.length) return '';
+
+    const total = mix.reduce((sum, item) => sum + item.count, 0) || 1;
+    const chips = mix.map(item => {
+        const share = Math.round((item.count / total) * 100);
+        return `
+            <span class="work-chip" title="${escapeHtml(item.label)} — ${formatNumber(item.count)} permits">
+                <span class="work-chip-bar" style="width: ${share}%"></span>
+                <span class="work-chip-text">${escapeHtml(item.label)}</span>
+                <span class="work-chip-count">${formatNumber(item.count)}</span>
+            </span>
+        `;
+    }).join('');
+
+    const more = contractor.work_mix_other
+        ? `<span class="work-chip work-chip-more">+${contractor.work_mix_other} more</span>`
+        : '';
+
+    return `
+        <div class="contractor-work">
+            <div class="contractor-work-label">Work</div>
+            <div class="work-chips">${chips}${more}</div>
+        </div>
+    `;
 }
 
 function displayContractors(contractors) {
@@ -169,15 +252,17 @@ function displayContractors(contractors) {
                 </div>
             </div>
 
+            ${renderWorkMix(contractor)}
+
             <div class="contractor-meta">
                 <span>
                     <i class="fas fa-calendar"></i>
-                    ${formatDate(contractor.most_recent_job)}
+                    Last permit ${formatDate(contractor.most_recent_job)}
                 </span>
-                <span>
-                    <i class="fas fa-tools"></i>
-                    ${contractor.job_types ? escapeHtml(truncate(contractor.job_types, 24)) : 'N/A'}
-                </span>
+                ${contractor.license_type ? `<span>
+                    <i class="fas fa-id-card"></i>
+                    ${escapeHtml(contractor.license_type)}
+                </span>` : ''}
             </div>
         </div>
     `).join('');
@@ -189,6 +274,21 @@ function displayContractors(contractors) {
             navigateToContractor(contractorName);
         });
     });
+}
+
+function clearFilters() {
+    SharedFilters.clear();
+    Object.keys(OWN_FILTER_PARAMS).forEach(id => {
+        const node = document.getElementById(id);
+        if (node) node.value = '';
+        ownFilters[id] = null;
+    });
+    const search = document.getElementById('contractorSearch');
+    if (search) search.value = '';
+    currentSearch = '';
+    sharedFilters = SharedFilters.read();
+    currentPage = 1;
+    loadContractors();
 }
 
 function updatePagination(pagination) {

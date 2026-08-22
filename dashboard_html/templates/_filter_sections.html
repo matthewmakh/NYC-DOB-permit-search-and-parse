@@ -1,0 +1,147 @@
+{#
+  Filter sections shared by the properties and contractors pages.
+
+  Both pages filter the same underlying data — permits joined to buildings —
+  so a given filter set means the same thing on either one. Properties returns
+  the buildings that match; contractors returns the people who worked on them.
+  Keeping the markup in one file is what keeps the two in step.
+
+  Caller sets `page` to 'properties' or 'contractors'. Everything outside this
+  file is page-specific and lives in the page's own template.
+
+  The work-classification selects start empty and are filled at runtime from
+  /api/permits/facets, so they only ever offer codes that match real permits.
+#}
+
+<div class="filter-section">
+    <h3>Borough</h3>
+    <select id="boroughFilter" class="filter-select" multiple
+        data-multiselect data-placeholder="All boroughs">
+        <option value="1">Manhattan</option>
+        <option value="2">Bronx</option>
+        <option value="3">Brooklyn</option>
+        <option value="4">Queens</option>
+        <option value="5">Staten Island</option>
+    </select>
+    <small class="filter-hint">Leave empty to include every borough.</small>
+</div>
+
+<div class="filter-section">
+    <h3>Property type</h3>
+    <select id="propertyType" class="filter-select" multiple
+        data-multiselect data-placeholder="All types">
+        <option value="residential">Residential</option>
+        <option value="commercial">Commercial</option>
+        <option value="mixed">Mixed use</option>
+    </select>
+    <small class="filter-hint">Pick any number &mdash; they are combined with OR.</small>
+</div>
+
+<div class="filter-section">
+    <h3>Building class</h3>
+    <select id="buildingClass" class="filter-select" multiple
+        data-multiselect data-placeholder="All classes"
+        data-search-placeholder="Search code or description&hellip;">
+        {%- for group in building_class_groups %}
+        <optgroup label="{{ group.label }}">
+            {%- for option in group.options %}
+            <option value="{{ option.value }}">{{ option.label }}</option>
+            {%- endfor %}
+        </optgroup>
+        {%- endfor %}
+    </select>
+    <small class="filter-hint">Pick a whole family (all C walk-ups) or specific codes.</small>
+</div>
+
+<div class="filter-section">
+    <h3>Units</h3>
+    <div class="range-inputs">
+        <input type="number" id="minUnits" class="filter-input" placeholder="Min">
+        <input type="number" id="maxUnits" class="filter-input" placeholder="Max">
+    </div>
+</div>
+
+<div class="filter-section">
+    <h3>Assessed value</h3>
+    <div class="range-inputs">
+        <input type="number" id="minValue" class="filter-input" placeholder="Min $">
+        <input type="number" id="maxValue" class="filter-input" placeholder="Max $">
+    </div>
+</div>
+
+<div class="filter-section">
+    <h3>Kind of work</h3>
+
+    <label class="filter-label" for="workType">Work type</label>
+    <select id="workType" class="filter-select" multiple
+        data-multiselect data-placeholder="All work"
+        data-facet="work_type"></select>
+    <small class="filter-hint">
+        The trade being performed &mdash; scaffold, plumbing, sprinkler, HVAC.
+    </small>
+
+    <label class="filter-label" for="jobType" style="margin-top: 12px;">Job type</label>
+    <select id="jobType" class="filter-select" multiple
+        data-multiselect data-placeholder="All jobs"
+        data-facet="job_type"></select>
+    <small class="filter-hint">
+        The scope of the job &mdash; new building, alteration, demolition.
+    </small>
+
+    <label class="filter-label" for="permitType" style="margin-top: 12px;">Permit type</label>
+    <select id="permitType" class="filter-select" multiple
+        data-multiselect data-placeholder="All types"
+        data-facet="permit_type"></select>
+
+    <label class="filter-label" for="licenseType" style="margin-top: 12px;">Licence type</label>
+    <select id="licenseType" class="filter-select" multiple
+        data-multiselect data-placeholder="All licences"
+        data-facet="license_type"></select>
+    <small class="filter-hint">
+        What the permit was pulled under &mdash; the cleanest read on a
+        contractor's trade.
+    </small>
+</div>
+
+<div class="filter-section">
+    <h3>Permit activity</h3>
+    {%- if page == 'properties' %}
+    <label class="checkbox-label">
+        <input type="checkbox" id="withPermits">
+        Only properties with permits
+    </label>
+    <input type="number" id="minPermits" class="filter-input"
+        placeholder="Min permit count" style="margin-top: 8px;">
+    <label class="filter-label" style="margin-top: 12px;">Recent permits</label>
+    {%- endif %}
+    <select id="recentPermitDays" class="filter-select"
+        data-multiselect data-placeholder="Any time">
+        <option value="">Any time</option>
+        <option value="3">Last 3 days</option>
+        <option value="7">Last week</option>
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="180">Last 6 months</option>
+        <option value="365">Last year</option>
+        <option value="730">Last 2 years</option>
+        <option value="custom">Custom&hellip;</option>
+    </select>
+    <input type="number" id="recentPermitCustomDays" class="filter-input"
+        placeholder="Number of days" style="display: none; margin-top: 8px;" min="1" max="3650">
+    {%- if page == 'contractors' %}
+    <small class="filter-hint">Limits which permits count toward the stats below.</small>
+    {%- endif %}
+</div>
+
+<div class="filter-section">
+    <h3>HPD violations</h3>
+    <select id="violationsFilter" class="filter-select" multiple
+        data-multiselect data-placeholder="Any">
+        <option value="true">Has open violations</option>
+        <option value="false">No open violations</option>
+    </select>
+    {%- if page == 'contractors' %}
+    <small class="filter-hint">Of the buildings the contractor worked on.</small>
+    {%- endif %}
+</div>

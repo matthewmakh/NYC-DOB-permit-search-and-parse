@@ -73,8 +73,8 @@ print('— permit type —')
 where, params = clauses(MultiDict([('permit_type', 'PL'), ('permit_type', 'EW')]))
 check('single EXISTS with IN list',
       where,
-      ['EXISTS (SELECT 1 FROM permits p'
-       ' WHERE p.bbl = b.bbl AND p.permit_type IN (%s,%s))'])
+      ['EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl'
+       ' AND UPPER(btrim(p.permit_type)) IN (%s,%s))'])
 check('values bound, not interpolated', params, ['PL', 'EW'])
 
 print('— HPD violations —')
@@ -171,6 +171,53 @@ check('comma-separated boroughs',
 check('invalid borough codes dropped',
       A._parse_boroughs_param('', multi_source=MultiDict([('borough', '1,9,x')])),
       ['1'])
+check('JSON array body (bulk enrich)',
+      A._parse_boroughs_param(['1', '3']), ['1', '3'])
+check('JSON array with a comma-joined entry',
+      A._parse_boroughs_param(['1,3', '5']), ['1', '3', '5'])
+check('empty JSON array', A._parse_boroughs_param([]), [])
+
+print('— permit predicates —')
+
+
+def permit(args, **kw):
+    return A._permit_predicates(args, **kw)
+
+
+parts, prm = permit(MultiDict([('work_type', 'sf'), ('work_type', 'SH')]))
+check('work type uppercased and IN-listed',
+      (parts, prm), (['UPPER(btrim(p.work_type)) IN (%s,%s)'], ['SF', 'SH']))
+parts, prm = permit(MultiDict([('job_type', 'A2')]))
+check('job type', (parts, prm), (['UPPER(btrim(p.job_type)) IN (%s)'], ['A2']))
+parts, prm = permit(MultiDict([('license_type', 'gc')]))
+check('licence type',
+      (parts, prm),
+      (['UPPER(btrim(p.permittee_license_type)) IN (%s)'], ['GC']))
+parts, prm = permit(MultiDict([('recent_permit_days', '30')]))
+check('recency bound as a parameter', prm, ['30', '30'])
+check('recency can be excluded',
+      permit(MultiDict([('recent_permit_days', '30')]), include_recency=False)[0], [])
+check('junk recency ignored',
+      permit(MultiDict([('recent_permit_days', 'abc')]))[0], [])
+check('negative recency ignored',
+      permit(MultiDict([('recent_permit_days', '-5')]))[0], [])
+check('alias is honoured',
+      permit(MultiDict([('work_type', 'PL')]), alias='q')[0],
+      ['UPPER(btrim(q.work_type)) IN (%s)'])
+check('nothing set means no predicate', permit(MultiDict([]))[0], [])
+
+print('— building-only vs full category filters —')
+w1, p1 = [], []
+A._append_building_only_filters(MultiDict([('property_type', 'residential'),
+                                           ('work_type', 'PL')]), w1, p1)
+check('building-only ignores permit attributes',
+      any('permits' in c for c in w1), False)
+w2, p2 = [], []
+A._append_category_filters(MultiDict([('property_type', 'residential'),
+                                      ('work_type', 'PL')]), w2, p2)
+check('category filters add the permits EXISTS',
+      any('FROM permits p' in c for c in w2), True)
+check('and bind the work type', p2, ['PL'])
 
 try:
     import pglast

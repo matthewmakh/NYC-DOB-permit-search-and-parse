@@ -572,6 +572,141 @@ def search_contact():
         }), 500
 
 
+# ============================================================================
+# PERMIT CLASSIFICATION CODES
+# ----------------------------------------------------------------------------
+# DOB spells out what a permit is for across four columns. Labels here are for
+# display only — the filter options themselves come from the database (see
+# /api/permits/facets), so a code we have not named still appears, just bare.
+# ============================================================================
+
+# job_type: the scope of the job the permit belongs to.
+JOB_TYPE_LABELS = {
+    'A1': 'Alteration Type 1 (use, egress or occupancy change)',
+    'A2': 'Alteration Type 2 (multiple work types, no use change)',
+    'A3': 'Alteration Type 3 (minor, single work type)',
+    'NB': 'New Building',
+    'DM': 'Demolition',
+    'SG': 'Sign',
+    'PA': 'Place of Assembly',
+}
+
+# work_type: the trade actually being performed. This is the column that
+# answers "what kind of work does this contractor do".
+WORK_TYPE_LABELS = {
+    'BL': 'Boiler',
+    'CC': 'Curb Cut',
+    'CH': 'Chute',
+    'EQ': 'Construction Equipment',
+    'EW': 'Equipment Work',
+    'FA': 'Fire Alarm',
+    'FB': 'Fuel Burning',
+    'FN': 'Fence',
+    'FP': 'Fire Suppression',
+    'FS': 'Fuel Storage',
+    'MH': 'Mechanical / HVAC',
+    'OT': 'Other',
+    'PL': 'Plumbing',
+    'SD': 'Standpipe',
+    'SF': 'Scaffold',
+    'SH': 'Sidewalk Shed',
+    'SP': 'Sprinkler',
+}
+
+# permit_type: the permit category DOB issues under.
+PERMIT_TYPE_LABELS = {
+    'AL': 'Alteration',
+    'BL': 'Boiler',
+    'DM': 'Demolition & Removal',
+    'EQ': 'Construction Equipment',
+    'EW': 'Equipment Work',
+    'FO': 'Foundation',
+    'FN': 'Fence',
+    'FP': 'Fire Suppression',
+    'NB': 'New Building',
+    'OT': 'Other',
+    'PL': 'Plumbing',
+    'SD': 'Standpipe',
+    'SG': 'Sign',
+    'SH': 'Sidewalk Shed',
+    'SP': 'Sprinkler',
+}
+
+# permittee_license_type: what licence the permit was pulled under, which is
+# the cleanest read on a contractor's trade.
+LICENSE_TYPE_LABELS = {
+    'GC': 'General Contractor',
+    'HI': 'Home Improvement Contractor',
+    'MP': 'Master Plumber',
+    'FS': 'Fire Suppression Contractor',
+    'OB': 'Oil Burner Installer',
+    'SI': 'Sign Hanger',
+    'ME': 'Master Electrician',
+    'EL': 'Electrician',
+    'PE': 'Professional Engineer',
+    'RA': 'Registered Architect',
+    'TC': 'Tower Crane Rigger',
+    'OW': 'Owner',
+    'DM': 'Demolition Contractor',
+    'GF': 'General Contractor (filing rep)',
+}
+
+_FACET_COLUMNS = {
+    'job_type': ('job_type', JOB_TYPE_LABELS),
+    'work_type': ('work_type', WORK_TYPE_LABELS),
+    'permit_type': ('permit_type', PERMIT_TYPE_LABELS),
+    'license_type': ('permittee_license_type', LICENSE_TYPE_LABELS),
+}
+
+
+def label_for(kind, code):
+    """Human label for a DOB code, falling back to the bare code."""
+    if not code:
+        return None
+    labels = _FACET_COLUMNS.get(kind, (None, {}))[1]
+    name = labels.get(str(code).upper())
+    return f'{code} — {name}' if name else str(code)
+
+
+@app.route('/api/permits/facets')
+@cache.cached(timeout=1800)
+def api_permit_facets():
+    """Filter options for the permit classification columns.
+
+    Values come from the permits table with a count each, so the filters only
+    ever offer choices that match something, and a code DOB adds later shows
+    up without a code change.
+    """
+    try:
+        facets = {}
+        with DatabaseConnection() as cur:
+            for kind, (column, _labels) in _FACET_COLUMNS.items():
+                # Column names are from the fixed map above, never user input.
+                cur.execute(f"""
+                    SELECT {column} AS code, COUNT(*) AS permit_count
+                    FROM permits
+                    WHERE {column} IS NOT NULL
+                      AND btrim({column}) <> ''
+                    GROUP BY {column}
+                    HAVING COUNT(*) >= 25
+                    ORDER BY COUNT(*) DESC
+                """)
+                facets[kind] = [
+                    {
+                        'value': row['code'].strip().upper(),
+                        'label': label_for(kind, row['code'].strip().upper()),
+                        'count': row['permit_count'],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+        return jsonify({'success': True, 'facets': facets})
+
+    except Exception as e:
+        print(f"Permit facets API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/permit-types')
 def get_permit_types():
     """Get all unique permit/job types"""
@@ -2791,11 +2926,65 @@ def _multi_param(args, name, allowed=None, upper=False):
     return out
 
 
-def _append_category_filters(args, where_clauses, params):
-    """Append the multi-select category filters to a WHERE list.
+def _permit_predicates(args, alias='p', include_recency=True):
+    """WHERE fragments describing the permits a filter set is asking about.
 
-    Shared by /api/properties, the CSV export and the bulk-enrich resolver so
-    all three always resolve a given filter set to the same properties.
+    Returned as (sql_parts, params) so the caller can drop them into an EXISTS
+    against the buildings table or straight into a query already scanning
+    permits. The properties page and the contractors page both go through
+    this, which is what makes a given filter set mean the same thing on both.
+    """
+    parts, params = [], []
+
+    permit_types = _multi_param(args, 'permit_type', upper=True)
+    if permit_types:
+        placeholders = ','.join(['%s'] * len(permit_types))
+        parts.append(f'UPPER(btrim({alias}.permit_type)) IN ({placeholders})')
+        params.extend(permit_types)
+
+    work_types = _multi_param(args, 'work_type', upper=True)
+    if work_types:
+        placeholders = ','.join(['%s'] * len(work_types))
+        parts.append(f'UPPER(btrim({alias}.work_type)) IN ({placeholders})')
+        params.extend(work_types)
+
+    job_types = _multi_param(args, 'job_type', upper=True)
+    if job_types:
+        placeholders = ','.join(['%s'] * len(job_types))
+        parts.append(f'UPPER(btrim({alias}.job_type)) IN ({placeholders})')
+        params.extend(job_types)
+
+    license_types = _multi_param(args, 'license_type', upper=True)
+    if license_types:
+        placeholders = ','.join(['%s'] * len(license_types))
+        parts.append(
+            f'UPPER(btrim({alias}.permittee_license_type)) IN ({placeholders})')
+        params.extend(license_types)
+
+    recent_days = None
+    if not include_recency:
+        return parts, params
+    try:
+        raw = args.get('recent_permit_days') if hasattr(args, 'get') else None
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0] if raw else None
+        recent_days = int(raw) if raw not in (None, '') else None
+    except (TypeError, ValueError):
+        recent_days = None
+    if recent_days is not None and recent_days > 0:
+        parts.append(
+            f"({alias}.filing_date >= CURRENT_DATE - (%s || ' days')::interval"
+            f" OR {alias}.issue_date >= CURRENT_DATE - (%s || ' days')::interval)")
+        params.extend([str(recent_days), str(recent_days)])
+
+    return parts, params
+
+
+def _append_building_only_filters(args, where_clauses, params, alias='b'):
+    """Filters that describe the building itself.
+
+    Split out from _append_category_filters because the contractors page
+    filters permits directly and needs these without the permits EXISTS.
     """
     property_types = _multi_param(args, 'property_type', allowed=set(_PROPERTY_TYPE_SQL))
     if property_types:
@@ -2810,15 +2999,6 @@ def _append_category_filters(args, where_clauses, params):
         )
         params.extend(f'{code}%' for code in building_classes)
 
-    permit_types = _multi_param(args, 'permit_type', upper=True)
-    if permit_types:
-        placeholders = ','.join(['%s'] * len(permit_types))
-        where_clauses.append(
-            'EXISTS (SELECT 1 FROM permits p'
-            f' WHERE p.bbl = b.bbl AND p.permit_type IN ({placeholders}))'
-        )
-        params.extend(permit_types)
-
     # "Has violations" and "No violations" are complements: picking both is the
     # same as picking neither, so neither adds a clause.
     violations = {v.lower() for v in _multi_param(args, 'has_violations')}
@@ -2828,6 +3008,28 @@ def _append_category_filters(args, where_clauses, params):
         where_clauses.append('b.hpd_open_violations > 0')
     elif wants_clean and not wants_open:
         where_clauses.append('(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)')
+
+
+def _append_category_filters(args, where_clauses, params):
+    """Building filters plus the permit-attribute EXISTS.
+
+    Shared by /api/properties, the CSV export and the bulk-enrich resolver so
+    all three always resolve a given filter set to the same properties.
+    """
+    _append_building_only_filters(args, where_clauses, params)
+
+    # Permit type, work type, job type and licence type all describe the
+    # permits on a building, so they collapse into a single EXISTS. Recency is
+    # left out because /api/properties applies it through its own join; the
+    # predicate is the same either way.
+    permit_parts, permit_params = _permit_predicates(
+        args, alias='p', include_recency=False)
+    if permit_parts:
+        where_clauses.append(
+            'EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND '
+            + ' AND '.join(permit_parts) + ')'
+        )
+        params.extend(permit_params)
 
 
 def _order_by_sql(args, whitelist, default_key, sort_order, tiebreaker=None):
@@ -2854,8 +3056,9 @@ def _order_by_sql(args, whitelist, default_key, sort_order, tiebreaker=None):
 def _parse_boroughs_param(raw, multi_source=None):
     """Parse the borough query param into a list of valid borough codes.
 
-    Accepts either repeated values (?borough=1&borough=3) or a single
-    comma-separated value (?borough=1,3). Empty / unknown codes are dropped.
+    Accepts repeated values (?borough=1&borough=3), a single comma-separated
+    value (?borough=1,3), or a JSON array (["1", "3"]) from a POST body.
+    Empty / unknown codes are dropped.
 
     `multi_source` (optional) is a MultiDict-like object with `getlist`.
     If provided, it's used instead of Flask's global request — needed when
@@ -2865,7 +3068,13 @@ def _parse_boroughs_param(raw, multi_source=None):
     valid = {'1', '2', '3', '4', '5'}
     raw_values = []
 
-    if multi_source is not None and hasattr(multi_source, 'getlist'):
+    if isinstance(raw, (list, tuple, set)):
+        # A JSON array, as the bulk-enrich POST body sends it. Checked first
+        # because that request has its own empty query string, and falling
+        # through to request.args would silently drop the filter.
+        for v in raw:
+            raw_values.extend(str(v).split(','))
+    elif multi_source is not None and hasattr(multi_source, 'getlist'):
         for v in multi_source.getlist('borough'):
             raw_values.extend(str(v).split(','))
     else:
@@ -2876,6 +3085,8 @@ def _parse_boroughs_param(raw, multi_source=None):
         except RuntimeError:
             if raw:
                 raw_values = str(raw).split(',')
+        if not raw_values and raw:
+            raw_values = str(raw).split(',')
 
     out = []
     seen = set()
@@ -4406,7 +4617,10 @@ def api_properties_export_with_enrichment():
 @login_required
 def contractors_page():
     """Render the contractors search/browse page"""
-    return render_template('contractors.html')
+    return render_template(
+        'contractors.html',
+        building_class_groups=building_class_options(),
+    )
 
 
 @app.route('/contractor/<contractor_name>')
@@ -4416,45 +4630,173 @@ def contractor_profile(contractor_name):
     return render_template('contractor_profile.html', contractor_name=contractor_name)
 
 
+def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
+    """Fill in what kind of work each contractor on this page actually does.
+
+    DOB spreads the answer over three columns and which one is populated
+    varies by permit feed — scaffolding work, for instance, often carries a
+    work_type with no job_type at all, which is why the old
+    string_agg(job_type) rendered as N/A for whole categories of contractor.
+    Falling back through work_type, permit_type then job_type gives every
+    contractor a real answer.
+
+    Runs as one extra query scoped to the names already on the page.
+    """
+    for contractor in contractors:
+        contractor['work_mix'] = []
+        contractor['job_types'] = None
+
+    names = [c['contractor_name'] for c in contractors if c.get('contractor_name')]
+    if not names:
+        return
+
+    scoped = list(where_parts) + ['p.applicant = ANY(%s)']
+    cur.execute(f"""
+        SELECT
+            p.applicant AS contractor_name,
+            COALESCE(
+                NULLIF(UPPER(btrim(p.work_type)), ''),
+                NULLIF(UPPER(btrim(p.permit_type)), ''),
+                NULLIF(UPPER(btrim(p.job_type)), '')
+            ) AS code,
+            COUNT(*) AS permit_count
+        FROM permits p
+        LEFT JOIN buildings b ON p.bbl = b.bbl
+        WHERE {' AND '.join(scoped)}
+        GROUP BY 1, 2
+        HAVING COALESCE(
+            NULLIF(UPPER(btrim(p.work_type)), ''),
+            NULLIF(UPPER(btrim(p.permit_type)), ''),
+            NULLIF(UPPER(btrim(p.job_type)), '')
+        ) IS NOT NULL
+        ORDER BY 1, COUNT(*) DESC
+    """, where_params + [names])
+
+    by_name = {}
+    for row in cur.fetchall():
+        by_name.setdefault(row['contractor_name'], []).append({
+            'code': row['code'],
+            'label': (WORK_TYPE_LABELS.get(row['code'])
+                      or PERMIT_TYPE_LABELS.get(row['code'])
+                      or JOB_TYPE_LABELS.get(row['code'])
+                      or row['code']),
+            'count': row['permit_count'],
+        })
+
+    for contractor in contractors:
+        mix = by_name.get(contractor['contractor_name'], [])
+        contractor['work_mix'] = mix[:top_n]
+        contractor['work_mix_other'] = max(0, len(mix) - top_n)
+        # Kept for anything still reading the old flat field.
+        contractor['job_types'] = ', '.join(m['code'] for m in mix[:top_n]) or None
+
+
 @app.route('/api/contractors/search')
 @cache.cached(timeout=300, query_string=True)
 def api_contractors_search():
     """
-    Search contractors with aggregated stats
-    
-    Query Parameters:
-    - search: Contractor name or license search
-    - sort_by: active_jobs, total_jobs, total_value, largest_project,
+    Search contractors with aggregated stats.
+
+    Takes the same filter vocabulary as /api/properties, so a filter set means
+    the same thing on both pages: there it returns the buildings that match,
+    here it returns the contractors who worked on them.
+
+    Shared with /api/properties:
+    - search, borough, property_type, building_class, min_units, max_units,
+      min_value, max_value, permit_type, work_type, job_type, license_type,
+      recent_permit_days
+
+    Contractor-specific:
+    - min_jobs, max_jobs, min_active_jobs, min_properties, max_properties
+    - sort_by: total_jobs, active_jobs, total_value, largest_project,
       unique_properties, most_recent_job — repeatable; later keys break ties
-      (default: total_jobs)
-    - sort_order: asc or desc, applied to every sort key (default: desc)
-    - page: Page number (default 1)
-    - per_page: Results per page (default 50, max 200)
+    - sort_order: asc or desc, applied to every sort key
+    - page, per_page
     """
     try:
         with DatabaseConnection() as cur:
-            # Parse query parameters
             search = request.args.get('search', '').strip()
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
             offset = (page - 1) * per_page
-            
-            # Build WHERE clause - exclude NULL, empty, and placeholder values
-            where_clause = """WHERE p.applicant IS NOT NULL 
-                AND p.applicant != '' 
+
+            # Exclude NULL, empty and placeholder applicant values
+            where_parts = ["""p.applicant IS NOT NULL
+                AND p.applicant != ''
                 AND p.applicant != 'N/A'
                 AND p.applicant != 'NA'
                 AND p.applicant != 'NONE'
-                AND p.applicant NOT ILIKE 'unknown%%'"""
-            search_params = []
-            
+                AND p.applicant NOT ILIKE 'unknown%%'"""]
+            where_params = []
+
             if search:
-                where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
-                search_term = f"%{search}%"
-                search_params = [search_term, search_term, search_term]
-            
-            # Sort is multi-select: later keys break ties in earlier ones.
+                where_parts.append(
+                    '(p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s'
+                    ' OR p.permittee_business_name ILIKE %s)')
+                term = f"%{search}%"
+                where_params.extend([term, term, term])
+
+            # Permit attributes — the same helper /api/properties uses.
+            permit_parts, permit_params = _permit_predicates(request.args, alias='p')
+            where_parts.extend(permit_parts)
+            where_params.extend(permit_params)
+
+            # Borough, from the permit itself so contractors working on
+            # buildings we have not enriched yet are still filterable.
+            boroughs = _parse_boroughs_param(request.args.get('borough', ''))
+            if boroughs:
+                placeholders = ','.join(['%s'] * len(boroughs))
+                where_parts.append(f'LEFT(p.bbl, 1) IN ({placeholders})')
+                where_params.extend(boroughs)
+
+            # Building attributes of the properties worked on, straight from
+            # the joined row. The permits EXISTS that /api/properties adds is
+            # deliberately not used here: this query already filters permits
+            # directly, and an EXISTS would match any permit on the building
+            # rather than this contractor's own.
+            building_parts, building_params = [], []
+            _append_building_only_filters(request.args, building_parts, building_params)
+            where_parts.extend(building_parts)
+            where_params.extend(building_params)
+
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            min_value = request.args.get('min_value', type=float)
+            max_value = request.args.get('max_value', type=float)
+            if min_units is not None:
+                where_parts.append('COALESCE(b.total_units, 0) >= %s')
+                where_params.append(min_units)
+            if max_units is not None:
+                where_parts.append('COALESCE(b.total_units, 0) <= %s')
+                where_params.append(max_units)
+            if min_value is not None:
+                where_parts.append('b.assessed_total_value >= %s')
+                where_params.append(min_value)
+            if max_value is not None:
+                where_parts.append('b.assessed_total_value <= %s')
+                where_params.append(max_value)
+
+            where_clause = 'WHERE ' + ' AND '.join(where_parts)
+
+            # Contractor-scale filters apply to the aggregates, so they belong
+            # in HAVING rather than WHERE.
+            having_parts, having_params = [], []
+            for param, expr in (
+                ('min_jobs', 'COUNT(*) >= %s'),
+                ('max_jobs', 'COUNT(*) <= %s'),
+                ('min_active_jobs',
+                 "COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days'"
+                 ' THEN 1 END) >= %s'),
+                ('min_properties', 'COUNT(DISTINCT p.bbl) >= %s'),
+                ('max_properties', 'COUNT(DISTINCT p.bbl) <= %s'),
+            ):
+                value = request.args.get(param, type=int)
+                if value is not None:
+                    having_parts.append(expr)
+                    having_params.append(value)
+            having_clause = ('HAVING ' + ' AND '.join(having_parts)) if having_parts else ''
+
             order_by_sql = _order_by_sql(
                 request.args,
                 {
@@ -4469,11 +4811,10 @@ def api_contractors_search():
                 sort_order,
                 tiebreaker='contractor_name ASC',
             )
-            
-            # Get contractors with aggregated stats
+
             query = f"""
                 WITH contractor_stats AS (
-                    SELECT 
+                    SELECT
                         p.applicant as contractor_name,
                         p.permittee_license_number as license,
                         COUNT(*) as total_jobs,
@@ -4481,44 +4822,57 @@ def api_contractors_search():
                         COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                         COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
                         MAX(p.issue_date) as most_recent_job,
+                        MIN(p.issue_date) as first_job,
                         COUNT(DISTINCT p.bbl) as unique_properties,
-                        string_agg(DISTINCT p.job_type, ', ') as job_types
+                        COUNT(DISTINCT NULLIF(btrim(p.permittee_license_type), '')) as license_type_count,
+                        (array_agg(DISTINCT UPPER(btrim(p.permittee_license_type)))
+                            FILTER (WHERE btrim(coalesce(p.permittee_license_type, '')) <> ''))[1]
+                            as license_type
                     FROM permits p
                     LEFT JOIN buildings b ON p.bbl = b.bbl
                     {where_clause}
                     GROUP BY p.applicant, p.permittee_license_number
+                    {having_clause}
                 )
-                SELECT 
-                    contractor_name,
-                    license,
-                    total_jobs,
-                    active_jobs,
-                    total_value,
-                    largest_project,
-                    most_recent_job,
-                    unique_properties,
-                    job_types
+                SELECT *
                 FROM contractor_stats
                 ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
             """
-            
-            query_params = search_params + [per_page, offset]
-            cur.execute(query, query_params)
-            contractors = cur.fetchall()
-            
-            # Get total count
-            count_query = f"""
-                SELECT COUNT(DISTINCT p.applicant)
-                FROM permits p
-                {where_clause}
-            """
-            cur.execute(count_query, search_params)
+
+            cur.execute(query, where_params + having_params + [per_page, offset])
+            contractors = [dict(c) for c in cur.fetchall()]
+
+            # What kind of work each of these contractors actually does.
+            # Done as a second pass over just the page's contractors so the
+            # aggregate above stays cheap.
+            _attach_work_mix(cur, contractors, where_parts, where_params)
+
+            if having_parts:
+                count_query = f"""
+                    SELECT COUNT(*) AS count FROM (
+                        SELECT 1
+                        FROM permits p
+                        LEFT JOIN buildings b ON p.bbl = b.bbl
+                        {where_clause}
+                        GROUP BY p.applicant, p.permittee_license_number
+                        {having_clause}
+                    ) matched
+                """
+                cur.execute(count_query, where_params + having_params)
+            else:
+                count_query = f"""
+                    SELECT COUNT(DISTINCT p.applicant) AS count
+                    FROM permits p
+                    LEFT JOIN buildings b ON p.bbl = b.bbl
+                    {where_clause}
+                """
+                cur.execute(count_query, where_params)
             total = cur.fetchone()['count']
-        
+
         return jsonify({
             'success': True,
-            'contractors': [dict(c) for c in contractors],
+            'contractors': contractors,
             'pagination': {
                 'page': page,
                 'per_page': per_page,
@@ -4526,12 +4880,13 @@ def api_contractors_search():
                 'pages': (total + per_page - 1) // per_page
             }
         })
-        
+
     except Exception as e:
         print(f"Contractors search API error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 
 @app.route('/api/contractor/<contractor_name>')

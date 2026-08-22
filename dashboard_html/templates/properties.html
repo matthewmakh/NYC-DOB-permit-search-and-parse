@@ -58,14 +58,6 @@
             </div>
 
             <div class="filter-section">
-                <h3>Assessed value</h3>
-                <div class="range-inputs">
-                    <input type="number" id="minValue" class="filter-input" placeholder="Min $">
-                    <input type="number" id="maxValue" class="filter-input" placeholder="Max $">
-                </div>
-            </div>
-
-            <div class="filter-section">
                 <h3>Sale price</h3>
                 <div class="range-inputs">
                     <input type="number" id="minSalePrice" class="filter-input" placeholder="Min $">
@@ -81,93 +73,7 @@
                 </div>
             </div>
 
-            <div class="filter-section">
-                <h3>Borough</h3>
-                <select id="boroughFilter" class="filter-select" multiple
-                    data-multiselect data-placeholder="All boroughs">
-                    <option value="1">Manhattan</option>
-                    <option value="2">Bronx</option>
-                    <option value="3">Brooklyn</option>
-                    <option value="4">Queens</option>
-                    <option value="5">Staten Island</option>
-                </select>
-                <small class="filter-hint">Leave empty to include every borough.</small>
-            </div>
-
-            <div class="filter-section">
-                <h3>Property type</h3>
-                <select id="propertyType" class="filter-select" multiple
-                    data-multiselect data-placeholder="All types">
-                    <option value="residential">Residential</option>
-                    <option value="commercial">Commercial</option>
-                    <option value="mixed">Mixed use</option>
-                </select>
-                <small class="filter-hint">Pick any number &mdash; they are combined with OR.</small>
-            </div>
-
-            <div class="filter-section">
-                <h3>Building class</h3>
-                <select id="buildingClass" class="filter-select" multiple
-                    data-multiselect data-placeholder="All classes"
-                    data-search-placeholder="Search code or description&hellip;">
-                    {%- for group in building_class_groups %}
-                    <optgroup label="{{ group.label }}">
-                        {%- for option in group.options %}
-                        <option value="{{ option.value }}">{{ option.label }}</option>
-                        {%- endfor %}
-                    </optgroup>
-                    {%- endfor %}
-                </select>
-                <small class="filter-hint">Pick a whole family (all C walk-ups) or specific codes.</small>
-            </div>
-
-            <div class="filter-section">
-                <h3>Units</h3>
-                <div class="range-inputs">
-                    <input type="number" id="minUnits" class="filter-input" placeholder="Min">
-                    <input type="number" id="maxUnits" class="filter-input" placeholder="Max">
-                </div>
-            </div>
-
-            <div class="filter-section">
-                <h3>Permit activity</h3>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="withPermits">
-                    Only properties with permits
-                </label>
-                <input type="number" id="minPermits" class="filter-input"
-                    placeholder="Min permit count" style="margin-top: 8px;">
-
-                <label class="filter-label" style="margin-top: 12px;">Permit type</label>
-                <select id="permitType" class="filter-select" multiple
-                    data-multiselect data-placeholder="All types">
-                    <option value="EW">EW &mdash; Equipment Work</option>
-                    <option value="PL">PL &mdash; Plumbing</option>
-                    <option value="EQ">EQ &mdash; Equipment</option>
-                    <option value="AL">AL &mdash; Alteration</option>
-                    <option value="NB">NB &mdash; New Building</option>
-                    <option value="SG">SG &mdash; Sign</option>
-                    <option value="DM">DM &mdash; Demolition</option>
-                    <option value="FO">FO &mdash; Foundation</option>
-                </select>
-
-                <label class="filter-label" style="margin-top: 12px;">Recent permits</label>
-                <select id="recentPermitDays" class="filter-select"
-                    data-multiselect data-placeholder="Any time">
-                    <option value="">Any time</option>
-                    <option value="3">Last 3 days</option>
-                    <option value="7">Last week</option>
-                    <option value="30">Last 30 days</option>
-                    <option value="60">Last 60 days</option>
-                    <option value="90">Last 90 days</option>
-                    <option value="180">Last 6 months</option>
-                    <option value="365">Last year</option>
-                    <option value="730">Last 2 years</option>
-                    <option value="custom">Custom&hellip;</option>
-                </select>
-                <input type="number" id="recentPermitCustomDays" class="filter-input"
-                    placeholder="Number of days" style="display: none; margin-top: 8px;" min="1" max="3650">
-            </div>
+            {% with page = 'properties' %}{% include "_filter_sections.html" %}{% endwith %}
 
             <div class="filter-section">
                 <h3>Financing ratio</h3>
@@ -177,15 +83,6 @@
                     <input type="number" id="financingMax" class="filter-input"
                         placeholder="Max %" min="0" max="100">
                 </div>
-            </div>
-
-            <div class="filter-section">
-                <h3>HPD violations</h3>
-                <select id="violationsFilter" class="filter-select" multiple
-                    data-multiselect data-placeholder="Any">
-                    <option value="true">Has open violations</option>
-                    <option value="false">No open violations</option>
-                </select>
             </div>
 
             <div class="filter-section">
@@ -396,6 +293,7 @@
     </div>
 
     <script src="/static/js/multiselect.js"></script>
+    <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/properties.js"></script>
 </body>
 </html>
