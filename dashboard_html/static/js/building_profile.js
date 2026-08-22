@@ -324,17 +324,31 @@ function renderHeroSection() {
                             !sos_data.principal_name.includes('CORP');
         // Tone down the yellow highlight when the SOS hit is just an agent —
         // they're not the owner, so we shouldn't make them look like the answer.
-        sosItem.className = 'owner-item sos-highlight' + (isAgent ? ' sos-agent' : '');
+        // The registered entity may not be the company any of our owner
+        // fields name — the lookup used to accept the first Active search hit
+        // without checking. A mismatch means these people run some OTHER
+        // company, so the row is demoted and called out rather than shown as
+        // the answer.
+        const isMismatch = sos_data.entity_match === 'mismatch';
+        sosItem.className = 'owner-item sos-highlight'
+            + (isAgent ? ' sos-agent' : '')
+            + (isMismatch ? ' sos-mismatch' : '');
 
         sosItem.innerHTML = `
             <span class="owner-source sos-source">
                 NY Secretary of State
-                ${isRealPerson ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
+                ${isRealPerson && !isMismatch ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
                 ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">AGENT</span>' : ''}
+                ${isMismatch ? '<span class="mismatch-badge" title="The registered company does not match any owner name on record for this property">UNVERIFIED</span>' : ''}
             </span>
             <span class="owner-name sos-name">${sos_data.principal_name}</span>
             ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
             <span class="sos-entity">Behind: ${sos_data.entity_name || 'LLC'} (${sos_data.entity_status || 'Unknown'})</span>
+            ${sos_data.lookup_source ? `<span class="sos-provenance">Looked up from ${sos_data.lookup_source}</span>` : ''}
+            ${isMismatch ? `<span class="sos-warning">
+                This company does not match any owner name on record here.
+                Treat these contacts as unverified.
+            </span>` : ''}
         `;
         ownerSourcesEl.appendChild(sosItem);
     }
@@ -483,9 +497,12 @@ function renderEnrichedDataPerOwner(dataList) {
 }
 
 function renderEnrichedData(data) {
-    // Backward compatible single-owner render
+    // Combined render. These contacts can come from more than one person —
+    // an agent and an owner both get looked up — so each carries the name it
+    // was found under. Never show a bare number here; you cannot tell whose
+    // it is before you dial.
     let html = '<div class="enriched-contacts">';
-    
+
     if (data.phones && data.phones.length > 0) {
         html += '<div class="enriched-phones">';
         data.phones.forEach(phone => {
@@ -493,18 +510,20 @@ function renderEnrichedData(data) {
                 <a href="tel:${phone.number}" class="contact-link phone-link">
                     ${formatPhoneNumber(phone.number)}
                     <span class="phone-type">${phone.type || ''}</span>
+                    ${phone.owner_name ? `<span class="contact-owner">${phone.owner_name}</span>` : ''}
                 </a>
             `;
         });
         html += '</div>';
     }
-    
+
     if (data.emails && data.emails.length > 0) {
         html += '<div class="enriched-emails">';
         data.emails.forEach(email => {
             html += `
                 <a href="mailto:${email.email}" class="contact-link email-link">
                     ${email.email}
+                    ${email.owner_name ? `<span class="contact-owner">${email.owner_name}</span>` : ''}
                 </a>
             `;
         });

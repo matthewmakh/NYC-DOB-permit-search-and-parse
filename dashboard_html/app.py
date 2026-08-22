@@ -572,6 +572,18 @@ def search_contact():
         }), 500
 
 
+# Which owner name step5 fed into the Secretary of State lookup. Stored by the
+# pipeline but never surfaced until now, which left no way to tell whether an
+# SOS entity legitimately supersedes the PLUTO name shown beside it (a newer
+# deed) or is simply the wrong company.
+SOS_SOURCE_LABELS = {
+    'sale_buyer_primary': 'ACRIS deed buyer (most recent sale)',
+    'owner_name_rpad': 'Tax records (RPAD)',
+    'current_owner_name': 'NYC PLUTO',
+    'owner_name_hpd': 'HPD registration',
+}
+
+
 # ============================================================================
 # PERMIT CLASSIFICATION CODES
 # ----------------------------------------------------------------------------
@@ -5249,7 +5261,7 @@ def api_building_profile(bbl):
                 -- NY SOS LLC data (Real person behind LLC)
                 sos_principal_name, sos_principal_title, sos_principal_street, sos_principal_city,
                 sos_principal_state, sos_principal_zip, sos_entity_name, sos_entity_status,
-                sos_dos_id, sos_formation_date, sos_last_enriched,
+                sos_dos_id, sos_formation_date, sos_last_enriched, sos_lookup_source,
                 -- Metadata
                 last_updated
             FROM buildings
@@ -5339,6 +5351,26 @@ def api_building_profile(bbl):
                     'formation_date': building['sos_formation_date'].isoformat() if building['sos_formation_date'] else None,
                     'last_enriched': building['sos_last_enriched'].isoformat() if building['sos_last_enriched'] else None
                 }
+
+                # Does the registered entity actually correspond to an owner
+                # name we hold for this building? Checked here rather than at
+                # write time so rows stored before the lookup verified its own
+                # match are flagged without waiting for a re-run.
+                try:
+                    from enrichment_service import entity_match_quality
+                    quality, matched_name = entity_match_quality(
+                        building['sos_entity_name'],
+                        [building['current_owner_name'], building['owner_name_rpad'],
+                         building['owner_name_hpd'], building['sale_buyer_primary']],
+                    )
+                except Exception as e:
+                    print(f"SOS entity match check failed: {e}")
+                    quality, matched_name = 'unknown', None
+
+                sos_data['entity_match'] = quality
+                sos_data['entity_matched_owner'] = matched_name
+                sos_data['lookup_source'] = SOS_SOURCE_LABELS.get(
+                    building['sos_lookup_source'], building['sos_lookup_source'])
         
             # ===== 6. CALCULATE RISK SCORE =====
             risk_factors = []
@@ -5570,13 +5602,20 @@ def api_building_profile(bbl):
                     enrichment_info['already_enriched'] = has_access
                     # enrichment_data_list is now a list of {owner_name, phones, emails} per owner
                     enrichment_info['enrichment_data_per_owner'] = enrichment_data_list if enrichment_data_list else []
-                    # For backward compatibility, also provide combined data
+                    # Combined view, kept for older clients. Every contact
+                    # carries the name it was looked up under: this list mixes
+                    # people — an agent's number can sit next to an owner's —
+                    # and an unlabelled block gives no way to tell which is
+                    # which before you dial.
                     if enrichment_data_list:
                         all_phones = []
                         all_emails = []
                         for ed in enrichment_data_list:
-                            all_phones.extend(ed.get('phones', []))
-                            all_emails.extend(ed.get('emails', []))
+                            owner = ed.get('owner_name')
+                            for phone in ed.get('phones', []):
+                                all_phones.append({**phone, 'owner_name': owner})
+                            for email in ed.get('emails', []):
+                                all_emails.append({**email, 'owner_name': owner})
                         enrichment_info['enrichment_data'] = {
                             'phones': all_phones,
                             'emails': all_emails

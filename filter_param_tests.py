@@ -219,6 +219,93 @@ check('category filters add the permits EXISTS',
       any('FROM permits p' in c for c in w2), True)
 check('and bind the work type', p2, ['PL'])
 
+print('— SOS entity matching —')
+import enrichment_service as E  # noqa: E402
+
+check('normalizer strips suffixes and punctuation',
+      E.normalize_entity_name('65 Spring Realty, L.L.C.'), '65 SPRING REALTY')
+check('exact match after normalizing',
+      E.entity_match_quality('65 SPRING REALTY LLC', ['65 Spring Realty, L.L.C.'])[0],
+      'exact')
+check('a different company is a mismatch',
+      E.entity_match_quality('ELDCD DEVELOPMENT LLC', ['65 SPRING REALTY LLC'])[0],
+      'mismatch')
+check('longer registered name counts as prefix',
+      E.entity_match_quality('65 SPRING REALTY HOLDINGS LLC', ['65 SPRING REALTY LLC'])[0],
+      'prefix')
+check('nothing to compare against is unknown',
+      E.entity_match_quality('ANY LLC', [None, ''])[0], 'unknown')
+check('no registered name is unknown',
+      E.entity_match_quality(None, ['65 SPRING REALTY LLC'])[0], 'unknown')
+check('match reports which owner field it matched',
+      E.entity_match_quality('65 SPRING REALTY LLC',
+                             ['MICHAEL MAKHARADZE', '65 SPRING REALTY LLC'])[1],
+      '65 SPRING REALTY LLC')
+
+print('— agent titles are not owners —')
+check('service of process agent', E.is_sos_agent_title('Service of Process Agent'), True)
+check('registered agent', E.is_sos_agent_title('REGISTERED AGENT'), True)
+check('chief executive officer is an owner',
+      E.is_sos_agent_title('Chief Executive Officer'), False)
+check('missing title is not an agent', E.is_sos_agent_title(None), False)
+
+print('— normalizer parity with the scraper —')
+try:
+    import ny_sos_lookup as S
+except ImportError:
+    print('  (ny_sos_lookup unavailable — httpx not installed; skipping)')
+else:
+    drifted = [n for n in ['65 SPRING REALTY LLC', '65 Spring Realty, L.L.C.',
+                           'ACME HOLDINGS INC.', 'Acme Holdings Incorporated',
+                           'BROOKLYN CO.', 'FOO BAR LP', 'X Y Z PLLC', 'TEST USA',
+                           'SOME NAME - BROOKLYN, NY 11201', '']
+               if E.normalize_entity_name(n) != S.normalize_business_name(n)]
+    check('web and scraper normalizers agree', drifted, [])
+
+    print('— the lookup refuses a company it was not asked about —')
+    import asyncio
+
+    def row(name, dos, status):
+        return {'dos_id': dos, 'entity_name': name, 'entity_status': status,
+                'entity_type': 'LimitedLiabilityCompany', 'jurisdiction': 'NY',
+                'formation_date': '1/1/2019'}
+
+    def lookup(query, matches):
+        async def run():
+            c = S.AsyncNYSOSClient()
+            c._client = object()
+
+            async def search(_):
+                return matches
+
+            async def det(dos_id, name):
+                m = next(x for x in matches if x['dos_id'] == dos_id)
+                return {'dos_id': dos_id, 'entity_name': m['entity_name'],
+                        'entity_type': 'LLC', 'status': m['entity_status'],
+                        'jurisdiction': 'NY', 'formation_date': '1/1/2019',
+                        'county': 'NY', 'people': [], 'raw_response': {}}
+
+            c._search_business, c._get_business_details = search, det
+            return await c.lookup(query)
+        return asyncio.run(run())
+
+    r = lookup('65 SPRING REALTY LLC',
+               [row('ELDCD DEVELOPMENT LLC', '1', 'Active'),
+                row('65 SPRING REALTY LLC', '2', 'Inactive')])
+    check('an inactive exact match beats an active stranger',
+          (r.found, r.entity_name, r.match_quality),
+          (True, '65 SPRING REALTY LLC', 'exact'))
+
+    r = lookup('65 SPRING REALTY LLC', [row('ZZZ CAPITAL LLC', '9', 'Active')])
+    check('an unrelated company is refused outright',
+          (r.found, r.match_quality), (False, 'none'))
+
+    r = lookup('65 SPRING REALTY LLC',
+               [row('65 SPRING REALTY LLC', '2', 'Inactive'),
+                row('65 SPRING REALTY LLC', '3', 'Active')])
+    check('among equal names the active registration wins',
+          (r.dos_id, r.match_quality), ('3', 'exact'))
+
 try:
     import pglast
 except ImportError:
