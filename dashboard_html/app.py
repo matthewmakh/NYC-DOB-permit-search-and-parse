@@ -2724,12 +2724,110 @@ def api_property_detail(bbl):
 @login_required
 def properties_page():
     """Render the properties search/browse page"""
-    return render_template('properties.html')
+    return render_template(
+        'properties.html',
+        building_class_groups=building_class_options(),
+    )
 
 
 # Hard cap on the number of properties one bulk-enrich job can target.
 # Caps cost/runtime exposure even with the type-to-confirm gate in the UI.
 BULK_ENRICH_MAX_PROPERTIES = 20000
+
+
+# Category filters the properties sidebar exposes as multi-selects. Each one
+# accepts any number of values and ORs them together, so "Residential OR
+# Mixed use" or "PL OR EW OR NB" is a single query rather than three passes.
+_PROPERTY_TYPE_SQL = {
+    # A=1-family, B=2-family, C=walk-up, D=elevator, R=condo
+    'residential': "b.building_class ~ '^[ABCDR]'",
+    # K=stores, O=office, E=warehouse, F=factory, G=garage
+    'commercial': "b.building_class ~ '^[KOEFG]'",
+    # S=mixed residential/commercial
+    'mixed': "b.building_class ~ '^S'",
+}
+
+
+def _multi_param(args, name, allowed=None, upper=False):
+    """Collect a repeatable filter param into a de-duplicated list of values.
+
+    Handles every shape these params arrive in:
+      - repeated query args   ?permit_type=PL&permit_type=EW
+      - one comma-separated   ?permit_type=PL,EW
+      - a JSON array          {"permit_type": ["PL", "EW"]}
+      - a single scalar       ?permit_type=PL      (pre-multi-select clients)
+
+    Empty values are dropped; `allowed`, when given, filters to a known set so
+    unrecognised input can never reach the query.
+    """
+    raw_values = []
+
+    def spread(value):
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                spread(item)
+            return
+        raw_values.extend(str(value).split(','))
+
+    if args is not None and hasattr(args, 'getlist'):
+        spread(args.getlist(name))
+    elif args is not None and hasattr(args, 'get'):
+        spread(args.get(name))
+
+    out = []
+    seen = set()
+    for value in raw_values:
+        value = value.strip()
+        if upper:
+            value = value.upper()
+        if not value or value in seen:
+            continue
+        if allowed is not None and value not in allowed:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _append_category_filters(args, where_clauses, params):
+    """Append the multi-select category filters to a WHERE list.
+
+    Shared by /api/properties, the CSV export and the bulk-enrich resolver so
+    all three always resolve a given filter set to the same properties.
+    """
+    property_types = _multi_param(args, 'property_type', allowed=set(_PROPERTY_TYPE_SQL))
+    if property_types:
+        where_clauses.append(
+            '(' + ' OR '.join(_PROPERTY_TYPE_SQL[t] for t in property_types) + ')'
+        )
+
+    building_classes = _multi_param(args, 'building_class', upper=True)
+    if building_classes:
+        where_clauses.append(
+            '(' + ' OR '.join(['b.building_class LIKE %s'] * len(building_classes)) + ')'
+        )
+        params.extend(f'{code}%' for code in building_classes)
+
+    permit_types = _multi_param(args, 'permit_type', upper=True)
+    if permit_types:
+        placeholders = ','.join(['%s'] * len(permit_types))
+        where_clauses.append(
+            'EXISTS (SELECT 1 FROM permits p'
+            f' WHERE p.bbl = b.bbl AND p.permit_type IN ({placeholders}))'
+        )
+        params.extend(permit_types)
+
+    # "Has violations" and "No violations" are complements: picking both is the
+    # same as picking neither, so neither adds a clause.
+    violations = {v.lower() for v in _multi_param(args, 'has_violations')}
+    wants_open = 'true' in violations
+    wants_clean = 'false' in violations
+    if wants_open and not wants_clean:
+        where_clauses.append('b.hpd_open_violations > 0')
+    elif wants_clean and not wants_open:
+        where_clauses.append('(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)')
 
 
 def _parse_boroughs_param(raw, multi_source=None):
@@ -2802,13 +2900,9 @@ def _resolve_filter_building_ids(args, limit=None):
     with_permits = str(g('with_permits', default='')).lower() == 'true'
     min_permits = g('min_permits', type=int)
     recent_permit_days = g('recent_permit_days', type=int)
-    permit_type = (g('permit_type', default='') or '').strip()
-    property_type = (g('property_type', default='') or '').strip()
     boroughs = _parse_boroughs_param(g('borough', default=''), multi_source=args if hasattr(args, 'getlist') else None)
-    building_class = (g('building_class', default='') or '').strip()
     min_units = g('min_units', type=int)
     max_units = g('max_units', type=int)
-    has_violations = g('has_violations')
     recent_sale_days = g('recent_sale_days', type=int)
     financing_min = g('financing_min', type=float)
     financing_max = g('financing_max', type=float)
@@ -2879,9 +2973,7 @@ def _resolve_filter_building_ids(args, limit=None):
         placeholders = ','.join(['%s'] * len(boroughs))
         where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
         params.extend(boroughs)
-    if building_class:
-        where_clauses.append("b.building_class LIKE %s")
-        params.append(f"{building_class.upper()}%")
+    _append_category_filters(args, where_clauses, params)
     if min_units is not None:
         where_clauses.append("COALESCE(b.total_units, 0) >= %s"); params.append(min_units)
     if max_units is not None:
@@ -2898,28 +2990,6 @@ def _resolve_filter_building_ids(args, limit=None):
                    OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
         )""")
         params.extend([str(recent_permit_days), str(recent_permit_days)])
-    if permit_type:
-        # Parameterized — staging's /api/properties version interpolates this raw,
-        # which is a SQL-injection risk we should fix separately.
-        where_clauses.append(
-            "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
-        )
-        params.append(permit_type)
-    if property_type:
-        # Mirror the building-class regexes used by /api/properties so the
-        # bulk-enrich resolver returns the same set the page is showing.
-        if property_type == 'residential':
-            where_clauses.append("b.building_class ~ '^[ABCDR]'")
-        elif property_type == 'commercial':
-            where_clauses.append("b.building_class ~ '^[KOEFG]'")
-        elif property_type == 'mixed':
-            where_clauses.append("b.building_class LIKE 'S%%'")
-    if has_violations is not None:
-        hv = str(has_violations).lower()
-        if hv == 'true':
-            where_clauses.append("b.hpd_open_violations > 0")
-        elif hv == 'false':
-            where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
     if has_enrichable_owner:
         where_clauses.append("""
             (
@@ -3050,10 +3120,12 @@ def api_properties():
     - with_permits: Only properties with permits (true/false)
     - min_permits: Minimum permit count
     - recent_permit_days: Only properties with permits filed/issued within X days
-    - borough: Borough filter (1-5)
-    - building_class: Building class code
+    - borough: Borough filter (1-5), repeatable or comma-separated
+    - building_class: Building class code prefix, repeatable or comma-separated
+    - permit_type: DOB permit type, repeatable or comma-separated
+    - property_type: residential/commercial/mixed, repeatable or comma-separated
     - min_units, max_units: Unit count range
-    - has_violations: Has HPD violations (true/false)
+    - has_violations: true and/or false; both (or neither) means no filter
     - recent_sale_days: Sold within X days
     - financing_min, financing_max: Financing ratio range
     - sort_by: Field to sort (value, sale_date, address)
@@ -3076,13 +3148,9 @@ def api_properties():
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
-            permit_type = request.args.get('permit_type', '').strip()  # Permit type filter
-            property_type = request.args.get('property_type', '').strip()  # Residential/Commercial filter
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
@@ -3187,23 +3255,11 @@ def api_properties():
                 where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
                 params.extend(boroughs)
         
-            # Property type filter (residential/commercial/mixed)
-            if property_type:
-                if property_type == 'residential':
-                    # A=1-family, B=2-family, C=walk-up, D=elevator, R=condo
-                    where_clauses.append("b.building_class ~ '^[ABCDR]'")
-                elif property_type == 'commercial':
-                    # K=stores, O=office, E=warehouse, F=factory, G=garage
-                    where_clauses.append("b.building_class ~ '^[KOEFG]'")
-                elif property_type == 'mixed':
-                    # S=mixed residential/commercial
-                    where_clauses.append("b.building_class LIKE 'S%'")
-        
-            # Building class
-            if building_class:
-                where_clauses.append("b.building_class LIKE %s")
-                params.append(f"{building_class}%")
-        
+            # Property type, building class, permit type and HPD violations are
+            # all multi-select in the sidebar; one shared helper turns each set
+            # of values into an OR'd clause.
+            _append_category_filters(request.args, where_clauses, params)
+
             # Units range
             if min_units is not None:
                 where_clauses.append("b.total_units >= %s")
@@ -3212,13 +3268,6 @@ def api_properties():
                 where_clauses.append("b.total_units <= %s")
                 params.append(max_units)
         
-            # HPD violations
-            if has_violations is not None:
-                if has_violations.lower() == 'true':
-                    where_clauses.append("b.hpd_open_violations > 0")
-                else:
-                    where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
-            
             # Enrichable owner filter - has a person name (not LLC/INC/CORP) with first+last
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
@@ -3246,14 +3295,6 @@ def api_properties():
                          AND b.owner_name_hpd ~ ' ')
                     )
                 """)
-
-            # Permit type filter — bound parameter (was previously interpolated raw,
-            # which was a SQL-injection risk via the ?permit_type= query param).
-            if permit_type:
-                where_clauses.append(
-                    "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
-                )
-                params.append(permit_type)
 
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -3540,10 +3581,8 @@ def api_properties_export():
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
@@ -3630,9 +3669,7 @@ def api_properties_export():
                 placeholders = ','.join(['%s'] * len(boroughs))
                 where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
                 params.extend(boroughs)
-            if building_class:
-                where_clauses.append("b.building_class LIKE %s")
-                params.append(f"{building_class.upper()}%")
+            _append_category_filters(request.args, where_clauses, params)
             if min_units is not None:
                 where_clauses.append("COALESCE(b.total_units, 0) >= %s")
                 params.append(min_units)
@@ -3652,11 +3689,6 @@ def api_properties_export():
                          OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
                 )""")
                 params.extend([str(recent_permit_days), str(recent_permit_days)])
-            if has_violations == 'true':
-                where_clauses.append("COALESCE(b.hpd_total_violations, 0) > 0")
-            elif has_violations == 'false':
-                where_clauses.append("COALESCE(b.hpd_total_violations, 0) = 0")
-            
             # Enrichable owner filter
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
@@ -4091,10 +4123,8 @@ def api_properties_export_with_enrichment():
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
@@ -4136,7 +4166,11 @@ def api_properties_export_with_enrichment():
 
             if with_permits or min_permits:
                 where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
-            
+
+            # These were read from the query string but never applied, so an
+            # enriched export could bill for rows the filtered screen excluded.
+            _append_category_filters(request.args, where_clauses, params)
+
             # Build query (limit 10000)
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -5940,6 +5974,267 @@ def api_bulk_enrich_jobs_list():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+BUILDING_CLASS_CODES = {
+    # Residential
+    'A0': 'Cape Cod style single-family home',
+    'A1': 'Two-story detached single-family home',
+    'A2': 'One-story ranch or bungalow',
+    'A3': 'Large single-family mansion',
+    'A4': 'Single-family home in city',
+    'A5': 'Single-family attached or semi-detached',
+    'A6': 'Summer cottage or bungalow',
+    'A7': 'Mansion-type or town house',
+    'A8': 'Bungalow colony (multiple cottages)',
+    'A9': 'Miscellaneous single-family',
+    'B1': 'Two-family brick or stone building',
+    'B2': 'Two-family frame construction',
+    'B3': 'Two-family converted from single-family',
+    'B9': 'Miscellaneous two-family',
+    'C0': 'Three-family brick or stone',
+    'C1': 'Walk-up apartment (3-6 families) over stores',
+    'C2': 'Walk-up apartment (3-6 families) no stores',
+    'C3': 'Walk-up apartment converted from house',
+    'C4': 'Renovated walk-up apartment',
+    'C5': 'Converted dwelling to apartments',
+    'C6': 'Walk-up cooperative or condo',
+    'C7': 'Walk-up apartment with commercial',
+    'C8': 'Walk-up cooperative or condo conversion',
+    'C9': 'Garden-type apartment complex (1-2 stories)',
+    'D0': 'Elevator apartment (7+ stories)',
+    'D1': 'Semi-fireproof elevator apartment',
+    'D2': 'Fireproof elevator apartment (artists in residence)',
+    'D3': 'Fireproof elevator apartment',
+    'D4': 'Elevator cooperative or condo',
+    'D5': 'Elevator apartment converted',
+    'D6': 'Elevator cooperative or condo conversion',
+    'D7': 'Elevator apartment with stores',
+    'D8': 'Elevator apartment (luxury)',
+    'D9': 'Elevator apartment miscellaneous',
+    # Commercial
+    'E1': 'Warehouse (brick/concrete)',
+    'E2': 'Warehouse (metal)',
+    'E3': 'Warehouse (converted factory)',
+    'E4': 'Warehouse (self-storage)',
+    'E7': 'Warehouse (commercial storage)',
+    'E9': 'Warehouse miscellaneous',
+    'F1': 'Factory/industrial (heavy manufacturing)',
+    'F2': 'Factory/industrial (artist loft)',
+    'F4': 'Factory/industrial (light manufacturing)',
+    'F5': 'Factory/industrial (metalworking)',
+    'F8': 'Factory/industrial (commercial/printing)',
+    'F9': 'Factory/industrial miscellaneous',
+    'G0': 'Garage (residential, <4 cars)',
+    'G1': 'Garage (all parking garages)',
+    'G2': 'Garage (permitted parking lot)',
+    'G3': 'Gas station with convenience store',
+    'G4': 'Gas station only',
+    'G5': 'Garage (commercial vehicles)',
+    'G6': 'Licensed parking lot',
+    'G7': 'Unlicensed parking lot',
+    'G8': 'Marina/boat storage',
+    'G9': 'Garage/parking miscellaneous',
+    'H1': 'Hotel (luxury)',
+    'H2': 'Hotel (full service)',
+    'H3': 'Hotel (limited service)',
+    'H4': 'Hotel (motel)',
+    'H5': 'Hotel (apartment hotel)',
+    'H6': 'Hotel (boutique/bed & breakfast)',
+    'H7': 'Hotel (SRO - single room occupancy)',
+    'H8': 'Hotel (dormitory)',
+    'H9': 'Hotel miscellaneous',
+    'I1': 'Hospital (general care)',
+    'I2': 'Hospital (infirmary)',
+    'I3': 'Hospital (mental health)',
+    'I4': 'Hospital (special hospital)',
+    'I5': 'Clinic/medical office',
+    'I6': 'Nursing home',
+    'I7': 'Adult care facility',
+    'I9': 'Hospital/health facility miscellaneous',
+    'J1': 'Theater (live performance)',
+    'J2': 'Theater (movie)',
+    'J3': 'Theater (photography/TV studio)',
+    'J4': 'Theater (arts/dance studio)',
+    'J5': 'Theater (bowling alley)',
+    'J6': 'Theater (indoor sports arena)',
+    'J7': 'Theater (athletic club)',
+    'J8': 'Theater (swimming pool)',
+    'J9': 'Theater/recreation miscellaneous',
+    'K1': 'Store building (one story retail)',
+    'K2': 'Store building (multi-story retail)',
+    'K3': 'Store building (multi-story department store)',
+    'K4': 'Store building (bank)',
+    'K5': 'Store building (mixed retail/office)',
+    'K6': 'Store building (shopping center)',
+    'K7': 'Store building (retail building with parking)',
+    'K8': 'Store building (convenience store)',
+    'K9': 'Store building miscellaneous',
+    'L1': 'Loft building (over 8 stories)',
+    'L2': 'Loft building (brick/concrete)',
+    'L3': 'Loft building (lightweight)',
+    'L8': 'Loft building (luxury/artist)',
+    'L9': 'Loft building miscellaneous',
+    'M1': 'Church/religious facility',
+    'M2': 'Mission/religious residence',
+    'M3': 'Parsonage/clergy residence',
+    'M4': 'Convent/monastery',
+    'M9': 'Religious facility miscellaneous',
+    'N1': 'Asylum/home for aged',
+    'N2': 'Asylum/infirmary',
+    'N3': 'Asylum/orphanage',
+    'N4': 'Asylum/detention facility',
+    'N9': 'Asylum/institution miscellaneous',
+    'O1': 'Office building (1 story)',
+    'O2': 'Office building (2-6 stories)',
+    'O3': 'Office building (7-19 stories)',
+    'O4': 'Office building (20+ stories - skyscraper)',
+    'O5': 'Office building (mixed-use residential/office)',
+    'O6': 'Office building (mixed-use with stores)',
+    'O7': 'Professional building (doctors/dentists)',
+    'O8': 'Office building (artist studio)',
+    'O9': 'Office building miscellaneous',
+    'P1': 'Indoor public assembly',
+    'P2': 'Outdoor stadiums/arenas',
+    'P3': 'Amusement park',
+    'P4': 'Beach/pool club',
+    'P5': 'Museum',
+    'P6': 'Library',
+    'P7': 'Funeral home',
+    'P8': 'Observatory/landmark',
+    'P9': 'Public assembly miscellaneous',
+    'Q1': 'Parking lot',
+    'Q2': 'Tennis court/pool',
+    'Q3': 'Playground',
+    'Q4': 'Beach',
+    'Q5': 'Golf course',
+    'Q6': 'Marina',
+    'Q7': 'Race track',
+    'Q8': 'Park/recreation area',
+    'Q9': 'Recreation miscellaneous',
+    'R0': 'Condo common area',
+    'R1': 'Condo residential unit',
+    'R2': 'Condo residential unit (horizontal)',
+    'R3': 'Condo residential unit (conversion)',
+    'R4': 'Condo commercial unit',
+    'R5': 'Miscellaneous commercial condo',
+    'R6': 'Condo garage',
+    'R7': 'Condo warehouse',
+    'R8': 'Condo office',
+    'R9': 'Condo miscellaneous',
+    'S0': 'Multiple dwellings (other)',
+    'S1': 'Single-family (other)',
+    'S2': 'Two-family (other)',
+    'S3': 'Three-family (other)',
+    'S4': 'Multiple dwelling',
+    'S5': 'Mixed residential/commercial',
+    'S9': 'Multiple residence miscellaneous',
+    'T1': 'Airport',
+    'T2': 'Pier/dock',
+    'T9': 'Transportation facility miscellaneous',
+    'U0': 'Utility company property',
+    'U1': 'Gas/steam plant',
+    'U2': 'Telephone exchange',
+    'U3': 'Electric substation',
+    'U4': 'Pumping station',
+    'U5': 'Communication tower',
+    'U6': 'Water/sewage plant',
+    'U7': 'Heating plant',
+    'U8': 'Garbage dump',
+    'U9': 'Utility miscellaneous',
+    'V0': 'Zoning permit/variance',
+    'V1': 'Vacant land zoned residential',
+    'V2': 'Vacant land zoned commercial',
+    'V3': 'Vacant land zoned mixed use',
+    'V4': 'Vacant land (police/fire department)',
+    'V5': 'Vacant land (school)',
+    'V6': 'Vacant land (library)',
+    'V7': 'Vacant land (hospital)',
+    'V8': 'Vacant land (public authority)',
+    'V9': 'Vacant land miscellaneous',
+    'W1': 'Educational structure (public school)',
+    'W2': 'Educational structure (private school)',
+    'W3': 'Educational structure (parochial school)',
+    'W4': 'Educational structure (non-profit school)',
+    'W5': 'Educational structure (private university)',
+    'W6': 'Educational structure (public university)',
+    'W7': 'Educational structure (religious seminary)',
+    'W8': 'Educational structure (specialized education)',
+    'W9': 'Educational structure miscellaneous',
+    'Y1': 'Government building (fire/police)',
+    'Y2': 'Government building (government office)',
+    'Y3': 'Government building (school)',
+    'Y4': 'Government building (library)',
+    'Y5': 'Government building (park)',
+    'Y6': 'Government building (courts)',
+    'Y7': 'Government building (military)',
+    'Y8': 'Government building (Department of Sanitation)',
+    'Y9': 'Government building miscellaneous',
+    'Z0': 'Mixed-use building (retail/residential)',
+    'Z1': 'Primarily residential, some commercial',
+    'Z2': 'Mixed retail/office',
+    'Z3': 'Mixed residential/factory',
+    'Z4': 'Industrial/warehouse complex',
+    'Z5': 'Mixed-use commercial',
+    'Z6': 'Mixed-use government/commercial',
+    'Z7': 'Mixed-use cultural/commercial',
+    'Z8': 'Mixed-use parking/residential',
+    'Z9': 'Mixed-use miscellaneous'
+}
+
+
+# Letter-level building-class families, used to offer "all C walk-ups" style
+# choices alongside the specific codes in the properties filter.
+BUILDING_CLASS_FAMILIES = {
+    'A': 'One-family homes',
+    'B': 'Two-family homes',
+    'C': 'Walk-up apartments',
+    'D': 'Elevator apartments',
+    'E': 'Warehouses',
+    'F': 'Factories & industrial',
+    'G': 'Garages & gas stations',
+    'H': 'Hotels',
+    'I': 'Hospitals & health',
+    'J': 'Theatres',
+    'K': 'Stores & retail',
+    'L': 'Lofts',
+    'M': 'Churches & religious',
+    'N': 'Asylums & homes',
+    'O': 'Office buildings',
+    'P': 'Places of public assembly',
+    'Q': 'Outdoor recreation & parking',
+    'R': 'Condominiums',
+    'S': 'Mixed residential/commercial',
+    'T': 'Transportation',
+    'U': 'Utility',
+    'V': 'Vacant land',
+    'W': 'Educational',
+    'Y': 'Government & municipal',
+    'Z': 'Mixed-use & misc',
+}
+
+
+def building_class_options():
+    """Option groups for the properties page building-class multi-select.
+
+    Each family is offered as a prefix (picking "C" matches every C code)
+    followed by its specific codes, so the filter works at whichever
+    granularity the user wants. Matching is a prefix LIKE either way.
+    """
+    by_letter = {}
+    for code, label in BUILDING_CLASS_CODES.items():
+        by_letter.setdefault(code[0], []).append({'value': code, 'label': f'{code} — {label}'})
+
+    groups = []
+    for letter in sorted(by_letter):
+        family = BUILDING_CLASS_FAMILIES.get(letter, f'Class {letter}')
+        groups.append({
+            'letter': letter,
+            'label': f'{letter} — {family}',
+            'options': [{'value': letter, 'label': f'All {letter} — {family}'}]
+                       + sorted(by_letter[letter], key=lambda o: o['value']),
+        })
+    return groups
+
+
 def translate_building_class(code):
     """
     Translate NYC building classification codes to plain English
@@ -5949,213 +6244,7 @@ def translate_building_class(code):
         return "Unknown building type"
     
     # NYC building class codes - https://www1.nyc.gov/assets/finance/jump/hlpbldgcode.html
-    translations = {
-        # Residential
-        'A0': 'Cape Cod style single-family home',
-        'A1': 'Two-story detached single-family home',
-        'A2': 'One-story ranch or bungalow',
-        'A3': 'Large single-family mansion',
-        'A4': 'Single-family home in city',
-        'A5': 'Single-family attached or semi-detached',
-        'A6': 'Summer cottage or bungalow',
-        'A7': 'Mansion-type or town house',
-        'A8': 'Bungalow colony (multiple cottages)',
-        'A9': 'Miscellaneous single-family',
-        'B1': 'Two-family brick or stone building',
-        'B2': 'Two-family frame construction',
-        'B3': 'Two-family converted from single-family',
-        'B9': 'Miscellaneous two-family',
-        'C0': 'Three-family brick or stone',
-        'C1': 'Walk-up apartment (3-6 families) over stores',
-        'C2': 'Walk-up apartment (3-6 families) no stores',
-        'C3': 'Walk-up apartment converted from house',
-        'C4': 'Renovated walk-up apartment',
-        'C5': 'Converted dwelling to apartments',
-        'C6': 'Walk-up cooperative or condo',
-        'C7': 'Walk-up apartment with commercial',
-        'C8': 'Walk-up cooperative or condo conversion',
-        'C9': 'Garden-type apartment complex (1-2 stories)',
-        'D0': 'Elevator apartment (7+ stories)',
-        'D1': 'Semi-fireproof elevator apartment',
-        'D2': 'Fireproof elevator apartment (artists in residence)',
-        'D3': 'Fireproof elevator apartment',
-        'D4': 'Elevator cooperative or condo',
-        'D5': 'Elevator apartment converted',
-        'D6': 'Elevator cooperative or condo conversion',
-        'D7': 'Elevator apartment with stores',
-        'D8': 'Elevator apartment (luxury)',
-        'D9': 'Elevator apartment miscellaneous',
-        # Commercial
-        'E1': 'Warehouse (brick/concrete)',
-        'E2': 'Warehouse (metal)',
-        'E3': 'Warehouse (converted factory)',
-        'E4': 'Warehouse (self-storage)',
-        'E7': 'Warehouse (commercial storage)',
-        'E9': 'Warehouse miscellaneous',
-        'F1': 'Factory/industrial (heavy manufacturing)',
-        'F2': 'Factory/industrial (artist loft)',
-        'F4': 'Factory/industrial (light manufacturing)',
-        'F5': 'Factory/industrial (metalworking)',
-        'F8': 'Factory/industrial (commercial/printing)',
-        'F9': 'Factory/industrial miscellaneous',
-        'G0': 'Garage (residential, <4 cars)',
-        'G1': 'Garage (all parking garages)',
-        'G2': 'Garage (permitted parking lot)',
-        'G3': 'Gas station with convenience store',
-        'G4': 'Gas station only',
-        'G5': 'Garage (commercial vehicles)',
-        'G6': 'Licensed parking lot',
-        'G7': 'Unlicensed parking lot',
-        'G8': 'Marina/boat storage',
-        'G9': 'Garage/parking miscellaneous',
-        'H1': 'Hotel (luxury)',
-        'H2': 'Hotel (full service)',
-        'H3': 'Hotel (limited service)',
-        'H4': 'Hotel (motel)',
-        'H5': 'Hotel (apartment hotel)',
-        'H6': 'Hotel (boutique/bed & breakfast)',
-        'H7': 'Hotel (SRO - single room occupancy)',
-        'H8': 'Hotel (dormitory)',
-        'H9': 'Hotel miscellaneous',
-        'I1': 'Hospital (general care)',
-        'I2': 'Hospital (infirmary)',
-        'I3': 'Hospital (mental health)',
-        'I4': 'Hospital (special hospital)',
-        'I5': 'Clinic/medical office',
-        'I6': 'Nursing home',
-        'I7': 'Adult care facility',
-        'I9': 'Hospital/health facility miscellaneous',
-        'J1': 'Theater (live performance)',
-        'J2': 'Theater (movie)',
-        'J3': 'Theater (photography/TV studio)',
-        'J4': 'Theater (arts/dance studio)',
-        'J5': 'Theater (bowling alley)',
-        'J6': 'Theater (indoor sports arena)',
-        'J7': 'Theater (athletic club)',
-        'J8': 'Theater (swimming pool)',
-        'J9': 'Theater/recreation miscellaneous',
-        'K1': 'Store building (one story retail)',
-        'K2': 'Store building (multi-story retail)',
-        'K3': 'Store building (multi-story department store)',
-        'K4': 'Store building (bank)',
-        'K5': 'Store building (mixed retail/office)',
-        'K6': 'Store building (shopping center)',
-        'K7': 'Store building (retail building with parking)',
-        'K8': 'Store building (convenience store)',
-        'K9': 'Store building miscellaneous',
-        'L1': 'Loft building (over 8 stories)',
-        'L2': 'Loft building (brick/concrete)',
-        'L3': 'Loft building (lightweight)',
-        'L8': 'Loft building (luxury/artist)',
-        'L9': 'Loft building miscellaneous',
-        'M1': 'Church/religious facility',
-        'M2': 'Mission/religious residence',
-        'M3': 'Parsonage/clergy residence',
-        'M4': 'Convent/monastery',
-        'M9': 'Religious facility miscellaneous',
-        'N1': 'Asylum/home for aged',
-        'N2': 'Asylum/infirmary',
-        'N3': 'Asylum/orphanage',
-        'N4': 'Asylum/detention facility',
-        'N9': 'Asylum/institution miscellaneous',
-        'O1': 'Office building (1 story)',
-        'O2': 'Office building (2-6 stories)',
-        'O3': 'Office building (7-19 stories)',
-        'O4': 'Office building (20+ stories - skyscraper)',
-        'O5': 'Office building (mixed-use residential/office)',
-        'O6': 'Office building (mixed-use with stores)',
-        'O7': 'Professional building (doctors/dentists)',
-        'O8': 'Office building (artist studio)',
-        'O9': 'Office building miscellaneous',
-        'P1': 'Indoor public assembly',
-        'P2': 'Outdoor stadiums/arenas',
-        'P3': 'Amusement park',
-        'P4': 'Beach/pool club',
-        'P5': 'Museum',
-        'P6': 'Library',
-        'P7': 'Funeral home',
-        'P8': 'Observatory/landmark',
-        'P9': 'Public assembly miscellaneous',
-        'Q1': 'Parking lot',
-        'Q2': 'Tennis court/pool',
-        'Q3': 'Playground',
-        'Q4': 'Beach',
-        'Q5': 'Golf course',
-        'Q6': 'Marina',
-        'Q7': 'Race track',
-        'Q8': 'Park/recreation area',
-        'Q9': 'Recreation miscellaneous',
-        'R0': 'Condo common area',
-        'R1': 'Condo residential unit',
-        'R2': 'Condo residential unit (horizontal)',
-        'R3': 'Condo residential unit (conversion)',
-        'R4': 'Condo commercial unit',
-        'R5': 'Miscellaneous commercial condo',
-        'R6': 'Condo garage',
-        'R7': 'Condo warehouse',
-        'R8': 'Condo office',
-        'R9': 'Condo miscellaneous',
-        'S0': 'Multiple dwellings (other)',
-        'S1': 'Single-family (other)',
-        'S2': 'Two-family (other)',
-        'S3': 'Three-family (other)',
-        'S4': 'Multiple dwelling',
-        'S5': 'Mixed residential/commercial',
-        'S9': 'Multiple residence miscellaneous',
-        'T1': 'Airport',
-        'T2': 'Pier/dock',
-        'T9': 'Transportation facility miscellaneous',
-        'U0': 'Utility company property',
-        'U1': 'Gas/steam plant',
-        'U2': 'Telephone exchange',
-        'U3': 'Electric substation',
-        'U4': 'Pumping station',
-        'U5': 'Communication tower',
-        'U6': 'Water/sewage plant',
-        'U7': 'Heating plant',
-        'U8': 'Garbage dump',
-        'U9': 'Utility miscellaneous',
-        'V0': 'Zoning permit/variance',
-        'V1': 'Vacant land zoned residential',
-        'V2': 'Vacant land zoned commercial',
-        'V3': 'Vacant land zoned mixed use',
-        'V4': 'Vacant land (police/fire department)',
-        'V5': 'Vacant land (school)',
-        'V6': 'Vacant land (library)',
-        'V7': 'Vacant land (hospital)',
-        'V8': 'Vacant land (public authority)',
-        'V9': 'Vacant land miscellaneous',
-        'W1': 'Educational structure (public school)',
-        'W2': 'Educational structure (private school)',
-        'W3': 'Educational structure (parochial school)',
-        'W4': 'Educational structure (non-profit school)',
-        'W5': 'Educational structure (private university)',
-        'W6': 'Educational structure (public university)',
-        'W7': 'Educational structure (religious seminary)',
-        'W8': 'Educational structure (specialized education)',
-        'W9': 'Educational structure miscellaneous',
-        'Y1': 'Government building (fire/police)',
-        'Y2': 'Government building (government office)',
-        'Y3': 'Government building (school)',
-        'Y4': 'Government building (library)',
-        'Y5': 'Government building (park)',
-        'Y6': 'Government building (courts)',
-        'Y7': 'Government building (military)',
-        'Y8': 'Government building (Department of Sanitation)',
-        'Y9': 'Government building miscellaneous',
-        'Z0': 'Mixed-use building (retail/residential)',
-        'Z1': 'Primarily residential, some commercial',
-        'Z2': 'Mixed retail/office',
-        'Z3': 'Mixed residential/factory',
-        'Z4': 'Industrial/warehouse complex',
-        'Z5': 'Mixed-use commercial',
-        'Z6': 'Mixed-use government/commercial',
-        'Z7': 'Mixed-use cultural/commercial',
-        'Z8': 'Mixed-use parking/residential',
-        'Z9': 'Mixed-use miscellaneous'
-    }
-    
-    return translations.get(code, f"Building code {code}")
+    return BUILDING_CLASS_CODES.get(code, f"Building code {code}")
 
 
 # ============================================================================

@@ -105,19 +105,29 @@
 
             <div class="filter-section">
                 <h3>Property type</h3>
-                <select id="propertyType" class="filter-select">
-                    <option value="">All types</option>
+                <select id="propertyType" class="filter-select" multiple
+                    data-multiselect data-placeholder="All types">
                     <option value="residential">Residential</option>
                     <option value="commercial">Commercial</option>
                     <option value="mixed">Mixed use</option>
                 </select>
+                <small class="filter-hint">Pick any number &mdash; they are combined with OR.</small>
             </div>
 
             <div class="filter-section">
                 <h3>Building class</h3>
-                <input type="text" id="buildingClass" class="filter-input"
-                    placeholder="e.g. A, B, C, D">
-                <small class="filter-hint">NYC building classification code.</small>
+                <select id="buildingClass" class="filter-select" multiple
+                    data-multiselect data-placeholder="All classes"
+                    data-search-placeholder="Search code or description&hellip;">
+                    {%- for group in building_class_groups %}
+                    <optgroup label="{{ group.label }}">
+                        {%- for option in group.options %}
+                        <option value="{{ option.value }}">{{ option.label }}</option>
+                        {%- endfor %}
+                    </optgroup>
+                    {%- endfor %}
+                </select>
+                <small class="filter-hint">Pick a whole family (all C walk-ups) or specific codes.</small>
             </div>
 
             <div class="filter-section">
@@ -138,20 +148,21 @@
                     placeholder="Min permit count" style="margin-top: 8px;">
 
                 <label class="filter-label" style="margin-top: 12px;">Permit type</label>
-                <select id="permitType" class="filter-select">
-                    <option value="">All types</option>
-                    <option value="EW">EW — Equipment Work</option>
-                    <option value="PL">PL — Plumbing</option>
-                    <option value="EQ">EQ — Equipment</option>
-                    <option value="AL">AL — Alteration</option>
-                    <option value="NB">NB — New Building</option>
-                    <option value="SG">SG — Sign</option>
-                    <option value="DM">DM — Demolition</option>
-                    <option value="FO">FO — Foundation</option>
+                <select id="permitType" class="filter-select" multiple
+                    data-multiselect data-placeholder="All types">
+                    <option value="EW">EW &mdash; Equipment Work</option>
+                    <option value="PL">PL &mdash; Plumbing</option>
+                    <option value="EQ">EQ &mdash; Equipment</option>
+                    <option value="AL">AL &mdash; Alteration</option>
+                    <option value="NB">NB &mdash; New Building</option>
+                    <option value="SG">SG &mdash; Sign</option>
+                    <option value="DM">DM &mdash; Demolition</option>
+                    <option value="FO">FO &mdash; Foundation</option>
                 </select>
 
                 <label class="filter-label" style="margin-top: 12px;">Recent permits</label>
-                <select id="recentPermitDays" class="filter-select">
+                <select id="recentPermitDays" class="filter-select"
+                    data-multiselect data-placeholder="Any time">
                     <option value="">Any time</option>
                     <option value="3">Last 3 days</option>
                     <option value="7">Last week</option>
@@ -179,10 +190,10 @@
 
             <div class="filter-section">
                 <h3>HPD violations</h3>
-                <select id="violationsFilter" class="filter-select">
-                    <option value="">Any</option>
-                    <option value="true">Has violations</option>
-                    <option value="false">No violations</option>
+                <select id="violationsFilter" class="filter-select" multiple
+                    data-multiselect data-placeholder="Any">
+                    <option value="true">Has open violations</option>
+                    <option value="false">No open violations</option>
                 </select>
             </div>
 
@@ -390,6 +401,7 @@
         </div>
     </div>
 
+    <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/properties.js"></script>
 </body>
 </html>

@@ -2,6 +2,12 @@
 // Properties Page JavaScript
 // ==========================================
 
+// Multi-select filters go on the wire as repeated params
+// (?permit_type=PL&permit_type=EW); the API ORs them together.
+function appendMulti(params, name, values) {
+    (values || []).forEach(value => params.append(name, value));
+}
+
 // State Management
 const state = {
     properties: [],
@@ -19,13 +25,13 @@ const state = {
         withPermits: false,
         minPermits: null,
         recentPermitDays: null,
-        permitType: null,  // Permit type filter
-        propertyType: null,  // Residential/Commercial filter
+        permitType: [],       // DOB permit types (multi-select, OR'd)
+        propertyType: [],     // Residential/commercial/mixed (multi-select, OR'd)
         borough: [],
-        buildingClass: '',
+        buildingClass: [],    // Class letters and/or specific codes (multi-select, OR'd)
         minUnits: null,
         maxUnits: null,
-        hasViolations: null,
+        hasViolations: [],    // 'true' and/or 'false'; both means no filter
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
@@ -48,6 +54,7 @@ const state = {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    MultiSelect.init();
     initializeEventListeners();
     loadPlays();
     loadStats();
@@ -242,13 +249,13 @@ async function loadProperties() {
         if (state.filters.withPermits) params.append('with_permits', 'true');
         if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
         if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
-        if (state.filters.permitType) params.append('permit_type', state.filters.permitType);
-        if (state.filters.propertyType) params.append('property_type', state.filters.propertyType);
+        appendMulti(params, 'permit_type', state.filters.permitType);
+        appendMulti(params, 'property_type', state.filters.propertyType);
         if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
-        if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
+        appendMulti(params, 'building_class', state.filters.buildingClass);
         if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
         if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
-        if (state.filters.hasViolations !== null) params.append('has_violations', state.filters.hasViolations);
+        appendMulti(params, 'has_violations', state.filters.hasViolations);
         if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
         if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
         if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
@@ -557,15 +564,11 @@ function initializeEventListeners() {
         });
     });
     
-    // Building class
-    let classTimeout;
-    document.getElementById('buildingClass').addEventListener('input', (e) => {
-        clearTimeout(classTimeout);
-        classTimeout = setTimeout(() => {
-            state.filters.buildingClass = e.target.value.trim();
-            state.pagination.page = 1;
-            loadProperties();
-        }, 500);
+    // Building class (multi-select over class families and specific codes)
+    document.getElementById('buildingClass').addEventListener('change', () => {
+        state.filters.buildingClass = MultiSelect.values('buildingClass');
+        state.pagination.page = 1;
+        loadProperties();
     });
     
     // Unit range
@@ -594,7 +597,8 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Recent permit days filter
+    // Recent permit days filter — single choice, since the options are nested
+    // windows and a union of them is just the widest one.
     document.getElementById('recentPermitDays').addEventListener('change', (e) => {
         const customInput = document.getElementById('recentPermitCustomDays');
         if (e.target.value === 'custom') {
@@ -616,16 +620,16 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Permit type filter
-    document.getElementById('permitType').addEventListener('change', (e) => {
-        state.filters.permitType = e.target.value || null;
+    // Permit type filter (multi-select, OR'd)
+    document.getElementById('permitType').addEventListener('change', () => {
+        state.filters.permitType = MultiSelect.values('permitType');
         state.pagination.page = 1;
         loadProperties();
     });
     
-    // Property type filter (residential/commercial/mixed)
-    document.getElementById('propertyType').addEventListener('change', (e) => {
-        state.filters.propertyType = e.target.value || null;
+    // Property type filter (multi-select, OR'd)
+    document.getElementById('propertyType').addEventListener('change', () => {
+        state.filters.propertyType = MultiSelect.values('propertyType');
         state.pagination.page = 1;
         loadProperties();
     });
@@ -650,10 +654,10 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Violations filter
-    document.getElementById('violationsFilter').addEventListener('change', (e) => {
-        const value = e.target.value;
-        state.filters.hasViolations = value === '' ? null : value;
+    // Violations filter — picking both "has" and "no" is the same as neither,
+    // which the API treats as no filter.
+    document.getElementById('violationsFilter').addEventListener('change', () => {
+        state.filters.hasViolations = MultiSelect.values('violationsFilter');
         state.pagination.page = 1;
         loadProperties();
     });
@@ -733,11 +737,13 @@ async function downloadExport() {
     if (state.filters.withPermits) params.append('with_permits', 'true');
     if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
     if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
+    appendMulti(params, 'permit_type', state.filters.permitType);
+    appendMulti(params, 'property_type', state.filters.propertyType);
     if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
-    if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
+    appendMulti(params, 'building_class', state.filters.buildingClass);
     if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
     if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
-    if (state.filters.hasViolations !== null) params.append('has_violations', state.filters.hasViolations);
+    appendMulti(params, 'has_violations', state.filters.hasViolations);
     if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
@@ -912,13 +918,13 @@ function resetFilters() {
         withPermits: false,
         minPermits: null,
         recentPermitDays: null,
-        permitType: null,
-        propertyType: null,
+        permitType: [],
+        propertyType: [],
         borough: [],
-        buildingClass: '',
+        buildingClass: [],
         minUnits: null,
         maxUnits: null,
-        hasViolations: null,
+        hasViolations: [],
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
@@ -943,21 +949,17 @@ function clearFilters() {
     document.getElementById('saleDateFrom').value = '';
     document.getElementById('saleDateTo').value = '';
     document.querySelectorAll('.borough-cb').forEach(cb => { cb.checked = false; });
-    const propertyTypeEl = document.getElementById('propertyType');
-    if (propertyTypeEl) propertyTypeEl.value = '';
-    document.getElementById('buildingClass').value = '';
+    // Silent so the single reload below is the only fetch.
+    MultiSelect.clearAll();
     document.getElementById('minUnits').value = '';
     document.getElementById('maxUnits').value = '';
     document.getElementById('minPermits').value = '';
-    document.getElementById('permitType').value = '';
-    document.getElementById('recentPermitDays').value = '';
     document.getElementById('recentPermitCustomDays').value = '';
     document.getElementById('recentPermitCustomDays').style.display = 'none';
     document.getElementById('financingMin').value = '';
     document.getElementById('financingMax').value = '';
     document.getElementById('cashOnly').checked = false;
     document.getElementById('withPermits').checked = false;
-    document.getElementById('violationsFilter').value = '';
     document.getElementById('hasEnrichableOwner').checked = false;
     
     state.pagination.page = 1;
@@ -1028,15 +1030,13 @@ function buildBulkEnrichFiltersPayload() {
     if (f.withPermits) payload.with_permits = true;
     if (f.minPermits) payload.min_permits = f.minPermits;
     if (f.recentPermitDays) payload.recent_permit_days = f.recentPermitDays;
-    if (f.permitType) payload.permit_type = f.permitType;
-    if (f.propertyType) payload.property_type = f.propertyType;
+    if (f.permitType && f.permitType.length) payload.permit_type = f.permitType;
+    if (f.propertyType && f.propertyType.length) payload.property_type = f.propertyType;
     if (f.borough && f.borough.length) payload.borough = f.borough;
-    if (f.buildingClass) payload.building_class = f.buildingClass;
+    if (f.buildingClass && f.buildingClass.length) payload.building_class = f.buildingClass;
     if (f.minUnits) payload.min_units = f.minUnits;
     if (f.maxUnits) payload.max_units = f.maxUnits;
-    if (f.hasViolations !== null && f.hasViolations !== undefined && f.hasViolations !== '') {
-        payload.has_violations = f.hasViolations;
-    }
+    if (f.hasViolations && f.hasViolations.length) payload.has_violations = f.hasViolations;
     if (f.recentSaleDays) payload.recent_sale_days = f.recentSaleDays;
     if (f.financingMin) payload.financing_min = f.financingMin;
     if (f.financingMax) payload.financing_max = f.financingMax;

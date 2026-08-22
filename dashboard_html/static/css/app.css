@@ -574,6 +574,241 @@ button { font-family: inherit; }
 }
 
 /* ============================================================
+   Multi-select filter
+   ------------------------------------------------------------
+   Progressive enhancement over a native <select multiple>. The
+   select stays in the DOM as the source of truth (so form reset,
+   clearFilters and no-JS fallback all keep working) and this
+   markup is layered on top of it.
+   ============================================================ */
+
+.ms {
+    position: relative;
+}
+
+/* Anchors the popover to the trigger, so the chips rendered below the
+   control never push the panel away from it. */
+.ms-control {
+    position: relative;
+}
+
+.ms > select {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.ms-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.ms-trigger:hover { border-color: var(--ink-3); }
+
+.ms-trigger:focus-visible,
+.ms.is-open .ms-trigger {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ms-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-value.is-placeholder { color: var(--ink-3); }
+
+.ms-caret {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    color: var(--ink-3);
+    transition: transform 140ms ease;
+}
+
+.ms.is-open .ms-caret { transform: rotate(180deg); }
+
+.ms-panel {
+    position: absolute;
+    z-index: 60;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 320px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+}
+
+.ms-panel[hidden] { display: none; }
+
+.ms-search {
+    flex-shrink: 0;
+    width: 100%;
+    padding: 9px 11px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface);
+}
+
+.ms-search:focus { outline: none; background: var(--surface-2); }
+
+.ms-options {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.ms-group-label {
+    padding: 8px 8px 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+
+.ms-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--ink-2);
+    cursor: pointer;
+    line-height: 1.35;
+}
+
+.ms-option:hover,
+.ms-option.is-active { background: var(--surface-2); }
+
+.ms-option input {
+    flex-shrink: 0;
+    accent-color: var(--ink);
+    margin: 0;
+}
+
+.ms-option.is-selected { color: var(--ink); font-weight: 500; }
+
+.ms-option[hidden] { display: none; }
+
+.ms-empty {
+    padding: 14px 10px;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    text-align: center;
+}
+
+.ms-footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+}
+
+.ms-footer-count {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.ms-clear {
+    padding: 3px 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ms-clear:hover { border-color: var(--ink-3); color: var(--ink); }
+.ms-clear:disabled { opacity: 0.45; cursor: default; }
+
+/* Selected values echoed below the trigger so a collapsed filter still
+   shows what it is doing. */
+.ms-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+}
+
+.ms-chips:empty { display: none; }
+
+.ms-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 2px 5px 2px 8px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 11.5px;
+    color: var(--ink-2);
+}
+
+.ms-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-chip button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ms-chip button:hover { background: var(--surface-3); color: var(--ink); }
+
+/* ============================================================
    Properties — layout
    ============================================================ */
 
