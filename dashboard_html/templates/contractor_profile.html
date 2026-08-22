@@ -7,147 +7,104 @@
 {% endblock %}
 
 {% block content %}
-<div class="container detail-page">
-    <div class="page-head profile-head">
-        <div class="profile-head-main">
-            <h1 id="contractorName">{{ contractor_name }}</h1>
-            <p class="profile-license" id="contractorLicense">License: Loading&hellip;</p>
-            <div class="profile-meta">
-                <span id="mostRecentJob">Most recent: &ndash;</span>
-                <span id="jobTypes">Specialties: &ndash;</span>
+<div class="dossier">
+
+    <div class="dossier-head">
+        <div class="dossier-head-inner">
+            <div class="dossier-head-row">
+                <div class="dossier-title-block">
+                    <div class="dossier-crumbs"><a href="/contractors">&larr; Contractor directory</a></div>
+                    <h1 id="contractorName">{{ contractor_name }}</h1>
+                    <div class="dossier-chips">
+                        <span class="id-chip accent mono" id="contractorLicense">License: Loading&hellip;</span>
+                        <span class="id-chip" id="mostRecentJob">Most recent: &ndash;</span>
+                        <span class="id-chip" id="jobTypes" style="display: none;"></span>
+                    </div>
+                </div>
             </div>
         </div>
-        <a href="/contractors" class="btn btn-secondary">
-            <i class="fas fa-arrow-left"></i> Directory
-        </a>
     </div>
 
-    <div class="profile-main">
-        <!-- Headline stats (click to switch tab) -->
-        <div class="cp-stats">
-            <div class="stat-card clickable" data-tab="permits">
-                <h2 id="totalJobs">&ndash;</h2>
-                <p>Total jobs</p>
-                <span class="stat-subtitle">All-time permits</span>
+    <div class="dossier-body">
+
+        <div class="glance-strip cp-stats">
+            <div class="glance-tile stat-card clickable" data-tab="permits">
+                <span class="glance-label">Total jobs <span class="glance-sub">all-time permits</span></span>
+                <span class="glance-value" id="totalJobs">&ndash;</span>
             </div>
-            <div class="stat-card clickable" data-tab="permits">
-                <h2 id="activeJobs">&ndash;</h2>
-                <p>Active jobs</p>
-                <span class="stat-subtitle">Last 90 days · <span id="jobsLastYearBadge">&ndash;</span> in the last year</span>
+            <div class="glance-tile stat-card clickable" data-tab="permits">
+                <span class="glance-label">Active &middot; 90 days <span class="glance-sub"><span id="jobsLastYearBadge">&ndash;</span> in the last year</span></span>
+                <span class="glance-value" id="activeJobs">&ndash;</span>
             </div>
-            <div class="stat-card clickable" data-tab="buildings">
-                <h2 id="uniqueProperties">&ndash;</h2>
-                <p>Properties</p>
-                <span class="stat-subtitle">Unique buildings</span>
+            <div class="glance-tile stat-card clickable" data-tab="buildings">
+                <span class="glance-label">Properties <span class="glance-sub">unique buildings</span></span>
+                <span class="glance-value" id="uniqueProperties">&ndash;</span>
             </div>
-            <div class="stat-card">
-                <h2 id="totalValue">&ndash;</h2>
-                <p>Total value</p>
-                <span class="stat-subtitle">Assessed value of buildings worked</span>
+            <div class="glance-tile stat-card">
+                <span class="glance-label">Value worked on <span class="glance-sub">assessed, all buildings</span></span>
+                <span class="glance-value" id="totalValue">&ndash;</span>
+            </div>
+            <div class="glance-tile stat-card">
+                <span class="glance-label">Largest project</span>
+                <span class="glance-value" id="sidebarLargestProject">&ndash;</span>
             </div>
         </div>
 
-        <!-- Track record facts -->
-        <div class="sidebar-card facts-card">
-            <div class="fact">
-                <strong id="firstJob">&ndash;</strong>
-                <span>First job on record</span>
-            </div>
-            <div class="fact">
-                <strong id="jobTypeVariety">&ndash;</strong>
-                <span>Job types performed</span>
-            </div>
-            <div class="fact">
-                <strong id="avgProjectValue">&ndash;</strong>
-                <span>Average project</span>
-            </div>
-            <div class="fact">
-                <strong id="sidebarLargestProject">&ndash;</strong>
-                <span>Largest project</span>
-            </div>
-            <div class="fact">
-                <strong id="sidebarActiveJobs">&ndash;</strong>
-                <span>Active right now</span>
-            </div>
-        </div>
+        <div class="dossier-columns">
 
-        <!-- Tabs -->
-        <div class="content-tabs">
-            <div class="tabs">
-                <button class="tab-btn active" data-tab="permits">
-                    <span>Permits</span>
-                    <span class="tab-badge" id="permitsCount">0</span>
-                </button>
-                <button class="tab-btn" data-tab="buildings">
-                    <span>Buildings</span>
-                    <span class="tab-badge" id="buildingsCount">0</span>
-                </button>
-            </div>
-        </div>
+            <div class="dossier-main">
+                <section class="dossier-card" id="permitsTab">
+                    <div class="dossier-card-head">
+                        <h3>Permits <span class="head-count" id="permitsCount">0</span></h3>
+                        <input type="text" id="permitsSearch" class="card-search" placeholder="Search permits by address, number, type&hellip;">
+                    </div>
+                    <div id="permitsList" class="content-list">
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
+                    </div>
+                </section>
 
-        <div class="tab-content-container">
-            <div id="permitsTab" class="tab-content active">
-                <div class="tab-search">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="permitsSearch" class="search-input" placeholder="Search permits by address, number, type&hellip;" />
-                </div>
-                <div id="permitsList" class="content-list">
-                    <div class="skeleton-card">
-                        <div class="skeleton-header">
-                            <div class="skeleton-avatar"></div>
-                            <div class="skeleton-info">
-                                <div class="skeleton-line"></div>
-                                <div class="skeleton-line short"></div>
-                            </div>
-                        </div>
+                <section class="dossier-card" id="buildingsTab">
+                    <div class="dossier-card-head">
+                        <h3>Buildings worked on <span class="head-count" id="buildingsCount">0</span></h3>
+                        <input type="text" id="buildingsSearch" class="card-search" placeholder="Search buildings by address, BBL, owner&hellip;">
                     </div>
-                    <div class="skeleton-card">
-                        <div class="skeleton-header">
-                            <div class="skeleton-avatar"></div>
-                            <div class="skeleton-info">
-                                <div class="skeleton-line"></div>
-                                <div class="skeleton-line short"></div>
-                            </div>
-                        </div>
+                    <div id="buildingsList" class="content-list">
+                        <div class="skeleton-text"></div>
+                        <div class="skeleton-text"></div>
                     </div>
-                    <div class="skeleton-card">
-                        <div class="skeleton-header">
-                            <div class="skeleton-avatar"></div>
-                            <div class="skeleton-info">
-                                <div class="skeleton-line"></div>
-                                <div class="skeleton-line short"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                </section>
             </div>
 
-            <div id="buildingsTab" class="tab-content">
-                <div class="tab-search">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="buildingsSearch" class="search-input" placeholder="Search buildings by address, BBL, owner&hellip;" />
-                </div>
-                <div id="buildingsList" class="content-list">
-                    <div class="skeleton-card">
-                        <div class="skeleton-header">
-                            <div class="skeleton-avatar"></div>
-                            <div class="skeleton-info">
-                                <div class="skeleton-line"></div>
-                                <div class="skeleton-line short"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="skeleton-card">
-                        <div class="skeleton-header">
-                            <div class="skeleton-avatar"></div>
-                            <div class="skeleton-info">
-                                <div class="skeleton-line"></div>
-                                <div class="skeleton-line short"></div>
-                            </div>
-                        </div>
+            <aside class="dossier-rail">
+                <div class="dossier-card rail-card" id="workMixCard" style="display: none;">
+                    <div class="dossier-card-head"><h3>What they do</h3></div>
+                    <div class="dossier-card-body">
+                        <div id="workMixBars"></div>
+                        <span class="workmix-note" id="workMixNote"></span>
                     </div>
                 </div>
-            </div>
+
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>About</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="fact-row"><span>First job on record</span><strong id="firstJob">&ndash;</strong></div>
+                        <div class="fact-row"><span>Job types performed</span><strong id="jobTypeVariety">&ndash;</strong></div>
+                        <div class="fact-row"><span>Average project</span><strong id="avgProjectValue">&ndash;</strong></div>
+                        <div class="fact-row"><span>Active right now</span><strong id="sidebarActiveJobs">&ndash;</strong></div>
+                        <div class="fact-row" id="boroughsRow" style="display: none;"><span>Boroughs</span><strong id="boroughsFact">&ndash;</strong></div>
+                    </div>
+                </div>
+
+                <div class="dossier-card rail-card" id="licenseCard" style="display: none;">
+                    <div class="dossier-card-head"><h3>Licence</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="fact-row"><span>Number</span><strong class="mono" id="licenseNumber">&ndash;</strong></div>
+                        <button class="linklike" id="licenseLookupBtn">Check against DOB licence records</button>
+                    </div>
+                </div>
+            </aside>
         </div>
     </div>
 </div>

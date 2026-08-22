@@ -168,6 +168,16 @@ function looksLikePropertyQuery(query) {
  * property that isn't yet in our database. On confirm, kicks off the
  * /api/property/auto-add request and redirects to the new building page.
  */
+const AUTO_ADD_SOURCES = [
+    { key: 'address', label: 'Resolve the address', source: 'Geoclient' },
+    { key: 'pluto', label: 'Building class, units, owner of record', source: 'PLUTO' },
+    { key: 'rpad', label: 'Tax-record owner and assessment', source: 'RPAD' },
+    { key: 'hpd', label: 'Registered owner and open violations', source: 'HPD' },
+    { key: 'acris', label: 'Deed and mortgage history', source: 'ACRIS' },
+    { key: 'tax_liens', label: 'Tax liens and violations', source: 'DOF / ECB' },
+    { key: 'sos', label: 'Person behind the LLC', source: 'NY Dept. of State' },
+];
+
 function offerAutoAddProperty(query) {
     // Remove any existing modal first.
     const existing = document.getElementById('autoAddModal');
@@ -183,12 +193,20 @@ function offerAutoAddProperty(query) {
             <p>
                 We can run a full lookup on <strong>${escapeHtml(query)}</strong>
                 using NYC's public data: PLUTO, RPAD, HPD, ACRIS, tax liens,
-                and NY Secretary of State. Takes about 10&ndash;20 seconds.
+                and NY Secretary of State.
             </p>
             <p class="fineprint">
                 Free &mdash; no contact enrichment runs unless you click Enrich
                 on the resulting page.
             </p>
+            <ul id="autoAddSteps" class="autoadd-steps" style="display: none;">
+                ${AUTO_ADD_SOURCES.map(s => `
+                    <li data-step="${s.key}">
+                        <span class="step-state step-pending"></span>
+                        <span class="step-label">${s.label}</span>
+                        <span class="step-source">${s.source}</span>
+                    </li>`).join('')}
+            </ul>
             <div id="autoAddStatus" class="autoadd-status"></div>
             <div class="autoadd-actions">
                 <button id="autoAddCancel" class="btn btn-secondary">Cancel</button>
@@ -206,14 +224,53 @@ function offerAutoAddProperty(query) {
     });
 }
 
+function setAutoAddStep(key, state) {
+    const li = document.querySelector(`#autoAddSteps li[data-step="${key}"]`);
+    if (!li) return;
+    const dot = li.querySelector('.step-state');
+    dot.className = `step-state step-${state}`;
+}
+
+/** Failure help: concrete next moves, plus borough retry chips when the
+ *  query didn't name one — an explicit borough search is stricter than the
+ *  all-borough fallback and sometimes lands where it missed. */
+function renderAutoAddFailure(statusEl, query, message) {
+    const hasBorough = /manhattan|brooklyn|queens|bronx|staten/i.test(query);
+    const boroughChips = hasBorough ? '' : `
+        <div class="autoadd-borough-retry">
+            <span>Try again in a specific borough:</span>
+            <div class="borough-chip-row">
+                ${['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'].map(b =>
+                    `<button class="borough-chip" data-borough="${b}">${b}</button>`).join('')}
+            </div>
+        </div>`;
+
+    statusEl.innerHTML = `
+        <strong>Couldn't look it up:</strong> ${escapeHtml(message)}
+        ${boroughChips}
+    `;
+    statusEl.classList.add('error');
+
+    statusEl.querySelectorAll('.borough-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const modal = document.getElementById('autoAddModal');
+            runAutoAdd(`${query}, ${chip.dataset.borough}`, modal);
+        });
+    });
+}
+
 async function runAutoAdd(query, modal) {
     const statusEl = document.getElementById('autoAddStatus');
     const confirmBtn = document.getElementById('autoAddConfirm');
     const cancelBtn = document.getElementById('autoAddCancel');
+    const stepsEl = document.getElementById('autoAddSteps');
     statusEl.style.display = 'block';
     statusEl.classList.remove('error', 'success');
-    statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving address and running enrichment&hellip;';
+    statusEl.innerHTML = '';
+    if (stepsEl) stepsEl.style.display = '';
+    setAutoAddStep('address', 'running');
     confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Looking up…';
     cancelBtn.disabled = true;
 
     try {
@@ -233,6 +290,7 @@ async function runAutoAdd(query, modal) {
             data = null;
         }
         if (!data || typeof data.success === 'undefined') {
+            setAutoAddStep('address', 'failed');
             statusEl.innerHTML = `
                 <strong>The lookup service didn't answer</strong>
                 (HTTP ${resp.status}). It may be restarting &mdash; wait a
@@ -240,35 +298,48 @@ async function runAutoAdd(query, modal) {
             `;
             statusEl.classList.add('error');
             confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Try again';
             cancelBtn.disabled = false;
             return;
         }
 
         if (!data.success) {
-            statusEl.innerHTML = `<strong>Couldn't look it up:</strong> ${escapeHtml(data.error || 'unknown error')}`;
-            statusEl.classList.add('error');
+            setAutoAddStep('address', 'failed');
+            renderAutoAddFailure(statusEl, query, data.error || 'unknown error');
             confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Try again';
             cancelBtn.disabled = false;
             return;
         }
 
-        // Show a brief success state with the per-step report so the user
-        // knows what actually came back before we redirect.
-        const reportLines = Object.entries(data.report || {})
-            .map(([step, status]) => `<li><strong>${step}</strong>: ${escapeHtml(String(status))}</li>`)
-            .join('');
-        statusEl.innerHTML = `
-            <strong>Done</strong> — BBL ${data.bbl}. Redirecting&hellip;
-            <ul>${reportLines}</ul>
-        `;
+        // Address resolved and the row exists; enrichment continues on the
+        // server. Show what we know, then hand over to the profile page,
+        // which renders each source as it lands.
+        setAutoAddStep('address', 'done');
+        if (data.enrichment_running) {
+            AUTO_ADD_SOURCES.slice(1).forEach(s => setAutoAddStep(s.key, 'running'));
+            statusEl.innerHTML = `
+                <strong>Property added</strong> — BBL ${data.bbl}.
+                Public-data enrichment is running in the background; the
+                profile fills in as each source finishes. Redirecting&hellip;
+            `;
+        } else {
+            Object.entries(data.report || {}).forEach(([step, status]) => {
+                const failed = /^(error|no data|no match)/i.test(String(status));
+                setAutoAddStep(step, failed ? 'failed' : 'done');
+            });
+            statusEl.innerHTML = `<strong>Done</strong> — BBL ${data.bbl}. Redirecting&hellip;`;
+        }
         statusEl.classList.add('success');
         setTimeout(() => {
             window.location.href = `/property/${data.bbl}`;
-        }, 1200);
+        }, 1400);
     } catch (e) {
+        setAutoAddStep('address', 'failed');
         statusEl.innerHTML = `<strong>Request failed:</strong> ${escapeHtml(String(e))}`;
         statusEl.classList.add('error');
         confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Try again';
         cancelBtn.disabled = false;
     }
 }

@@ -1284,3 +1284,404 @@
     color: var(--ink-3);
     margin-top: 1px;
 }
+
+/* ============================================================
+   Dossier layout — one scrolling page replacing the tab stack.
+   Used by building_profile.html and contractor_profile.html;
+   the sections keep their old inner markup and ids, so all
+   rules below are scoped under .dossier.
+   ============================================================ */
+
+.dossier { padding-bottom: 72px; }
+
+.dossier-head {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+}
+
+.dossier-head-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 24px 18px;
+}
+
+.dossier-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.dossier-title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 280px;
+    flex: 1;
+}
+
+.dossier-crumbs { font-size: 12.5px; color: var(--ink-3); }
+.dossier-crumbs .crumb-sep { margin: 0 6px; color: var(--line-2); }
+
+.dossier .building-address,
+.dossier h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    margin: 0;
+}
+
+.dossier .address-city {
+    display: block;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink-2);
+    letter-spacing: 0;
+    margin-top: 2px;
+}
+
+.dossier-chips {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.id-chip {
+    padding: 2px 9px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--ink-2);
+}
+.id-chip.mono { font-family: var(--mono); }
+.id-chip.accent { background: var(--accent-soft); color: var(--accent); }
+
+/* Risk chip: compact inline version for the header row */
+.dossier .risk-score-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    text-align: left;
+}
+.dossier .risk-score-value {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
+}
+.dossier .risk-score-copy { display: flex; flex-direction: column; gap: 1px; }
+.dossier .risk-score-label { font-size: 12px; font-weight: 600; }
+.dossier .risk-explanation-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 11.5px;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+}
+.dossier .risk-explanation-btn:hover { color: var(--accent-hover); }
+.dossier .risk-red .risk-score-value, .dossier .risk-red .risk-score-label { color: var(--red); }
+.dossier .risk-yellow .risk-score-value, .dossier .risk-yellow .risk-score-label { color: var(--amber); }
+.dossier .risk-green .risk-score-value, .dossier .risk-green .risk-score-label { color: var(--green); }
+
+/* Jump nav (the former tabs). The bar sticks just below the 58px site
+   nav; sections carry scroll-margin-top so anchors land clear of it. */
+.section-nav-bar {
+    position: sticky;
+    top: 58px;
+    z-index: 90;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--surface-2);
+}
+.section-nav {
+    display: flex;
+    gap: 22px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+    overflow-x: auto;
+}
+.section-nav .tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 2px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+}
+.section-nav .tab-btn:hover { color: var(--ink); }
+.section-nav .tab-btn.active {
+    color: var(--ink);
+    border-bottom-color: var(--ink);
+}
+.section-nav .tab-badge {
+    display: none;
+    padding: 1px 7px;
+    border-radius: 99px;
+    font-size: 11px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+}
+.section-nav .tab-badge.show { display: inline-block; }
+
+.dossier-body {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px 24px 0;
+}
+
+/* Glance strip */
+.glance-strip {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.glance-strip.cp-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.glance-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-1);
+    padding: 14px 16px;
+}
+.glance-tile.clickable { cursor: pointer; }
+.glance-tile.clickable:hover { border-color: var(--line-2); }
+.glance-label { font-size: 12px; color: var(--ink-3); }
+.glance-sub { display: block; font-size: 11px; color: var(--ink-3); }
+.glance-value {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+.glance-value.warn { color: var(--amber); }
+.glance-value.ok { color: var(--green); }
+
+/* Columns */
+.dossier-columns {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+}
+.dossier-main {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    flex: 1;
+    min-width: 0;
+}
+.dossier-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 340px;
+    flex-shrink: 0;
+}
+
+/* Cards */
+.dossier-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-1);
+    overflow: hidden;
+    scroll-margin-top: 130px;
+}
+.dossier-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+}
+.dossier-card-head h3 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+.dossier-card-body { padding: 16px 18px; }
+.rail-card .dossier-card-body { padding: 14px 18px; }
+
+.head-count {
+    padding: 1px 8px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    vertical-align: 2px;
+}
+
+.card-search {
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 12.5px;
+    font-family: inherit;
+    color: var(--ink);
+    width: 240px;
+    max-width: 100%;
+}
+
+.linklike {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: inherit;
+}
+.linklike:hover { color: var(--accent-hover); }
+
+.fin-flag {
+    padding: 2px 9px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 500;
+}
+.flag-green { background: var(--green-soft); color: var(--green); }
+.flag-accent { background: var(--accent-soft); color: var(--accent); }
+
+.freshness-note { font-size: 12px; color: var(--ink-3); }
+
+.owner-history {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+}
+
+/* Timeline */
+.timeline-filters { display: flex; gap: 6px; }
+.pill-btn {
+    padding: 3px 10px;
+    border-radius: 99px;
+    border: none;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+    font-family: inherit;
+}
+.pill-btn.active { background: var(--ink); color: #fff; }
+
+.dossier .activity-item {
+    display: flex;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--surface-2);
+    align-items: flex-start;
+}
+.dossier .activity-item:last-child { border-bottom: none; }
+.dossier .activity-date {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    width: 92px;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    padding-top: 1px;
+}
+.activity-pill {
+    padding: 2px 9px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 500;
+    flex-shrink: 0;
+    height: fit-content;
+}
+.pill-permit { background: var(--surface-2); color: var(--ink-2); }
+.pill-transaction { background: var(--accent-soft); color: var(--accent); }
+.pill-violation { background: var(--amber-soft); color: var(--amber); }
+.dossier .activity-content { min-width: 0; }
+.dossier .activity-title { font-size: 13.5px; font-weight: 500; }
+.dossier .activity-description { font-size: 12.5px; color: var(--ink-2); }
+
+/* Signals */
+.signal-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font-size: 13px;
+    padding: 4px 0;
+}
+.signal-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 99px;
+    margin-top: 6px;
+    flex-shrink: 0;
+    background: var(--ink-3);
+}
+.signal-red .signal-dot { background: var(--red); }
+.signal-amber .signal-dot { background: var(--amber); }
+.signal-green .signal-dot { background: var(--green); }
+.signal-accent .signal-dot { background: var(--accent); }
+
+/* Rail facts + sources */
+.fact-row, .source-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    padding: 4px 0;
+}
+.fact-row span, .source-row span:first-child { color: var(--ink-2); }
+.fact-row strong { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.fact-row .mono { font-family: var(--mono); font-size: 12.5px; }
+.source-row { font-size: 12.5px; }
+.source-when { color: var(--ink-3); }
+
+/* Contractor work mix */
+.workmix-row { margin-bottom: 10px; }
+.workmix-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+.workmix-head span:last-child { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.workmix-track {
+    height: 6px;
+    border-radius: 99px;
+    background: var(--surface-2);
+}
+.workmix-fill {
+    height: 6px;
+    border-radius: 99px;
+    background: var(--accent);
+}
+.workmix-fill.fill-muted { background: var(--line-2); }
+.workmix-note { font-size: 11.5px; color: var(--ink-3); }
+
+@media (max-width: 900px) {
+    .dossier-columns { flex-direction: column; }
+    .dossier-rail { width: 100%; }
+    .glance-strip, .glance-strip.cp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .dossier-head-row { flex-direction: column; }
+}

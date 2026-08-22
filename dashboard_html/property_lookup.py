@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import logging
+import threading
 import psycopg2
 import psycopg2.extras
 import requests
@@ -461,7 +462,34 @@ def run_free_enrichment(conn, building_id, bbl):
 # Top-level entry point used by the Flask route
 # ---------------------------------------------------------------------------
 
-def auto_add_property(conn, query):
+def _enrich_in_background(connect, building_id, bbl):
+    """Run the free enrichment on its own thread and its own connection.
+
+    The web request that started it has already returned — running the six
+    enrichment steps inline held a sync gunicorn worker for 10-120s, and
+    with only two workers that turned into edge 502s for everyone whenever
+    the database was busy. A daemon thread dying with the worker is fine:
+    the nightly cron re-enriches whatever was left half-done.
+    """
+    def run():
+        conn = None
+        try:
+            conn = connect()
+            report = run_free_enrichment(conn, building_id, bbl)
+            log.info(f"background enrichment for {bbl}: {report}")
+        except Exception:
+            log.exception(f"background enrichment failed for bbl={bbl}")
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=run, name=f'auto-add-{bbl}', daemon=True).start()
+
+
+def auto_add_property(conn, query, background_connect=None):
     """Main entry point. Resolve the query, ensure a buildings row exists,
     run every free enrichment step. Returns:
 
@@ -471,8 +499,15 @@ def auto_add_property(conn, query):
         'bbl': str | None,
         'building_id': int | None,
         'already_existed': bool,
+        'enrichment_running': bool,
         'report': {step_name: status, ...},
       }
+
+    With `background_connect` (a zero-arg callable returning a fresh DB
+    connection), only the fast part — resolve + insert — happens on the
+    caller's clock; the enrichment steps run on a background thread and the
+    report says so. Without it (scripts, pipeline), everything runs inline
+    as before.
     """
     if not query or not query.strip():
         return {'success': False, 'error': 'empty query'}
@@ -484,12 +519,31 @@ def auto_add_property(conn, query):
         # just the BBL and let PLUTO fill in the rest.
         lookup = {'bbl': bbl, 'address': None, 'borough': None,
                   'block': None, 'lot': None, 'bin': None}
+        resolved_note = 'accepted as a raw BBL'
     else:
         lookup, reason = resolve_address_to_property(query)
         if not lookup:
             return {'success': False, 'error': reason}
+        resolved_note = f"resolved to {lookup['address']}"
 
     building_id, created = _ensure_building_row(conn, lookup)
+
+    if background_connect is not None:
+        _enrich_in_background(background_connect, building_id, lookup['bbl'])
+        return {
+            'success': True,
+            'error': None,
+            'bbl': lookup['bbl'],
+            'building_id': building_id,
+            'already_existed': not created,
+            'enrichment_running': True,
+            'report': {
+                'address': resolved_note,
+                'enrichment': ('running in the background — the profile '
+                               'fills in as each source lands'),
+            },
+        }
+
     report = run_free_enrichment(conn, building_id, lookup['bbl'])
 
     return {
@@ -498,5 +552,6 @@ def auto_add_property(conn, query):
         'bbl': lookup['bbl'],
         'building_id': building_id,
         'already_existed': not created,
+        'enrichment_running': False,
         'report': report,
     }

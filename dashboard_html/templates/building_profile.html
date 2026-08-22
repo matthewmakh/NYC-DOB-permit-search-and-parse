@@ -7,173 +7,215 @@
 {% endblock %}
 
 {% block content %}
-<div class="building-profile-container">
-    <!-- Hero: address, ownership, risk -->
-    <div class="hero-section" id="hero-section">
-        <div class="hero-content">
-            <div class="hero-left">
-                <h1 class="building-address" id="building-address">Loading&hellip;</h1>
-                <div class="bbl-code">BBL <span id="bbl-display">{{ bbl }}</span> <span id="bin-display"></span></div>
-            </div>
+<div class="dossier">
 
-            <div class="hero-right">
-                <div class="risk-score-card" id="risk-score-card">
-                    <div class="risk-score-value" id="risk-score-value">&ndash;</div>
-                    <div class="risk-score-label" id="risk-score-label">Loading</div>
-                    <button class="risk-explanation-btn" id="risk-explanation-btn">Why this score?</button>
+    <!-- Header band: address, identifiers, risk, jump nav -->
+    <div class="dossier-head">
+        <div class="dossier-head-inner">
+            <div class="dossier-head-row">
+                <div class="dossier-title-block">
+                    <div class="dossier-crumbs"><a href="/properties">Properties</a><span class="crumb-sep">/</span><span id="crumb-borough">&hellip;</span></div>
+                    <h1 class="building-address" id="building-address">Loading&hellip;</h1>
+                    <div class="dossier-chips">
+                        <span class="id-chip mono">BBL <span id="bbl-display">{{ bbl }}</span></span>
+                        <span class="id-chip mono" id="bin-display" style="display: none;"></span>
+                        <span class="id-chip accent" id="class-chip" style="display: none;"></span>
+                    </div>
                 </div>
-
-                <div class="owners-card">
-                    <h3>Ownership</h3>
-                    <div class="owner-sources" id="owner-sources">
-                        <div class="owner-item skeleton">
-                            <span class="owner-source">Loading</span>
-                            <span class="owner-name">&hellip;</span>
+                <div class="dossier-head-actions">
+                    <div class="risk-score-card" id="risk-score-card">
+                        <div class="risk-score-value" id="risk-score-value">&ndash;</div>
+                        <div class="risk-score-copy">
+                            <span class="risk-score-label" id="risk-score-label">Loading</span>
+                            <button class="risk-explanation-btn" id="risk-explanation-btn">Why this score?</button>
                         </div>
                     </div>
                 </div>
             </div>
+
+        </div>
+
+        <!-- Jump nav: every old tab is a section on this page now. Sticky
+             under the site nav so the sections stay one click away. -->
+        <div class="section-nav-bar">
+            <nav class="section-nav" id="section-nav">
+                <button class="tab-btn active" data-tab="overview"><span class="tab-label">Overview</span></button>
+                <button class="tab-btn" data-tab="owners"><span class="tab-label">Ownership</span><span class="tab-badge" id="owners-badge"></span></button>
+                <button class="tab-btn" data-tab="financials"><span class="tab-label">Financials</span></button>
+                <button class="tab-btn" data-tab="activity"><span class="tab-label">Timeline</span><span class="tab-badge" id="activity-badge"></span></button>
+                <button class="tab-btn" data-tab="permits"><span class="tab-label">Permits</span><span class="tab-badge" id="permits-badge"></span></button>
+                <button class="tab-btn" data-tab="transactions"><span class="tab-label">Transactions</span><span class="tab-badge" id="transactions-badge"></span></button>
+                <button class="tab-btn" data-tab="violations"><span class="tab-label">Violations</span><span class="tab-badge" id="violations-badge"></span></button>
+                <button class="tab-btn" data-tab="contacts"><span class="tab-label">Contacts</span><span class="tab-badge" id="contacts-badge"></span></button>
+            </nav>
         </div>
     </div>
 
-    <!-- Risk explanation modal -->
-    <div class="modal" id="risk-explanation-modal">
-        <div class="modal-content">
-            <span class="modal-close">&times;</span>
-            <h2>Risk score breakdown</h2>
-            <div id="risk-factors-list"></div>
-            <div class="risk-total">
-                <strong>Total risk score:</strong> <span id="modal-risk-score">&ndash;</span>/100
-            </div>
+    <div class="dossier-body" id="tab-overview">
+
+        <!-- At-a-glance strip -->
+        <div class="glance-strip" id="glance-strip">
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
         </div>
-    </div>
 
-    <!-- Tabs -->
-    <div class="tab-navigation">
-        <button class="tab-btn active" data-tab="overview">
-            <span class="tab-label">Overview</span>
-        </button>
-        <button class="tab-btn" data-tab="financials">
-            <span class="tab-label">Financials</span>
-        </button>
-        <button class="tab-btn" data-tab="owners">
-            <span class="tab-label">Owners</span>
-            <span class="tab-badge" id="owners-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="transactions">
-            <span class="tab-label">Transactions</span>
-            <span class="tab-badge" id="transactions-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="permits">
-            <span class="tab-label">Permits</span>
-            <span class="tab-badge" id="permits-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="violations">
-            <span class="tab-label">Violations</span>
-            <span class="tab-badge" id="violations-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="activity">
-            <span class="tab-label">Activity</span>
-            <span class="tab-badge" id="activity-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="contacts">
-            <span class="tab-label">Contacts</span>
-            <span class="tab-badge" id="contacts-badge"></span>
-        </button>
-    </div>
+        <div class="dossier-columns">
 
-    <!-- Tab content -->
-    <div class="tab-content-container">
-        <div class="tab-content active" id="tab-overview">
-            <div class="cards-grid">
-                <div class="info-card">
-                    <h3>Building information</h3>
-                    <div class="info-rows" id="building-basics">
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
+            <!-- Main column -->
+            <div class="dossier-main">
+
+                <section class="dossier-card" id="tab-owners">
+                    <div class="dossier-card-head">
+                        <h3>Ownership</h3>
+                        <button class="linklike" id="toggle-owner-history">Ownership history</button>
                     </div>
+                    <div class="dossier-card-body">
+                        <div class="owner-sources" id="owner-sources">
+                            <div class="owner-item skeleton">
+                                <span class="owner-source">Loading</span>
+                                <span class="owner-name">&hellip;</span>
+                            </div>
+                        </div>
+                        <div id="owners-content" class="owner-history" style="display: none;">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-financials">
+                    <div class="dossier-card-head">
+                        <h3>Financial position</h3>
+                        <span class="fin-flag" id="financing-flag" style="display: none;"></span>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div id="financials-content">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-activity">
+                    <div class="dossier-card-head">
+                        <h3>Timeline</h3>
+                        <div class="timeline-filters" id="timeline-filters">
+                            <button class="pill-btn active" data-type="all">All</button>
+                            <button class="pill-btn" data-type="transaction">Deeds &amp; loans</button>
+                            <button class="pill-btn" data-type="permit">Permits</button>
+                        </div>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div class="activity-feed" id="activity-feed">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-permits">
+                    <div class="dossier-card-head">
+                        <h3>Construction permits</h3>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div id="permits-content">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-transactions">
+                    <div class="dossier-card-head">
+                        <h3>ACRIS transactions</h3>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div id="transactions-content">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-violations">
+                    <div class="dossier-card-head">
+                        <h3>Violations</h3>
+                        <span class="freshness-note">Checked live from NYC Open Data on page load</span>
+                    </div>
+                    <div class="dossier-card-body">
+                        <p class="data-freshness-note">Status reflects the agency's current record &mdash; HPD only closes a violation once the owner certifies the fix, so old violations can legitimately still be open.</p>
+                        <div id="violations-content">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="tab-contacts">
+                    <div class="dossier-card-head">
+                        <h3>Contacts</h3>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div class="contacts-directory" id="contacts-directory">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Rail -->
+            <aside class="dossier-rail">
+                <div class="dossier-card rail-card" id="signals-card" style="display: none;">
+                    <div class="dossier-card-head"><h3>Signals</h3></div>
+                    <div class="dossier-card-body" id="signals-list"></div>
                 </div>
 
-                <div class="info-card">
-                    <h3>Property stats</h3>
-                    <div class="stats-grid" id="property-stats">
-                        <div class="stat-item skeleton">
-                            <div class="stat-value">&ndash;</div>
-                            <div class="stat-label">Loading</div>
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>Building facts</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="info-rows" id="building-basics">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
                         </div>
                     </div>
                 </div>
 
-                <div class="info-card">
-                    <h3>Quick metrics</h3>
-                    <div class="metrics-list" id="quick-metrics">
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>On this property</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="stats-grid" id="property-stats">
+                            <div class="stat-item skeleton">
+                                <div class="stat-value">&ndash;</div>
+                                <div class="stat-label">Loading</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <div class="tab-content" id="tab-financials">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Financial overview</h3>
-                    <div id="financials-content">Loading&hellip;</div>
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>Key metrics</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="metrics-list" id="quick-metrics">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </div>
 
-        <div class="tab-content" id="tab-owners">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Ownership history</h3>
-                    <div id="owners-content">Loading&hellip;</div>
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>Data sources</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="source-row"><span>PLUTO / RPAD / HPD</span><span class="source-when">refreshed nightly</span></div>
+                        <div class="source-row"><span>ACRIS deeds &amp; mortgages</span><span class="source-when">refreshed nightly</span></div>
+                        <div class="source-row"><span>Violations</span><span class="source-when">live on page load</span></div>
+                        <div class="source-row"><span>Secretary of State</span><span class="source-when">on ownership change</span></div>
+                    </div>
                 </div>
-            </div>
+            </aside>
         </div>
+    </div>
+</div>
 
-        <div class="tab-content" id="tab-transactions">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>ACRIS transaction history</h3>
-                    <div id="transactions-content">Loading&hellip;</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-permits">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Construction permits</h3>
-                    <div id="permits-content">Loading&hellip;</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-violations">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Violations</h3>
-                    <p class="data-freshness-note">Checked live from NYC Open Data every time this page loads. Status reflects the agency's current record &mdash; HPD only closes a violation once the owner certifies the fix, so old violations can legitimately still be open.</p>
-                    <div id="violations-content">Loading&hellip;</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-activity">
-            <div class="activity-feed" id="activity-feed">
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-contacts">
-            <div class="contacts-directory" id="contacts-directory">
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-            </div>
+<!-- Risk explanation modal -->
+<div class="modal" id="risk-explanation-modal">
+    <div class="modal-content">
+        <span class="modal-close">&times;</span>
+        <h2>Risk score breakdown</h2>
+        <div id="risk-factors-list"></div>
+        <div class="risk-total">
+            <strong>Total risk score:</strong> <span id="modal-risk-score">&ndash;</span>/100
         </div>
     </div>
 </div>
