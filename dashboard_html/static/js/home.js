@@ -173,6 +173,7 @@ const AUTO_ADD_SOURCES = [
     { key: 'pluto', label: 'Building class, units, owner of record', source: 'PLUTO' },
     { key: 'rpad', label: 'Tax-record owner and assessment', source: 'RPAD' },
     { key: 'hpd', label: 'Registered owner and open violations', source: 'HPD' },
+    { key: 'permits', label: 'Construction permit history', source: 'DOB' },
     { key: 'acris', label: 'Deed and mortgage history', source: 'ACRIS' },
     { key: 'tax_liens', label: 'Tax liens and violations', source: 'DOF / ECB' },
     { key: 'sos', label: 'Person behind the LLC', source: 'NY Dept. of State' },

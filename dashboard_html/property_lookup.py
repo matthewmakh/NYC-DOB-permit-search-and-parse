@@ -378,6 +378,9 @@ def resolve_address_to_property(query):
 def _ensure_building_row(conn, lookup):
     """Find or create the buildings row keyed by `lookup['bbl']`.
     Returns (building_id, created_flag)."""
+    # The borough column holds the numeric code everywhere else in the
+    # database; resolvers carry the human name for the address string only.
+    lookup = {**lookup, 'borough': str(lookup['bbl'])[0]}
     cur = conn.cursor()
     cur.execute("SELECT id FROM buildings WHERE bbl = %s", (lookup['bbl'],))
     row = cur.fetchone()
@@ -481,6 +484,13 @@ def _run_hpd(conn, building_id, bbl):
     return f'{n} fields updated'
 
 
+def _run_permits(conn, building_id, bbl):
+    # Late import: permit_sync pulls the Socrata client; keep module load light.
+    from permit_sync import sync_permits_for_bbl
+    count = sync_permits_for_bbl(conn, bbl)
+    return f'{count} permits' if count else 'no permits on record'
+
+
 def _run_acris(conn, building_id, bbl):
     count = enrich_building_from_acris(conn, building_id, bbl)
     return f'{count} transactions' if count else 'no transactions'
@@ -533,6 +543,7 @@ _ENRICHMENT_STEPS = [
     ('pluto',     _run_pluto),
     ('rpad',      _run_rpad),
     ('hpd',       _run_hpd),
+    ('permits',   _run_permits),
     ('acris',     _run_acris),
     ('tax_liens', _run_tax_liens),
     ('sos',       _run_sos),
@@ -543,6 +554,25 @@ def run_free_enrichment(conn, building_id, bbl):
     """Run every free enrichment step against the given building. Returns
     a dict {step_name: 'ok|failed|skipped reason', ...} for the caller to
     render. Never raises — each step is isolated."""
+    # The rest of the database stores borough as the numeric code '1'-'5';
+    # early resolver versions wrote the word ('Queens'), which broke borough
+    # filters and rendered "Unknown" on the page. Heal it from the BBL.
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE buildings SET borough = %s
+            WHERE id = %s AND (borough IS NULL
+                               OR borough NOT IN ('1', '2', '3', '4', '5'))
+        """, (str(bbl)[0], building_id))
+        conn.commit()
+        cur.close()
+    except Exception:
+        log.exception(f"borough heal failed for bbl={bbl}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
     report = {}
     for name, fn in _ENRICHMENT_STEPS:
         try:
@@ -577,7 +607,9 @@ def _enrich_in_background(connect, building_id, bbl):
         try:
             conn = connect()
             report = run_free_enrichment(conn, building_id, bbl)
-            log.info(f"background enrichment for {bbl}: {report}")
+            # print, not log: Railway shows stdout, and this report is the
+            # only record of what each source did for an auto-added building.
+            print(f"[auto-add] enrichment report for {bbl}: {report}", flush=True)
         except Exception:
             log.exception(f"background enrichment failed for bbl={bbl}")
         finally:

@@ -577,6 +577,44 @@ finally:
     PL._geoclient_get = _real_get
     PL._geosearch_get = _real_geosearch
 
+print('— permit_sync mirrors the nightly scraper —')
+import permit_sync as PS  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import permit_scraper_api as SCRAPER  # noqa: E402
+
+check('BIS column order identical', PS.BIS_COLUMNS, SCRAPER.BIS_COLUMNS)
+check('select fields identical', PS.SELECT_FIELDS, SCRAPER.NYCOpenDataClient.SELECT_FIELDS)
+
+_fixture = {
+    'job__': '440776739', 'job_type': 'A2', 'permit_type': 'PL',
+    'permit_subtype': 'OT', 'bldg_type': '1', 'borough': 'QUEENS',
+    'block': '09966', 'lot': '00080', 'bin__': '4213565',
+    'house__': '184-23', 'street_name': 'CAMBRIDGE ROAD', 'zip_code': '11432',
+    'filing_date': '03/02/2024 00:00:00', 'issuance_date': '03/05/2024 00:00:00',
+    'expiration_date': '03/01/2025', 'job_start_date': '03/10/2024',
+    'permit_status': 'ISSUED', 'filing_status': 'INITIAL',
+    'permittee_s_business_name': 'T&S HOME IMPROVEMENT INC',
+    'permittee_s_license_type': 'MP', 'permittee_s_license__': '0481522',
+    'gis_latitude': '40.716', 'gis_longitude': '-73.783',
+    'dobrundate': '03/06/2024 00:00:00', 'permit_si_no': '3899021',
+}
+ours, ours_skipped = PS.prepare_rows_bis([dict(_fixture)])
+theirs, _ = SCRAPER.prepare_rows_bis([dict(_fixture)])
+check('fixture row maps identically (minus timestamp)',
+      ours[0][:-1], theirs[0][:-1])
+check('mapped bbl assembled from parts', ours[0][14], '4099660080')
+check('permit_no comes from the job number', ours[0][0], '440776739')
+check('issue date parsed from issuance_date', str(ours[0][2]), '2024-03-05')
+
+check('lot matches across paddings',
+      [PS._lot_matches({'lot': v}, '80') for v in ('00080', '80', '080', '81')],
+      [True, True, True, False])
+check('permit_no falls back to bin+date',
+      PS.prepare_rows_bis([{'bin__': '4213565', 'issuance_date': '01/02/2024',
+                            'borough': 'QUEENS', 'block': '9966', 'lot': '80'}])[0][0][0],
+      '4213565_01/02/2024')
+
 print()
 print('=' * 50)
 print(f'{passed} passed, {failed} failed')
