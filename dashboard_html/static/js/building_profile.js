@@ -324,17 +324,31 @@ function renderHeroSection() {
                             !sos_data.principal_name.includes('CORP');
         // Tone down the yellow highlight when the SOS hit is just an agent —
         // they're not the owner, so we shouldn't make them look like the answer.
-        sosItem.className = 'owner-item sos-highlight' + (isAgent ? ' sos-agent' : '');
+        // The registered entity may not be the company any of our owner
+        // fields name — the lookup used to accept the first Active search hit
+        // without checking. A mismatch means these people run some OTHER
+        // company, so the row is demoted and called out rather than shown as
+        // the answer.
+        const isMismatch = sos_data.entity_match === 'mismatch';
+        sosItem.className = 'owner-item sos-highlight'
+            + (isAgent ? ' sos-agent' : '')
+            + (isMismatch ? ' sos-mismatch' : '');
 
         sosItem.innerHTML = `
             <span class="owner-source sos-source">
-                🔍 NY Secretary of State
-                ${isRealPerson ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
-                ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">⚠️ AGENT</span>' : ''}
+                NY Secretary of State
+                ${isRealPerson && !isMismatch ? '<span class="real-person-badge">REAL PERSON</span>' : ''}
+                ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">AGENT</span>' : ''}
+                ${isMismatch ? '<span class="mismatch-badge" title="The registered company does not match any owner name on record for this property">UNVERIFIED</span>' : ''}
             </span>
             <span class="owner-name sos-name">${sos_data.principal_name}</span>
             ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
             <span class="sos-entity">Behind: ${sos_data.entity_name || 'LLC'} (${sos_data.entity_status || 'Unknown'})</span>
+            ${sos_data.lookup_source ? `<span class="sos-provenance">Looked up from ${sos_data.lookup_source}</span>` : ''}
+            ${isMismatch ? `<span class="sos-warning">
+                This company does not match any owner name on record here.
+                Treat these contacts as unverified.
+            </span>` : ''}
         `;
         ownerSourcesEl.appendChild(sosItem);
     }
@@ -388,7 +402,7 @@ function addEnrichOwnerButton(container) {
     if (hasEnrichedDataPerOwner) {
         html += `
             <div class="enriched-data-box">
-                <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                <h4>Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
                 ${renderEnrichedDataPerOwner(enrichmentData.enrichment_data_per_owner)}
             </div>
         `;
@@ -396,7 +410,7 @@ function addEnrichOwnerButton(container) {
         // Fallback to combined data for backward compatibility
         html += `
             <div class="enriched-data-box">
-                <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                <h4>Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
                 ${renderEnrichedData(enrichmentData.enrichment_data)}
             </div>
         `;
@@ -408,7 +422,7 @@ function addEnrichOwnerButton(container) {
             html += `
                 <div class="enrich-prompt">
                     <a href="/login?next=${encodeURIComponent(window.location.pathname)}" class="enrich-owner-btn login-required">
-                        📞 Get Owner Phone & Email
+                        Get Owner Phone & Email
                         <span class="enrich-cost">Login Required</span>
                     </a>
                     <p class="enrich-note">Sign in to unlock owner contact information</p>
@@ -419,7 +433,7 @@ function addEnrichOwnerButton(container) {
             const cost = enrichmentData.cost === 0 ? 'FREE' : `$${enrichmentData.cost.toFixed(2)}`;
             const batchCost = enrichmentData.batch_cost || enrichmentData.cost;
             const batchDisplay = batchCost === 0 ? '' : ` ($${batchCost.toFixed(2)} in bulk)`;
-            const btnText = hasEnrichedOwners ? '📞 Enrich More Owners' : '📞 Get Owner Phone & Email';
+            const btnText = hasEnrichedOwners ? 'Enrich More Owners' : 'Get Owner Phone & Email';
             html += `
                 <div class="enrich-prompt">
                     <button class="enrich-owner-btn" onclick="showEnrichModal(${buildingId})">
@@ -444,7 +458,7 @@ function renderEnrichedDataPerOwner(dataList) {
     dataList.forEach((ownerData, index) => {
         const ownerName = ownerData.owner_name || 'Unknown Owner';
         html += `<div class="owner-contacts-group ${index > 0 ? 'owner-divider' : ''}">`;
-        html += `<div class="owner-name-header">👤 ${ownerName}</div>`;
+        html += `<div class="owner-name-header">${ownerName}</div>`;
         html += '<div class="enriched-contacts">';
         
         if (ownerData.phones && ownerData.phones.length > 0) {
@@ -452,7 +466,7 @@ function renderEnrichedDataPerOwner(dataList) {
             ownerData.phones.forEach(phone => {
                 html += `
                     <a href="tel:${phone.number}" class="contact-link phone-link">
-                        📱 ${formatPhoneNumber(phone.number)}
+                        ${formatPhoneNumber(phone.number)}
                         <span class="phone-type">${phone.type || ''}</span>
                     </a>
                 `;
@@ -465,7 +479,7 @@ function renderEnrichedDataPerOwner(dataList) {
             ownerData.emails.forEach(email => {
                 html += `
                     <a href="mailto:${email.email}" class="contact-link email-link">
-                        ✉️ ${email.email}
+                        ${email.email}
                     </a>
                 `;
             });
@@ -483,28 +497,33 @@ function renderEnrichedDataPerOwner(dataList) {
 }
 
 function renderEnrichedData(data) {
-    // Backward compatible single-owner render
+    // Combined render. These contacts can come from more than one person —
+    // an agent and an owner both get looked up — so each carries the name it
+    // was found under. Never show a bare number here; you cannot tell whose
+    // it is before you dial.
     let html = '<div class="enriched-contacts">';
-    
+
     if (data.phones && data.phones.length > 0) {
         html += '<div class="enriched-phones">';
         data.phones.forEach(phone => {
             html += `
                 <a href="tel:${phone.number}" class="contact-link phone-link">
-                    📱 ${formatPhoneNumber(phone.number)}
+                    ${formatPhoneNumber(phone.number)}
                     <span class="phone-type">${phone.type || ''}</span>
+                    ${phone.owner_name ? `<span class="contact-owner">${phone.owner_name}</span>` : ''}
                 </a>
             `;
         });
         html += '</div>';
     }
-    
+
     if (data.emails && data.emails.length > 0) {
         html += '<div class="enriched-emails">';
         data.emails.forEach(email => {
             html += `
                 <a href="mailto:${email.email}" class="contact-link email-link">
-                    ✉️ ${email.email}
+                    ${email.email}
+                    ${email.owner_name ? `<span class="contact-owner">${email.owner_name}</span>` : ''}
                 </a>
             `;
         });
@@ -548,13 +567,13 @@ function showEnrichModal(buildingId) {
     if (enrichedOwners.length > 0) {
         enrichedHtml = `
             <div class="already-enriched-section">
-                <h4>✅ Already Enriched</h4>
+                <h4>Already Enriched</h4>
                 ${enrichedOwners.map(owner => `
                     <div class="owner-option enriched disabled">
                         <div class="owner-option-content">
                             <span class="owner-option-name">${owner.name}</span>
                             <span class="owner-option-source">${owner.source}</span>
-                            <span class="enriched-badge">✓ Unlocked</span>
+                            <span class="enriched-badge">Unlocked</span>
                         </div>
                     </div>
                 `).join('')}
@@ -569,20 +588,20 @@ function showEnrichModal(buildingId) {
     modal.innerHTML = `
         <div class="modal-content enrich-modal-content">
             <span class="modal-close" onclick="closeEnrichModal()">&times;</span>
-            <h2>📞 Get Owner Contact Information</h2>
+            <h2>Get Owner Contact Information</h2>
             <p class="modal-subtitle">Select an owner to lookup their phone and email</p>
             
             ${enrichedHtml}
             
             <div class="owner-selection">
-                <h4>📋 Available to Enrich (${availableOwners.length})</h4>
+                <h4>Available to Enrich (${availableOwners.length})</h4>
                 ${availableOwners.map((owner, idx) => `
                     <label class="owner-option ${owner.recommended ? 'recommended' : ''}">
                         <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
                         <div class="owner-option-content">
                             <span class="owner-option-name">${owner.name}</span>
                             <span class="owner-option-source">${owner.source}</span>
-                            ${owner.recommended ? '<span class="recommended-badge">✨ Recommended</span>' : ''}
+                            ${owner.recommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                             ${owner.reason ? `<span class="owner-option-reason">${owner.reason}</span>` : ''}
                         </div>
                     </label>
@@ -661,7 +680,7 @@ async function confirmEnrich(buildingId) {
                 if (enrichSection) {
                     enrichSection.innerHTML = `
                         <div class="enriched-data-box success-flash">
-                            <h4>📞 Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
+                            <h4>Owner Contact Info <span class="unlocked-badge">UNLOCKED</span></h4>
                             ${renderEnrichedData(data.data)}
                         </div>
                     `;
@@ -731,7 +750,7 @@ function renderRiskExplanation() {
     factorsList.innerHTML = '';
     
     if (risk_assessment.factors.length === 0) {
-        factorsList.innerHTML = '<p class="no-risk-factors">✅ No significant risk factors identified for this property.</p>';
+        factorsList.innerHTML = '<p class="no-risk-factors">No significant risk factors identified for this property.</p>';
     } else {
         risk_assessment.factors.forEach(factor => {
             const factorCard = document.createElement('div');
@@ -871,7 +890,7 @@ function renderOverviewTab() {
     if (building.is_cash_purchase !== null) {
         metrics.push({
             label: 'Purchase Type',
-            value: building.is_cash_purchase ? '💵 Cash Purchase' : '🏦 Financed',
+            value: building.is_cash_purchase ? 'Cash Purchase' : 'Financed',
             class: building.is_cash_purchase ? 'metric-highlight' : ''
         });
     }
@@ -961,7 +980,7 @@ function renderFinancialsTab() {
     const hasLienData = building.has_tax_delinquency || building.ecb_total_balance;
     if (hasLienData) {
         html += `<div class="financial-card alert-card">
-            <h4>⚠️ Outstanding Liabilities</h4>
+            <h4>Outstanding Liabilities</h4>
             <div class="financial-rows">`;
         
         if (building.has_tax_delinquency) {
@@ -1013,13 +1032,13 @@ function renderOwnersTab() {
 
         html += `
         <div class="sos-section ${isRealPerson ? 'real-person-found' : ''}${isAgent ? ' sos-agent' : ''}">
-            <h4>🔍 ${isAgent ? 'SOS — Service Agent (not the owner)' : 'Real Person Behind LLC'}</h4>
+            <h4>${isAgent ? 'SOS — Service Agent (not the owner)' : 'Real Person Behind LLC'}</h4>
             <div class="sos-card">
                 <div class="sos-main">
                     <div class="sos-principal-name">${sos_data.principal_name}</div>
                     ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
-                    ${isRealPerson ? '<span class="real-person-badge-large">✓ REAL PERSON IDENTIFIED</span>' : ''}
-                    ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">⚠️ AGENT — not the owner</span>' : ''}
+                    ${isRealPerson ? '<span class="real-person-badge-large">REAL PERSON IDENTIFIED</span>' : ''}
+                    ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">AGENT — not the owner</span>' : ''}
                 </div>
                 <div class="sos-details">
                     <div class="sos-detail-row">
@@ -1055,10 +1074,10 @@ function renderOwnersTab() {
     html += '<div class="current-owners">';
     
     const sourceInfo = {
-        'pluto': { label: 'NYC PLUTO Database', icon: '🗺️' },
-        'rpad': { label: 'Tax Assessment Records', icon: '💰' },
-        'hpd': { label: 'HPD Registered Owner', icon: '🏠' },
-        'ecb': { label: 'ECB Violation Respondent', icon: '⚖️' }
+        'pluto': { label: 'NYC PLUTO Database', icon: '' },
+        'rpad': { label: 'Tax Assessment Records', icon: '' },
+        'hpd': { label: 'HPD Registered Owner', icon: '' },
+        'ecb': { label: 'ECB Violation Respondent', icon: '' }
     };
     
     Object.entries(owners).forEach(([source, name]) => {
@@ -1401,7 +1420,7 @@ function showPermitDetails(index) {
     
     let html = `
     <div class="permit-detail-modal-content">
-        <h2>📋 Permit #${permit.permit_no}</h2>
+        <h2>Permit #${permit.permit_no}</h2>
         <div class="permit-detail-grid">`;
     
     // Basic Information - always show
@@ -1550,7 +1569,7 @@ function buildEnrichButton(permit, contactName, contactType, licenseNumber = nul
         <div class="enrich-contact-section" id="enrich-section-${contactType}-${permitId}">
             <button class="enrich-contact-btn" id="${buttonId}" 
                 onclick="enrichPermitContact('${bbl}', ${buildingId || 'null'}, ${permitId}, '${contactName.replace(/'/g, "\\'")}', '${contactType}', '${licenseNumber || ''}', '${licenseType || ''}', '${existingPhone || ''}', this)">
-                📞 Get Contact Info
+                Get Contact Info
                 <span class="enrich-cost">$0.50</span>
             </button>
         </div>
@@ -1593,7 +1612,7 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
             // Update button to show success
             button.outerHTML = `
                 <div class="enrich-success">
-                    ✅ Contact info unlocked${data.charged ? ' - $0.50 charged' : ''}
+                    Contact info unlocked${data.charged ? ' - $0.50 charged' : ''}
                 </div>
             `;
             
@@ -1604,7 +1623,7 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
         } else {
             // Show error
             button.disabled = false;
-            button.innerHTML = `📞 Get Contact Info <span class="enrich-cost">$0.50</span>`;
+            button.innerHTML = `Get Contact Info <span class="enrich-cost">$0.50</span>`;
             
             // Show error message
             const section = button.closest('.enrich-contact-section');
@@ -1617,7 +1636,7 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
     } catch (error) {
         console.error('Enrichment error:', error);
         button.disabled = false;
-        button.innerHTML = `📞 Get Contact Info <span class="enrich-cost">$0.50</span>`;
+        button.innerHTML = `Get Contact Info <span class="enrich-cost">$0.50</span>`;
     }
 }
 
@@ -1635,10 +1654,10 @@ function renderEnrichedContactData(data, contactName) {
         data.phones.forEach(phone => {
             html += `
                 <div class="enriched-phone-item">
-                    <span class="phone-icon">📞</span>
+                    <span class="phone-icon"></span>
                     <span class="phone-number">${formatPhoneNumber(phone.number)}</span>
                     ${phone.type ? `<span class="phone-type">${phone.type}</span>` : ''}
-                    ${phone.is_valid === false ? `<span class="phone-invalid">⚠️</span>` : ''}
+                    ${phone.is_valid === false ? `<span class="phone-invalid"></span>` : ''}
                 </div>
             `;
         });
@@ -1651,7 +1670,7 @@ function renderEnrichedContactData(data, contactName) {
         data.emails.forEach(email => {
             html += `
                 <div class="enriched-email-item">
-                    <span class="email-icon">✉️</span>
+                    <span class="email-icon"></span>
                     <a href="mailto:${email.email}" class="email-address">${email.email}</a>
                 </div>
             `;
@@ -1807,7 +1826,7 @@ async function showLicenseInfo(licenseNumber, licenseType) {
                         ${nys.registered_through ? `<div class="lic-row"><span>Registered Through:</span><span>${nys.registered_through}</span></div>` : ''}
                         ${nys.date_of_licensure ? `<div class="lic-row"><span>Licensed Since:</span><span>${nys.date_of_licensure}</span></div>` : ''}
                         ${nys.address ? `<div class="lic-row"><span>Location:</span><span>${nys.address}</span></div>` : ''}
-                        ${nys.enforcement_actions ? `<div class="lic-row warning"><span>⚠️ Enforcement Actions:</span><span>Yes</span></div>` : ''}
+                        ${nys.enforcement_actions ? `<div class="lic-row warning"><span>Enforcement Actions:</span><span>Yes</span></div>` : ''}
                     </div>
                 </div>`;
         }
@@ -1873,7 +1892,7 @@ function renderViolationsTab() {
     const hasViolations = building.ecb_violation_count || building.dob_violation_count || building.hpd_total_violations;
     
     if (!hasViolations) {
-        container.innerHTML = '<div class="no-data">✅ No violations on record</div>';
+        container.innerHTML = '<div class="no-data">No violations on record</div>';
         return;
     }
     
@@ -1888,7 +1907,7 @@ function renderViolationsTab() {
     if (totalOwed > 0) {
         html += `
         <div class="total-violations-owed">
-            <div class="total-owed-icon">⚠️</div>
+            <div class="total-owed-icon"></div>
             <div class="total-owed-content">
                 <div class="total-owed-label">Total Outstanding Violations</div>
                 <div class="total-owed-amount">$${formatNumber(totalOwed)}</div>
@@ -1901,7 +1920,7 @@ function renderViolationsTab() {
     
     // Left side: ECB Violations
     html += '<div class="violations-column">';
-    html += '<h3>⚖️ ECB Violations';
+    html += '<h3>ECB Violations';
     if (ecbBalance > 0) {
         html += ` <span class="violation-amount-header">$${formatNumber(ecbBalance)} owed</span>`;
     }
@@ -1915,7 +1934,7 @@ function renderViolationsTab() {
     
     // Right side: HPD Violations
     html += '<div class="violations-column">';
-    html += '<h3>🏠 HPD Violations';
+    html += '<h3>HPD Violations';
     if (hpdBalance > 0) {
         html += ` <span class="violation-amount-header">$${formatNumber(hpdBalance)} owed</span>`;
     }
@@ -1933,7 +1952,7 @@ function renderViolationsTab() {
     if (building.dob_violation_count && building.dob_violation_count > 0) {
         html += `
         <div class="dob-violations-summary">
-            <h4>🏗️ DOB Violations Summary</h4>
+            <h4>DOB Violations Summary</h4>
             <div class="violation-stats">
                 <div class="viol-stat">
                     <div class="viol-stat-value">${building.dob_violation_count}</div>
@@ -2304,7 +2323,7 @@ function renderContactsTab() {
     
     if (hasEnrichedContacts) {
         html += '<div class="contacts-section enriched-contacts-section">';
-        html += '<h4 class="contacts-section-title">📞 Enriched Contacts <span class="enriched-badge">VERIFIED</span></h4>';
+        html += '<h4 class="contacts-section-title">Enriched Contacts <span class="enriched-badge">VERIFIED</span></h4>';
         html += '<div class="contacts-list enriched-list">';
         
         // Owner enrichments
@@ -2326,7 +2345,7 @@ function renderContactsTab() {
                             <div class="contact-name">${contact.name}</div>
                             <div class="contact-role">${getContactTypeLabel(contact.type)}</div>
                             <div class="contact-locked">
-                                🔒 Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
+                                Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
                             </div>
                         </div>
                     `;
@@ -2349,7 +2368,7 @@ function renderContactsTab() {
         
         if (usefulContacts.length > 0) {
             html += '<div class="contacts-section permit-contacts-section">';
-            html += '<h4 class="contacts-section-title">👷 Contractors from Permits</h4>';
+            html += '<h4 class="contacts-section-title">Contractors from Permits</h4>';
             html += '<div class="contacts-list">';
             
             usefulContacts.forEach(contact => {
@@ -2359,8 +2378,8 @@ function renderContactsTab() {
                     <div class="contact-role">${contact.role}</div>
                     ${contact.phone ? `
                         <div class="contact-phone">
-                            📞 ${formatPhoneNumber(contact.phone)}
-                            ${contact.is_mobile ? ' <span class="mobile-badge">📱 Mobile</span>' : ''}
+                            ${formatPhoneNumber(contact.phone)}
+                            ${contact.is_mobile ? ' <span class="mobile-badge">Mobile</span>' : ''}
                             ${contact.line_type ? ` <span class="line-type-badge">${contact.line_type}</span>` : ''}
                         </div>
                     ` : ''}
@@ -2374,7 +2393,7 @@ function renderContactsTab() {
         } else if (!hasEnrichedContacts) {
             html = `
                 <div class="no-data">
-                    <p>📋 <strong>${contacts.length} contractors</strong> have worked on this property</p>
+                    <p><strong>${contacts.length} contractors</strong> have worked on this property</p>
                     <p>Phone numbers not available in current dataset</p>
                     <p><em>Tip: Click on a permit and use "Get Contact Info" to find phone numbers</em></p>
                 </div>`;
@@ -2397,7 +2416,7 @@ function renderEnrichedContactCard(contact, roleLabel) {
         <div class="contact-card enriched-contact-card">
             <div class="contact-header">
                 <div class="contact-name">${contact.name}</div>
-                <span class="verified-badge">✓ Verified</span>
+                <span class="verified-badge">Verified</span>
             </div>
             <div class="contact-role">${roleLabel}</div>
     `;
@@ -2407,7 +2426,7 @@ function renderEnrichedContactCard(contact, roleLabel) {
         contact.phones.forEach(phone => {
             html += `
                 <div class="contact-phone enriched-phone">
-                    📞 <a href="tel:${phone.number}">${formatPhoneNumber(phone.number)}</a>
+                    <a href="tel:${phone.number}">${formatPhoneNumber(phone.number)}</a>
                     ${phone.type ? `<span class="phone-type-badge">${phone.type}</span>` : ''}
                 </div>
             `;
@@ -2419,7 +2438,7 @@ function renderEnrichedContactCard(contact, roleLabel) {
         contact.emails.forEach(email => {
             html += `
                 <div class="contact-email enriched-email">
-                    ✉️ <a href="mailto:${email.email}">${email.email}</a>
+                    <a href="mailto:${email.email}">${email.email}</a>
                 </div>
             `;
         });
@@ -2526,14 +2545,14 @@ function getBoroughName(code) {
 
 function getDocTypeLabel(docType) {
     const labels = {
-        'DEED': '🏠 Deed Transfer',
-        'DEEDO': '🏠 Deed (Other)',
-        'MTGE': '🏦 Mortgage',
-        'AGMT': '🏦 Agreement',
-        'SAT': '✅ Satisfaction of Mortgage',
-        'SATF': '✅ Satisfaction (Full)',
-        'UCC': '📄 UCC Filing',
-        'ASST': '📄 Assignment'
+        'DEED': 'Deed Transfer',
+        'DEEDO': 'Deed (Other)',
+        'MTGE': 'Mortgage',
+        'AGMT': 'Agreement',
+        'SAT': 'Satisfaction of Mortgage',
+        'SATF': 'Satisfaction (Full)',
+        'UCC': 'UCC Filing',
+        'ASST': 'Assignment'
     };
     return labels[docType] || docType;
 }

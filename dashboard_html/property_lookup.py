@@ -30,22 +30,19 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-# The pipeline step modules live at the repo root, not under dashboard_html/,
-# so we need to put the repo root on sys.path before importing them.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# The shared data modules live in this same directory (dashboard_html/), so
+# the dashboard service deploys self-contained on Railway (whose root
+# directory setting is dashboard_html — the repo root doesn't exist there).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from step2_enrich_from_pluto import (
     get_pluto_data_for_bbl,
     get_rpad_data_for_bbl,
     get_hpd_data_for_bbl,
 )
-from step3_enrich_from_acris import (
-    get_acris_full_history,
-    save_transactions_and_parties,
-    update_buildings_table as acris_update_buildings,
-)
+from step3_enrich_from_acris import enrich_building_from_acris
 from step4_enrich_from_tax_liens import (
     enrich_building as fetch_tax_lien_data,
     update_building_tax_lien_data,
@@ -232,62 +229,76 @@ def _apply_dict_update(conn, building_id, columns_to_values):
 
 
 def _run_pluto(conn, building_id, bbl):
-    data = get_pluto_data_for_bbl(bbl)
+    # step2 helpers return a (data, error) tuple with normalized keys.
+    data, error = get_pluto_data_for_bbl(bbl)
+    if error:
+        return f'error: {error}'
     if not data:
         return 'no data'
-    # Use the PLUTO ownername if the building row doesn't already have one.
-    pluto_fields = {
-        'current_owner_name': data.get('ownername'),
-        'building_class': data.get('bldgclass'),
-        'land_use': data.get('landuse'),
-        'residential_units': data.get('unitsres'),
-        'total_units': data.get('unitstotal'),
-        'year_built': data.get('yearbuilt'),
-        'year_altered': data.get('yearalter1'),
-        'num_floors': data.get('numfloors'),
-        'building_sqft': data.get('bldgarea'),
-        'lot_sqft': data.get('lotarea'),
-        'assessed_land_value': data.get('assessland'),
-        'assessed_total_value': data.get('assesstot'),
-    }
-    n = _apply_dict_update(conn, building_id, pluto_fields)
+    n = _apply_dict_update(conn, building_id, {
+        'current_owner_name': data.get('owner_name'),
+        'building_class': data.get('building_class'),
+        'land_use': data.get('land_use'),
+        'residential_units': data.get('residential_units'),
+        'total_units': data.get('total_units'),
+        'year_built': data.get('year_built'),
+        'year_altered': data.get('year_altered'),
+        'num_floors': data.get('num_floors'),
+        'building_sqft': data.get('building_sqft'),
+        'lot_sqft': data.get('lot_sqft'),
+        'zip_code': data.get('zip_code'),
+        'latitude': data.get('latitude'),
+        'longitude': data.get('longitude'),
+        'zoning_district': data.get('zoning_district'),
+        'built_far': data.get('built_far'),
+        'max_resid_far': data.get('max_resid_far'),
+        'max_comm_far': data.get('max_comm_far'),
+        'unused_far': data.get('unused_far'),
+        'pluto_owner_type': data.get('pluto_owner_type'),
+    })
     return f'{n} fields updated'
 
 
 def _run_rpad(conn, building_id, bbl):
-    data = get_rpad_data_for_bbl(bbl)
+    data, error = get_rpad_data_for_bbl(bbl)
+    if error:
+        return f'error: {error}'
     if not data:
         return 'no data'
     n = _apply_dict_update(conn, building_id, {
-        'owner_name_rpad': data.get('owner'),
+        'owner_name_rpad': data.get('owner_name_rpad'),
+        'assessed_land_value': data.get('assessed_land_value'),
+        'assessed_total_value': data.get('assessed_total_value'),
     })
     return f'{n} fields updated'
 
 
 def _run_hpd(conn, building_id, bbl):
-    data = get_hpd_data_for_bbl(bbl)
+    data, error = get_hpd_data_for_bbl(bbl)
+    if error:
+        return f'error: {error}'
     if not data:
         return 'no data'
     n = _apply_dict_update(conn, building_id, {
-        'owner_name_hpd': data.get('ownername'),
-        'hpd_registration_id': data.get('registrationid'),
+        'owner_name_hpd': data.get('owner_name_hpd'),
+        'hpd_registration_id': data.get('hpd_registration_id'),
+        'hpd_open_violations': data.get('hpd_open_violations'),
+        'hpd_total_violations': data.get('hpd_total_violations'),
+        'hpd_open_complaints': data.get('hpd_open_complaints'),
+        'hpd_total_complaints': data.get('hpd_total_complaints'),
+        'hpd_owner_business_address': data.get('hpd_owner_business_address'),
+        'hpd_owner_business_city': data.get('hpd_owner_business_city'),
+        'hpd_owner_business_state': data.get('hpd_owner_business_state'),
+        'hpd_owner_business_zip': data.get('hpd_owner_business_zip'),
+        'hpd_agent_name': data.get('hpd_agent_name'),
+        'hpd_site_manager_name': data.get('hpd_site_manager_name'),
     })
     return f'{n} fields updated'
 
 
 def _run_acris(conn, building_id, bbl):
-    transactions = get_acris_full_history(bbl)
-    if not transactions:
-        return 'no transactions'
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    # The step3 helpers expect a RealDictCursor; mirror that contract.
-    primary_deed, primary_mortgage = save_transactions_and_parties(
-        cur, building_id, bbl, transactions,
-    )
-    acris_update_buildings(cur, building_id, transactions, primary_deed, primary_mortgage)
-    conn.commit()
-    cur.close()
-    return f'{len(transactions)} transactions'
+    count = enrich_building_from_acris(conn, building_id, bbl)
+    return f'{count} transactions' if count else 'no transactions'
 
 
 def _run_tax_liens(conn, building_id, bbl):
@@ -354,6 +365,12 @@ def run_free_enrichment(conn, building_id, bbl):
         except Exception as e:
             log.exception(f"{name} enrichment failed for bbl={bbl}")
             report[name] = f'error: {e}'
+            # A failed statement aborts the shared transaction; roll back so
+            # the remaining steps still run.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     return report
 
 

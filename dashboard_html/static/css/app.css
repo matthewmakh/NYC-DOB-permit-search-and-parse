@@ -574,6 +574,259 @@ button { font-family: inherit; }
 }
 
 /* ============================================================
+   Multi-select filter
+   ------------------------------------------------------------
+   Progressive enhancement over a native <select multiple>. The
+   select stays in the DOM as the source of truth (so form reset,
+   clearFilters and no-JS fallback all keep working) and this
+   markup is layered on top of it.
+   ============================================================ */
+
+.ms {
+    position: relative;
+}
+
+/* Anchors the popover to the trigger, so the chips rendered below the
+   control never push the panel away from it. */
+.ms-control {
+    position: relative;
+}
+
+/* Compact variant for the toolbar rows, which size to their content and
+   have no room for a chip list below the control. */
+.ms[data-ms-compact] {
+    width: auto;
+    min-width: 132px;
+    max-width: 260px;
+}
+
+.ms[data-ms-compact="narrow"] {
+    min-width: 76px;
+}
+
+.ms[data-ms-compact] .ms-panel {
+    left: auto;
+    right: 0;
+    min-width: 200px;
+}
+
+.ms > select {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.ms-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.ms-trigger:hover { border-color: var(--ink-3); }
+
+.ms-trigger:focus-visible,
+.ms.is-open .ms-trigger {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ms-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-value.is-placeholder { color: var(--ink-3); }
+
+.ms-caret {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    color: var(--ink-3);
+    transition: transform 140ms ease;
+}
+
+.ms.is-open .ms-caret { transform: rotate(180deg); }
+
+.ms-panel {
+    position: absolute;
+    z-index: 60;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 320px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+}
+
+.ms-panel[hidden] { display: none; }
+
+.ms-search {
+    flex-shrink: 0;
+    width: 100%;
+    padding: 9px 11px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface);
+}
+
+.ms-search:focus { outline: none; background: var(--surface-2); }
+
+.ms-options {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.ms-group-label {
+    padding: 8px 8px 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+
+.ms-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--ink-2);
+    cursor: pointer;
+    line-height: 1.35;
+}
+
+.ms-option:hover,
+.ms-option.is-active { background: var(--surface-2); }
+
+.ms-option input {
+    flex-shrink: 0;
+    accent-color: var(--ink);
+    margin: 0;
+}
+
+.ms-option.is-selected { color: var(--ink); font-weight: 500; }
+
+.ms-option[hidden] { display: none; }
+
+.ms-empty {
+    padding: 14px 10px;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    text-align: center;
+}
+
+.ms-footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+}
+
+.ms-footer-count {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.ms-clear {
+    padding: 3px 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ms-clear:hover { border-color: var(--ink-3); color: var(--ink); }
+.ms-clear:disabled { opacity: 0.45; cursor: default; }
+
+/* Selected values echoed below the trigger so a collapsed filter still
+   shows what it is doing. */
+.ms-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+}
+
+.ms-chips:empty { display: none; }
+
+.ms-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 2px 5px 2px 8px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 11.5px;
+    color: var(--ink-2);
+}
+
+.ms-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-chip button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ms-chip button:hover { background: var(--surface-3); color: var(--ink); }
+
+/* ============================================================
    Properties — layout
    ============================================================ */
 
@@ -839,6 +1092,204 @@ button { font-family: inherit; }
 .badge-acris { background: var(--accent-soft); color: var(--accent); }
 .badge-permits { background: var(--surface-2); color: var(--ink-2); }
 .badge-violations { background: var(--amber-soft); color: var(--amber); }
+.badge-speculation { background: var(--red-soft); color: var(--red); }
+.badge-upside { background: var(--accent-soft); color: var(--accent); }
+.badge-equity { background: var(--green-soft); color: var(--green); }
+
+/* ============================================================
+   Prebuilt plays
+   ============================================================ */
+
+.plays-section { margin-bottom: 20px; }
+
+.plays-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.plays-head h2 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+
+.plays-head p { font-size: 12.5px; color: var(--ink-3); }
+
+.plays-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+}
+
+.play-card {
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 13px 15px;
+    cursor: pointer;
+    font-family: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.play-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-1); }
+
+.play-card.active {
+    border-color: var(--ink);
+    box-shadow: 0 0 0 1px var(--ink);
+}
+
+.play-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.play-name {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    line-height: 1.35;
+}
+
+.play-count {
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.play-desc {
+    font-size: 11.5px;
+    color: var(--ink-2);
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.play-card.active .play-desc { -webkit-line-clamp: unset; }
+
+.play-audience {
+    align-self: flex-start;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 7px;
+    border-radius: 99px;
+    background: var(--surface-2);
+    color: var(--ink-3);
+}
+
+/* Active-play guide */
+.play-guide {
+    margin-top: 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--ink);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+}
+
+.play-guide-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 4px;
+}
+
+.play-guide-head h3 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+
+.play-guide-head p { font-size: 13px; color: var(--ink-2); margin-top: 3px; max-width: 62ch; }
+
+.playbook-what {
+    font-size: 13px;
+    color: var(--ink-2);
+    line-height: 1.6;
+    max-width: 70ch;
+    margin: 10px 0 14px;
+}
+
+.playbook-ways {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.playbook-way {
+    background: var(--surface-2);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+}
+
+.playbook-way h4 { font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+
+.playbook-way p { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+
+.playbook-steps-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+}
+
+.playbook-steps {
+    margin: 8px 0 0 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: playstep;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.playbook-steps li {
+    counter-increment: playstep;
+    position: relative;
+    padding-left: 34px;
+    font-size: 13px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    max-width: 74ch;
+}
+
+.playbook-steps li::before {
+    content: counter(playstep);
+    position: absolute;
+    left: 0;
+    top: 1px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--surface);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.playbook-caution {
+    margin-top: 14px;
+    background: var(--amber-soft);
+    color: var(--amber);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
 
 .property-actions {
     display: flex;
@@ -1644,4 +2095,85 @@ button { font-family: inherit; }
     .search-btn { width: 100%; }
     .stats-dashboard { grid-template-columns: 1fr 1fr; }
     .portfolio-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ============================================================
+   Contractor work mix
+   ------------------------------------------------------------
+   What kind of work a contractor actually does, biggest first.
+   The bar behind each row is that category's share of their
+   permits, so the shape of a business reads at a glance.
+   ============================================================ */
+
+.contractor-work {
+    padding: 12px 0 2px;
+    border-top: 1px solid var(--line);
+}
+
+.contractor-work-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 7px;
+}
+
+.work-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.work-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    font-size: 12px;
+    color: var(--ink-2);
+    overflow: hidden;
+}
+
+.work-chip-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--accent-soft);
+    border-radius: var(--radius-sm);
+}
+
+.work-chip-text,
+.work-chip-count {
+    position: relative;
+}
+
+.work-chip-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.work-chip-count {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.work-chip-more {
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 11.5px;
+    padding-left: 8px;
+}
+
+/* The contractors page uses the properties sidebar layout, so its grid needs
+   to flow inside .content rather than the full-width container it had. */
+.content .contractors-grid {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }

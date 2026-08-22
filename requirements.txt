@@ -1,6 +1,6 @@
 beautifulsoup4==4.13.4
 mysql-connector-python==9.3.0
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.10
 undetected-chromedriver
 selenium
 selenium-wire

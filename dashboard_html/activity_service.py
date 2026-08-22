@@ -229,6 +229,8 @@ def log_activity(
     error_message=None,
     response_status=None,
     response_time_ms=None,
+    endpoint=None,
+    http_method=None,
     metadata=None,
     async_log=True,
     include_geo=True
@@ -252,6 +254,8 @@ def log_activity(
         action_success: Whether the action succeeded
         action_result: Result of the action
         error_message: Error message if action failed
+        endpoint: API path or endpoint name (defaults to request.endpoint)
+        http_method: HTTP verb (defaults to request.method)
         response_status: HTTP response status code
         response_time_ms: Response time in milliseconds
         metadata: Additional data as dict
@@ -285,8 +289,8 @@ def log_activity(
         # Get request context
         _page_url = page_url
         _referrer_url = None
-        _http_method = None
-        _endpoint = None
+        _http_method = http_method
+        _endpoint = endpoint
         _request_params = None
         _user_agent = None
         _ip_address = None
@@ -295,8 +299,10 @@ def log_activity(
             if request:
                 _page_url = page_url or request.url
                 _referrer_url = request.referrer
-                _http_method = request.method
-                _endpoint = request.endpoint
+                # Explicit values win: log_api_call passes the request path,
+                # which is more useful than Flask's endpoint function name.
+                _http_method = http_method or request.method
+                _endpoint = endpoint or request.endpoint
                 
                 # Get request params (excluding sensitive data)
                 params = {}

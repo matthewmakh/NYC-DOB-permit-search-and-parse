@@ -572,6 +572,153 @@ def search_contact():
         }), 500
 
 
+# Which owner name step5 fed into the Secretary of State lookup. Stored by the
+# pipeline but never surfaced until now, which left no way to tell whether an
+# SOS entity legitimately supersedes the PLUTO name shown beside it (a newer
+# deed) or is simply the wrong company.
+SOS_SOURCE_LABELS = {
+    'sale_buyer_primary': 'ACRIS deed buyer (most recent sale)',
+    'owner_name_rpad': 'Tax records (RPAD)',
+    'current_owner_name': 'NYC PLUTO',
+    'owner_name_hpd': 'HPD registration',
+}
+
+
+# ============================================================================
+# PERMIT CLASSIFICATION CODES
+# ----------------------------------------------------------------------------
+# DOB spells out what a permit is for across four columns. Labels here are for
+# display only — the filter options themselves come from the database (see
+# /api/permits/facets), so a code we have not named still appears, just bare.
+# ============================================================================
+
+# job_type: the scope of the job the permit belongs to.
+JOB_TYPE_LABELS = {
+    'A1': 'Alteration Type 1 (use, egress or occupancy change)',
+    'A2': 'Alteration Type 2 (multiple work types, no use change)',
+    'A3': 'Alteration Type 3 (minor, single work type)',
+    'NB': 'New Building',
+    'DM': 'Demolition',
+    'SG': 'Sign',
+    'PA': 'Place of Assembly',
+}
+
+# work_type: the trade actually being performed. This is the column that
+# answers "what kind of work does this contractor do".
+WORK_TYPE_LABELS = {
+    'BL': 'Boiler',
+    'CC': 'Curb Cut',
+    'CH': 'Chute',
+    'EQ': 'Construction Equipment',
+    'EW': 'Equipment Work',
+    'FA': 'Fire Alarm',
+    'FB': 'Fuel Burning',
+    'FN': 'Fence',
+    'FP': 'Fire Suppression',
+    'FS': 'Fuel Storage',
+    'MH': 'Mechanical / HVAC',
+    'OT': 'Other',
+    'PL': 'Plumbing',
+    'SD': 'Standpipe',
+    'SF': 'Scaffold',
+    'SH': 'Sidewalk Shed',
+    'SP': 'Sprinkler',
+}
+
+# permit_type: the permit category DOB issues under.
+PERMIT_TYPE_LABELS = {
+    'AL': 'Alteration',
+    'BL': 'Boiler',
+    'DM': 'Demolition & Removal',
+    'EQ': 'Construction Equipment',
+    'EW': 'Equipment Work',
+    'FO': 'Foundation',
+    'FN': 'Fence',
+    'FP': 'Fire Suppression',
+    'NB': 'New Building',
+    'OT': 'Other',
+    'PL': 'Plumbing',
+    'SD': 'Standpipe',
+    'SG': 'Sign',
+    'SH': 'Sidewalk Shed',
+    'SP': 'Sprinkler',
+}
+
+# permittee_license_type: what licence the permit was pulled under, which is
+# the cleanest read on a contractor's trade.
+LICENSE_TYPE_LABELS = {
+    'GC': 'General Contractor',
+    'HI': 'Home Improvement Contractor',
+    'MP': 'Master Plumber',
+    'FS': 'Fire Suppression Contractor',
+    'OB': 'Oil Burner Installer',
+    'SI': 'Sign Hanger',
+    'ME': 'Master Electrician',
+    'EL': 'Electrician',
+    'PE': 'Professional Engineer',
+    'RA': 'Registered Architect',
+    'TC': 'Tower Crane Rigger',
+    'OW': 'Owner',
+    'DM': 'Demolition Contractor',
+    'GF': 'General Contractor (filing rep)',
+}
+
+_FACET_COLUMNS = {
+    'job_type': ('job_type', JOB_TYPE_LABELS),
+    'work_type': ('work_type', WORK_TYPE_LABELS),
+    'permit_type': ('permit_type', PERMIT_TYPE_LABELS),
+    'license_type': ('permittee_license_type', LICENSE_TYPE_LABELS),
+}
+
+
+def label_for(kind, code):
+    """Human label for a DOB code, falling back to the bare code."""
+    if not code:
+        return None
+    labels = _FACET_COLUMNS.get(kind, (None, {}))[1]
+    name = labels.get(str(code).upper())
+    return f'{code} — {name}' if name else str(code)
+
+
+@app.route('/api/permits/facets')
+@cache.cached(timeout=1800)
+def api_permit_facets():
+    """Filter options for the permit classification columns.
+
+    Values come from the permits table with a count each, so the filters only
+    ever offer choices that match something, and a code DOB adds later shows
+    up without a code change.
+    """
+    try:
+        facets = {}
+        with DatabaseConnection() as cur:
+            for kind, (column, _labels) in _FACET_COLUMNS.items():
+                # Column names are from the fixed map above, never user input.
+                cur.execute(f"""
+                    SELECT {column} AS code, COUNT(*) AS permit_count
+                    FROM permits
+                    WHERE {column} IS NOT NULL
+                      AND btrim({column}) <> ''
+                    GROUP BY {column}
+                    HAVING COUNT(*) >= 25
+                    ORDER BY COUNT(*) DESC
+                """)
+                facets[kind] = [
+                    {
+                        'value': row['code'].strip().upper(),
+                        'label': label_for(kind, row['code'].strip().upper()),
+                        'count': row['permit_count'],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+        return jsonify({'success': True, 'facets': facets})
+
+    except Exception as e:
+        print(f"Permit facets API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/permit-types')
 def get_permit_types():
     """Get all unique permit/job types"""
@@ -1107,7 +1254,7 @@ def get_building_contacts(building_id):
             WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
             ORDER BY name, role;
         """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
-        contacts = cur.fetchall()
+            contacts = cur.fetchall()
         
         return jsonify(contacts)
         
@@ -1176,23 +1323,23 @@ def get_seller_leads():
             AND ap.party_name NOT ILIKE '%%funding%%'
         """
         
-        params = []
+            params = []
         
-        # Apply filters
-        if min_sale_price:
-            query += " AND t.doc_amount >= %s"
-            params.append(min_sale_price)
+            # Apply filters
+            if min_sale_price:
+                query += " AND t.doc_amount >= %s"
+                params.append(min_sale_price)
         
-        if state_filter:
-            query += " AND ap.state = %s"
-            params.append(state_filter.upper())
+            if state_filter:
+                query += " AND ap.state = %s"
+                params.append(state_filter.upper())
         
-        query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
-        query += " LIMIT %s"
-        params.append(limit)
+            query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
+            query += " LIMIT %s"
+            params.append(limit)
         
-        cur.execute(query, tuple(params))
-        leads = cur.fetchall()
+            cur.execute(query, tuple(params))
+            leads = cur.fetchall()
         
         # Format leads for frontend
         formatted_leads = []
@@ -1877,21 +2024,21 @@ def export_construction_permits():
             WHERE p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
         """
         
-        params = [days]
+            params = [days]
         
-        if job_types:
-            placeholders = ','.join(['%s'] * len(job_types))
-            query += f" AND p.job_type IN ({placeholders})"
-            params.extend(job_types)
+            if job_types:
+                placeholders = ','.join(['%s'] * len(job_types))
+                query += f" AND p.job_type IN ({placeholders})"
+                params.extend(job_types)
         
-        if borough:
-            query += " AND p.borough = %s"
-            params.append(borough)
+            if borough:
+                query += " AND p.borough = %s"
+                params.append(borough)
         
-        query += " ORDER BY p.issue_date DESC LIMIT 500"
+            query += " ORDER BY p.issue_date DESC LIMIT 500"
         
-        cur.execute(query, tuple(params))
-        permits = cur.fetchall()
+            cur.execute(query, tuple(params))
+            permits = cur.fetchall()
         
         # Create CSV
         si = StringIO()
@@ -2724,7 +2871,10 @@ def api_property_detail(bbl):
 @login_required
 def properties_page():
     """Render the properties search/browse page"""
-    return render_template('properties.html')
+    return render_template(
+        'properties.html',
+        building_class_groups=building_class_options(),
+    )
 
 
 # Hard cap on the number of properties one bulk-enrich job can target.
@@ -2732,11 +2882,195 @@ def properties_page():
 BULK_ENRICH_MAX_PROPERTIES = 20000
 
 
+# Category filters the properties sidebar exposes as multi-selects. Each one
+# accepts any number of values and ORs them together, so "Residential OR
+# Mixed use" or "PL OR EW OR NB" is a single query rather than three passes.
+_PROPERTY_TYPE_SQL = {
+    # A=1-family, B=2-family, C=walk-up, D=elevator, R=condo
+    'residential': "b.building_class ~ '^[ABCDR]'",
+    # K=stores, O=office, E=warehouse, F=factory, G=garage
+    'commercial': "b.building_class ~ '^[KOEFG]'",
+    # S=mixed residential/commercial
+    'mixed': "b.building_class ~ '^S'",
+}
+
+
+def _multi_param(args, name, allowed=None, upper=False):
+    """Collect a repeatable filter param into a de-duplicated list of values.
+
+    Handles every shape these params arrive in:
+      - repeated query args   ?permit_type=PL&permit_type=EW
+      - one comma-separated   ?permit_type=PL,EW
+      - a JSON array          {"permit_type": ["PL", "EW"]}
+      - a single scalar       ?permit_type=PL      (pre-multi-select clients)
+
+    Empty values are dropped; `allowed`, when given, filters to a known set so
+    unrecognised input can never reach the query.
+    """
+    raw_values = []
+
+    def spread(value):
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                spread(item)
+            return
+        raw_values.extend(str(value).split(','))
+
+    if args is not None and hasattr(args, 'getlist'):
+        spread(args.getlist(name))
+    elif args is not None and hasattr(args, 'get'):
+        spread(args.get(name))
+
+    out = []
+    seen = set()
+    for value in raw_values:
+        value = value.strip()
+        if upper:
+            value = value.upper()
+        if not value or value in seen:
+            continue
+        if allowed is not None and value not in allowed:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _permit_predicates(args, alias='p', include_recency=True):
+    """WHERE fragments describing the permits a filter set is asking about.
+
+    Returned as (sql_parts, params) so the caller can drop them into an EXISTS
+    against the buildings table or straight into a query already scanning
+    permits. The properties page and the contractors page both go through
+    this, which is what makes a given filter set mean the same thing on both.
+    """
+    parts, params = [], []
+
+    permit_types = _multi_param(args, 'permit_type', upper=True)
+    if permit_types:
+        placeholders = ','.join(['%s'] * len(permit_types))
+        parts.append(f'UPPER(btrim({alias}.permit_type)) IN ({placeholders})')
+        params.extend(permit_types)
+
+    work_types = _multi_param(args, 'work_type', upper=True)
+    if work_types:
+        placeholders = ','.join(['%s'] * len(work_types))
+        parts.append(f'UPPER(btrim({alias}.work_type)) IN ({placeholders})')
+        params.extend(work_types)
+
+    job_types = _multi_param(args, 'job_type', upper=True)
+    if job_types:
+        placeholders = ','.join(['%s'] * len(job_types))
+        parts.append(f'UPPER(btrim({alias}.job_type)) IN ({placeholders})')
+        params.extend(job_types)
+
+    license_types = _multi_param(args, 'license_type', upper=True)
+    if license_types:
+        placeholders = ','.join(['%s'] * len(license_types))
+        parts.append(
+            f'UPPER(btrim({alias}.permittee_license_type)) IN ({placeholders})')
+        params.extend(license_types)
+
+    recent_days = None
+    if not include_recency:
+        return parts, params
+    try:
+        raw = args.get('recent_permit_days') if hasattr(args, 'get') else None
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0] if raw else None
+        recent_days = int(raw) if raw not in (None, '') else None
+    except (TypeError, ValueError):
+        recent_days = None
+    if recent_days is not None and recent_days > 0:
+        parts.append(
+            f"({alias}.filing_date >= CURRENT_DATE - (%s || ' days')::interval"
+            f" OR {alias}.issue_date >= CURRENT_DATE - (%s || ' days')::interval)")
+        params.extend([str(recent_days), str(recent_days)])
+
+    return parts, params
+
+
+def _append_building_only_filters(args, where_clauses, params, alias='b'):
+    """Filters that describe the building itself.
+
+    Split out from _append_category_filters because the contractors page
+    filters permits directly and needs these without the permits EXISTS.
+    """
+    property_types = _multi_param(args, 'property_type', allowed=set(_PROPERTY_TYPE_SQL))
+    if property_types:
+        where_clauses.append(
+            '(' + ' OR '.join(_PROPERTY_TYPE_SQL[t] for t in property_types) + ')'
+        )
+
+    building_classes = _multi_param(args, 'building_class', upper=True)
+    if building_classes:
+        where_clauses.append(
+            '(' + ' OR '.join(['b.building_class LIKE %s'] * len(building_classes)) + ')'
+        )
+        params.extend(f'{code}%' for code in building_classes)
+
+    # "Has violations" and "No violations" are complements: picking both is the
+    # same as picking neither, so neither adds a clause.
+    violations = {v.lower() for v in _multi_param(args, 'has_violations')}
+    wants_open = 'true' in violations
+    wants_clean = 'false' in violations
+    if wants_open and not wants_clean:
+        where_clauses.append('b.hpd_open_violations > 0')
+    elif wants_clean and not wants_open:
+        where_clauses.append('(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)')
+
+
+def _append_category_filters(args, where_clauses, params):
+    """Building filters plus the permit-attribute EXISTS.
+
+    Shared by /api/properties, the CSV export and the bulk-enrich resolver so
+    all three always resolve a given filter set to the same properties.
+    """
+    _append_building_only_filters(args, where_clauses, params)
+
+    # Permit type, work type, job type and licence type all describe the
+    # permits on a building, so they collapse into a single EXISTS. Recency is
+    # left out because /api/properties applies it through its own join; the
+    # predicate is the same either way.
+    permit_parts, permit_params = _permit_predicates(
+        args, alias='p', include_recency=False)
+    if permit_parts:
+        where_clauses.append(
+            'EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND '
+            + ' AND '.join(permit_parts) + ')'
+        )
+        params.extend(permit_params)
+
+
+def _order_by_sql(args, whitelist, default_key, sort_order, tiebreaker=None):
+    """Build an ORDER BY body from a repeatable sort_by param.
+
+    The Sort control is a multi-select: the keys are applied in the order
+    they were picked, so the second key breaks ties in the first. Unknown
+    keys are dropped, and an empty selection falls back to `default_key`.
+
+    `whitelist` maps a public key to a SQL expression — nothing else can
+    reach the query, so the keys are safe to interpolate.
+    """
+    keys = [k for k in _multi_param(args, 'sort_by') if k in whitelist]
+    if not keys:
+        keys = [default_key]
+
+    direction = 'ASC' if str(sort_order).lower() == 'asc' else 'DESC'
+    parts = [f'{whitelist[key]} {direction} NULLS LAST' for key in keys]
+    if tiebreaker:
+        parts.append(tiebreaker)
+    return ', '.join(parts)
+
+
 def _parse_boroughs_param(raw, multi_source=None):
     """Parse the borough query param into a list of valid borough codes.
 
-    Accepts either repeated values (?borough=1&borough=3) or a single
-    comma-separated value (?borough=1,3). Empty / unknown codes are dropped.
+    Accepts repeated values (?borough=1&borough=3), a single comma-separated
+    value (?borough=1,3), or a JSON array (["1", "3"]) from a POST body.
+    Empty / unknown codes are dropped.
 
     `multi_source` (optional) is a MultiDict-like object with `getlist`.
     If provided, it's used instead of Flask's global request — needed when
@@ -2746,7 +3080,13 @@ def _parse_boroughs_param(raw, multi_source=None):
     valid = {'1', '2', '3', '4', '5'}
     raw_values = []
 
-    if multi_source is not None and hasattr(multi_source, 'getlist'):
+    if isinstance(raw, (list, tuple, set)):
+        # A JSON array, as the bulk-enrich POST body sends it. Checked first
+        # because that request has its own empty query string, and falling
+        # through to request.args would silently drop the filter.
+        for v in raw:
+            raw_values.extend(str(v).split(','))
+    elif multi_source is not None and hasattr(multi_source, 'getlist'):
         for v in multi_source.getlist('borough'):
             raw_values.extend(str(v).split(','))
     else:
@@ -2757,6 +3097,8 @@ def _parse_boroughs_param(raw, multi_source=None):
         except RuntimeError:
             if raw:
                 raw_values = str(raw).split(',')
+        if not raw_values and raw:
+            raw_values = str(raw).split(',')
 
     out = []
     seen = set()
@@ -2802,13 +3144,9 @@ def _resolve_filter_building_ids(args, limit=None):
     with_permits = str(g('with_permits', default='')).lower() == 'true'
     min_permits = g('min_permits', type=int)
     recent_permit_days = g('recent_permit_days', type=int)
-    permit_type = (g('permit_type', default='') or '').strip()
-    property_type = (g('property_type', default='') or '').strip()
     boroughs = _parse_boroughs_param(g('borough', default=''), multi_source=args if hasattr(args, 'getlist') else None)
-    building_class = (g('building_class', default='') or '').strip()
     min_units = g('min_units', type=int)
     max_units = g('max_units', type=int)
-    has_violations = g('has_violations')
     recent_sale_days = g('recent_sale_days', type=int)
     financing_min = g('financing_min', type=float)
     financing_max = g('financing_max', type=float)
@@ -2816,6 +3154,16 @@ def _resolve_filter_building_ids(args, limit=None):
 
     where_clauses = []
     params = []
+
+    # Prebuilt play — bulk enrichment over a play targets exactly the
+    # play's building set. Unknown/unavailable plays raise so the caller
+    # surfaces the error instead of silently enriching everything.
+    play_id = str(g('play', default='') or '').strip()
+    if play_id:
+        play_where, play_error = _resolve_play_where(play_id)
+        if play_error:
+            raise ValueError(play_error)
+        where_clauses.append(play_where)
 
     if search:
         is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
@@ -2869,9 +3217,7 @@ def _resolve_filter_building_ids(args, limit=None):
         placeholders = ','.join(['%s'] * len(boroughs))
         where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
         params.extend(boroughs)
-    if building_class:
-        where_clauses.append("b.building_class LIKE %s")
-        params.append(f"{building_class.upper()}%")
+    _append_category_filters(args, where_clauses, params)
     if min_units is not None:
         where_clauses.append("COALESCE(b.total_units, 0) >= %s"); params.append(min_units)
     if max_units is not None:
@@ -2888,28 +3234,6 @@ def _resolve_filter_building_ids(args, limit=None):
                    OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
         )""")
         params.extend([str(recent_permit_days), str(recent_permit_days)])
-    if permit_type:
-        # Parameterized — staging's /api/properties version interpolates this raw,
-        # which is a SQL-injection risk we should fix separately.
-        where_clauses.append(
-            "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
-        )
-        params.append(permit_type)
-    if property_type:
-        # Mirror the building-class regexes used by /api/properties so the
-        # bulk-enrich resolver returns the same set the page is showing.
-        if property_type == 'residential':
-            where_clauses.append("b.building_class ~ '^[ABCDR]'")
-        elif property_type == 'commercial':
-            where_clauses.append("b.building_class ~ '^[KOEFG]'")
-        elif property_type == 'mixed':
-            where_clauses.append("b.building_class LIKE 'S%%'")
-    if has_violations is not None:
-        hv = str(has_violations).lower()
-        if hv == 'true':
-            where_clauses.append("b.hpd_open_violations > 0")
-        elif hv == 'false':
-            where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
     if has_enrichable_owner:
         where_clauses.append("""
             (
@@ -2942,6 +3266,88 @@ def _resolve_filter_building_ids(args, limit=None):
         return [r['id'] for r in cur.fetchall()]
 
 
+# ---------------------------------------------------------------------------
+# Prebuilt filter "plays" (see plays.py). A play is a server-defined WHERE
+# fragment over the signal columns; plays are only offered when the columns
+# from migrate_add_intel_signals.py exist, so pre-migration databases just
+# show fewer plays.
+# ---------------------------------------------------------------------------
+
+_buildings_columns_cache = {'at': 0.0, 'cols': set()}
+
+
+def _buildings_columns():
+    """Column names on buildings, cached for 5 minutes."""
+    now = time.time()
+    if now - _buildings_columns_cache['at'] > 300:
+        try:
+            with DatabaseConnection() as cur:
+                cur.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'buildings'
+                """)
+                _buildings_columns_cache['cols'] = {r['column_name'] for r in cur.fetchall()}
+                _buildings_columns_cache['at'] = now
+        except Exception as e:
+            print(f"buildings-columns probe failed: {e}")
+    return _buildings_columns_cache['cols']
+
+
+def _resolve_play_where(play_id):
+    """(where_fragment, error) for a ?play= param. Empty play_id -> (None, None)."""
+    if not play_id:
+        return None, None
+    from plays import get_play
+    play = get_play(play_id, _buildings_columns())
+    if not play:
+        return None, f"Unknown or unavailable play: {play_id}"
+    return play['where'], None
+
+
+# Extra buildings columns returned to the list UI when the signals
+# migration has run (property cards render badges from whichever arrive).
+_SIGNAL_SELECT_COLUMNS = [
+    'unused_far', 'zoning_district', 'is_free_and_clear', 'has_open_mortgage',
+    'has_senior_exemption', 'has_disabled_exemption',
+    'on_speculation_watch_list', 'speculation_watch_date',
+    'litigation_open_count', 'eviction_count',
+    'has_tax_delinquency', 'tax_delinquency_latest_date',
+    'latest_co_date', 'latest_co_type', 'fisp_status',
+    'll97_covered_estimated', 'energy_star_score',
+]
+
+
+def _signal_select_sql():
+    cols = _buildings_columns()
+    return ''.join(f", b.{c}" for c in _SIGNAL_SELECT_COLUMNS if c in cols)
+
+
+@app.route('/api/properties/plays')
+@cache.cached(timeout=600)
+def api_property_plays():
+    """Prebuilt plays available on this database, with live match counts."""
+    from plays import available_plays, public_play
+    try:
+        plays_list = available_plays(_buildings_columns())
+        counts = {}
+        if plays_list:
+            count_exprs = ', '.join(
+                f"COUNT(*) FILTER (WHERE {p['where']}) AS c{i}"
+                for i, p in enumerate(plays_list)
+            )
+            with DatabaseConnection() as cur:
+                cur.execute(f"SELECT {count_exprs} FROM buildings b", ())
+                row = cur.fetchone()
+                counts = {p['id']: row[f'c{i}'] for i, p in enumerate(plays_list)}
+        return jsonify({
+            'success': True,
+            'plays': [dict(public_play(p), count=counts.get(p['id'], 0)) for p in plays_list],
+        })
+    except Exception as e:
+        print(f"Plays API error: {e}")
+        return jsonify({'success': False, 'error': str(e), 'plays': []}), 500
+
+
 @app.route('/api/properties')
 @cache.cached(timeout=300, query_string=True)
 def api_properties():
@@ -2958,14 +3364,16 @@ def api_properties():
     - with_permits: Only properties with permits (true/false)
     - min_permits: Minimum permit count
     - recent_permit_days: Only properties with permits filed/issued within X days
-    - borough: Borough filter (1-5)
-    - building_class: Building class code
+    - borough: Borough filter (1-5), repeatable or comma-separated
+    - building_class: Building class code prefix, repeatable or comma-separated
+    - permit_type: DOB permit type, repeatable or comma-separated
+    - property_type: residential/commercial/mixed, repeatable or comma-separated
     - min_units, max_units: Unit count range
-    - has_violations: Has HPD violations (true/false)
+    - has_violations: true and/or false; both (or neither) means no filter
     - recent_sale_days: Sold within X days
     - financing_min, financing_max: Financing ratio range
-    - sort_by: Field to sort (value, sale_date, address)
-    - sort_order: asc or desc
+    - sort_by: Field(s) to sort by, repeatable; later keys break ties
+    - sort_order: asc or desc, applied to every sort key
     - page: Page number (default 1)
     - per_page: Results per page (default 50, max 200)
     """
@@ -2984,24 +3392,26 @@ def api_properties():
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
-            permit_type = request.args.get('permit_type', '').strip()  # Permit type filter
-            property_type = request.args.get('property_type', '').strip()  # Residential/Commercial filter
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
-            sort_by = request.args.get('sort_by', 'sale_date')
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
-            
+
+            # Prebuilt play (server-defined WHERE fragment; see plays.py)
+            play_where, play_error = _resolve_play_where(request.args.get('play', '').strip())
+            if play_error:
+                return jsonify({'success': False, 'error': play_error}), 400
+
             # Build WHERE clauses
             where_clauses = []
             params = []
+            if play_where:
+                where_clauses.append(play_where)
         
             # Text search across multiple fields
             if search:
@@ -3088,23 +3498,11 @@ def api_properties():
                 where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
                 params.extend(boroughs)
         
-            # Property type filter (residential/commercial/mixed)
-            if property_type:
-                if property_type == 'residential':
-                    # A=1-family, B=2-family, C=walk-up, D=elevator, R=condo
-                    where_clauses.append("b.building_class ~ '^[ABCDR]'")
-                elif property_type == 'commercial':
-                    # K=stores, O=office, E=warehouse, F=factory, G=garage
-                    where_clauses.append("b.building_class ~ '^[KOEFG]'")
-                elif property_type == 'mixed':
-                    # S=mixed residential/commercial
-                    where_clauses.append("b.building_class LIKE 'S%'")
-        
-            # Building class
-            if building_class:
-                where_clauses.append("b.building_class LIKE %s")
-                params.append(f"{building_class}%")
-        
+            # Property type, building class, permit type and HPD violations are
+            # all multi-select in the sidebar; one shared helper turns each set
+            # of values into an OR'd clause.
+            _append_category_filters(request.args, where_clauses, params)
+
             # Units range
             if min_units is not None:
                 where_clauses.append("b.total_units >= %s")
@@ -3113,13 +3511,6 @@ def api_properties():
                 where_clauses.append("b.total_units <= %s")
                 params.append(max_units)
         
-            # HPD violations
-            if has_violations is not None:
-                if has_violations.lower() == 'true':
-                    where_clauses.append("b.hpd_open_violations > 0")
-                else:
-                    where_clauses.append("(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)")
-            
             # Enrichable owner filter - has a person name (not LLC/INC/CORP) with first+last
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
@@ -3147,14 +3538,6 @@ def api_properties():
                          AND b.owner_name_hpd ~ ' ')
                     )
                 """)
-
-            # Permit type filter — bound parameter (was previously interpolated raw,
-            # which was a SQL-injection risk via the ?permit_type= query param).
-            if permit_type:
-                where_clauses.append(
-                    "EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND p.permit_type = %s)"
-                )
-                params.append(permit_type)
 
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -3198,10 +3581,20 @@ def api_properties():
                 'sale_date': 'b.sale_date',
                 'sale_price': 'b.sale_price',
                 'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
-                'permits': 'pc.permit_count'
+                'permits': 'pc.permit_count',
+                'units': 'b.total_units'
             }
-            sort_column = valid_sort_columns.get(sort_by, 'b.sale_date')
-            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
+            # Signal-column sorts, offered only once the migration has run
+            available_cols = _buildings_columns()
+            if 'unused_far' in available_cols:
+                valid_sort_columns['unused_far'] = 'b.unused_far'
+            if 'latest_co_date' in available_cols:
+                valid_sort_columns['co_date'] = 'b.latest_co_date'
+            # Sort is multi-select: later keys break ties in earlier ones.
+            order_by_sql = _order_by_sql(
+                request.args, valid_sort_columns, 'sale_date', sort_order,
+                tiebreaker='b.id',
+            )
         
             # Get total count
             count_query = f"""
@@ -3250,6 +3643,7 @@ def api_properties():
                     b.acris_deed_count,
                     b.acris_mortgage_count,
                     b.acris_total_transactions,
+                    b.lot_sqft{_signal_select_sql()},
                     COALESCE(pc.permit_count, 0) as permit_count,
                     pcon.contractor_name,
                     pcon.contractor_phone,
@@ -3268,7 +3662,7 @@ def api_properties():
                 ) pcon ON true
                 {recent_permit_sql}
                 {where_sql}
-                ORDER BY {sort_column} {sort_direction} NULLS LAST, b.id
+                ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
             """
         
@@ -3332,7 +3726,7 @@ def api_owner_portfolio(owner_name):
             ORDER BY b.assessed_total_value DESC NULLS LAST
         """, (f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%", f"%{owner_name}%"))
         
-        properties = cur.fetchall()
+            properties = cur.fetchall()
         
         # Calculate portfolio stats
         total_value = sum(p['assessed_total_value'] or 0 for p in properties)
@@ -3433,29 +3827,33 @@ def api_properties_export():
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
-            sort_by = request.args.get('sort_by', 'sale_date')
             sort_order = request.args.get('sort_order', 'desc').lower()
-            
+
+            # Prebuilt play — exporting a play exports exactly the play's set
+            play_where, play_error = _resolve_play_where(request.args.get('play', '').strip())
+            if play_error:
+                return jsonify({'success': False, 'error': play_error}), 400
+
             # Build WHERE clauses
             where_clauses = []
             params = []
-            
+            if play_where:
+                where_clauses.append(play_where)
+
             if search:
                 # Check if search looks like a zip code (5 digits starting with 1)
                 is_zip_search = search.isdigit() and len(search) == 5 and search.startswith('1')
-                
+
                 if is_zip_search:
                     # Search by zip code - join with permits table
                     where_clauses.append("""(
-                        b.address ILIKE %s OR 
-                        b.bbl LIKE %s OR 
+                        b.address ILIKE %s OR
+                        b.bbl LIKE %s OR
                         b.current_owner_name ILIKE %s OR
                         b.owner_name_rpad ILIKE %s OR
                         b.owner_name_hpd ILIKE %s OR
@@ -3516,9 +3914,7 @@ def api_properties_export():
                 placeholders = ','.join(['%s'] * len(boroughs))
                 where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
                 params.extend(boroughs)
-            if building_class:
-                where_clauses.append("b.building_class LIKE %s")
-                params.append(f"{building_class.upper()}%")
+            _append_category_filters(request.args, where_clauses, params)
             if min_units is not None:
                 where_clauses.append("COALESCE(b.total_units, 0) >= %s")
                 params.append(min_units)
@@ -3538,11 +3934,6 @@ def api_properties_export():
                          OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
                 )""")
                 params.extend([str(recent_permit_days), str(recent_permit_days)])
-            if has_violations == 'true':
-                where_clauses.append("COALESCE(b.hpd_total_violations, 0) > 0")
-            elif has_violations == 'false':
-                where_clauses.append("COALESCE(b.hpd_total_violations, 0) = 0")
-            
             # Enrichable owner filter
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
@@ -3576,8 +3967,8 @@ def api_properties_export():
                 'address': 'b.address',
                 'owner': 'COALESCE(b.current_owner_name, b.owner_name_rpad)',
             }
-            sort_col = sort_columns.get(sort_by, 'b.sale_date')
-            sort_dir = 'ASC' if sort_order == 'asc' else 'DESC'
+            order_by_sql = _order_by_sql(
+                request.args, sort_columns, 'sale_date', sort_order)
             
             # Get user's unlocked building IDs
             cur.execute("""
@@ -3607,7 +3998,7 @@ def api_properties_export():
                     (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
                 FROM buildings b
                 WHERE {where_sql}
-                ORDER BY {sort_col} {sort_dir} NULLS LAST
+                ORDER BY {order_by_sql}
                 LIMIT 10000
             """
             
@@ -3977,10 +4368,8 @@ def api_properties_export_with_enrichment():
             min_permits = request.args.get('min_permits', type=int)
             recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
-            building_class = request.args.get('building_class', '').strip()
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
-            has_violations = request.args.get('has_violations')
             recent_sale_days = request.args.get('recent_sale_days', type=int)
             financing_min = request.args.get('financing_min', type=float)
             financing_max = request.args.get('financing_max', type=float)
@@ -4022,7 +4411,11 @@ def api_properties_export_with_enrichment():
 
             if with_permits or min_permits:
                 where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
-            
+
+            # These were read from the query string but never applied, so an
+            # enriched export could bill for rows the filtered screen excluded.
+            _append_category_filters(request.args, where_clauses, params)
+
             # Build query (limit 10000)
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -4236,7 +4629,10 @@ def api_properties_export_with_enrichment():
 @login_required
 def contractors_page():
     """Render the contractors search/browse page"""
-    return render_template('contractors.html')
+    return render_template(
+        'contractors.html',
+        building_class_groups=building_class_options(),
+    )
 
 
 @app.route('/contractor/<contractor_name>')
@@ -4246,57 +4642,191 @@ def contractor_profile(contractor_name):
     return render_template('contractor_profile.html', contractor_name=contractor_name)
 
 
+def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
+    """Fill in what kind of work each contractor on this page actually does.
+
+    DOB spreads the answer over three columns and which one is populated
+    varies by permit feed — scaffolding work, for instance, often carries a
+    work_type with no job_type at all, which is why the old
+    string_agg(job_type) rendered as N/A for whole categories of contractor.
+    Falling back through work_type, permit_type then job_type gives every
+    contractor a real answer.
+
+    Runs as one extra query scoped to the names already on the page.
+    """
+    for contractor in contractors:
+        contractor['work_mix'] = []
+        contractor['job_types'] = None
+
+    names = [c['contractor_name'] for c in contractors if c.get('contractor_name')]
+    if not names:
+        return
+
+    scoped = list(where_parts) + ['p.applicant = ANY(%s)']
+    cur.execute(f"""
+        SELECT
+            p.applicant AS contractor_name,
+            COALESCE(
+                NULLIF(UPPER(btrim(p.work_type)), ''),
+                NULLIF(UPPER(btrim(p.permit_type)), ''),
+                NULLIF(UPPER(btrim(p.job_type)), '')
+            ) AS code,
+            COUNT(*) AS permit_count
+        FROM permits p
+        LEFT JOIN buildings b ON p.bbl = b.bbl
+        WHERE {' AND '.join(scoped)}
+        GROUP BY 1, 2
+        HAVING COALESCE(
+            NULLIF(UPPER(btrim(p.work_type)), ''),
+            NULLIF(UPPER(btrim(p.permit_type)), ''),
+            NULLIF(UPPER(btrim(p.job_type)), '')
+        ) IS NOT NULL
+        ORDER BY 1, COUNT(*) DESC
+    """, where_params + [names])
+
+    by_name = {}
+    for row in cur.fetchall():
+        by_name.setdefault(row['contractor_name'], []).append({
+            'code': row['code'],
+            'label': (WORK_TYPE_LABELS.get(row['code'])
+                      or PERMIT_TYPE_LABELS.get(row['code'])
+                      or JOB_TYPE_LABELS.get(row['code'])
+                      or row['code']),
+            'count': row['permit_count'],
+        })
+
+    for contractor in contractors:
+        mix = by_name.get(contractor['contractor_name'], [])
+        contractor['work_mix'] = mix[:top_n]
+        contractor['work_mix_other'] = max(0, len(mix) - top_n)
+        # Kept for anything still reading the old flat field.
+        contractor['job_types'] = ', '.join(m['code'] for m in mix[:top_n]) or None
+
+
 @app.route('/api/contractors/search')
 @cache.cached(timeout=300, query_string=True)
 def api_contractors_search():
     """
-    Search contractors with aggregated stats
-    
-    Query Parameters:
-    - search: Contractor name or license search
-    - sort_by: active_jobs, total_jobs, total_value (default: total_jobs)
-    - sort_order: asc or desc (default: desc)
-    - page: Page number (default 1)
-    - per_page: Results per page (default 50, max 200)
+    Search contractors with aggregated stats.
+
+    Takes the same filter vocabulary as /api/properties, so a filter set means
+    the same thing on both pages: there it returns the buildings that match,
+    here it returns the contractors who worked on them.
+
+    Shared with /api/properties:
+    - search, borough, property_type, building_class, min_units, max_units,
+      min_value, max_value, permit_type, work_type, job_type, license_type,
+      recent_permit_days
+
+    Contractor-specific:
+    - min_jobs, max_jobs, min_active_jobs, min_properties, max_properties
+    - sort_by: total_jobs, active_jobs, total_value, largest_project,
+      unique_properties, most_recent_job — repeatable; later keys break ties
+    - sort_order: asc or desc, applied to every sort key
+    - page, per_page
     """
     try:
         with DatabaseConnection() as cur:
-            # Parse query parameters
             search = request.args.get('search', '').strip()
-            sort_by = request.args.get('sort_by', 'total_jobs')
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
             offset = (page - 1) * per_page
-            
-            # Build WHERE clause - exclude NULL, empty, and placeholder values
-            where_clause = """WHERE p.applicant IS NOT NULL 
-                AND p.applicant != '' 
+
+            # Exclude NULL, empty and placeholder applicant values
+            where_parts = ["""p.applicant IS NOT NULL
+                AND p.applicant != ''
                 AND p.applicant != 'N/A'
                 AND p.applicant != 'NA'
                 AND p.applicant != 'NONE'
-                AND p.applicant NOT ILIKE 'unknown%%'"""
-            search_params = []
-            
+                AND p.applicant NOT ILIKE 'unknown%%'"""]
+            where_params = []
+
             if search:
-                where_clause += " AND (p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s OR p.permittee_business_name ILIKE %s)"
-                search_term = f"%{search}%"
-                search_params = [search_term, search_term, search_term]
-            
-            # Determine sort column
-            sort_column = {
-                'active_jobs': 'active_jobs',
-                'total_jobs': 'total_jobs',
-                'total_value': 'total_value',
-                'largest_project': 'largest_project'
-            }.get(sort_by, 'total_jobs')
-            
-            sort_direction = 'ASC' if sort_order == 'asc' else 'DESC'
-            
-            # Get contractors with aggregated stats
+                where_parts.append(
+                    '(p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s'
+                    ' OR p.permittee_business_name ILIKE %s)')
+                term = f"%{search}%"
+                where_params.extend([term, term, term])
+
+            # Permit attributes — the same helper /api/properties uses.
+            permit_parts, permit_params = _permit_predicates(request.args, alias='p')
+            where_parts.extend(permit_parts)
+            where_params.extend(permit_params)
+
+            # Borough, from the permit itself so contractors working on
+            # buildings we have not enriched yet are still filterable.
+            boroughs = _parse_boroughs_param(request.args.get('borough', ''))
+            if boroughs:
+                placeholders = ','.join(['%s'] * len(boroughs))
+                where_parts.append(f'LEFT(p.bbl, 1) IN ({placeholders})')
+                where_params.extend(boroughs)
+
+            # Building attributes of the properties worked on, straight from
+            # the joined row. The permits EXISTS that /api/properties adds is
+            # deliberately not used here: this query already filters permits
+            # directly, and an EXISTS would match any permit on the building
+            # rather than this contractor's own.
+            building_parts, building_params = [], []
+            _append_building_only_filters(request.args, building_parts, building_params)
+            where_parts.extend(building_parts)
+            where_params.extend(building_params)
+
+            min_units = request.args.get('min_units', type=int)
+            max_units = request.args.get('max_units', type=int)
+            min_value = request.args.get('min_value', type=float)
+            max_value = request.args.get('max_value', type=float)
+            if min_units is not None:
+                where_parts.append('COALESCE(b.total_units, 0) >= %s')
+                where_params.append(min_units)
+            if max_units is not None:
+                where_parts.append('COALESCE(b.total_units, 0) <= %s')
+                where_params.append(max_units)
+            if min_value is not None:
+                where_parts.append('b.assessed_total_value >= %s')
+                where_params.append(min_value)
+            if max_value is not None:
+                where_parts.append('b.assessed_total_value <= %s')
+                where_params.append(max_value)
+
+            where_clause = 'WHERE ' + ' AND '.join(where_parts)
+
+            # Contractor-scale filters apply to the aggregates, so they belong
+            # in HAVING rather than WHERE.
+            having_parts, having_params = [], []
+            for param, expr in (
+                ('min_jobs', 'COUNT(*) >= %s'),
+                ('max_jobs', 'COUNT(*) <= %s'),
+                ('min_active_jobs',
+                 "COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days'"
+                 ' THEN 1 END) >= %s'),
+                ('min_properties', 'COUNT(DISTINCT p.bbl) >= %s'),
+                ('max_properties', 'COUNT(DISTINCT p.bbl) <= %s'),
+            ):
+                value = request.args.get(param, type=int)
+                if value is not None:
+                    having_parts.append(expr)
+                    having_params.append(value)
+            having_clause = ('HAVING ' + ' AND '.join(having_parts)) if having_parts else ''
+
+            order_by_sql = _order_by_sql(
+                request.args,
+                {
+                    'active_jobs': 'active_jobs',
+                    'total_jobs': 'total_jobs',
+                    'total_value': 'total_value',
+                    'largest_project': 'largest_project',
+                    'unique_properties': 'unique_properties',
+                    'most_recent_job': 'most_recent_job',
+                },
+                'total_jobs',
+                sort_order,
+                tiebreaker='contractor_name ASC',
+            )
+
             query = f"""
                 WITH contractor_stats AS (
-                    SELECT 
+                    SELECT
                         p.applicant as contractor_name,
                         p.permittee_license_number as license,
                         COUNT(*) as total_jobs,
@@ -4304,44 +4834,57 @@ def api_contractors_search():
                         COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                         COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
                         MAX(p.issue_date) as most_recent_job,
+                        MIN(p.issue_date) as first_job,
                         COUNT(DISTINCT p.bbl) as unique_properties,
-                        string_agg(DISTINCT p.job_type, ', ') as job_types
+                        COUNT(DISTINCT NULLIF(btrim(p.permittee_license_type), '')) as license_type_count,
+                        (array_agg(DISTINCT UPPER(btrim(p.permittee_license_type)))
+                            FILTER (WHERE btrim(coalesce(p.permittee_license_type, '')) <> ''))[1]
+                            as license_type
                     FROM permits p
                     LEFT JOIN buildings b ON p.bbl = b.bbl
                     {where_clause}
                     GROUP BY p.applicant, p.permittee_license_number
+                    {having_clause}
                 )
-                SELECT 
-                    contractor_name,
-                    license,
-                    total_jobs,
-                    active_jobs,
-                    total_value,
-                    largest_project,
-                    most_recent_job,
-                    unique_properties,
-                    job_types
+                SELECT *
                 FROM contractor_stats
-                ORDER BY {sort_column} {sort_direction}
+                ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
             """
-            
-            query_params = search_params + [per_page, offset]
-            cur.execute(query, query_params)
-            contractors = cur.fetchall()
-            
-            # Get total count
-            count_query = f"""
-                SELECT COUNT(DISTINCT p.applicant)
-                FROM permits p
-                {where_clause}
-            """
-            cur.execute(count_query, search_params)
+
+            cur.execute(query, where_params + having_params + [per_page, offset])
+            contractors = [dict(c) for c in cur.fetchall()]
+
+            # What kind of work each of these contractors actually does.
+            # Done as a second pass over just the page's contractors so the
+            # aggregate above stays cheap.
+            _attach_work_mix(cur, contractors, where_parts, where_params)
+
+            if having_parts:
+                count_query = f"""
+                    SELECT COUNT(*) AS count FROM (
+                        SELECT 1
+                        FROM permits p
+                        LEFT JOIN buildings b ON p.bbl = b.bbl
+                        {where_clause}
+                        GROUP BY p.applicant, p.permittee_license_number
+                        {having_clause}
+                    ) matched
+                """
+                cur.execute(count_query, where_params + having_params)
+            else:
+                count_query = f"""
+                    SELECT COUNT(DISTINCT p.applicant) AS count
+                    FROM permits p
+                    LEFT JOIN buildings b ON p.bbl = b.bbl
+                    {where_clause}
+                """
+                cur.execute(count_query, where_params)
             total = cur.fetchone()['count']
-        
+
         return jsonify({
             'success': True,
-            'contractors': [dict(c) for c in contractors],
+            'contractors': contractors,
             'pagination': {
                 'page': page,
                 'per_page': per_page,
@@ -4349,12 +4892,13 @@ def api_contractors_search():
                 'pages': (total + per_page - 1) // per_page
             }
         })
-        
+
     except Exception as e:
         print(f"Contractors search API error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 
 @app.route('/api/contractor/<contractor_name>')
@@ -4717,7 +5261,7 @@ def api_building_profile(bbl):
                 -- NY SOS LLC data (Real person behind LLC)
                 sos_principal_name, sos_principal_title, sos_principal_street, sos_principal_city,
                 sos_principal_state, sos_principal_zip, sos_entity_name, sos_entity_status,
-                sos_dos_id, sos_formation_date, sos_last_enriched,
+                sos_dos_id, sos_formation_date, sos_last_enriched, sos_lookup_source,
                 -- Metadata
                 last_updated
             FROM buildings
@@ -4807,6 +5351,26 @@ def api_building_profile(bbl):
                     'formation_date': building['sos_formation_date'].isoformat() if building['sos_formation_date'] else None,
                     'last_enriched': building['sos_last_enriched'].isoformat() if building['sos_last_enriched'] else None
                 }
+
+                # Does the registered entity actually correspond to an owner
+                # name we hold for this building? Checked here rather than at
+                # write time so rows stored before the lookup verified its own
+                # match are flagged without waiting for a re-run.
+                try:
+                    from enrichment_service import entity_match_quality
+                    quality, matched_name = entity_match_quality(
+                        building['sos_entity_name'],
+                        [building['current_owner_name'], building['owner_name_rpad'],
+                         building['owner_name_hpd'], building['sale_buyer_primary']],
+                    )
+                except Exception as e:
+                    print(f"SOS entity match check failed: {e}")
+                    quality, matched_name = 'unknown', None
+
+                sos_data['entity_match'] = quality
+                sos_data['entity_matched_owner'] = matched_name
+                sos_data['lookup_source'] = SOS_SOURCE_LABELS.get(
+                    building['sos_lookup_source'], building['sos_lookup_source'])
         
             # ===== 6. CALCULATE RISK SCORE =====
             risk_factors = []
@@ -5038,13 +5602,20 @@ def api_building_profile(bbl):
                     enrichment_info['already_enriched'] = has_access
                     # enrichment_data_list is now a list of {owner_name, phones, emails} per owner
                     enrichment_info['enrichment_data_per_owner'] = enrichment_data_list if enrichment_data_list else []
-                    # For backward compatibility, also provide combined data
+                    # Combined view, kept for older clients. Every contact
+                    # carries the name it was looked up under: this list mixes
+                    # people — an agent's number can sit next to an owner's —
+                    # and an unlabelled block gives no way to tell which is
+                    # which before you dial.
                     if enrichment_data_list:
                         all_phones = []
                         all_emails = []
                         for ed in enrichment_data_list:
-                            all_phones.extend(ed.get('phones', []))
-                            all_emails.extend(ed.get('emails', []))
+                            owner = ed.get('owner_name')
+                            for phone in ed.get('phones', []):
+                                all_phones.append({**phone, 'owner_name': owner})
+                            for email in ed.get('emails', []):
+                                all_emails.append({**email, 'owner_name': owner})
                         enrichment_info['enrichment_data'] = {
                             'phones': all_phones,
                             'emails': all_emails
@@ -5826,6 +6397,267 @@ def api_bulk_enrich_jobs_list():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+BUILDING_CLASS_CODES = {
+    # Residential
+    'A0': 'Cape Cod style single-family home',
+    'A1': 'Two-story detached single-family home',
+    'A2': 'One-story ranch or bungalow',
+    'A3': 'Large single-family mansion',
+    'A4': 'Single-family home in city',
+    'A5': 'Single-family attached or semi-detached',
+    'A6': 'Summer cottage or bungalow',
+    'A7': 'Mansion-type or town house',
+    'A8': 'Bungalow colony (multiple cottages)',
+    'A9': 'Miscellaneous single-family',
+    'B1': 'Two-family brick or stone building',
+    'B2': 'Two-family frame construction',
+    'B3': 'Two-family converted from single-family',
+    'B9': 'Miscellaneous two-family',
+    'C0': 'Three-family brick or stone',
+    'C1': 'Walk-up apartment (3-6 families) over stores',
+    'C2': 'Walk-up apartment (3-6 families) no stores',
+    'C3': 'Walk-up apartment converted from house',
+    'C4': 'Renovated walk-up apartment',
+    'C5': 'Converted dwelling to apartments',
+    'C6': 'Walk-up cooperative or condo',
+    'C7': 'Walk-up apartment with commercial',
+    'C8': 'Walk-up cooperative or condo conversion',
+    'C9': 'Garden-type apartment complex (1-2 stories)',
+    'D0': 'Elevator apartment (7+ stories)',
+    'D1': 'Semi-fireproof elevator apartment',
+    'D2': 'Fireproof elevator apartment (artists in residence)',
+    'D3': 'Fireproof elevator apartment',
+    'D4': 'Elevator cooperative or condo',
+    'D5': 'Elevator apartment converted',
+    'D6': 'Elevator cooperative or condo conversion',
+    'D7': 'Elevator apartment with stores',
+    'D8': 'Elevator apartment (luxury)',
+    'D9': 'Elevator apartment miscellaneous',
+    # Commercial
+    'E1': 'Warehouse (brick/concrete)',
+    'E2': 'Warehouse (metal)',
+    'E3': 'Warehouse (converted factory)',
+    'E4': 'Warehouse (self-storage)',
+    'E7': 'Warehouse (commercial storage)',
+    'E9': 'Warehouse miscellaneous',
+    'F1': 'Factory/industrial (heavy manufacturing)',
+    'F2': 'Factory/industrial (artist loft)',
+    'F4': 'Factory/industrial (light manufacturing)',
+    'F5': 'Factory/industrial (metalworking)',
+    'F8': 'Factory/industrial (commercial/printing)',
+    'F9': 'Factory/industrial miscellaneous',
+    'G0': 'Garage (residential, <4 cars)',
+    'G1': 'Garage (all parking garages)',
+    'G2': 'Garage (permitted parking lot)',
+    'G3': 'Gas station with convenience store',
+    'G4': 'Gas station only',
+    'G5': 'Garage (commercial vehicles)',
+    'G6': 'Licensed parking lot',
+    'G7': 'Unlicensed parking lot',
+    'G8': 'Marina/boat storage',
+    'G9': 'Garage/parking miscellaneous',
+    'H1': 'Hotel (luxury)',
+    'H2': 'Hotel (full service)',
+    'H3': 'Hotel (limited service)',
+    'H4': 'Hotel (motel)',
+    'H5': 'Hotel (apartment hotel)',
+    'H6': 'Hotel (boutique/bed & breakfast)',
+    'H7': 'Hotel (SRO - single room occupancy)',
+    'H8': 'Hotel (dormitory)',
+    'H9': 'Hotel miscellaneous',
+    'I1': 'Hospital (general care)',
+    'I2': 'Hospital (infirmary)',
+    'I3': 'Hospital (mental health)',
+    'I4': 'Hospital (special hospital)',
+    'I5': 'Clinic/medical office',
+    'I6': 'Nursing home',
+    'I7': 'Adult care facility',
+    'I9': 'Hospital/health facility miscellaneous',
+    'J1': 'Theater (live performance)',
+    'J2': 'Theater (movie)',
+    'J3': 'Theater (photography/TV studio)',
+    'J4': 'Theater (arts/dance studio)',
+    'J5': 'Theater (bowling alley)',
+    'J6': 'Theater (indoor sports arena)',
+    'J7': 'Theater (athletic club)',
+    'J8': 'Theater (swimming pool)',
+    'J9': 'Theater/recreation miscellaneous',
+    'K1': 'Store building (one story retail)',
+    'K2': 'Store building (multi-story retail)',
+    'K3': 'Store building (multi-story department store)',
+    'K4': 'Store building (bank)',
+    'K5': 'Store building (mixed retail/office)',
+    'K6': 'Store building (shopping center)',
+    'K7': 'Store building (retail building with parking)',
+    'K8': 'Store building (convenience store)',
+    'K9': 'Store building miscellaneous',
+    'L1': 'Loft building (over 8 stories)',
+    'L2': 'Loft building (brick/concrete)',
+    'L3': 'Loft building (lightweight)',
+    'L8': 'Loft building (luxury/artist)',
+    'L9': 'Loft building miscellaneous',
+    'M1': 'Church/religious facility',
+    'M2': 'Mission/religious residence',
+    'M3': 'Parsonage/clergy residence',
+    'M4': 'Convent/monastery',
+    'M9': 'Religious facility miscellaneous',
+    'N1': 'Asylum/home for aged',
+    'N2': 'Asylum/infirmary',
+    'N3': 'Asylum/orphanage',
+    'N4': 'Asylum/detention facility',
+    'N9': 'Asylum/institution miscellaneous',
+    'O1': 'Office building (1 story)',
+    'O2': 'Office building (2-6 stories)',
+    'O3': 'Office building (7-19 stories)',
+    'O4': 'Office building (20+ stories - skyscraper)',
+    'O5': 'Office building (mixed-use residential/office)',
+    'O6': 'Office building (mixed-use with stores)',
+    'O7': 'Professional building (doctors/dentists)',
+    'O8': 'Office building (artist studio)',
+    'O9': 'Office building miscellaneous',
+    'P1': 'Indoor public assembly',
+    'P2': 'Outdoor stadiums/arenas',
+    'P3': 'Amusement park',
+    'P4': 'Beach/pool club',
+    'P5': 'Museum',
+    'P6': 'Library',
+    'P7': 'Funeral home',
+    'P8': 'Observatory/landmark',
+    'P9': 'Public assembly miscellaneous',
+    'Q1': 'Parking lot',
+    'Q2': 'Tennis court/pool',
+    'Q3': 'Playground',
+    'Q4': 'Beach',
+    'Q5': 'Golf course',
+    'Q6': 'Marina',
+    'Q7': 'Race track',
+    'Q8': 'Park/recreation area',
+    'Q9': 'Recreation miscellaneous',
+    'R0': 'Condo common area',
+    'R1': 'Condo residential unit',
+    'R2': 'Condo residential unit (horizontal)',
+    'R3': 'Condo residential unit (conversion)',
+    'R4': 'Condo commercial unit',
+    'R5': 'Miscellaneous commercial condo',
+    'R6': 'Condo garage',
+    'R7': 'Condo warehouse',
+    'R8': 'Condo office',
+    'R9': 'Condo miscellaneous',
+    'S0': 'Multiple dwellings (other)',
+    'S1': 'Single-family (other)',
+    'S2': 'Two-family (other)',
+    'S3': 'Three-family (other)',
+    'S4': 'Multiple dwelling',
+    'S5': 'Mixed residential/commercial',
+    'S9': 'Multiple residence miscellaneous',
+    'T1': 'Airport',
+    'T2': 'Pier/dock',
+    'T9': 'Transportation facility miscellaneous',
+    'U0': 'Utility company property',
+    'U1': 'Gas/steam plant',
+    'U2': 'Telephone exchange',
+    'U3': 'Electric substation',
+    'U4': 'Pumping station',
+    'U5': 'Communication tower',
+    'U6': 'Water/sewage plant',
+    'U7': 'Heating plant',
+    'U8': 'Garbage dump',
+    'U9': 'Utility miscellaneous',
+    'V0': 'Zoning permit/variance',
+    'V1': 'Vacant land zoned residential',
+    'V2': 'Vacant land zoned commercial',
+    'V3': 'Vacant land zoned mixed use',
+    'V4': 'Vacant land (police/fire department)',
+    'V5': 'Vacant land (school)',
+    'V6': 'Vacant land (library)',
+    'V7': 'Vacant land (hospital)',
+    'V8': 'Vacant land (public authority)',
+    'V9': 'Vacant land miscellaneous',
+    'W1': 'Educational structure (public school)',
+    'W2': 'Educational structure (private school)',
+    'W3': 'Educational structure (parochial school)',
+    'W4': 'Educational structure (non-profit school)',
+    'W5': 'Educational structure (private university)',
+    'W6': 'Educational structure (public university)',
+    'W7': 'Educational structure (religious seminary)',
+    'W8': 'Educational structure (specialized education)',
+    'W9': 'Educational structure miscellaneous',
+    'Y1': 'Government building (fire/police)',
+    'Y2': 'Government building (government office)',
+    'Y3': 'Government building (school)',
+    'Y4': 'Government building (library)',
+    'Y5': 'Government building (park)',
+    'Y6': 'Government building (courts)',
+    'Y7': 'Government building (military)',
+    'Y8': 'Government building (Department of Sanitation)',
+    'Y9': 'Government building miscellaneous',
+    'Z0': 'Mixed-use building (retail/residential)',
+    'Z1': 'Primarily residential, some commercial',
+    'Z2': 'Mixed retail/office',
+    'Z3': 'Mixed residential/factory',
+    'Z4': 'Industrial/warehouse complex',
+    'Z5': 'Mixed-use commercial',
+    'Z6': 'Mixed-use government/commercial',
+    'Z7': 'Mixed-use cultural/commercial',
+    'Z8': 'Mixed-use parking/residential',
+    'Z9': 'Mixed-use miscellaneous'
+}
+
+
+# Letter-level building-class families, used to offer "all C walk-ups" style
+# choices alongside the specific codes in the properties filter.
+BUILDING_CLASS_FAMILIES = {
+    'A': 'One-family homes',
+    'B': 'Two-family homes',
+    'C': 'Walk-up apartments',
+    'D': 'Elevator apartments',
+    'E': 'Warehouses',
+    'F': 'Factories & industrial',
+    'G': 'Garages & gas stations',
+    'H': 'Hotels',
+    'I': 'Hospitals & health',
+    'J': 'Theatres',
+    'K': 'Stores & retail',
+    'L': 'Lofts',
+    'M': 'Churches & religious',
+    'N': 'Asylums & homes',
+    'O': 'Office buildings',
+    'P': 'Places of public assembly',
+    'Q': 'Outdoor recreation & parking',
+    'R': 'Condominiums',
+    'S': 'Mixed residential/commercial',
+    'T': 'Transportation',
+    'U': 'Utility',
+    'V': 'Vacant land',
+    'W': 'Educational',
+    'Y': 'Government & municipal',
+    'Z': 'Mixed-use & misc',
+}
+
+
+def building_class_options():
+    """Option groups for the properties page building-class multi-select.
+
+    Each family is offered as a prefix (picking "C" matches every C code)
+    followed by its specific codes, so the filter works at whichever
+    granularity the user wants. Matching is a prefix LIKE either way.
+    """
+    by_letter = {}
+    for code, label in BUILDING_CLASS_CODES.items():
+        by_letter.setdefault(code[0], []).append({'value': code, 'label': f'{code} — {label}'})
+
+    groups = []
+    for letter in sorted(by_letter):
+        family = BUILDING_CLASS_FAMILIES.get(letter, f'Class {letter}')
+        groups.append({
+            'letter': letter,
+            'label': f'{letter} — {family}',
+            'options': [{'value': letter, 'label': f'All {letter} — {family}'}]
+                       + sorted(by_letter[letter], key=lambda o: o['value']),
+        })
+    return groups
+
+
 def translate_building_class(code):
     """
     Translate NYC building classification codes to plain English
@@ -5835,213 +6667,7 @@ def translate_building_class(code):
         return "Unknown building type"
     
     # NYC building class codes - https://www1.nyc.gov/assets/finance/jump/hlpbldgcode.html
-    translations = {
-        # Residential
-        'A0': 'Cape Cod style single-family home',
-        'A1': 'Two-story detached single-family home',
-        'A2': 'One-story ranch or bungalow',
-        'A3': 'Large single-family mansion',
-        'A4': 'Single-family home in city',
-        'A5': 'Single-family attached or semi-detached',
-        'A6': 'Summer cottage or bungalow',
-        'A7': 'Mansion-type or town house',
-        'A8': 'Bungalow colony (multiple cottages)',
-        'A9': 'Miscellaneous single-family',
-        'B1': 'Two-family brick or stone building',
-        'B2': 'Two-family frame construction',
-        'B3': 'Two-family converted from single-family',
-        'B9': 'Miscellaneous two-family',
-        'C0': 'Three-family brick or stone',
-        'C1': 'Walk-up apartment (3-6 families) over stores',
-        'C2': 'Walk-up apartment (3-6 families) no stores',
-        'C3': 'Walk-up apartment converted from house',
-        'C4': 'Renovated walk-up apartment',
-        'C5': 'Converted dwelling to apartments',
-        'C6': 'Walk-up cooperative or condo',
-        'C7': 'Walk-up apartment with commercial',
-        'C8': 'Walk-up cooperative or condo conversion',
-        'C9': 'Garden-type apartment complex (1-2 stories)',
-        'D0': 'Elevator apartment (7+ stories)',
-        'D1': 'Semi-fireproof elevator apartment',
-        'D2': 'Fireproof elevator apartment (artists in residence)',
-        'D3': 'Fireproof elevator apartment',
-        'D4': 'Elevator cooperative or condo',
-        'D5': 'Elevator apartment converted',
-        'D6': 'Elevator cooperative or condo conversion',
-        'D7': 'Elevator apartment with stores',
-        'D8': 'Elevator apartment (luxury)',
-        'D9': 'Elevator apartment miscellaneous',
-        # Commercial
-        'E1': 'Warehouse (brick/concrete)',
-        'E2': 'Warehouse (metal)',
-        'E3': 'Warehouse (converted factory)',
-        'E4': 'Warehouse (self-storage)',
-        'E7': 'Warehouse (commercial storage)',
-        'E9': 'Warehouse miscellaneous',
-        'F1': 'Factory/industrial (heavy manufacturing)',
-        'F2': 'Factory/industrial (artist loft)',
-        'F4': 'Factory/industrial (light manufacturing)',
-        'F5': 'Factory/industrial (metalworking)',
-        'F8': 'Factory/industrial (commercial/printing)',
-        'F9': 'Factory/industrial miscellaneous',
-        'G0': 'Garage (residential, <4 cars)',
-        'G1': 'Garage (all parking garages)',
-        'G2': 'Garage (permitted parking lot)',
-        'G3': 'Gas station with convenience store',
-        'G4': 'Gas station only',
-        'G5': 'Garage (commercial vehicles)',
-        'G6': 'Licensed parking lot',
-        'G7': 'Unlicensed parking lot',
-        'G8': 'Marina/boat storage',
-        'G9': 'Garage/parking miscellaneous',
-        'H1': 'Hotel (luxury)',
-        'H2': 'Hotel (full service)',
-        'H3': 'Hotel (limited service)',
-        'H4': 'Hotel (motel)',
-        'H5': 'Hotel (apartment hotel)',
-        'H6': 'Hotel (boutique/bed & breakfast)',
-        'H7': 'Hotel (SRO - single room occupancy)',
-        'H8': 'Hotel (dormitory)',
-        'H9': 'Hotel miscellaneous',
-        'I1': 'Hospital (general care)',
-        'I2': 'Hospital (infirmary)',
-        'I3': 'Hospital (mental health)',
-        'I4': 'Hospital (special hospital)',
-        'I5': 'Clinic/medical office',
-        'I6': 'Nursing home',
-        'I7': 'Adult care facility',
-        'I9': 'Hospital/health facility miscellaneous',
-        'J1': 'Theater (live performance)',
-        'J2': 'Theater (movie)',
-        'J3': 'Theater (photography/TV studio)',
-        'J4': 'Theater (arts/dance studio)',
-        'J5': 'Theater (bowling alley)',
-        'J6': 'Theater (indoor sports arena)',
-        'J7': 'Theater (athletic club)',
-        'J8': 'Theater (swimming pool)',
-        'J9': 'Theater/recreation miscellaneous',
-        'K1': 'Store building (one story retail)',
-        'K2': 'Store building (multi-story retail)',
-        'K3': 'Store building (multi-story department store)',
-        'K4': 'Store building (bank)',
-        'K5': 'Store building (mixed retail/office)',
-        'K6': 'Store building (shopping center)',
-        'K7': 'Store building (retail building with parking)',
-        'K8': 'Store building (convenience store)',
-        'K9': 'Store building miscellaneous',
-        'L1': 'Loft building (over 8 stories)',
-        'L2': 'Loft building (brick/concrete)',
-        'L3': 'Loft building (lightweight)',
-        'L8': 'Loft building (luxury/artist)',
-        'L9': 'Loft building miscellaneous',
-        'M1': 'Church/religious facility',
-        'M2': 'Mission/religious residence',
-        'M3': 'Parsonage/clergy residence',
-        'M4': 'Convent/monastery',
-        'M9': 'Religious facility miscellaneous',
-        'N1': 'Asylum/home for aged',
-        'N2': 'Asylum/infirmary',
-        'N3': 'Asylum/orphanage',
-        'N4': 'Asylum/detention facility',
-        'N9': 'Asylum/institution miscellaneous',
-        'O1': 'Office building (1 story)',
-        'O2': 'Office building (2-6 stories)',
-        'O3': 'Office building (7-19 stories)',
-        'O4': 'Office building (20+ stories - skyscraper)',
-        'O5': 'Office building (mixed-use residential/office)',
-        'O6': 'Office building (mixed-use with stores)',
-        'O7': 'Professional building (doctors/dentists)',
-        'O8': 'Office building (artist studio)',
-        'O9': 'Office building miscellaneous',
-        'P1': 'Indoor public assembly',
-        'P2': 'Outdoor stadiums/arenas',
-        'P3': 'Amusement park',
-        'P4': 'Beach/pool club',
-        'P5': 'Museum',
-        'P6': 'Library',
-        'P7': 'Funeral home',
-        'P8': 'Observatory/landmark',
-        'P9': 'Public assembly miscellaneous',
-        'Q1': 'Parking lot',
-        'Q2': 'Tennis court/pool',
-        'Q3': 'Playground',
-        'Q4': 'Beach',
-        'Q5': 'Golf course',
-        'Q6': 'Marina',
-        'Q7': 'Race track',
-        'Q8': 'Park/recreation area',
-        'Q9': 'Recreation miscellaneous',
-        'R0': 'Condo common area',
-        'R1': 'Condo residential unit',
-        'R2': 'Condo residential unit (horizontal)',
-        'R3': 'Condo residential unit (conversion)',
-        'R4': 'Condo commercial unit',
-        'R5': 'Miscellaneous commercial condo',
-        'R6': 'Condo garage',
-        'R7': 'Condo warehouse',
-        'R8': 'Condo office',
-        'R9': 'Condo miscellaneous',
-        'S0': 'Multiple dwellings (other)',
-        'S1': 'Single-family (other)',
-        'S2': 'Two-family (other)',
-        'S3': 'Three-family (other)',
-        'S4': 'Multiple dwelling',
-        'S5': 'Mixed residential/commercial',
-        'S9': 'Multiple residence miscellaneous',
-        'T1': 'Airport',
-        'T2': 'Pier/dock',
-        'T9': 'Transportation facility miscellaneous',
-        'U0': 'Utility company property',
-        'U1': 'Gas/steam plant',
-        'U2': 'Telephone exchange',
-        'U3': 'Electric substation',
-        'U4': 'Pumping station',
-        'U5': 'Communication tower',
-        'U6': 'Water/sewage plant',
-        'U7': 'Heating plant',
-        'U8': 'Garbage dump',
-        'U9': 'Utility miscellaneous',
-        'V0': 'Zoning permit/variance',
-        'V1': 'Vacant land zoned residential',
-        'V2': 'Vacant land zoned commercial',
-        'V3': 'Vacant land zoned mixed use',
-        'V4': 'Vacant land (police/fire department)',
-        'V5': 'Vacant land (school)',
-        'V6': 'Vacant land (library)',
-        'V7': 'Vacant land (hospital)',
-        'V8': 'Vacant land (public authority)',
-        'V9': 'Vacant land miscellaneous',
-        'W1': 'Educational structure (public school)',
-        'W2': 'Educational structure (private school)',
-        'W3': 'Educational structure (parochial school)',
-        'W4': 'Educational structure (non-profit school)',
-        'W5': 'Educational structure (private university)',
-        'W6': 'Educational structure (public university)',
-        'W7': 'Educational structure (religious seminary)',
-        'W8': 'Educational structure (specialized education)',
-        'W9': 'Educational structure miscellaneous',
-        'Y1': 'Government building (fire/police)',
-        'Y2': 'Government building (government office)',
-        'Y3': 'Government building (school)',
-        'Y4': 'Government building (library)',
-        'Y5': 'Government building (park)',
-        'Y6': 'Government building (courts)',
-        'Y7': 'Government building (military)',
-        'Y8': 'Government building (Department of Sanitation)',
-        'Y9': 'Government building miscellaneous',
-        'Z0': 'Mixed-use building (retail/residential)',
-        'Z1': 'Primarily residential, some commercial',
-        'Z2': 'Mixed retail/office',
-        'Z3': 'Mixed residential/factory',
-        'Z4': 'Industrial/warehouse complex',
-        'Z5': 'Mixed-use commercial',
-        'Z6': 'Mixed-use government/commercial',
-        'Z7': 'Mixed-use cultural/commercial',
-        'Z8': 'Mixed-use parking/residential',
-        'Z9': 'Mixed-use miscellaneous'
-    }
-    
-    return translations.get(code, f"Building code {code}")
+    return BUILDING_CLASS_CODES.get(code, f"Building code {code}")
 
 
 # ============================================================================

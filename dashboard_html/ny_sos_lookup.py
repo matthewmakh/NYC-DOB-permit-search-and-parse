@@ -75,6 +75,9 @@ class SOSBusinessResult:
     normalized_name: str      # Cleaned/normalized version
     found: bool = False       # Did we find it?
     error: str = ""           # Error message if failed
+    # How confidently the registered entity is the one we asked about:
+    # "exact", "prefix", or "none". Never "none" when found is True.
+    match_quality: str = "none"
     
     # Business details (if found)
     dos_id: str = ""          # NY DOS ID
@@ -114,6 +117,20 @@ class SOSBusinessResult:
 # NAME NORMALIZATION UTILITIES
 # ============================================================================
 
+# "C/O ...", "ATTN: ..." and "% ..." tails are mailing instructions appended
+# to owner names in ACRIS/RPAD, not part of the company's registered name.
+# Left in place they break the BeginsWith search outright (no registered name
+# starts with the full string), so those buildings silently got no SOS data.
+_CARE_OF_TAIL = re.compile(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', re.IGNORECASE)
+
+
+def strip_care_of_tail(name: str) -> str:
+    """Drop a trailing care-of/attention clause from an owner name."""
+    if not name:
+        return ""
+    return _CARE_OF_TAIL.sub('', name).strip()
+
+
 def normalize_business_name(name: str) -> str:
     """
     Normalize business name for deduplication and caching.
@@ -121,7 +138,7 @@ def normalize_business_name(name: str) -> str:
     if not name:
         return ""
     
-    name = name.upper().strip()
+    name = strip_care_of_tail(name.upper().strip())
     
     # Remove location suffix
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
@@ -209,9 +226,51 @@ def _clean_business_name_for_search(name: str) -> str:
     """Clean business name for API searching."""
     if not name:
         return ""
+    name = strip_care_of_tail(name)
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s+(USA|U\.S\.A\.)$', '', name, flags=re.IGNORECASE)
     return name.strip()
+
+
+def _select_match(query_name: str, matches: List[Dict]) -> Tuple[Optional[Dict], str]:
+    """Pick the search hit that is actually the company we asked about.
+
+    The DOS search is a BeginsWith over entity names, so a query with no
+    registrant can still come back with a page of other companies. Ranking on
+    status alone — as this used to — meant an unrelated Active company beat
+    the exact match when the exact one happened to be dissolved, and its
+    officers were then stored as the building's owner.
+
+    Identity first, status second:
+      "exact"  — same name once suffixes and punctuation are normalized
+      "prefix" — the registered name starts with what we asked for, which
+                 catches "65 SPRING REALTY LLC" vs "65 SPRING REALTY, LLC"
+                 and similar registry spellings
+    Anything weaker is not a match, and we would rather return nothing.
+    """
+    wanted = normalize_business_name(query_name)
+    if not wanted:
+        return None, 'none'
+
+    exact, prefix = [], []
+    for m in matches:
+        candidate = normalize_business_name(m.get('entity_name') or '')
+        if not candidate:
+            continue
+        if candidate == wanted:
+            exact.append(m)
+        elif candidate.startswith(wanted) or wanted.startswith(candidate):
+            prefix.append(m)
+
+    for tier, name in ((exact, 'exact'), (prefix, 'prefix')):
+        if not tier:
+            continue
+        # Within a tier an Active registration is the better answer, but a
+        # dissolved exact match still beats an active near-miss.
+        active = [m for m in tier if m.get('entity_status') == 'Active']
+        return (active[0] if active else tier[0]), name
+
+    return None, 'none'
 
 
 def _parse_formation_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -283,8 +342,19 @@ class AsyncNYSOSClient:
                     if not matches:
                         return result
                     
-                    active_matches = [m for m in matches if m.get('entity_status') == 'Active']
-                    selected = active_matches[0] if active_matches else matches[0]
+                    selected, match_quality = _select_match(business_name, matches)
+                    if selected is None:
+                        # The search returned companies, but none of them is
+                        # the one we asked about. Attaching a stranger's
+                        # officers to a building is worse than no data, so
+                        # record the miss and stop.
+                        result.error = (
+                            f"No entity matching '{business_name}' "
+                            f"(closest of {len(matches)}: "
+                            f"{matches[0].get('entity_name')!r})"
+                        )
+                        return result
+                    result.match_quality = match_quality
                     
                     details = await self._get_business_details(
                         selected['dos_id'], 

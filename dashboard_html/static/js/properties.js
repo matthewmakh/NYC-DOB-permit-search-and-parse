@@ -2,6 +2,30 @@
 // Properties Page JavaScript
 // ==========================================
 
+// The API answers in snake_case and does not echo the page size the way the
+// renderer wants it. Without this, totalPages/hasNext/hasPrev come back
+// undefined — which left every pagination button disabled with no page
+// numbers — and perPage was dropped, so the next request silently fell back
+// to the server default.
+function normalizePagination(raw) {
+    const p = raw || {};
+    return {
+        page: p.page || 1,
+        perPage: p.per_page || state.pagination.perPage,
+        totalCount: p.total_count || 0,
+        total_count: p.total_count || 0,
+        totalPages: p.total_pages || 0,
+        hasNext: p.has_next === true,
+        hasPrev: p.has_prev === true,
+    };
+}
+
+// Multi-select filters go on the wire as repeated params
+// (?permit_type=PL&permit_type=EW); the API ORs them together.
+function appendMulti(params, name, values) {
+    (values || []).forEach(value => params.append(name, value));
+}
+
 // State Management
 const state = {
     properties: [],
@@ -9,8 +33,6 @@ const state = {
     filters: {
         search: '',
         owner: '',
-        minValue: null,
-        maxValue: null,
         minSalePrice: null,
         maxSalePrice: null,
         saleDateFrom: null,
@@ -18,22 +40,20 @@ const state = {
         cashOnly: false,
         withPermits: false,
         minPermits: null,
-        recentPermitDays: null,
-        permitType: null,  // Permit type filter
-        propertyType: null,  // Residential/Commercial filter
-        borough: [],
-        buildingClass: '',
-        minUnits: null,
-        maxUnits: null,
-        hasViolations: null,
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false
+        hasEnrichableOwner: false,
+        play: null
     },
+    // Borough, property type, building class, units, value, kind of work,
+    // recency and violations live here — the same set, read the same way, as
+    // on the contractors page. See static/js/filters_common.js.
+    shared: {},
+    plays: [],
     sort: {
-        by: 'sale_date',
+        by: [],          // Sort keys in pick order; empty means the API default
         order: 'desc'
     },
     pagination: {
@@ -46,11 +66,137 @@ const state = {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    MultiSelect.init();
+    state.shared = SharedFilters.read();
+    SharedFilters.loadFacets();
     initializeEventListeners();
+    loadPlays();
     loadStats();
     loadProperties();
     checkResumableBulkEnrichJob();
 });
+
+// ==========================================
+// PREBUILT PLAYS
+// ==========================================
+
+async function loadPlays() {
+    try {
+        const res = await fetch('/api/properties/plays');
+        const data = await res.json();
+        if (!data.success || !data.plays || !data.plays.length) return;
+        state.plays = data.plays;
+        renderPlayCards();
+        document.getElementById('playsSection').style.display = 'block';
+    } catch (e) {
+        console.warn('Plays unavailable:', e);
+    }
+}
+
+function renderPlayCards() {
+    const row = document.getElementById('playsRow');
+    row.innerHTML = state.plays.map(play => `
+        <button class="play-card ${state.filters.play === play.id ? 'active' : ''}"
+                onclick="togglePlay('${play.id}')">
+            <div class="play-card-top">
+                <span class="play-name">${escapeHtml(play.name)}</span>
+                <span class="play-count">${formatNumber(play.count)}</span>
+            </div>
+            <div class="play-desc">${escapeHtml(play.description)}</div>
+            <span class="play-audience play-audience-${play.audience}">${
+                play.audience === 'both' ? 'investors + contractors' : play.audience}</span>
+        </button>
+    `).join('');
+}
+
+function togglePlay(playId) {
+    if (state.filters.play === playId) {
+        state.filters.play = null;
+    } else {
+        state.filters.play = playId;
+        const play = state.plays.find(p => p.id === playId);
+        if (play && play.recommended_sort) {
+            applyRecommendedSort(play.recommended_sort);
+        }
+    }
+    state.pagination.page = 1;
+    renderPlayCards();
+    renderPlayGuide();
+    loadProperties();
+}
+
+// Signal sorts (unused FAR, CO date) only exist once a play recommends
+// them — add the <option> on demand so the select stays clean otherwise.
+const EXTRA_SORT_LABELS = { unused_far: 'Unused FAR', co_date: 'CO date' };
+
+function applyRecommendedSort(rec) {
+    const sortSelect = document.getElementById('sortBy');
+    if (!Array.from(sortSelect.options).some(o => o.value === rec.by)) {
+        if (!EXTRA_SORT_LABELS[rec.by]) return;
+        const opt = document.createElement('option');
+        opt.value = rec.by;
+        opt.textContent = EXTRA_SORT_LABELS[rec.by];
+        sortSelect.appendChild(opt);
+        // The enhanced control read its options at init; let it see the new one.
+        MultiSelect.refresh('sortBy');
+    }
+    // A play's recommendation replaces the sort rather than adding to it.
+    MultiSelect.set('sortBy', [rec.by], { silent: true });
+    state.sort.by = [rec.by];
+    MultiSelect.set('sortOrder', [rec.order], { silent: true });
+    state.sort.order = rec.order;
+}
+
+function renderPlayGuide() {
+    const guide = document.getElementById('playGuide');
+    const play = state.plays.find(p => p.id === state.filters.play);
+    if (!play) {
+        guide.style.display = 'none';
+        guide.innerHTML = '';
+        return;
+    }
+
+    let html = `
+        <div class="play-guide-head">
+            <div>
+                <h3>${escapeHtml(play.name)}</h3>
+                <p>${escapeHtml(play.description)}</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="togglePlay('${play.id}')">Clear play</button>
+        </div>
+    `;
+
+    if (play.playbook) {
+        const pb = play.playbook;
+        html += `
+            <div class="playbook">
+                <p class="playbook-what">${escapeHtml(pb.what)}</p>
+                <div class="playbook-ways">
+                    ${pb.ways.map(w => `
+                        <div class="playbook-way">
+                            <h4>${escapeHtml(w.title)}</h4>
+                            <p>${escapeHtml(w.body)}</p>
+                        </div>
+                    `).join('')}
+                </div>
+                <h4 class="playbook-steps-title">How to run it</h4>
+                <ol class="playbook-steps">
+                    ${pb.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+                </ol>
+                <div class="playbook-caution">${escapeHtml(pb.caution)}</div>
+            </div>
+        `;
+    } else if (play.how_to_use && play.how_to_use.length) {
+        html += `
+            <ol class="playbook-steps">
+                ${play.how_to_use.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+            </ol>
+        `;
+    }
+
+    guide.innerHTML = html;
+    guide.style.display = 'block';
+}
 
 async function checkResumableBulkEnrichJob() {
     try {
@@ -110,8 +256,7 @@ async function loadProperties() {
         // Add all active filters
         if (state.filters.search) params.append('search', state.filters.search);
         if (state.filters.owner) params.append('owner', state.filters.owner);
-        if (state.filters.minValue) params.append('min_value', state.filters.minValue);
-        if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
+        SharedFilters.toParams(params, state.shared);
         if (state.filters.minSalePrice) params.append('min_sale_price', state.filters.minSalePrice);
         if (state.filters.maxSalePrice) params.append('max_sale_price', state.filters.maxSalePrice);
         if (state.filters.saleDateFrom) params.append('sale_date_from', state.filters.saleDateFrom);
@@ -119,21 +264,14 @@ async function loadProperties() {
         if (state.filters.cashOnly) params.append('cash_only', 'true');
         if (state.filters.withPermits) params.append('with_permits', 'true');
         if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
-        if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
-        if (state.filters.permitType) params.append('permit_type', state.filters.permitType);
-        if (state.filters.propertyType) params.append('property_type', state.filters.propertyType);
-        if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
-        if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
-        if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
-        if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
-        if (state.filters.hasViolations !== null) params.append('has_violations', state.filters.hasViolations);
         if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
         if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
         if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
         if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
-        
+        if (state.filters.play) params.append('play', state.filters.play);
+
         // Add sort and pagination
-        params.append('sort_by', state.sort.by);
+        appendMulti(params, 'sort_by', state.sort.by);
         params.append('sort_order', state.sort.order);
         params.append('page', state.pagination.page);
         params.append('per_page', state.pagination.perPage);
@@ -143,7 +281,7 @@ async function loadProperties() {
         
         if (data.success) {
             state.properties = data.properties;
-            state.pagination = data.pagination;
+            state.pagination = normalizePagination(data.pagination);
             renderProperties();
             renderPagination();
             updateResultsCount();
@@ -243,6 +381,7 @@ function renderProperties() {
                     ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">ACRIS</span>' : ''}
                     ${permitCount > 0 ? `<span class="badge badge-permits">${permitCount} permit${permitCount > 1 ? 's' : ''}</span>` : ''}
                     ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} violation${violationCount > 1 ? 's' : ''}</span>` : ''}
+                    ${signalBadges(property)}
                 </div>
 
                 <div class="property-actions">
@@ -256,6 +395,44 @@ function renderProperties() {
             </div>
         `;
     }).join('');
+}
+
+// Badges for the signal columns (only present in API responses once the
+// signals migration has run — each guard tolerates their absence).
+function signalBadges(p) {
+    const badges = [];
+    if (p.on_speculation_watch_list) {
+        badges.push('<span class="badge badge-speculation">Speculation list</span>');
+    }
+    if (p.unused_far >= 1) {
+        const buildable = p.lot_sqft ? ` (~${formatNumber(Math.round(p.unused_far * p.lot_sqft))} sqft)` : '';
+        badges.push(`<span class="badge badge-upside">+${Number(p.unused_far).toFixed(1)} FAR${buildable}</span>`);
+    }
+    if (p.is_free_and_clear && p.acris_total_transactions > 0) {
+        badges.push('<span class="badge badge-equity">Free &amp; clear</span>');
+    }
+    if (p.has_senior_exemption) {
+        badges.push('<span class="badge badge-equity">Senior exemption</span>');
+    }
+    if (p.litigation_open_count > 0) {
+        badges.push(`<span class="badge badge-violations">${p.litigation_open_count} open case${p.litigation_open_count > 1 ? 's' : ''}</span>`);
+    }
+    if (p.eviction_count > 0) {
+        badges.push(`<span class="badge badge-violations">${p.eviction_count} eviction${p.eviction_count > 1 ? 's' : ''}</span>`);
+    }
+    if (p.has_tax_delinquency) {
+        badges.push('<span class="badge badge-violations">Lien-sale notice</span>');
+    }
+    if (p.latest_co_date) {
+        const coDate = new Date(p.latest_co_date);
+        if (!isNaN(coDate) && (Date.now() - coDate.getTime()) < 200 * 86400000) {
+            badges.push(`<span class="badge badge-permits">CO ${formatDate(p.latest_co_date)}</span>`);
+        }
+    }
+    if (p.fisp_status && /^(UNSAFE|SWARMP)/i.test(p.fisp_status)) {
+        badges.push(`<span class="badge badge-violations">FISP ${escapeHtml(p.fisp_status.split(' ')[0])}</span>`);
+    }
+    return badges.join('');
 }
 
 function renderPagination() {
@@ -323,6 +500,15 @@ function updateResultsCount() {
 // ==========================================
 
 function initializeEventListeners() {
+    // Borough, property type, building class, units, value, kind of work,
+    // recency and violations are wired by the shared module so this page and
+    // the contractors page read them identically.
+    SharedFilters.bind(() => {
+        state.shared = SharedFilters.read();
+        state.pagination.page = 1;
+        loadProperties();
+    });
+
     // Universal search
     let searchTimeout;
     document.getElementById('universalSearch').addEventListener('input', (e) => {
@@ -346,18 +532,6 @@ function initializeEventListeners() {
     });
     
     // Value range
-    document.getElementById('minValue').addEventListener('change', (e) => {
-        state.filters.minValue = e.target.value ? parseFloat(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
-    document.getElementById('maxValue').addEventListener('change', (e) => {
-        state.filters.maxValue = e.target.value ? parseFloat(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
     // Sale price range
     document.getElementById('minSalePrice').addEventListener('change', (e) => {
         state.filters.minSalePrice = e.target.value ? parseFloat(e.target.value) : null;
@@ -385,40 +559,6 @@ function initializeEventListeners() {
     });
     
     // Borough filter (multi-select via checkboxes)
-    document.querySelectorAll('.borough-cb').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const checked = Array.from(document.querySelectorAll('.borough-cb:checked'))
-                .map(el => el.value);
-            state.filters.borough = checked;
-            state.pagination.page = 1;
-            loadProperties();
-        });
-    });
-    
-    // Building class
-    let classTimeout;
-    document.getElementById('buildingClass').addEventListener('input', (e) => {
-        clearTimeout(classTimeout);
-        classTimeout = setTimeout(() => {
-            state.filters.buildingClass = e.target.value.trim();
-            state.pagination.page = 1;
-            loadProperties();
-        }, 500);
-    });
-    
-    // Unit range
-    document.getElementById('minUnits').addEventListener('change', (e) => {
-        state.filters.minUnits = e.target.value ? parseInt(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
-    document.getElementById('maxUnits').addEventListener('change', (e) => {
-        state.filters.maxUnits = e.target.value ? parseInt(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
     // Permit filters
     document.getElementById('withPermits').addEventListener('change', (e) => {
         state.filters.withPermits = e.target.checked;
@@ -428,42 +568,6 @@ function initializeEventListeners() {
     
     document.getElementById('minPermits').addEventListener('change', (e) => {
         state.filters.minPermits = e.target.value ? parseInt(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
-    // Recent permit days filter
-    document.getElementById('recentPermitDays').addEventListener('change', (e) => {
-        const customInput = document.getElementById('recentPermitCustomDays');
-        if (e.target.value === 'custom') {
-            customInput.style.display = 'block';
-            customInput.focus();
-            // Don't trigger search yet - wait for custom input
-        } else {
-            customInput.style.display = 'none';
-            customInput.value = '';
-            state.filters.recentPermitDays = e.target.value ? parseInt(e.target.value) : null;
-            state.pagination.page = 1;
-            loadProperties();
-        }
-    });
-    
-    document.getElementById('recentPermitCustomDays').addEventListener('change', (e) => {
-        state.filters.recentPermitDays = e.target.value ? parseInt(e.target.value) : null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
-    // Permit type filter
-    document.getElementById('permitType').addEventListener('change', (e) => {
-        state.filters.permitType = e.target.value || null;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
-    // Property type filter (residential/commercial/mixed)
-    document.getElementById('propertyType').addEventListener('change', (e) => {
-        state.filters.propertyType = e.target.value || null;
         state.pagination.page = 1;
         loadProperties();
     });
@@ -488,14 +592,6 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Violations filter
-    document.getElementById('violationsFilter').addEventListener('change', (e) => {
-        const value = e.target.value;
-        state.filters.hasViolations = value === '' ? null : value;
-        state.pagination.page = 1;
-        loadProperties();
-    });
-    
     // Enrichable owner checkbox
     document.getElementById('hasEnrichableOwner').addEventListener('change', (e) => {
         state.filters.hasEnrichableOwner = e.target.checked;
@@ -504,8 +600,10 @@ function initializeEventListeners() {
     });
     
     // Sort controls
-    document.getElementById('sortBy').addEventListener('change', (e) => {
-        state.sort.by = e.target.value;
+    // Sort accepts several keys; later ones break ties in earlier ones.
+    document.getElementById('sortBy').addEventListener('change', () => {
+        state.sort.by = MultiSelect.values('sortBy');
+        state.pagination.page = 1;
         loadProperties();
     });
     
@@ -561,8 +659,7 @@ async function downloadExport() {
     
     if (state.filters.search) params.append('search', state.filters.search);
     if (state.filters.owner) params.append('owner', state.filters.owner);
-    if (state.filters.minValue) params.append('min_value', state.filters.minValue);
-    if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
+    SharedFilters.toParams(params, state.shared);
     if (state.filters.minSalePrice) params.append('min_sale_price', state.filters.minSalePrice);
     if (state.filters.maxSalePrice) params.append('max_sale_price', state.filters.maxSalePrice);
     if (state.filters.saleDateFrom) params.append('sale_date_from', state.filters.saleDateFrom);
@@ -570,21 +667,16 @@ async function downloadExport() {
     if (state.filters.cashOnly) params.append('cash_only', 'true');
     if (state.filters.withPermits) params.append('with_permits', 'true');
     if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
-    if (state.filters.recentPermitDays) params.append('recent_permit_days', state.filters.recentPermitDays);
-    if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
-    if (state.filters.buildingClass) params.append('building_class', state.filters.buildingClass);
-    if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
-    if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
-    if (state.filters.hasViolations !== null) params.append('has_violations', state.filters.hasViolations);
     if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
     if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
-    
+    if (state.filters.play) params.append('play', state.filters.play);
+
     // Add sort
-    params.append('sort_by', state.sort.by);
+    appendMulti(params, 'sort_by', state.sort.by);
     params.append('sort_order', state.sort.order);
-    
+
     // Add selected fields
     params.append('fields', fields.join(','));
     
@@ -739,8 +831,6 @@ function resetFilters() {
     state.filters = {
         search: '',
         owner: '',
-        minValue: null,
-        maxValue: null,
         minSalePrice: null,
         maxSalePrice: null,
         saleDateFrom: null,
@@ -748,50 +838,36 @@ function resetFilters() {
         cashOnly: false,
         withPermits: false,
         minPermits: null,
-        recentPermitDays: null,
-        permitType: null,
-        propertyType: null,
-        borough: [],
-        buildingClass: '',
-        minUnits: null,
-        maxUnits: null,
-        hasViolations: null,
         recentSaleDays: null,
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false
+        hasEnrichableOwner: false,
+        play: null
     };
 }
 
 function clearFilters() {
     resetFilters();
+    renderPlayCards();
+    renderPlayGuide();
     
     // Clear all form inputs
     document.getElementById('universalSearch').value = '';
     document.getElementById('ownerSearch').value = '';
-    document.getElementById('minValue').value = '';
-    document.getElementById('maxValue').value = '';
     document.getElementById('minSalePrice').value = '';
     document.getElementById('maxSalePrice').value = '';
     document.getElementById('saleDateFrom').value = '';
     document.getElementById('saleDateTo').value = '';
-    document.querySelectorAll('.borough-cb').forEach(cb => { cb.checked = false; });
-    const propertyTypeEl = document.getElementById('propertyType');
-    if (propertyTypeEl) propertyTypeEl.value = '';
-    document.getElementById('buildingClass').value = '';
-    document.getElementById('minUnits').value = '';
-    document.getElementById('maxUnits').value = '';
+    // Silent so the single reload below is the only fetch. Scoped to the
+    // sidebar so the toolbar's sort and per-page controls keep their values.
+    SharedFilters.clear();
+    state.shared = SharedFilters.read();
     document.getElementById('minPermits').value = '';
-    document.getElementById('permitType').value = '';
-    document.getElementById('recentPermitDays').value = '';
-    document.getElementById('recentPermitCustomDays').value = '';
-    document.getElementById('recentPermitCustomDays').style.display = 'none';
     document.getElementById('financingMin').value = '';
     document.getElementById('financingMax').value = '';
     document.getElementById('cashOnly').checked = false;
     document.getElementById('withPermits').checked = false;
-    document.getElementById('violationsFilter').value = '';
     document.getElementById('hasEnrichableOwner').checked = false;
     
     state.pagination.page = 1;
@@ -852,8 +928,7 @@ function buildBulkEnrichFiltersPayload() {
     const payload = {};
     if (f.search) payload.search = f.search;
     if (f.owner) payload.owner = f.owner;
-    if (f.minValue) payload.min_value = f.minValue;
-    if (f.maxValue) payload.max_value = f.maxValue;
+    Object.assign(payload, SharedFilters.toPayload(state.shared));
     if (f.minSalePrice) payload.min_sale_price = f.minSalePrice;
     if (f.maxSalePrice) payload.max_sale_price = f.maxSalePrice;
     if (f.saleDateFrom) payload.sale_date_from = f.saleDateFrom;
@@ -861,20 +936,11 @@ function buildBulkEnrichFiltersPayload() {
     if (f.cashOnly) payload.cash_only = true;
     if (f.withPermits) payload.with_permits = true;
     if (f.minPermits) payload.min_permits = f.minPermits;
-    if (f.recentPermitDays) payload.recent_permit_days = f.recentPermitDays;
-    if (f.permitType) payload.permit_type = f.permitType;
-    if (f.propertyType) payload.property_type = f.propertyType;
-    if (f.borough && f.borough.length) payload.borough = f.borough;
-    if (f.buildingClass) payload.building_class = f.buildingClass;
-    if (f.minUnits) payload.min_units = f.minUnits;
-    if (f.maxUnits) payload.max_units = f.maxUnits;
-    if (f.hasViolations !== null && f.hasViolations !== undefined && f.hasViolations !== '') {
-        payload.has_violations = f.hasViolations;
-    }
     if (f.recentSaleDays) payload.recent_sale_days = f.recentSaleDays;
     if (f.financingMin) payload.financing_min = f.financingMin;
     if (f.financingMax) payload.financing_max = f.financingMax;
     if (f.hasEnrichableOwner) payload.has_enrichable_owner = true;
+    if (f.play) payload.play = f.play;
     return payload;
 }
 
@@ -1320,11 +1386,7 @@ async function updateEnrichmentEstimate() {
         
         if (state.filters.search) params.append('search', state.filters.search);
         if (state.filters.owner) params.append('owner', state.filters.owner);
-        if (state.filters.minValue) params.append('min_value', state.filters.minValue);
-        if (state.filters.maxValue) params.append('max_value', state.filters.maxValue);
-        if (state.filters.borough && state.filters.borough.length) params.append('borough', state.filters.borough.join(','));
-        if (state.filters.minUnits) params.append('min_units', state.filters.minUnits);
-        if (state.filters.maxUnits) params.append('max_units', state.filters.maxUnits);
+        SharedFilters.toParams(params, state.shared);
         if (state.filters.withPermits) params.append('with_permits', 'true');
         
         // Call API to get accurate estimate
@@ -1386,6 +1448,7 @@ window.closeExportModal = closeExportModal;
 window.downloadExport = downloadExport;
 window.goToPage = goToPage;
 window.clearFilters = clearFilters;
+window.togglePlay = togglePlay;
 window.showBulkEnrichModal = showBulkEnrichModal;
 window.closeBulkEnrichModal = closeBulkEnrichModal;
 window.cancelBulkEnrichJob = cancelBulkEnrichJob;

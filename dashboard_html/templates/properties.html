@@ -58,14 +58,6 @@
             </div>
 
             <div class="filter-section">
-                <h3>Assessed value</h3>
-                <div class="range-inputs">
-                    <input type="number" id="minValue" class="filter-input" placeholder="Min $">
-                    <input type="number" id="maxValue" class="filter-input" placeholder="Max $">
-                </div>
-            </div>
-
-            <div class="filter-section">
                 <h3>Sale price</h3>
                 <div class="range-inputs">
                     <input type="number" id="minSalePrice" class="filter-input" placeholder="Min $">
@@ -81,91 +73,7 @@
                 </div>
             </div>
 
-            <div class="filter-section">
-                <h3>Borough</h3>
-                <div id="boroughFilter" class="borough-checkboxes">
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="1"> Manhattan
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="2"> Bronx
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="3"> Brooklyn
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="4"> Queens
-                    </label>
-                    <label class="checkbox-label borough-cb-label">
-                        <input type="checkbox" class="borough-cb" value="5"> Staten Island
-                    </label>
-                </div>
-                <small class="filter-hint">Leave all unchecked to include every borough.</small>
-            </div>
-
-            <div class="filter-section">
-                <h3>Property type</h3>
-                <select id="propertyType" class="filter-select">
-                    <option value="">All types</option>
-                    <option value="residential">Residential</option>
-                    <option value="commercial">Commercial</option>
-                    <option value="mixed">Mixed use</option>
-                </select>
-            </div>
-
-            <div class="filter-section">
-                <h3>Building class</h3>
-                <input type="text" id="buildingClass" class="filter-input"
-                    placeholder="e.g. A, B, C, D">
-                <small class="filter-hint">NYC building classification code.</small>
-            </div>
-
-            <div class="filter-section">
-                <h3>Units</h3>
-                <div class="range-inputs">
-                    <input type="number" id="minUnits" class="filter-input" placeholder="Min">
-                    <input type="number" id="maxUnits" class="filter-input" placeholder="Max">
-                </div>
-            </div>
-
-            <div class="filter-section">
-                <h3>Permit activity</h3>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="withPermits">
-                    Only properties with permits
-                </label>
-                <input type="number" id="minPermits" class="filter-input"
-                    placeholder="Min permit count" style="margin-top: 8px;">
-
-                <label class="filter-label" style="margin-top: 12px;">Permit type</label>
-                <select id="permitType" class="filter-select">
-                    <option value="">All types</option>
-                    <option value="EW">EW — Equipment Work</option>
-                    <option value="PL">PL — Plumbing</option>
-                    <option value="EQ">EQ — Equipment</option>
-                    <option value="AL">AL — Alteration</option>
-                    <option value="NB">NB — New Building</option>
-                    <option value="SG">SG — Sign</option>
-                    <option value="DM">DM — Demolition</option>
-                    <option value="FO">FO — Foundation</option>
-                </select>
-
-                <label class="filter-label" style="margin-top: 12px;">Recent permits</label>
-                <select id="recentPermitDays" class="filter-select">
-                    <option value="">Any time</option>
-                    <option value="3">Last 3 days</option>
-                    <option value="7">Last week</option>
-                    <option value="30">Last 30 days</option>
-                    <option value="60">Last 60 days</option>
-                    <option value="90">Last 90 days</option>
-                    <option value="180">Last 6 months</option>
-                    <option value="365">Last year</option>
-                    <option value="730">Last 2 years</option>
-                    <option value="custom">Custom&hellip;</option>
-                </select>
-                <input type="number" id="recentPermitCustomDays" class="filter-input"
-                    placeholder="Number of days" style="display: none; margin-top: 8px;" min="1" max="3650">
-            </div>
+            {% with page = 'properties' %}{% include "_filter_sections.html" %}{% endwith %}
 
             <div class="filter-section">
                 <h3>Financing ratio</h3>
@@ -175,15 +83,6 @@
                     <input type="number" id="financingMax" class="filter-input"
                         placeholder="Max %" min="0" max="100">
                 </div>
-            </div>
-
-            <div class="filter-section">
-                <h3>HPD violations</h3>
-                <select id="violationsFilter" class="filter-select">
-                    <option value="">Any</option>
-                    <option value="true">Has violations</option>
-                    <option value="false">No violations</option>
-                </select>
             </div>
 
             <div class="filter-section">
@@ -201,6 +100,18 @@
 
         <!-- Main content -->
         <main class="content">
+            <!-- Prebuilt plays: goal-named filters over the signal columns.
+                 Populated by JS from /api/properties/plays; hidden until
+                 the signals migration has run. -->
+            <section id="playsSection" class="plays-section" style="display: none;">
+                <div class="plays-head">
+                    <h2>Plays</h2>
+                    <p>Prebuilt filters, each named for the goal. Pick one, work the list.</p>
+                </div>
+                <div id="playsRow" class="plays-row"></div>
+                <div id="playGuide" class="play-guide" style="display: none;"></div>
+            </section>
+
             <section class="stats-dashboard">
                 <div class="stat-card">
                     <div class="stat-label">Total properties</div>
@@ -226,7 +137,8 @@
                 </div>
                 <div class="controls-right">
                     <label for="sortBy">Sort</label>
-                    <select id="sortBy" class="control-select">
+                    <select id="sortBy" class="control-select" multiple
+                        data-multiselect data-compact data-placeholder="Sale date">
                         <option value="sale_date">Sale date</option>
                         <option value="value">Assessed value</option>
                         <option value="sale_price">Sale price</option>
@@ -235,12 +147,14 @@
                         <option value="permits">Permit count</option>
                         <option value="units">Units</option>
                     </select>
-                    <select id="sortOrder" class="control-select">
+                    <select id="sortOrder" class="control-select"
+                        data-multiselect data-compact data-placeholder="High to low">
                         <option value="desc">High to low</option>
                         <option value="asc">Low to high</option>
                     </select>
                     <label for="perPage">Per page</label>
-                    <select id="perPage" class="control-select">
+                    <select id="perPage" class="control-select"
+                        data-multiselect data-compact="narrow" data-placeholder="50">
                         <option value="25">25</option>
                         <option value="50" selected>50</option>
                         <option value="100">100</option>
@@ -378,6 +292,8 @@
         </div>
     </div>
 
+    <script src="/static/js/multiselect.js"></script>
+    <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/properties.js"></script>
 </body>
 </html>

@@ -232,20 +232,22 @@ def call_enformion_api(first_name, last_name, address_line1=None, address_line2=
         'galaxy-search-type': 'DevAPIContactEnrichPlus'
     }
     
-    # Build proper address - Enformion needs city/state in AddressLine2
-    # Default to Brooklyn, NY if no address_line2 provided
-    city_state = address_line2.strip() if address_line2 else "Brooklyn, NY"
-    
-    # Use "Address" (singular object) NOT "Addresses" (array) - API requires this format
+    # Build proper address - Enformion wants city/state in AddressLine2.
+    # If the caller doesn't know the city, send the name WITHOUT an address
+    # block: a fabricated default city ("Brooklyn, NY") used to bias paid
+    # lookups toward the wrong same-named person.
     payload = {
         "FirstName": first_name or "",
         "MiddleName": middle_name or "",
         "LastName": last_name or "",
-        "Address": {
-            "AddressLine1": address_line1 or "",
-            "AddressLine2": city_state
-        }
     }
+    city_state = address_line2.strip() if address_line2 else None
+    if address_line1 or city_state:
+        # Use "Address" (singular object) NOT "Addresses" (array) - API requires this format
+        payload["Address"] = {
+            "AddressLine1": address_line1 or "",
+            "AddressLine2": city_state or "",
+        }
     
     print(f"Enformion API call: {ENFORMION_API_URL}")
     print(f"Payload: {payload}")
@@ -906,6 +908,65 @@ def check_user_enrichment_access(user_id, building_id, owner_name=None):
 # Enriching them gives us the agent's phone, which is useless for outreach to
 # the real owner. We detect them via the sos_principal_title column populated
 # by step5_enrich_from_sos.py.
+# Business-name suffixes that carry no identity — "65 SPRING REALTY LLC" and
+# "65 Spring Realty, L.L.C." are the same company.
+_ENTITY_SUFFIXES = re.compile(
+    r'\b(L\.?L\.?C|L\.?L\.?P|L\.?P|P\.?L\.?L\.?C|P\.?C|INC|INCORPORATED|'
+    r'CORP|CORPORATION|LTD|LIMITED|COMPANY|CO|DBA|D/B/A|USA)\b\.?',
+    re.IGNORECASE,
+)
+
+
+def normalize_entity_name(name):
+    """Normalize a business name for identity comparison.
+
+    Mirrors ny_sos_lookup.normalize_business_name. The two are deliberately
+    separate copies: the scraper runs in the pipeline environment and the web
+    app must not depend on it (it pulls httpx, which the dashboard does not
+    install). test_entity_match_parity in filter_param_tests.py pins them to
+    the same behaviour so they cannot drift silently.
+    """
+    if not name:
+        return ''
+    out = str(name).upper().strip()
+    # Mirror the scraper: care-of/attention tails are mailing instructions,
+    # not identity.
+    out = re.sub(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', '', out)
+    out = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', out)
+    out = _ENTITY_SUFFIXES.sub(' ', out)
+    out = re.sub(r'[^\w\s]', ' ', out)
+    return re.sub(r'\s+', ' ', out).strip()
+
+
+def entity_match_quality(registered_name, candidate_names):
+    """How well a registered SOS entity matches any of a building's owners.
+
+    Returns (quality, matched_name) where quality is 'exact', 'prefix',
+    'mismatch', or 'unknown' when there is nothing to compare against.
+
+    This runs when the profile is served rather than when the data is
+    written, so rows stored before the lookup verified its match — which
+    could attach an unrelated company's officers to a building — are flagged
+    without needing a re-run.
+    """
+    registered = normalize_entity_name(registered_name)
+    if not registered:
+        return 'unknown', None
+
+    candidates = [(normalize_entity_name(n), n) for n in candidate_names if n]
+    candidates = [(norm, raw) for norm, raw in candidates if norm]
+    if not candidates:
+        return 'unknown', None
+
+    for norm, raw in candidates:
+        if norm == registered:
+            return 'exact', raw
+    for norm, raw in candidates:
+        if norm.startswith(registered) or registered.startswith(norm):
+            return 'prefix', raw
+    return 'mismatch', None
+
+
 SOS_AGENT_TITLES = frozenset({'SERVICE OF PROCESS AGENT', 'REGISTERED AGENT'})
 
 
@@ -1033,6 +1094,8 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
                 owner_name_hpd,
                 sos_principal_name,
                 sos_principal_title,
+                sos_entity_name,
+                sale_buyer_primary,
                 ecb_respondent_name
             FROM buildings WHERE id = %s
         """, (building_id,))
@@ -1049,7 +1112,15 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
         # Registered Agent. Agents are designated mail recipients, not owners.
         sos_name = building['sos_principal_name']
         sos_title = building['sos_principal_title']
-        if sos_name and not is_sos_agent_title(sos_title):
+        # Also skip when the registered entity is not the company any of our
+        # owner fields name. Those people run some other business, so paying
+        # to look up their contacts buys nothing for this building.
+        sos_match, _matched = entity_match_quality(
+            building['sos_entity_name'],
+            [building['current_owner_name'], building['owner_name_rpad'],
+             building['owner_name_hpd'], building['sale_buyer_primary']],
+        )
+        if sos_name and not is_sos_agent_title(sos_title) and sos_match != 'mismatch':
             key = canonical_name_key(sos_name)
             if key:
                 is_enriched = _is_already_enriched(key)

@@ -651,10 +651,14 @@ class NYCOpenDataClient:
             print(f"❌ Invalid date format. Use YYYY-MM-DD")
             return []
         
+        # Match on filing OR issuance date: the product keys on issue_date,
+        # and a permit filed months ago but issued inside the sync window
+        # would never be picked up by a filing_date-only filter.
         where_clauses = [
-            f"filing_date >= '{start_formatted}' AND filing_date <= '{end_formatted}'"
+            f"((filing_date >= '{start_formatted}' AND filing_date <= '{end_formatted}') "
+            f"OR (issuance_date >= '{start_formatted}' AND issuance_date <= '{end_formatted}'))"
         ]
-        
+
         if permit_type:
             where_clauses.append(f"permit_type='{permit_type}'")
         if borough:

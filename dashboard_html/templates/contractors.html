@@ -30,49 +30,91 @@
         </div>
     </nav>
 
-    <div class="container">
-        <div class="page-head">
-            <div class="page-head-row">
-                <div>
-                    <h1>Contractors</h1>
-                    <p>Every contractor pulling permits in NYC, with their work history and portfolio.</p>
-                </div>
-                <div class="head-metric">
-                    <div class="stat-value" id="totalContractors">&ndash;</div>
-                    <div class="stat-label">Contractors</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="search-section">
-            <div class="search-bar">
-                <i class="fas fa-search"></i>
-                <input type="text" id="contractorSearch" placeholder="Search by contractor name or license number" />
-                <button class="btn-clear" id="clearSearch" style="display: none;" title="Clear search">
-                    <i class="fas fa-times"></i>
-                </button>
+    <div class="main-container">
+        <!-- Sidebar filters — the same set the properties page uses, so a
+             filter applies identically whichever page you are on. -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Filters</h2>
+                <button class="btn-clear" id="clearFiltersBtn">Clear all</button>
             </div>
 
-            <div class="filter-controls">
-                <div class="filter-group">
+            <div class="filter-section">
+                <h3>Search</h3>
+                <input type="text" id="contractorSearch" class="filter-input"
+                    placeholder="Contractor name or licence number">
+            </div>
+
+            {% with page = 'contractors' %}{% include "_filter_sections.html" %}{% endwith %}
+
+            <div class="filter-section">
+                <h3>Total jobs</h3>
+                <div class="range-inputs">
+                    <input type="number" id="minJobs" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxJobs" class="filter-input" placeholder="Max">
+                </div>
+            </div>
+
+            <div class="filter-section">
+                <h3>Active jobs</h3>
+                <input type="number" id="minActiveJobs" class="filter-input"
+                    placeholder="Min in last 90 days">
+                <small class="filter-hint">Permits issued in the last 90 days.</small>
+            </div>
+
+            <div class="filter-section">
+                <h3>Properties worked</h3>
+                <div class="range-inputs">
+                    <input type="number" id="minProperties" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxProperties" class="filter-input" placeholder="Max">
+                </div>
+                <small class="filter-hint">Distinct buildings, not permit count.</small>
+            </div>
+        </aside>
+
+        <main class="content">
+            <div class="page-head">
+                <div class="page-head-row">
+                    <div>
+                        <h1>Contractors</h1>
+                        <p>Every contractor pulling permits in NYC, with their work history and portfolio.</p>
+                    </div>
+                    <div class="head-metric">
+                        <div class="stat-value" id="totalContractors">&ndash;</div>
+                        <div class="stat-label">Matching contractors</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls-bar">
+                <div class="results-info">
+                    <span id="resultsCount"></span>
+                </div>
+                <div class="controls-right">
                     <label for="sortBy">Sort</label>
-                    <select id="sortBy" class="filter-select">
+                    <select id="sortBy" class="control-select" multiple
+                        data-multiselect data-compact data-placeholder="Total jobs">
                         <option value="total_jobs">Total jobs</option>
                         <option value="active_jobs">Active jobs</option>
                         <option value="total_value">Total project value</option>
                         <option value="largest_project">Largest project</option>
+                        <option value="unique_properties">Properties worked</option>
+                        <option value="most_recent_job">Most recent job</option>
                     </select>
-                </div>
-
-                <div class="filter-group">
-                    <label for="sortOrder">Order</label>
-                    <select id="sortOrder" class="filter-select">
+                    <select id="sortOrder" class="control-select"
+                        data-multiselect data-compact data-placeholder="High to low">
                         <option value="desc">High to low</option>
                         <option value="asc">Low to high</option>
                     </select>
+                    <label for="perPage">Per page</label>
+                    <select id="perPage" class="control-select"
+                        data-multiselect data-compact="narrow" data-placeholder="50">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                    </select>
                 </div>
             </div>
-        </div>
 
         <div id="contractorsGrid" class="contractors-grid">
             <!-- Skeleton placeholders shown while the first page loads -->
@@ -176,9 +218,12 @@
             <button id="nextPage" class="btn-pagination">
                 Next <i class="fas fa-chevron-right"></i>
             </button>
-        </div>
+            </div>
+        </main>
     </div>
 
+    <script src="/static/js/multiselect.js"></script>
+    <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/contractors.js"></script>
 </body>
 </html>
