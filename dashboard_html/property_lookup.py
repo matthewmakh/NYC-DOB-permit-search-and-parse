@@ -184,9 +184,14 @@ def _lookup_from_geoclient_address(addr, house, street, borough):
 
 
 def _geoclient_get(path, params):
-    """One Geoclient call. Returns the parsed JSON dict, or None on any
-    transport/HTTP failure (logged, never raised — a retry with the next
-    candidate should still run)."""
+    """One Geoclient call. Returns (json_dict_or_None, failure_note).
+
+    failure_note is None when Geoclient answered 200 with a body; otherwise
+    it says what went wrong (HTTP status, transport error), so the caller
+    can tell "the geocoder rejected/never saw the request" apart from "the
+    geocoder looked and found nothing" — the two need different answers.
+    Never raises; a retry with the next candidate should still run.
+    """
     try:
         resp = requests.get(
             f'https://api.nyc.gov/geoclient/v2/{path}',
@@ -195,15 +200,70 @@ def _geoclient_get(path, params):
             timeout=10,
         )
     except requests.RequestException as e:
-        log.warning(f"Geoclient {path} request failed: {e}")
-        return None
+        note = f'request failed ({e})'
+        print(f"[auto-add] Geoclient /{path} {params}: {note}", flush=True)
+        return None, note
     if resp.status_code != 200:
-        log.warning(f"Geoclient {path} {resp.status_code}: {resp.text[:200]}")
-        return None
+        note = f'HTTP {resp.status_code}: {resp.text[:160]}'
+        print(f"[auto-add] Geoclient /{path} {params}: {note}", flush=True)
+        return None, note
     try:
-        return resp.json() or {}
+        data = resp.json() or {}
     except ValueError:
-        return None
+        return None, 'unparseable response body'
+    return data, None
+
+
+def _geosearch_get(text):
+    """NYC Planning's GeoSearch (Pelias) — free, no key. Second opinion when
+    Geoclient is misconfigured or misses. Returns (lookup_dict_or_None,
+    failure_note). Parsed defensively: only a feature carrying a 10-digit
+    PAD BBL counts, everything else is treated as no match."""
+    try:
+        resp = requests.get(
+            'https://geosearch.planninglabs.nyc/v2/search',
+            params={'text': f'{text}, New York, NY', 'size': 5},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        note = f'request failed ({e})'
+        print(f"[auto-add] GeoSearch {text!r}: {note}", flush=True)
+        return None, note
+    if resp.status_code != 200:
+        note = f'HTTP {resp.status_code}: {resp.text[:160]}'
+        print(f"[auto-add] GeoSearch {text!r}: {note}", flush=True)
+        return None, note
+    try:
+        features = (resp.json() or {}).get('features') or []
+    except ValueError:
+        return None, 'unparseable response body'
+
+    for feature in features:
+        props = feature.get('properties') or {}
+        pad = (props.get('addendum') or {}).get('pad') or {}
+        bbl = str(pad.get('bbl') or props.get('pad_bbl') or '')
+        if len(bbl) != 10 or not bbl.isdigit():
+            continue
+        coords = (feature.get('geometry') or {}).get('coordinates') or [None, None]
+        street = (props.get('street') or '').upper()
+        house = props.get('housenumber') or ''
+        parts = [f"{house} {street}".strip()]
+        if props.get('borough'):
+            parts.append(str(props['borough']).upper())
+        zip5 = props.get('postalcode')
+        parts.append(f'NY {zip5}' if zip5 else 'NY')
+        print(f"[auto-add] GeoSearch matched {props.get('label')!r} -> BBL {bbl}", flush=True)
+        return {
+            'bbl': bbl,
+            'bin': str(pad.get('bin')) if pad.get('bin') else None,
+            'latitude': coords[1],
+            'longitude': coords[0],
+            'address': ', '.join(p for p in parts if p),
+            'borough': str(props['borough']).title() if props.get('borough') else None,
+            'block': bbl[1:6],
+            'lot': bbl[6:10],
+        }, None
+    return None, 'no feature with a PAD BBL'
 
 
 def resolve_address_to_property(query):
@@ -222,12 +282,6 @@ def resolve_address_to_property(query):
     Each step also retries with the Queens hyphenated house number
     ('18423' -> '184-23') since that's the official form.
     """
-    if not NYC_APP_ID:
-        log.warning("NYC_GEOCLIENT_APP_ID not set; cannot resolve addresses")
-        return None, ('Address lookup is not configured on this server '
-                      '(NYC_GEOCLIENT_APP_ID is missing). You can still '
-                      'paste the 10-digit BBL directly.')
-
     house, street = _parse_house_and_street(query)
     if not house or not street:
         return None, ('That doesn\'t look like a street address. Use '
@@ -241,31 +295,78 @@ def resolve_address_to_property(query):
     if zip5 and street.upper().endswith(zip5):
         street = street[:-len(zip5)].rstrip(' ,')
 
-    if borough or zip5:
+    # Every geocoder attempt is recorded: a key rejection or an outage must
+    # never masquerade as "address doesn't exist" — they call for opposite
+    # remedies and the old single generic message hid which one happened.
+    service_failures = []
+    geoclient_said = None
+
+    if NYC_APP_ID:
+        if borough or zip5:
+            for house_form in _house_number_candidates(house):
+                params = {'houseNumber': house_form, 'street': street}
+                if borough:
+                    params['borough'] = borough
+                else:
+                    params['zip'] = zip5
+                data, note = _geoclient_get('address', params)
+                if note:
+                    service_failures.append(f'Geoclient address: {note}')
+                    continue
+                addr = (data or {}).get('address') or {}
+                lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
+                if lookup:
+                    return lookup, None
+                # Geosupport explains its rejections; keep the last one.
+                geoclient_said = addr.get('message') or addr.get('message2') or geoclient_said
+                print(f"[auto-add] Geoclient no-match for {params}: "
+                      f"{geoclient_said or 'no message'}", flush=True)
+
+        # No borough/ZIP in the query, or the strict lookup missed: let
+        # Geoclient's single-field search try every borough.
         for house_form in _house_number_candidates(house):
-            params = {'houseNumber': house_form, 'street': street}
-            if borough:
-                params['borough'] = borough
-            else:
-                params['zip'] = zip5
-            data = _geoclient_get('address', params)
-            addr = (data or {}).get('address') or {}
-            lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
-            if lookup:
-                return lookup, None
+            free_form = f"{house_form} {street}"
+            data, note = _geoclient_get('search', {'input': free_form})
+            if note:
+                service_failures.append(f'Geoclient search: {note}')
+                continue
+            for result in (data or {}).get('results') or []:
+                addr = result.get('response') or {}
+                lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
+                if lookup:
+                    return lookup, None
+    else:
+        service_failures.append('Geoclient: NYC_GEOCLIENT_APP_ID is not set')
+        print("[auto-add] NYC_GEOCLIENT_APP_ID not set; relying on GeoSearch", flush=True)
 
-    # No borough/ZIP in the query, or the strict lookup missed: let
-    # Geoclient's single-field search try every borough.
+    # Second opinion: NYC Planning's keyless GeoSearch. Covers a missing or
+    # rejected Geoclient key, and its fuzzier matching sometimes lands where
+    # Geosupport's strict parser refuses.
     for house_form in _house_number_candidates(house):
-        free_form = f"{house_form} {street}"
-        data = _geoclient_get('search', {'input': free_form})
-        for result in (data or {}).get('results') or []:
-            addr = result.get('response') or {}
-            lookup = _lookup_from_geoclient_address(addr, house_form, street, borough)
-            if lookup:
-                return lookup, None
+        text = f"{house_form} {street}" + (f", {borough.title()}" if borough else '')
+        lookup, note = _geosearch_get(text)
+        if lookup:
+            return lookup, None
+        if note and 'no feature' not in note:
+            service_failures.append(f'GeoSearch: {note}')
 
-    return None, (f'Could not match "{query}" to a NYC property. '
+    # Nothing matched. Say what actually happened, in order of usefulness.
+    geoclient_worked = NYC_APP_ID and not any(
+        f.startswith('Geoclient') for f in service_failures)
+
+    if not geoclient_worked and service_failures:
+        detail = '; '.join(dict.fromkeys(service_failures))
+        return None, ('The address services could not be reached, so this '
+                      f'may not mean the address is wrong ({detail}). '
+                      'Try again in a minute, or paste the 10-digit BBL.')
+
+    hint = f' The city geocoder said: "{geoclient_said.strip()}".' if geoclient_said else ''
+    if borough:
+        return None, (f'NYC has no record of "{house} {street}" in '
+                      f'{borough.title()}.{hint} Double-check the house '
+                      'number and street spelling, or paste the 10-digit BBL '
+                      'from any tax document.')
+    return None, (f'Could not match "{query}" to a NYC property.{hint} '
                   'Try adding the borough (e.g. "QUEENS") or the ZIP code, '
                   'or paste the 10-digit BBL directly.')
 

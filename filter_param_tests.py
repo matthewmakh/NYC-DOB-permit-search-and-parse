@@ -477,11 +477,17 @@ def _fake_geoclient(path, params):
             'firstBoroughName': 'QUEENS', 'zipCode': '11432',
             'latitude': 40.71, 'longitude': -73.79,
             'bblTaxBlock': '09876', 'bblTaxLot': '0032',
-        }}]}
-    return {}
+        }}]}, None
+    return {}, None
+
+
+def _fake_geosearch_miss(text):
+    _calls.append(('geosearch', text))
+    return None, 'no feature with a PAD BBL'
 
 
 PL._geoclient_get, _real_get = _fake_geoclient, PL._geoclient_get
+PL._geosearch_get, _real_geosearch = _fake_geosearch_miss, PL._geosearch_get
 PL.NYC_APP_ID, _real_app_id = 'test-key', PL.NYC_APP_ID
 try:
     lookup, reason = PL.resolve_address_to_property('18423 cambridge rd')
@@ -508,16 +514,68 @@ try:
 
     lookup, reason = PL.resolve_address_to_property('999 NOWHERE LANE')
     check('no match names the query in the reason', '999 NOWHERE LANE' in (reason or ''), True)
+    check('borough-less miss still advises a borough',
+          'adding the borough' in (reason or ''), True)
+
+    _calls.clear()
+    lookup, reason = PL.resolve_address_to_property('999 NOWHERE LANE, QUEENS')
+    check('borough miss names the borough', 'Queens' in (reason or ''), True)
+    check('borough miss does not advise adding a borough',
+          'adding the borough' in (reason or ''), False)
+    check('miss falls through to geosearch',
+          any(c[0] == 'geosearch' for c in _calls), True)
+
+    def _geoclient_with_message(path, params):
+        if path == 'address':
+            return {'address': {'message': 'CAMBRIDGE ROAD NOT FOUND IN QUEENS'}}, None
+        return {}, None
+    PL._geoclient_get = _geoclient_with_message
+    lookup, reason = PL.resolve_address_to_property('18423 CAMBRIDGE RD, QUEENS')
+    check('geosupport rejection is quoted to the user',
+          'CAMBRIDGE ROAD NOT FOUND IN QUEENS' in (reason or ''), True)
+
+    def _geoclient_denied(path, params):
+        return None, 'HTTP 401: invalid subscription key'
+    PL._geoclient_get = _geoclient_denied
+    PL._geosearch_get = lambda text: (None, 'request failed (blocked)')
+    lookup, reason = PL.resolve_address_to_property('18423 CAMBRIDGE RD, QUEENS')
+    check('service failure is not called a bad address',
+          'could not be reached' in (reason or ''), True)
+    check('service failure names the rejection', 'HTTP 401' in (reason or ''), True)
+
+    def _fake_geosearch_hit(text):
+        return ({'bbl': '4098220015', 'bin': '4123456', 'latitude': 40.71,
+                 'longitude': -73.78, 'address': '184-23 CAMBRIDGE RD, QUEENS, NY 11432',
+                 'borough': 'Queens', 'block': '09822', 'lot': '0015'}, None)
+    PL._geosearch_get = _fake_geosearch_hit
+    lookup, reason = PL.resolve_address_to_property('18423 CAMBRIDGE RD, QUEENS')
+    check('geosearch rescues a geoclient outage', (lookup or {}).get('bbl'), '4098220015')
 finally:
     PL._geoclient_get = _real_get
+    PL._geosearch_get = _real_geosearch
     PL.NYC_APP_ID = _real_app_id
 
 PL.NYC_APP_ID = None
+PL._geosearch_get = lambda text: (None, 'request failed (blocked)')
 try:
     lookup, reason = PL.resolve_address_to_property('141 WYONA ST, BROOKLYN')
     check('missing api key is said out loud', 'NYC_GEOCLIENT_APP_ID' in (reason or ''), True)
 finally:
     PL.NYC_APP_ID = _real_app_id
+    PL._geosearch_get = _real_geosearch
+
+PL.NYC_APP_ID = None
+PL._geoclient_get = lambda path, params: ({}, None)
+PL._geosearch_get = lambda text: (({'bbl': '3012340056', 'bin': None, 'latitude': None,
+                                    'longitude': None, 'address': '141 WYONA ST, BROOKLYN, NY',
+                                    'borough': 'Brooklyn', 'block': '01234', 'lot': '0056'}, None))
+try:
+    lookup, reason = PL.resolve_address_to_property('141 WYONA ST, BROOKLYN')
+    check('no key still resolves through geosearch', (lookup or {}).get('bbl'), '3012340056')
+finally:
+    PL.NYC_APP_ID = _real_app_id
+    PL._geoclient_get = _real_get
+    PL._geosearch_get = _real_geosearch
 
 print()
 print('=' * 50)
