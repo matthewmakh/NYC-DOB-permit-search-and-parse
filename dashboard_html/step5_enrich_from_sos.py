@@ -44,14 +44,23 @@ elif os.path.exists('dashboard_html/.env'):
 else:
     load_dotenv()
 
-# Import the SOS lookup module (local copy for Railway compatibility)
+# Import the SOS lookup module (local copy for Railway compatibility).
+#
+# NEVER sys.exit here: this module is imported by the web app's auto-add
+# request path, and SystemExit is not an Exception — the old exit(1) sailed
+# through every try/except, killed the gunicorn worker mid-request, and the
+# platform edge reported the closed connection as an instant 502. That single
+# line was the production outage. A missing httpx now just disables the
+# lookup half; get_best_llc_name/process_sos_result keep working.
 try:
     from ny_sos_lookup import lookup_businesses, SOSBusinessResult, is_likely_individual
+    SOS_LOOKUP_IMPORT_ERROR = None
 except ImportError as e:
-    print(f"❌ Cannot import ny_sos_lookup")
-    print(f"   Error: {e}")
-    print(f"   Make sure httpx is installed: pip install httpx")
-    sys.exit(1)
+    lookup_businesses = None
+    SOSBusinessResult = None
+    is_likely_individual = None
+    SOS_LOOKUP_IMPORT_ERROR = str(e)
+    print(f"⚠️  ny_sos_lookup unavailable ({e}) — SOS lookups disabled until httpx is installed")
 
 # =============================================================================
 # CONFIGURATION
@@ -256,8 +265,10 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
         if not name:
             continue
         
-        # Skip if it looks like an individual person (not an LLC/Corp)
-        if is_likely_individual(name):
+        # Skip if it looks like an individual person (not an LLC/Corp).
+        # Without ny_sos_lookup the person-check is unavailable; is_llc_name
+        # below still keeps obvious non-companies out.
+        if is_likely_individual is not None and is_likely_individual(name):
             continue
         
         # Only look up if it's an LLC/Corp
@@ -356,6 +367,13 @@ def update_buildings_with_sos(conn, updates: List[Dict]):
 
 
 def main():
+    # The pipeline script genuinely cannot run without the lookup module —
+    # exiting is right HERE, at the CLI entry, never at import time.
+    if SOS_LOOKUP_IMPORT_ERROR:
+        print(f"❌ Cannot run: ny_sos_lookup unavailable ({SOS_LOOKUP_IMPORT_ERROR})")
+        print(f"   Install httpx first: pip install httpx")
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description='Enrich buildings from NY Secretary of State')
     parser.add_argument('--limit', type=int, help='Limit number of buildings to process')
     parser.add_argument('--dry-run', action='store_true', help='Preview without saving')
