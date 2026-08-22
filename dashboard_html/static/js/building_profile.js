@@ -187,6 +187,8 @@ async function loadBuildingProfile() {
         
         // Render all sections
         renderHeroSection();
+        renderGlanceStrip();
+        renderSignalsCard();
         renderOverviewTab();
         renderFinancialsTab();
         renderOwnersTab();
@@ -195,9 +197,14 @@ async function loadBuildingProfile() {
         renderViolationsTab();
         renderActivityTab();
         renderContactsTab();
-        
+
         // Update tab badges
         updateTabBadges();
+
+        // Violations detail lists used to load when their tab was opened;
+        // on the one-page dossier they load the first time the section
+        // scrolls into view instead.
+        setupViolationsLazyLoad();
         
     } catch (error) {
         console.error('Error loading building profile:', error);
@@ -283,13 +290,22 @@ function renderHeroSection() {
         ${building.borough_name || building.zip_code ? `<span class="address-city">${building.borough_name || ''}${building.borough_name && building.zip_code ? ', ' : ''}${building.zip_code ? 'NY ' + building.zip_code : ''}</span>` : ''}
     `;
     document.getElementById('bbl-display').textContent = building.bbl;
-    
-    // Show BIN if available
+
+    const crumb = document.getElementById('crumb-borough');
+    if (crumb) crumb.textContent = building.borough_name || 'NYC';
+
+    // BIN and building-class chips only render when we actually have them.
     const binDisplay = document.getElementById('bin-display');
     if (building.bin) {
-        binDisplay.textContent = '| BIN: ' + building.bin;
+        binDisplay.textContent = 'BIN ' + building.bin;
+        binDisplay.style.display = '';
     } else {
-        binDisplay.textContent = '';
+        binDisplay.style.display = 'none';
+    }
+    const classChip = document.getElementById('class-chip');
+    if (classChip && building.building_class) {
+        classChip.textContent = `${building.building_class} · ${building_class_description}`;
+        classChip.style.display = '';
     }
     
     // Risk Score with color coding
@@ -375,6 +391,97 @@ function renderHeroSection() {
 }
 
 // ============================================================================
+// GLANCE STRIP + SIGNALS (dossier header widgets)
+// ============================================================================
+
+function renderGlanceStrip() {
+    const { building } = buildingData;
+    const strip = document.getElementById('glance-strip');
+    if (!strip) return;
+
+    const openViolations = (building.hpd_open_violations || 0) +
+                           (building.ecb_open_violations || 0) +
+                           (building.dob_open_violations || 0);
+
+    const tiles = [
+        { label: 'Assessed value',
+          value: building.assessed_total_value ? formatLargeNumber(building.assessed_total_value) : '—' },
+        { label: building.sale_date ? `Last sale · ${new Date(building.sale_date).getFullYear()}` : 'Last sale',
+          value: building.sale_price ? formatLargeNumber(building.sale_price) : '—' },
+        { label: 'Financing',
+          value: building.is_cash_purchase ? 'Cash'
+               : (building.financing_ratio !== null && building.financing_ratio !== undefined)
+                   ? `${(building.financing_ratio * 100).toFixed(1)}%` : '—' },
+        { label: 'Units', value: building.total_units ? formatNumber(building.total_units) : '—' },
+        { label: 'Year built', value: building.year_built || '—' },
+        { label: 'Open violations', value: formatNumber(openViolations),
+          tone: openViolations > 0 ? 'warn' : 'ok' },
+    ];
+
+    strip.innerHTML = tiles.map(t => `
+        <div class="glance-tile">
+            <span class="glance-label">${t.label}</span>
+            <span class="glance-value ${t.tone || ''}">${t.value}</span>
+        </div>`).join('');
+}
+
+function renderSignalsCard() {
+    const { building } = buildingData;
+    const card = document.getElementById('signals-card');
+    const list = document.getElementById('signals-list');
+    if (!card || !list) return;
+
+    // Ordered by how loudly each one should speak; only real values render,
+    // and the card stays hidden when the signals pipeline hasn't run yet.
+    const signals = [];
+    if (building.on_speculation_watch_list) {
+        signals.push({ tone: 'red', text: 'On the HPD speculation watch list' });
+    }
+    if (building.has_tax_delinquency) {
+        signals.push({ tone: building.tax_delinquency_water_only ? 'amber' : 'red',
+                       text: `Tax delinquency — ${building.tax_delinquency_count} notice(s)${building.tax_delinquency_water_only ? ' (water only)' : ''}` });
+    }
+    if (building.ecb_total_balance > 0) {
+        signals.push({ tone: 'amber', text: `ECB balance outstanding — $${formatNumber(building.ecb_total_balance)}` });
+    }
+    if (building.litigation_open_count > 0) {
+        signals.push({ tone: 'amber', text: `${building.litigation_open_count} open HPD litigation case(s)` });
+    }
+    if (building.eviction_count > 0) {
+        signals.push({ tone: 'amber', text: `${building.eviction_count} marshal eviction(s) on record` });
+    }
+    if (building.dob_active_complaint_count > 0) {
+        signals.push({ tone: 'amber', text: `${building.dob_active_complaint_count} active DOB complaint(s)` });
+    }
+    if (building.is_free_and_clear) {
+        signals.push({ tone: 'green', text: 'Free and clear — no open mortgage' });
+    } else if (building.open_mortgage_count > 1) {
+        signals.push({ tone: 'amber', text: `${building.open_mortgage_count} open mortgages` });
+    }
+    if (building.unused_far && Number(building.unused_far) >= 0.5 && building.max_resid_far) {
+        signals.push({ tone: 'accent',
+                       text: `Unused FAR — ${Number(building.unused_far).toFixed(1)} of ${Number(building.max_resid_far).toFixed(1)} buildable remains` });
+    }
+    if (building.has_senior_exemption || building.has_disabled_exemption) {
+        signals.push({ tone: 'accent', text: 'Senior/disabled tax exemption on file' });
+    }
+    if (building.latest_co_date) {
+        signals.push({ tone: 'green', text: `Certificate of occupancy issued ${formatDate(building.latest_co_date)}` });
+    }
+    if (building.fisp_status) {
+        signals.push({ tone: 'neutral', text: `Facade (FISP): ${building.fisp_status}${building.fisp_cycle ? ` — cycle ${building.fisp_cycle}` : ''}` });
+    }
+
+    if (!signals.length) return;
+    card.style.display = '';
+    list.innerHTML = signals.slice(0, 7).map(s => `
+        <div class="signal-row signal-${s.tone}">
+            <span class="signal-dot"></span>
+            <span>${s.text}</span>
+        </div>`).join('');
+}
+
+// ============================================================================
 // OWNER ENRICHMENT
 // ============================================================================
 
@@ -446,6 +553,7 @@ function addEnrichOwnerButton(container) {
         }
     }
     
+    if (!html.trim()) return;  // nothing to offer — don't render an empty box
     enrichSection.innerHTML = html;
     
     container.appendChild(enrichSection);
@@ -773,49 +881,114 @@ function renderRiskExplanation() {
 // TAB NAVIGATION
 // ============================================================================
 
+// Every former tab is a section on one page now. The nav buttons scroll,
+// and a scrollspy keeps the active state honest while the user scrolls
+// on their own.
 function setupTabNavigation() {
-    const tabBtns = document.querySelectorAll('.tab-btn');
-    
-    tabBtns.forEach(btn => {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const tabName = btn.getAttribute('data-tab');
-            switchTab(tabName);
+            switchTab(btn.getAttribute('data-tab'));
+        });
+    });
+
+    // Deterministic scrollspy: the active section is the last one whose top
+    // has passed the sticky-header line. Ratio-based observers pick the
+    // biggest section on screen, which is wrong next to short ones.
+    const sections = Array.from(document.querySelectorAll('section[id^="tab-"]'));
+    if (sections.length) {
+        let ticking = false;
+        const markActive = () => {
+            ticking = false;
+            // A click told us where we're going; don't let the spy overrule
+            // it while the smooth scroll is still travelling (or when the
+            // target section can't physically reach the top of the page).
+            if (Date.now() < spyHoldUntil) return;
+            let current = 'overview';
+            for (const s of sections) {
+                if (s.getBoundingClientRect().top <= 150) {
+                    current = s.id.replace(/^tab-/, '');
+                }
+            }
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-tab') === current);
+            });
+        };
+        window.addEventListener('scroll', () => {
+            if (!ticking) {
+                ticking = true;
+                requestAnimationFrame(markActive);
+            }
+        }, { passive: true });
+    }
+
+    const historyToggle = document.getElementById('toggle-owner-history');
+    if (historyToggle) {
+        historyToggle.addEventListener('click', () => {
+            const panel = document.getElementById('owners-content');
+            const open = panel.style.display !== 'none';
+            panel.style.display = open ? 'none' : '';
+            historyToggle.textContent = open ? 'Ownership history' : 'Hide history';
+        });
+    }
+
+    document.querySelectorAll('#timeline-filters .pill-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('#timeline-filters .pill-btn')
+                .forEach(b => b.classList.toggle('active', b === btn));
+            const type = btn.getAttribute('data-type');
+            document.querySelectorAll('#activity-feed .activity-item').forEach(item => {
+                item.style.display =
+                    (type === 'all' || item.dataset.eventType === type) ? '' : 'none';
+            });
         });
     });
 }
 
+let spyHoldUntil = 0;
+
 function switchTab(tabName) {
-    // Update buttons
     document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.getAttribute('data-tab') === tabName) {
-            btn.classList.add('active');
-        }
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
     });
-    
-    // Update content
-    document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.remove('active');
-    });
-    
-    document.getElementById(`tab-${tabName}`).classList.add('active');
-    
-    // Auto-load detailed violations when violations tab is opened
-    if (tabName === 'violations') {
-        const { building } = buildingData;
-        
-        // Load ECB violations
-        const ecbContainer = document.getElementById('ecb-violations-container');
-        if (ecbContainer && ecbContainer.innerHTML === '' && building.ecb_violation_count > 0) {
-            loadECBViolationDetails();
-        }
-        
-        // Load HPD violations
-        const hpdContainer = document.getElementById('hpd-violations-container');
-        if (hpdContainer && hpdContainer.innerHTML === '' && building.hpd_total_violations > 0) {
-            loadHPDViolationDetails();
-        }
+    spyHoldUntil = Date.now() + 1200;
+    const section = document.getElementById(`tab-${tabName}`);
+    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (tabName === 'violations') loadViolationDetailsOnce();
+}
+
+// The heavy per-violation lists come from live Open Data calls, so they
+// still load lazily — on first sight of the section instead of a tab click.
+let violationDetailsLoaded = false;
+
+function loadViolationDetailsOnce() {
+    if (violationDetailsLoaded || !buildingData) return;
+    const { building } = buildingData;
+    violationDetailsLoaded = true;
+
+    const ecbContainer = document.getElementById('ecb-violations-container');
+    if (ecbContainer && ecbContainer.innerHTML === '' && building.ecb_violation_count > 0) {
+        loadECBViolationDetails();
     }
+    const hpdContainer = document.getElementById('hpd-violations-container');
+    if (hpdContainer && hpdContainer.innerHTML === '' && building.hpd_total_violations > 0) {
+        loadHPDViolationDetails();
+    }
+}
+
+function setupViolationsLazyLoad() {
+    const section = document.getElementById('tab-violations');
+    if (!section) return;
+    if (!('IntersectionObserver' in window)) {
+        loadViolationDetailsOnce();
+        return;
+    }
+    const once = new IntersectionObserver(entries => {
+        if (entries.some(e => e.isIntersecting)) {
+            loadViolationDetailsOnce();
+            once.disconnect();
+        }
+    }, { rootMargin: '200px' });
+    once.observe(section);
 }
 
 // ============================================================================
@@ -856,6 +1029,30 @@ function renderOverviewTab() {
             <span class="info-label">Square Footage:</span>
             <span class="info-value">${building.building_sqft ? formatNumber(building.building_sqft) + ' sq ft' : 'Unknown'}</span>
         </div>
+        ${building.lot_sqft ? `
+        <div class="info-row">
+            <span class="info-label">Lot:</span>
+            <span class="info-value">${formatNumber(building.lot_sqft)} sq ft</span>
+        </div>
+        ` : ''}
+        ${building.num_floors ? `
+        <div class="info-row">
+            <span class="info-label">Floors:</span>
+            <span class="info-value">${building.num_floors}</span>
+        </div>
+        ` : ''}
+        ${building.zoning_district ? `
+        <div class="info-row">
+            <span class="info-label">Zoning:</span>
+            <span class="info-value">${building.zoning_district}</span>
+        </div>
+        ` : ''}
+        ${building.built_far ? `
+        <div class="info-row">
+            <span class="info-label">Built FAR / max:</span>
+            <span class="info-value">${Number(building.built_far).toFixed(1)}${building.max_resid_far ? ' / ' + Number(building.max_resid_far).toFixed(1) : ''}</span>
+        </div>
+        ` : ''}
     `;
     
     // Property Stats
@@ -934,7 +1131,21 @@ function renderOverviewTab() {
 function renderFinancialsTab() {
     const { building } = buildingData;
     const container = document.getElementById('financials-content');
-    
+
+    // Header flag: the one-line read on how this building is held.
+    const flag = document.getElementById('financing-flag');
+    if (flag) {
+        if (building.is_cash_purchase) {
+            flag.textContent = 'Cash purchase';
+            flag.className = 'fin-flag flag-green';
+            flag.style.display = '';
+        } else if (building.financing_ratio !== null && building.financing_ratio !== undefined) {
+            flag.textContent = `Financed · ${(building.financing_ratio * 100).toFixed(0)}% LTV`;
+            flag.className = 'fin-flag flag-accent';
+            flag.style.display = '';
+        }
+    }
+
     let html = '<div class="financials-grid">';
     
     // Sale Information
@@ -2288,20 +2499,24 @@ function renderActivityTab() {
         return;
     }
     
+    // Pills, not emoji: the event's type is what the reader filters on.
+    const typeLabels = { permit: 'Permit', transaction: 'Deed / loan', violation: 'Violation' };
+
     let html = '<div class="activity-timeline">';
-    
+
     activity_timeline.forEach(event => {
+        const type = event.type || 'other';
         html += `
-        <div class="activity-item">
-            <div class="activity-icon">${event.icon}</div>
+        <div class="activity-item" data-event-type="${type}">
+            <div class="activity-date">${formatDate(event.date)}</div>
+            <span class="activity-pill pill-${type}">${typeLabels[type] || type}</span>
             <div class="activity-content">
-                <div class="activity-date">${formatDate(event.date)}</div>
                 <div class="activity-title">${event.title}</div>
                 <div class="activity-description">${event.description}</div>
             </div>
         </div>`;
     });
-    
+
     html += '</div>';
     container.innerHTML = html;
 }

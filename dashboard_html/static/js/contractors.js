@@ -339,15 +339,11 @@ function initializeProfilePage() {
         });
     });
     
-    // Stat cards click to switch tabs
+    // Stat tiles scroll to the card they summarize
     document.querySelectorAll('.stat-card.clickable').forEach(card => {
         card.addEventListener('click', () => {
             const tabName = card.dataset.tab;
-            if (tabName) {
-                switchTab(tabName);
-                // Scroll to tabs
-                document.querySelector('.content-tabs').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
+            if (tabName) switchTab(tabName);
         });
     });
     
@@ -371,6 +367,8 @@ async function loadContractorProfile() {
             displayContractorStats(data.contractor);
             displayPermits(data.permits);
             displayBuildings(data.buildings);
+            renderProfileWorkMix(data.permits);
+            renderBoroughsFact(data.buildings);
         } else {
             showError(document.querySelector('.profile-header'), data.error || 'Contractor not found');
         }
@@ -389,19 +387,34 @@ function displayContractorStats(contractor) {
     
     // Update header
     document.getElementById('contractorName').textContent = contractor.contractor_name;
-    document.getElementById('contractorLicense').textContent = contractor.license ? 
-        `License: ${contractor.license}` : 'License: Not Available';
-    
+    document.getElementById('contractorLicense').textContent = contractor.license ?
+        `Licence ${contractor.license}` : 'No licence on file';
+
+    // Licence rail card only appears when there is a number to show.
+    const licenseCard = document.getElementById('licenseCard');
+    if (licenseCard && contractor.license) {
+        licenseCard.style.display = '';
+        document.getElementById('licenseNumber').textContent = contractor.license;
+        const lookupBtn = document.getElementById('licenseLookupBtn');
+        if (lookupBtn) {
+            if (typeof showLicenseInfo === 'function') {
+                lookupBtn.addEventListener('click', () =>
+                    showLicenseInfo(contractor.license, contractor.license_type || null));
+            } else {
+                lookupBtn.style.display = 'none';
+            }
+        }
+    }
+
     if (contractor.most_recent_job) {
-        document.getElementById('mostRecentJob').innerHTML = `
-            <i class="fas fa-calendar"></i> ${formatDate(contractor.most_recent_job)}
-        `;
+        document.getElementById('mostRecentJob').textContent =
+            `Last permit ${formatDate(contractor.most_recent_job)}`;
     }
     
     if (contractor.job_types) {
-        document.getElementById('jobTypes').innerHTML = `
-            <i class="fas fa-briefcase"></i> ${contractor.job_types}
-        `;
+        const jobTypesChip = document.getElementById('jobTypes');
+        jobTypesChip.textContent = contractor.job_types;
+        jobTypesChip.style.display = '';
     }
     
     // Update main stat cards
@@ -517,21 +530,66 @@ function displayBuildings(buildings) {
     `).join('');
 }
 
+// Permits and buildings are both always on the page now — a "tab" click
+// just scrolls its card into view.
 function switchTab(tabName) {
-    // Update tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    document.getElementById(`${tabName}Tab`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/**
+ * "What they do" rail card: share of this contractor's permits by job type.
+ * Computed from the permits the profile already loaded — no extra request.
+ */
+function renderProfileWorkMix(permits) {
+    const card = document.getElementById('workMixCard');
+    const bars = document.getElementById('workMixBars');
+    if (!card || !bars || !permits || !permits.length) return;
+
+    const counts = {};
+    let counted = 0;
+    permits.forEach(p => {
+        const key = (p.job_type || '').trim();
+        if (!key) return;
+        counts[key] = (counts[key] || 0) + 1;
+        counted += 1;
     });
-    
-    // Update tab content
-    document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.toggle('active', content.id === `${tabName}Tab`);
+    if (!counted) return;
+
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const shown = top.slice(0, 4);
+    const otherCount = top.slice(4).reduce((sum, [, n]) => sum + n, 0);
+    if (otherCount) shown.push(['Other', otherCount]);
+
+    bars.innerHTML = shown.map(([label, n], i) => {
+        const pct = Math.round((n / counted) * 100);
+        return `
+        <div class="workmix-row">
+            <div class="workmix-head"><span>${escapeHtml(label)}</span><span>${pct}%</span></div>
+            <div class="workmix-track"><div class="workmix-fill ${label === 'Other' ? 'fill-muted' : ''}" style="width: ${Math.max(pct, 2)}%"></div></div>
+        </div>`;
+    }).join('');
+
+    document.getElementById('workMixNote').textContent =
+        `Share of ${formatNumber(counted)} permits, by job type on the permit.`;
+    card.style.display = '';
+}
+
+/** Which boroughs this contractor's buildings sit in, for the About card. */
+function renderBoroughsFact(buildings) {
+    const row = document.getElementById('boroughsRow');
+    const fact = document.getElementById('boroughsFact');
+    if (!row || !fact || !buildings || !buildings.length) return;
+
+    const names = { '1': 'Mn', '2': 'Bx', '3': 'Bk', '4': 'Qn', '5': 'SI' };
+    const seen = [];
+    buildings.forEach(b => {
+        const short = names[String(b.borough)] || null;
+        if (short && !seen.includes(short)) seen.push(short);
     });
-    
-    // Update stat cards active state
-    document.querySelectorAll('.stat-card').forEach(card => {
-        card.classList.toggle('active', card.dataset.tab === tabName);
-    });
+    if (!seen.length) return;
+    fact.textContent = seen.join(' · ');
+    row.style.display = '';
 }
 
 function filterPermits(searchTerm) {

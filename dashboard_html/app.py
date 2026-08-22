@@ -2604,7 +2604,14 @@ def api_auto_add_property():
     conn = None
     try:
         conn = get_db_connection()
-        result = auto_add_property(conn, query)
+        # Only resolve + insert happen on this request; the six enrichment
+        # steps run on a background thread with their own direct connection.
+        # Inline they held a sync worker for 10-120s, which is what turned
+        # into edge 502s whenever the database was busy.
+        result = auto_add_property(
+            conn, query,
+            background_connect=lambda: psycopg2.connect(**DB_CONFIG),
+        )
         status = 200 if result.get('success') else 422
         return jsonify(result), status
     except Exception as e:
@@ -5243,14 +5250,28 @@ def api_building_profile(bbl):
             
             # ===== 1. BUILDING CORE DATA (70+ fields from all sources) =====
             cur.execute("""
-            SELECT 
+            SELECT
                 id, bbl, bin, address, CAST(borough AS TEXT) as borough, block, lot,
                 -- PLUTO data
                 current_owner_name, total_units, building_sqft, year_built, year_altered, building_class,
+                residential_units, num_floors, lot_sqft, land_use, zip_code,
+                zoning_district, built_far, max_resid_far, max_comm_far, unused_far,
                 -- RPAD data
                 owner_name_rpad, assessed_land_value, assessed_total_value,
                 -- HPD data
                 owner_name_hpd, hpd_total_violations, hpd_total_complaints,
+                hpd_open_violations, hpd_open_complaints, hpd_registration_id,
+                hpd_agent_name, hpd_site_manager_name,
+                -- Intel signals (step6)
+                has_open_mortgage, is_free_and_clear, open_mortgage_count, last_satisfaction_date,
+                litigation_count, litigation_open_count, litigation_last_case_type,
+                eviction_count, eviction_last_date,
+                exemption_count, has_senior_exemption, has_disabled_exemption,
+                on_speculation_watch_list, speculation_watch_date,
+                dob_complaint_count, dob_active_complaint_count,
+                co_count, latest_co_date, latest_co_type,
+                fisp_status, fisp_cycle, energy_star_score, site_eui,
+                rolling_sale_price, rolling_sale_date, signals_last_enriched,
                 -- ACRIS primary deed
                 sale_price, sale_date, sale_recorded_date, sale_buyer_primary, sale_seller_primary,
                 sale_percent_transferred, sale_crfn,
@@ -5577,7 +5598,9 @@ def api_building_profile(bbl):
             
             # Create enhanced building dict with full address info
             building_dict = dict(building)
-            building_dict['zip_code'] = property_zip
+            # The buildings row's own zip (from PLUTO) wins; the permits scan
+            # is only a fallback for rows PLUTO hasn't filled yet.
+            building_dict['zip_code'] = building_dict.get('zip_code') or property_zip
             building_dict['borough_name'] = borough_name
             
             # ===== ENRICHMENT DATA (include to speed up button load) =====

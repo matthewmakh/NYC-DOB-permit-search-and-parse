@@ -2177,3 +2177,61 @@ button { font-family: inherit; }
 .content .contractors-grid {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
+
+/* Auto-add lookup: per-source checklist + failure guidance */
+.autoadd-steps {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.autoadd-steps li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--surface-2);
+    font-size: 13px;
+}
+.autoadd-steps li:last-child { border-bottom: none; }
+.autoadd-steps .step-label { flex: 1; min-width: 0; }
+.autoadd-steps .step-source { font-size: 11.5px; color: var(--ink-3); flex-shrink: 0; }
+
+.step-state {
+    width: 14px;
+    height: 14px;
+    border-radius: 99px;
+    flex-shrink: 0;
+    box-sizing: border-box;
+}
+.step-pending { border: 1.5px solid var(--line-2); }
+.step-running {
+    border: 2px solid var(--accent);
+    border-top-color: var(--accent-soft);
+    animation: autoadd-spin 0.9s linear infinite;
+}
+.step-done { background: var(--green); }
+.step-failed { background: var(--red); }
+@keyframes autoadd-spin { to { transform: rotate(360deg); } }
+
+.autoadd-borough-retry { margin-top: 10px; font-size: 12.5px; }
+.borough-chip-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.borough-chip {
+    padding: 5px 12px;
+    border-radius: 99px;
+    border: 1px solid var(--line-2);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+}
+.borough-chip:hover { background: var(--surface-2); }
