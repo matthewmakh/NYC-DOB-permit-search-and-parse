@@ -127,11 +127,23 @@ else:
 db_pool = None
 
 def init_db_pool():
-    """Initialize the database connection pool for this worker process"""
+    """Initialize the database connection pool for this worker process.
+
+    MUST NOT raise. This runs from gunicorn's post_fork hook, and a raise
+    there fails the worker boot — gunicorn then halts the whole master
+    ('Worker failed to boot'), nothing listens, and the platform edge
+    answers every request with an instant 502. That is exactly what took
+    the site down while the enrichment pipeline had Postgres saturated:
+    one worker restart during the bad window, and the app never came back
+    (the platform stops restarting after 10 crash loops). Verified by
+    booting this stack locally against an unreachable database.
+
+    On failure the pool stays None and get_db_connection retries creating
+    it per-request: routes answer with a fast JSON error while the
+    database is down, and heal on their own the moment it is back.
+    """
     global db_pool
     if db_pool is None:
-        # Use smaller pool per worker to avoid exceeding connection limit
-        # 2 workers × 5 max connections = 10 total max
         try:
             print(f"🔌 Creating connection pool to {DB_CONFIG['host']}:{DB_CONFIG['port']}...", flush=True)
             # Threaded: gunicorn runs gthread workers, so several request
@@ -141,10 +153,11 @@ def init_db_pool():
             db_pool = pool.ThreadedConnectionPool(1, 8, **DB_CONFIG)
             print(f"✅ Initialized connection pool for worker PID {os.getpid()}", flush=True)
         except Exception as e:
-            print(f"❌ Failed to create connection pool: {e}", flush=True)
+            print(f"❌ Failed to create connection pool (will retry per-request): {e}", flush=True)
             import traceback
             traceback.print_exc()
-            raise
+            db_pool = None
+            return None
         # One-off, idempotent: ensure bulk_enrich_jobs table exists and any
         # 'running' jobs from a previous container are marked failed.
         try:
@@ -161,6 +174,10 @@ def get_db_connection():
     global db_pool
     if db_pool is None:
         init_db_pool()
+    if db_pool is None:
+        # Pool creation failed (database down/saturated). Fail this request
+        # fast with a clear reason; the next request retries the pool.
+        raise RuntimeError('database unavailable — connection pool could not be created')
     try:
         conn = db_pool.getconn()
         # Test if connection is valid

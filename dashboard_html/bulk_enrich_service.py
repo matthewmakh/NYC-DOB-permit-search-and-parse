@@ -26,12 +26,18 @@ import psycopg2.extras
 # long-lived workers should not hold pool connections for tens of minutes.
 
 def _get_conn():
+    # DATABASE_URL wins when set, matching app.py; connect_timeout so a busy
+    # database fails this worker's write fast instead of hanging the thread.
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        return psycopg2.connect(database_url, connect_timeout=10)
     return psycopg2.connect(
         host=os.getenv('DB_HOST'),
         port=os.getenv('DB_PORT'),
         database=os.getenv('DB_NAME'),
         user=os.getenv('DB_USER'),
         password=os.getenv('DB_PASSWORD'),
+        connect_timeout=10,
     )
 
 

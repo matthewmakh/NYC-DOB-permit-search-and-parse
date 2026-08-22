@@ -39,11 +39,18 @@ def post_fork(server, worker):
     instead of sharing the parent's connections.
     """
     server.log.info(f"Worker spawned (pid: {worker.pid})")
-    
-    # Force re-initialization of connection pool in this worker
-    import app
-    app.db_pool = None  # Reset the global pool
-    app.init_db_pool()  # Initialize fresh pool for this worker
+
+    # Force re-initialization of connection pool in this worker. NEVER let
+    # this raise: a raise here fails the worker boot and gunicorn halts the
+    # whole master ('Worker failed to boot') — the app goes dark and the
+    # edge 502s everything. init_db_pool itself no longer raises, but keep
+    # the belt with the braces.
+    try:
+        import app
+        app.db_pool = None  # Reset the global pool
+        app.init_db_pool()  # Initialize fresh pool for this worker
+    except Exception as e:
+        server.log.error(f"post_fork pool init failed (worker will retry per-request): {e}")
 
 
 def worker_exit(server, worker):
@@ -51,7 +58,10 @@ def worker_exit(server, worker):
     server.log.info(f"Worker exiting (pid: {worker.pid})")
     
     # Clean up database connections
-    import app
-    if app.db_pool is not None:
-        app.db_pool.closeall()
-        app.db_pool = None
+    try:
+        import app
+        if app.db_pool is not None:
+            app.db_pool.closeall()
+            app.db_pool = None
+    except Exception as e:
+        server.log.error(f"worker_exit pool cleanup failed: {e}")
