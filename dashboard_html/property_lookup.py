@@ -489,7 +489,7 @@ def _enrich_in_background(connect, building_id, bbl):
     threading.Thread(target=run, name=f'auto-add-{bbl}', daemon=True).start()
 
 
-def auto_add_property(conn, query, background_connect=None):
+def auto_add_property(connect, query, background=True):
     """Main entry point. Resolve the query, ensure a buildings row exists,
     run every free enrichment step. Returns:
 
@@ -503,11 +503,13 @@ def auto_add_property(conn, query, background_connect=None):
         'report': {step_name: status, ...},
       }
 
-    With `background_connect` (a zero-arg callable returning a fresh DB
-    connection), only the fast part — resolve + insert — happens on the
-    caller's clock; the enrichment steps run on a background thread and the
-    report says so. Without it (scripts, pipeline), everything runs inline
-    as before.
+    `connect` is a zero-arg callable returning a fresh DB connection. It is
+    called only AFTER the Geoclient resolution succeeds, so the 10-20s
+    network wait never holds a database connection, and this path never
+    touches the web app's shared pool. With `background` (the default),
+    only resolve + insert happen on the caller's clock and the enrichment
+    steps run on their own thread; pass background=False in scripts to run
+    everything inline.
     """
     if not query or not query.strip():
         return {'success': False, 'error': 'empty query'}
@@ -526,32 +528,39 @@ def auto_add_property(conn, query, background_connect=None):
             return {'success': False, 'error': reason}
         resolved_note = f"resolved to {lookup['address']}"
 
-    building_id, created = _ensure_building_row(conn, lookup)
+    conn = connect()
+    try:
+        building_id, created = _ensure_building_row(conn, lookup)
 
-    if background_connect is not None:
-        _enrich_in_background(background_connect, building_id, lookup['bbl'])
+        if background:
+            _enrich_in_background(connect, building_id, lookup['bbl'])
+            return {
+                'success': True,
+                'error': None,
+                'bbl': lookup['bbl'],
+                'building_id': building_id,
+                'already_existed': not created,
+                'enrichment_running': True,
+                'report': {
+                    'address': resolved_note,
+                    'enrichment': ('running in the background — the profile '
+                                   'fills in as each source lands'),
+                },
+            }
+
+        report = run_free_enrichment(conn, building_id, lookup['bbl'])
+
         return {
             'success': True,
             'error': None,
             'bbl': lookup['bbl'],
             'building_id': building_id,
             'already_existed': not created,
-            'enrichment_running': True,
-            'report': {
-                'address': resolved_note,
-                'enrichment': ('running in the background — the profile '
-                               'fills in as each source lands'),
-            },
+            'enrichment_running': False,
+            'report': report,
         }
-
-    report = run_free_enrichment(conn, building_id, lookup['bbl'])
-
-    return {
-        'success': True,
-        'error': None,
-        'bbl': lookup['bbl'],
-        'building_id': building_id,
-        'already_existed': not created,
-        'enrichment_running': False,
-        'report': report,
-    }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

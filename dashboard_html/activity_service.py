@@ -75,14 +75,30 @@ class ActivityType:
 
 
 def get_db_connection():
-    """Get database connection for logging"""
+    """Get database connection for logging
+
+    Runs inside request handling, so it must fail fast: without a connect
+    timeout, a busy or restarting Postgres left every request hanging on
+    this call until gunicorn killed the worker — which the platform edge
+    reports as a 502. DATABASE_URL wins when set, matching app.py.
+    """
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        return psycopg2.connect(
+            database_url,
+            connect_timeout=5,
+            options='-c statement_timeout=30000',
+            cursor_factory=RealDictCursor,
+        )
     return psycopg2.connect(
         host=os.getenv('DB_HOST'),
         port=os.getenv('DB_PORT'),
         database=os.getenv('DB_NAME'),
         user=os.getenv('DB_USER'),
         password=os.getenv('DB_PASSWORD'),
-        cursor_factory=RealDictCursor
+        connect_timeout=5,
+        options='-c statement_timeout=30000',
+        cursor_factory=RealDictCursor,
     )
 
 

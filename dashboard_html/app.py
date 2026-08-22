@@ -100,7 +100,11 @@ if DATABASE_URL:
         'user': parsed.username,
         'password': parsed.password,
         'connect_timeout': 10,
-        'sslmode': 'require'
+        'sslmode': 'require',
+        # No single statement may hold a worker past a minute. Without this,
+        # a query stuck behind pipeline load ran until gunicorn's 120s kill,
+        # and a killed worker is what the platform edge reports as a 502.
+        'options': '-c statement_timeout=60000',
     }
     print(f"✅ Using DATABASE_URL (host: {parsed.hostname})", flush=True)
 else:
@@ -112,7 +116,8 @@ else:
         'user': os.getenv('DB_USER', 'postgres'),
         'password': os.getenv('DB_PASSWORD', ''),
         'connect_timeout': 10,
-        'sslmode': 'require'  # Railway requires SSL for public connections
+        'sslmode': 'require',  # Railway requires SSL for public connections
+        'options': '-c statement_timeout=60000',
     }
     print(f"✅ Using individual DB vars (host: {DB_CONFIG['host']}, port: {DB_CONFIG['port']}, db: {DB_CONFIG['database']}, user: {DB_CONFIG['user']}, pass: {'*' * len(DB_CONFIG['password']) if DB_CONFIG['password'] else 'EMPTY!'})", flush=True)
 
@@ -129,7 +134,11 @@ def init_db_pool():
         # 2 workers × 5 max connections = 10 total max
         try:
             print(f"🔌 Creating connection pool to {DB_CONFIG['host']}:{DB_CONFIG['port']}...", flush=True)
-            db_pool = pool.SimpleConnectionPool(1, 5, **DB_CONFIG)
+            # Threaded: gunicorn runs gthread workers, so several request
+            # threads hit this pool at once. 8 max × 2 workers = 16
+            # connections, well inside Railway Postgres limits even with
+            # the pipeline connected.
+            db_pool = pool.ThreadedConnectionPool(1, 8, **DB_CONFIG)
             print(f"✅ Initialized connection pool for worker PID {os.getpid()}", flush=True)
         except Exception as e:
             print(f"❌ Failed to create connection pool: {e}", flush=True)
@@ -2598,19 +2607,13 @@ def api_auto_add_property():
     if not query:
         return jsonify({'success': False, 'error': 'query is required'}), 400
 
-    # get_db_connection re-raises when the pool can't be rebuilt (DB down /
-    # in recovery), so it must sit inside the try or the user gets a bare
-    # HTML 500 the modal can't explain.
-    conn = None
     try:
-        conn = get_db_connection()
-        # Only resolve + insert happen on this request; the six enrichment
-        # steps run on a background thread with their own direct connection.
-        # Inline they held a sync worker for 10-120s, which is what turned
-        # into edge 502s whenever the database was busy.
+        # Direct connections, never the shared pool: only resolve + insert
+        # happen on this request (the enrichment steps continue on a
+        # background thread), and the DB connection is opened only after
+        # Geoclient answers, so this endpoint can't starve page requests.
         result = auto_add_property(
-            conn, query,
-            background_connect=lambda: psycopg2.connect(**DB_CONFIG),
+            lambda: psycopg2.connect(**DB_CONFIG), query,
         )
         status = 200 if result.get('success') else 422
         return jsonify(result), status
@@ -2620,9 +2623,6 @@ def api_auto_add_property():
         # Some driver errors stringify to '' — never send an empty reason.
         message = str(e).strip() or type(e).__name__
         return jsonify({'success': False, 'error': message}), 500
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 @app.route('/api/suggest')
