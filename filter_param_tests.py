@@ -249,6 +249,21 @@ check('chief executive officer is an owner',
       E.is_sos_agent_title('Chief Executive Officer'), False)
 check('missing title is not an agent', E.is_sos_agent_title(None), False)
 
+print('— care-of tails are mailing instructions, not identity —')
+check('C/O tail stripped',
+      E.normalize_entity_name('65 SPRING REALTY LLC C/O FOX MGMT'),
+      '65 SPRING REALTY')
+check('ATTN tail stripped',
+      E.normalize_entity_name('65 SPRING REALTY LLC ATTN: IRA FOX'),
+      '65 SPRING REALTY')
+check('percent-style care-of stripped',
+      E.normalize_entity_name('65 SPRING REALTY LLC % FOX MGMT'),
+      '65 SPRING REALTY')
+check('a C/O-tailed owner name exact-matches the clean registration',
+      E.entity_match_quality('65 SPRING REALTY LLC',
+                             ['65 SPRING REALTY LLC C/O FOX MGMT'])[0],
+      'exact')
+
 print('— normalizer parity with the scraper —')
 try:
     import ny_sos_lookup as S
@@ -258,7 +273,10 @@ else:
     drifted = [n for n in ['65 SPRING REALTY LLC', '65 Spring Realty, L.L.C.',
                            'ACME HOLDINGS INC.', 'Acme Holdings Incorporated',
                            'BROOKLYN CO.', 'FOO BAR LP', 'X Y Z PLLC', 'TEST USA',
-                           'SOME NAME - BROOKLYN, NY 11201', '']
+                           'SOME NAME - BROOKLYN, NY 11201', '',
+                           '65 SPRING REALTY LLC C/O FOX MGMT',
+                           '65 SPRING REALTY LLC ATTN: IRA FOX',
+                           'ACME LLC % SMITH MGMT CO']
                if E.normalize_entity_name(n) != S.normalize_business_name(n)]
     check('web and scraper normalizers agree', drifted, [])
 
@@ -305,6 +323,87 @@ else:
                 row('65 SPRING REALTY LLC', '3', 'Active')])
     check('among equal names the active registration wins',
           (r.dos_id, r.match_quality), ('3', 'exact'))
+
+    check('search string drops the care-of tail (BeginsWith would find nothing)',
+          S._clean_business_name_for_search('65 SPRING REALTY LLC C/O FOX MGMT'),
+          '65 SPRING REALTY LLC')
+
+    print('— LLC source priority (RPAD extract is frozen at FY2018/19) —')
+    import step5_enrich_from_sos as S5
+    check('deed buyer first',
+          S5.get_best_llc_name({'sale_buyer_primary': 'NEW OWNER LLC',
+                                'current_owner_name': 'PLUTO LLC',
+                                'owner_name_rpad': 'OLD RPAD LLC'}),
+          ('NEW OWNER LLC', 'sale_buyer_primary'))
+    check('PLUTO outranks the stale RPAD extract',
+          S5.get_best_llc_name({'current_owner_name': 'PLUTO LLC',
+                                'owner_name_rpad': 'OLD RPAD LLC'}),
+          ('PLUTO LLC', 'current_owner_name'))
+    check('RPAD still beats HPD',
+          S5.get_best_llc_name({'owner_name_rpad': 'OLD RPAD LLC',
+                                'owner_name_hpd': 'HPD LLC'}),
+          ('OLD RPAD LLC', 'owner_name_rpad'))
+    check('individual buyer falls through to the next LLC',
+          S5.get_best_llc_name({'sale_buyer_primary': 'JIN PEI XIE',
+                                'current_owner_name': 'PLUTO LLC'}),
+          ('PLUTO LLC', 'current_owner_name'))
+
+    print('— references dataset linkage (live schema has no doc-id column) —')
+    import step3_enrich_from_acris as S3
+
+    class _RefClient:
+        def get_columns(self, ds):
+            return ['document_id', 'good_through_date', 'record_type',
+                    'reference_by_crfn_', 'reference_by_reel_borough',
+                    'reference_by_reel_nbr', 'reference_by_reel_page',
+                    'reference_by_reel_year']
+
+        def get_batched(self, dataset, field, values, select=None, **kw):
+            if dataset == 'acris_master':
+                return [
+                    {'document_id': 'MTGE1', 'doc_type': 'MTGE',
+                     'document_amt': '500000', 'document_date': '2015-01-02T00:00:00',
+                     'recorded_datetime': '2015-01-10T00:00:00',
+                     'crfn': '2015000012345', 'percent_trans': ''},
+                    {'document_id': 'SAT1', 'doc_type': 'SAT', 'document_amt': '0',
+                     'document_date': '2020-06-01T00:00:00',
+                     'recorded_datetime': '2020-06-10T00:00:00',
+                     'crfn': '2020000099999', 'percent_trans': ''},
+                    {'document_id': 'FT_165', 'doc_type': 'DEED', 'document_amt': '1',
+                     'document_date': None, 'recorded_datetime': None,
+                     'crfn': '', 'percent_trans': ''},
+                    {'document_id': 'FT_165', 'doc_type': 'DEED', 'document_amt': '1',
+                     'document_date': None, 'recorded_datetime': None,
+                     'crfn': '', 'percent_trans': ''},
+                ]
+            if dataset == 'acris_references' and field == 'document_id':
+                return [{'document_id': 'SAT1', 'reference_by_crfn_': '2015000012345'}]
+            return []
+
+    check('counterpart column resolves to the CRFN field',
+          S3._reference_counterpart_field(_RefClient()), 'reference_by_crfn_')
+
+    _o_client, _o_ids, _o_roles = (S3.get_client, S3.get_document_ids_for_bbl,
+                                   S3.load_party_roles)
+    S3.get_client = lambda: _RefClient()
+    S3.get_document_ids_for_bbl = lambda bbl: ['MTGE1', 'SAT1', 'FT_165']
+    S3.load_party_roles = lambda client: {}
+    try:
+        h = S3.get_acris_full_history('1000010001')
+    finally:
+        S3.get_client, S3.get_document_ids_for_bbl, S3.load_party_roles = (
+            _o_client, _o_ids, _o_roles)
+
+    check('reference resolves through CRFN to the mortgage',
+          h['references'],
+          [{'document_id': 'SAT1', 'referenced_document_id': 'MTGE1',
+            'crfn': '2015000012345'}])
+    check('duplicate legacy FT rows collapse to one transaction',
+          [t['document_id'] for t in h['transactions']].count('FT_165'), 1)
+    status = S3.derive_mortgage_status(h['transactions'], h['references'])
+    check('satisfaction discharges the mortgage',
+          'MTGE1' in status['satisfied_ids'], True)
+    check('building reads free-and-clear', status['is_free_and_clear'], True)
 
 try:
     import pglast

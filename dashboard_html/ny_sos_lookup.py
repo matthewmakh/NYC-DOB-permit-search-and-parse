@@ -117,6 +117,20 @@ class SOSBusinessResult:
 # NAME NORMALIZATION UTILITIES
 # ============================================================================
 
+# "C/O ...", "ATTN: ..." and "% ..." tails are mailing instructions appended
+# to owner names in ACRIS/RPAD, not part of the company's registered name.
+# Left in place they break the BeginsWith search outright (no registered name
+# starts with the full string), so those buildings silently got no SOS data.
+_CARE_OF_TAIL = re.compile(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', re.IGNORECASE)
+
+
+def strip_care_of_tail(name: str) -> str:
+    """Drop a trailing care-of/attention clause from an owner name."""
+    if not name:
+        return ""
+    return _CARE_OF_TAIL.sub('', name).strip()
+
+
 def normalize_business_name(name: str) -> str:
     """
     Normalize business name for deduplication and caching.
@@ -124,7 +138,7 @@ def normalize_business_name(name: str) -> str:
     if not name:
         return ""
     
-    name = name.upper().strip()
+    name = strip_care_of_tail(name.upper().strip())
     
     # Remove location suffix
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
@@ -212,6 +226,7 @@ def _clean_business_name_for_search(name: str) -> str:
     """Clean business name for API searching."""
     if not name:
         return ""
+    name = strip_care_of_tail(name)
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s+(USA|U\.S\.A\.)$', '', name, flags=re.IGNORECASE)
     return name.strip()

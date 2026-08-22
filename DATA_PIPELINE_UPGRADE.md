@@ -40,6 +40,19 @@ which are the slowest and most fragile part of that install.
 
 ## Deploy order
 
+**2026-08-22 incident:** the first prod run filled the Railway Postgres
+volume — the repair's in-place rewrite of ~7.5M party rows ran as one giant
+transaction while the nightly cron wrote concurrently — and the database
+crashed into recovery. Recovery order: grow the volume in Railway, pause the
+nightly enrichment cron, wait for the DB to accept connections, `git pull`,
+then run `./deploy_pipeline.sh` (stops at the first failure; the old paste
+block also tripped zsh on its `#` comments). The repair is now disk-light by
+default: it only does the cheap resets and lets the forced ACRIS refetch
+rewrite names and party rows from source. Nothing from the failed applies
+persisted — the script committed once at the end, so both crashes rolled
+back cleanly.
+
+
 ```bash
 # 1. Schema first (idempotent, safe to re-run)
 python migrate_add_intel_signals.py

@@ -17,12 +17,21 @@ B4 — tax delinquency flags included lien-sale notices from any year:
   7. Reset tax_lien_last_checked so step4 re-evaluates every building under
      the new most-recent-cycle rule (clears stale flags on its next run)
 
+DISK SAFETY: the default run performs only the cheap resets (5-7). The
+in-place rewrite of every party row (1-4) is millions of row versions in
+one pass — it filled the Railway volume and crashed Postgres on 2026-08-22.
+It is also redundant: the forced step3 refetch deletes and rewrites each
+building's names and party rows from source with the correct roles. Pass
+--rewrite-in-place only if you cannot run the refetch; it commits in
+batches so a failure keeps its progress.
+
 Optional --backfill-new-fields: fetches PLUTO + HPD for every building and
 fills ONLY the new columns (FAR/zoning/lat-lon, HPD mailing address). Use
 after running migrate_add_intel_signals.py; existing owner data is not
 touched. ~5 API calls per building.
 
-Dry-run by default. Pass --apply to execute.
+Dry-run by default. Pass --apply to execute. Each step commits on its own,
+so a crash mid-run keeps completed steps and the script is safe to re-run.
 Afterwards run:
     ACRIS_FORCE_REFRESH=1 python step3_enrich_from_acris_parallel.py
     python step4_enrich_from_tax_liens.py
@@ -69,7 +78,7 @@ def count(cur, sql, params=()):
     return cur.fetchone()[0]
 
 
-def repair(conn, apply_changes):
+def repair(conn, apply_changes, rewrite_in_place=False):
     cur = conn.cursor()
 
     print("=" * 70)
@@ -91,14 +100,15 @@ def repair(conn, apply_changes):
     n_lien_checked = count(cur, "SELECT COUNT(*) FROM buildings WHERE tax_lien_last_checked IS NOT NULL")
     n_flagged = count(cur, "SELECT COUNT(*) FROM buildings WHERE has_tax_delinquency = TRUE")
 
+    heavy = 'run' if rewrite_in_place else 'SKIPPED — the forced refetch rewrites these from source'
     print(f"""
 Plan:
-  1. Swap buyer/seller name columns on {n_names} buildings
-  2. Relabel {n_buyer_rows} 'buyer' and {n_seller_rows} 'seller' party rows (swap)
-  3. Recompute lead flags on the corrected sellers
-  4. Delete {n_lender_rows} mislabeled 'lender' rows + clear mortgage_lender_primary
+  1. Swap buyer/seller name columns on {n_names} buildings ({heavy})
+  2. Relabel {n_buyer_rows} 'buyer' and {n_seller_rows} 'seller' party rows ({heavy})
+  3. Recompute lead flags on the corrected sellers ({heavy})
+  4. Delete {n_lender_rows} mislabeled 'lender' rows ({heavy})
   5. Clear SOS results on {n_sos} buildings looked up via the swapped buyer field
-  6. Reset ACRIS eligibility on {n_acris_enriched} buildings (refetch fills lenders + equity signals)
+  6. Reset ACRIS eligibility on {n_acris_enriched} buildings (refetch fills names, parties, lenders + equity signals)
   7. Reset tax-lien check on {n_lien_checked} buildings ({n_flagged} currently flagged delinquent)
 """)
 
@@ -106,43 +116,65 @@ Plan:
         cur.close()
         return
 
-    # 1. Swap the summary name columns (single pass, row-wise swap).
-    cur.execute("""
-        UPDATE buildings
-        SET sale_buyer_primary = sale_seller_primary,
-            sale_seller_primary = sale_buyer_primary
-        WHERE sale_buyer_primary IS NOT NULL OR sale_seller_primary IS NOT NULL
-    """)
-    print(f"  ✅ 1. Swapped names on {cur.rowcount} buildings")
+    if not rewrite_in_place:
+        print("  ⏭️  1-4 skipped (disk-light mode); ACRIS_FORCE_REFRESH refetch corrects them")
 
-    # 2. Swap the party labels.
-    cur.execute("""
-        UPDATE acris_parties
-        SET party_type = CASE party_type
-            WHEN 'buyer' THEN 'seller'
-            WHEN 'seller' THEN 'buyer'
-        END
-        WHERE party_type IN ('buyer', 'seller')
-    """)
-    print(f"  ✅ 2. Relabeled {cur.rowcount} party rows")
+    if rewrite_in_place:
+        # 1. Swap the summary name columns (single pass, row-wise swap).
+        # NOTE: this is an involution — running it twice restores the broken
+        # state — so it only runs under the explicit flag, once.
+        cur.execute("""
+            UPDATE buildings
+            SET sale_buyer_primary = sale_seller_primary,
+                sale_seller_primary = sale_buyer_primary
+            WHERE sale_buyer_primary IS NOT NULL OR sale_seller_primary IS NOT NULL
+        """)
+        print(f"  ✅ 1. Swapped names on {cur.rowcount} buildings")
+        conn.commit()
 
-    # 3. Lead flag belongs on sellers with a mailing address.
-    cur.execute("""
-        UPDATE acris_parties
-        SET is_lead = (party_type = 'seller'
-                       AND address_1 IS NOT NULL AND address_1 <> '')
-        WHERE party_type IN ('buyer', 'seller')
-    """)
-    print(f"  ✅ 3. Recomputed lead flags on {cur.rowcount} rows")
+        # 2+3. Swap the party labels and recompute lead flags, batched so no
+        # single transaction holds millions of row versions. A swapped row is
+        # indistinguishable from an unswapped one, so a temporary marker
+        # column tracks progress; adding and dropping it are metadata-only.
+        cur.execute("ALTER TABLE acris_parties ADD COLUMN IF NOT EXISTS relabel_done BOOLEAN")
+        conn.commit()
+        relabeled = 0
+        while True:
+            cur.execute("""
+                WITH batch AS (
+                    SELECT id, party_type FROM acris_parties
+                    WHERE party_type IN ('buyer', 'seller')
+                      AND (relabel_done IS NOT TRUE)
+                    LIMIT 200000
+                )
+                UPDATE acris_parties p
+                SET party_type = CASE b.party_type
+                        WHEN 'buyer' THEN 'seller'
+                        WHEN 'seller' THEN 'buyer'
+                    END,
+                    is_lead = (b.party_type = 'buyer'
+                               AND p.address_1 IS NOT NULL AND p.address_1 <> ''),
+                    relabel_done = TRUE
+                FROM batch b WHERE p.id = b.id
+            """)
+            if cur.rowcount == 0:
+                break
+            relabeled += cur.rowcount
+            conn.commit()
+            print(f"     … relabeled {relabeled} rows")
+        cur.execute("ALTER TABLE acris_parties DROP COLUMN IF EXISTS relabel_done")
+        conn.commit()
+        print(f"  ✅ 2+3. Relabeled {relabeled} party rows (lead flags included)")
 
-    # 4. 'lender' rows were borrowers; real lenders come from re-enrichment.
-    cur.execute("DELETE FROM acris_parties WHERE party_type = 'lender'")
-    deleted = cur.rowcount
-    cur.execute("""
-        UPDATE buildings SET mortgage_lender_primary = NULL
-        WHERE mortgage_lender_primary IS NOT NULL
-    """)
-    print(f"  ✅ 4. Deleted {deleted} borrower-as-lender rows, cleared {cur.rowcount} lender names")
+        # 4. 'lender' rows were borrowers; real lenders come from re-enrichment.
+        cur.execute("DELETE FROM acris_parties WHERE party_type = 'lender'")
+        deleted = cur.rowcount
+        cur.execute("""
+            UPDATE buildings SET mortgage_lender_primary = NULL
+            WHERE mortgage_lender_primary IS NOT NULL
+        """)
+        print(f"  ✅ 4. Deleted {deleted} borrower-as-lender rows, cleared {cur.rowcount} lender names")
+        conn.commit()
 
     # 5. SOS lookups that chased the selling LLC's principal.
     set_nulls = ', '.join(f"{f} = NULL" for f in SOS_RESET_FIELDS)
@@ -151,15 +183,16 @@ Plan:
         WHERE sos_lookup_source = 'sale_buyer_primary'
     """)
     print(f"  ✅ 5. Cleared SOS data on {cur.rowcount} buildings (step5 re-runs them)")
+    conn.commit()
 
     # 6. Force ACRIS refetch under the corrected role mapping.
     cur.execute("UPDATE buildings SET acris_last_enriched = NULL WHERE acris_last_enriched IS NOT NULL")
     print(f"  ✅ 6. Reset ACRIS eligibility on {cur.rowcount} buildings")
+    conn.commit()
 
     # 7. Re-evaluate lien-sale status under the recency rule.
     cur.execute("UPDATE buildings SET tax_lien_last_checked = NULL WHERE tax_lien_last_checked IS NOT NULL")
     print(f"  ✅ 7. Reset tax-lien checks on {cur.rowcount} buildings")
-
     conn.commit()
     cur.close()
     print("""
@@ -235,11 +268,15 @@ def main():
                         help='Execute the repair (default is dry run)')
     parser.add_argument('--backfill-new-fields', action='store_true',
                         help='Also fetch PLUTO/HPD to fill the new columns on every building')
+    parser.add_argument('--rewrite-in-place', action='store_true',
+                        help='Also rewrite existing name/party rows directly (millions of '
+                             'row versions — needs disk headroom; the forced refetch makes '
+                             'this unnecessary)')
     args = parser.parse_args()
 
     conn = psycopg2.connect(DATABASE_URL)
     try:
-        repair(conn, args.apply)
+        repair(conn, args.apply, rewrite_in_place=args.rewrite_in_place)
         if args.backfill_new_fields:
             backfill_new_fields(conn, args.apply)
     finally:

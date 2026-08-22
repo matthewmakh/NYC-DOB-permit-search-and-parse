@@ -114,13 +114,21 @@ def get_document_ids_for_bbl(bbl):
 
 
 def _reference_counterpart_field(client):
-    """The references dataset column naming is awkward; find the field that
-    holds the other document's id, defaulting to the documented name."""
+    """Find the column that names the referenced document.
+
+    The live dataset (verified 2026-08) has no document-id counterpart at
+    all — it links documents by CRFN via `reference_by_crfn_` (trailing
+    underscore included), with reel/page columns for pre-CRFN filings.
+    An id-shaped column is still preferred if Socrata ever restores one.
+    """
     cols = client.get_columns('acris_references')
     for col in sorted(cols):
         if col.startswith('reference') and 'doc' in col and 'id' in col:
             return col
-    return 'reference_by_doc_id'
+    for col in sorted(cols):
+        if col.startswith('reference') and 'crfn' in col:
+            return col
+    return 'reference_by_crfn_'
 
 
 def get_acris_full_history(bbl):
@@ -147,13 +155,34 @@ def get_acris_full_history(bbl):
         select='document_id,party_type,name,address_1,address_2,city,state,zip,country',
     )
 
+    # References link documents by CRFN, so resolve through the CRFNs the
+    # master rows carry. Pre-2003 reel/page references have no CRFN and are
+    # skipped — those mortgages simply stay "status unknown" rather than
+    # wrongly "open".
     ref_field = _reference_counterpart_field(client)
+    crfn_to_doc = {}
+    for m in masters:
+        crfn = (m.get('crfn') or '').strip()
+        if crfn:
+            crfn_to_doc.setdefault(crfn, m.get('document_id'))
+
     ref_rows = []
     try:
-        ref_rows.extend(client.get_batched('acris_references', 'document_id', doc_ids,
-                                           select=f'document_id,{ref_field},crfn'))
-        ref_rows.extend(client.get_batched('acris_references', ref_field, doc_ids,
-                                           select=f'document_id,{ref_field},crfn'))
+        if 'crfn' in ref_field:
+            ref_rows.extend(client.get_batched(
+                'acris_references', 'document_id', doc_ids,
+                select=f'document_id,{ref_field}'))
+            if crfn_to_doc:
+                ref_rows.extend(client.get_batched(
+                    'acris_references', ref_field, sorted(crfn_to_doc),
+                    select=f'document_id,{ref_field}'))
+        else:
+            ref_rows.extend(client.get_batched(
+                'acris_references', 'document_id', doc_ids,
+                select=f'document_id,{ref_field}'))
+            ref_rows.extend(client.get_batched(
+                'acris_references', ref_field, doc_ids,
+                select=f'document_id,{ref_field}'))
     except SocrataError as e:
         print(f"      ⚠️ References fetch failed (non-fatal): {e}")
 
@@ -174,8 +203,15 @@ def get_acris_full_history(bbl):
 
     roles = load_party_roles(client)
     transactions = []
+    # Legacy FT_*/BK_* reel-era ids can come back as several master rows for
+    # one document_id; keep the first. Without this the per-building insert
+    # violates unique_doc_per_building and the whole building is skipped.
+    seen_doc_ids = set()
     for doc in masters:
         doc_id = doc.get('document_id')
+        if not doc_id or doc_id in seen_doc_ids:
+            continue
+        seen_doc_ids.add(doc_id)
         doc_type = (doc.get('doc_type') or '').strip().upper()
         try:
             doc_amount = float(doc.get('document_amt') or 0)
@@ -220,14 +256,18 @@ def get_acris_full_history(bbl):
     references = []
     for row in ref_rows:
         a = row.get('document_id')
-        b = row.get(ref_field)
-        if not a or not b or (a, b) in seen:
+        b = (row.get(ref_field) or '').strip()
+        crfn = ''
+        if 'crfn' in ref_field:
+            crfn = b
+            b = crfn_to_doc.get(b)
+        if not a or not b or a == b or (a, b) in seen:
             continue
         seen.add((a, b))
         references.append({
             'document_id': a,
             'referenced_document_id': b,
-            'crfn': row.get('crfn', ''),
+            'crfn': crfn or row.get('crfn', ''),
         })
 
     return {'transactions': transactions, 'references': references}
@@ -317,6 +357,8 @@ def save_transactions_and_parties(cur, building_id, bbl, transactions):
                     doc_date, recorded_date, crfn, percent_transferred,
                     is_primary_deed, is_primary_mortgage, remarks
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (building_id, document_id) DO UPDATE
+                    SET doc_amount = EXCLUDED.doc_amount
                 RETURNING id
             """, (
                 building_id, bbl, transaction['document_id'], transaction['doc_type'],
@@ -332,6 +374,8 @@ def save_transactions_and_parties(cur, building_id, bbl, transactions):
                     doc_date, recorded_date, crfn, percent_transferred,
                     is_primary_deed, is_primary_mortgage
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (building_id, document_id) DO UPDATE
+                    SET doc_amount = EXCLUDED.doc_amount
                 RETURNING id
             """, (
                 building_id, bbl, transaction['document_id'], transaction['doc_type'],

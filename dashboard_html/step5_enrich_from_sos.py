@@ -57,6 +57,12 @@ except ImportError as e:
 # CONFIGURATION
 # =============================================================================
 
+# DATABASE_URL wins when set — it's how the deploy runbook passes the prod
+# connection. The discrete DB_* variables remain for the Railway cron, whose
+# environment defines them individually. Without this, a laptop run with only
+# DATABASE_URL exported silently fell through to localhost.
+DATABASE_URL = os.getenv('DATABASE_URL')
+
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': int(os.getenv('DB_PORT', '5432')),
@@ -91,6 +97,8 @@ def is_llc_name(name: str) -> bool:
 
 def get_db_connection():
     """Get database connection."""
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL)
     return psycopg2.connect(**DB_CONFIG)
 
 
@@ -168,6 +176,13 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                     OR
                     -- Never enriched (no principal found)
                     (sos_principal_name IS NULL OR sos_principal_name = '')
+                    OR
+                    -- A deed recorded after the last lookup: the building may
+                    -- have changed hands, so the cached principal is suspect
+                    -- regardless of the {REFRESH_DAYS}-day cycle.
+                    (sale_recorded_date IS NOT NULL
+                     AND sos_last_enriched IS NOT NULL
+                     AND sale_recorded_date > sos_last_enriched)
                     {f"OR (sos_last_enriched < NOW() - INTERVAL '{REFRESH_DAYS} days')" if refresh else ''}
                 )
             """
@@ -183,6 +198,7 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 address,
                 sale_buyer_primary,
                 sale_date,
+                sale_recorded_date,
                 current_owner_name,
                 owner_name_rpad,
                 owner_name_hpd
@@ -217,21 +233,22 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
     """
     Get the best LLC name to look up from a building's owner fields.
     Returns (name, source_field) or (None, '') if no LLC found.
-    
+
     Priority order (MOST RECENT FIRST):
-    1. sale_buyer_primary (ACRIS) - from the most recent deed
-    2. owner_name_rpad (Tax) - current taxpayer
-    3. current_owner_name (PLUTO) - updated annually
-    4. owner_name_hpd (HPD) - registered owner
-    
+    1. sale_buyer_primary (ACRIS) - grantee on the most recent recorded deed,
+       the legally authoritative current owner
+    2. current_owner_name (PLUTO) - refreshed annually
+    3. owner_name_rpad (Tax) - the RPAD open-data extract's newest vintage is
+       FY2018/19 (verified live 2026-08), so these names can be years stale
+    4. owner_name_hpd (HPD) - registered managing owner, often an officer
+
     Skips:
     - Names that look like individuals (not LLCs/Corps)
     """
-    # Priority order: ACRIS (most recent) > RPAD (taxpayer) > PLUTO > HPD
     sources = [
         ('sale_buyer_primary', building.get('sale_buyer_primary')),
-        ('owner_name_rpad', building.get('owner_name_rpad')),
         ('current_owner_name', building.get('current_owner_name')),
+        ('owner_name_rpad', building.get('owner_name_rpad')),
         ('owner_name_hpd', building.get('owner_name_hpd')),
     ]
     

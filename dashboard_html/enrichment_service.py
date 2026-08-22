@@ -929,6 +929,9 @@ def normalize_entity_name(name):
     if not name:
         return ''
     out = str(name).upper().strip()
+    # Mirror the scraper: care-of/attention tails are mailing instructions,
+    # not identity.
+    out = re.sub(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', '', out)
     out = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', out)
     out = _ENTITY_SUFFIXES.sub(' ', out)
     out = re.sub(r'[^\w\s]', ' ', out)
