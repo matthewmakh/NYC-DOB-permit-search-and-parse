@@ -323,6 +323,11 @@ check('server also accepts an already textual borough',
           {'address': '18423 CAMBRIDGE RD', 'borough': 'Queens',
            'zip_code': '11432'}),
       ('18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432'))
+check('server separates a full imported display address before provider lookup',
+      E.resolve_owner_search_location(
+          {'address': '18423 CAMBRIDGE ROAD, QUEENS, NY 11432',
+           'borough': 'Queens', 'zip_code': '11432'}),
+      ('18423 CAMBRIDGE ROAD', 'QUEENS', 'NY', '11432'))
 
 class _ApifyAddressCursor:
     def __init__(self, rows):
@@ -393,6 +398,38 @@ check('newest-phone address resident cannot beat the named owner',
       best['Person Link'], 'person-correct')
 check('ZIP/street evidence produces high confidence', evidence['confidence'], 'high')
 check('verified selection has no error', error, None)
+
+# RPAD misspells this property's historical owner's surname as MAKHARADEZE;
+# ACRIS and the provider use MAKHARADZE. Accept that one-character correction
+# only because the result also matches the exact property ZIP/street.
+corrected_government_typo = {
+    **correct_person,
+    'First Name': 'Michael', 'Last Name': 'Makharadze',
+    'Person Link': 'person-government-typo',
+}
+typo_best, typo_evidence, typo_error = E._pick_best_apify_item(
+    [corrected_government_typo], 'MICHAEL', 'MAKHARADEZE',
+    '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')
+check('one-character RPAD surname typo is accepted with exact property evidence',
+      typo_best['Person Link'], 'person-government-typo')
+check('surname correction is explicit in match evidence',
+      typo_evidence['name_match_type'], 'one-character-surname-typo')
+check('verified government typo has no error', typo_error, None)
+
+weak_typo_location = {
+    **corrected_government_typo,
+    'Street Address': '1 OTHER RD', 'Address Locality': 'Queens',
+    'Address Region': 'NY', 'Postal Code': '11367',
+}
+check('surname typo is rejected when only city and state corroborate it',
+      E._pick_best_apify_item(
+          [weak_typo_location], 'MICHAEL', 'MAKHARADEZE',
+          '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')[0], None)
+same_zip_wrong_street = {**weak_typo_location, 'Postal Code': '11432'}
+check('surname typo is rejected on a same-ZIP but different street',
+      E._pick_best_apify_item(
+          [same_zip_wrong_street], 'MICHAEL', 'MAKHARADEZE',
+          '18423 CAMBRIDGE RD', 'QUEENS', 'NY', '11432')[0], None)
 
 unrelated_same_name = {
     'Search Option': 'Name Search', 'First Name': 'Samantha',

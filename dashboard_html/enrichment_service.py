@@ -333,7 +333,15 @@ def resolve_owner_search_location(building, fallback_address=None):
         parse_nyc_address(fallback_address)
     )
     row = building or {}
-    street = (row.get('address') or fallback_street or '').strip() or None
+    # ``buildings.address`` is not consistent across import paths: older rows
+    # contain only the street, while newer property imports store the complete
+    # ``STREET, BOROUGH, NY ZIP`` display address. Passing that complete value
+    # as the provider's street produced inputs such as
+    # ``18423 CAMBRIDGE RD, QUEENS, NY 11432; QUEENS, NY 11432`` and also made
+    # a returned ``Street Address`` impossible to compare with our target.
+    row_street, row_city, row_state, row_zip = parse_nyc_address(
+        row.get('address'))
+    street = (row_street or fallback_street or '').strip() or None
 
     borough_raw = row.get('borough')
     borough_key = str(borough_raw).strip() if borough_raw is not None else ''
@@ -341,13 +349,13 @@ def resolve_owner_search_location(building, fallback_address=None):
     if not city and borough_key.upper() in _NYC_BOROUGH_NAMES.values():
         city = borough_key.upper()
     if not city:
-        candidate_city = (fallback_city or '').strip().upper()
+        candidate_city = (row_city or fallback_city or '').strip().upper()
         city = _NYC_BOROUGH_NAMES.get(candidate_city, candidate_city or None)
 
-    zipcode = str(row.get('zip_code') or fallback_zip or '').strip()
+    zipcode = str(row.get('zip_code') or row_zip or fallback_zip or '').strip()
     zip_match = re.search(r'\b(\d{5})', zipcode)
     zipcode = zip_match.group(1) if zip_match else None
-    state = (fallback_state or 'NY').strip().upper()
+    state = (row_state or fallback_state or 'NY').strip().upper()
     return street, city, state, zipcode
 
 
@@ -616,6 +624,35 @@ def _match_key(value):
     return re.sub(r'[^A-Z0-9]+', '', folded.upper())
 
 
+def _one_edit_name_typo(a, b):
+    """True for one conservative insertion/deletion/substitution.
+
+    This is intentionally narrower than generic fuzzy matching. It is used
+    only for long surnames and only when a corroborated street match strongly
+    ties the provider result to the property. Short names and transpositions
+    remain exact-only to avoid collapsing distinct people.
+    """
+    a = _match_key(a)
+    b = _match_key(b)
+    if a == b or min(len(a), len(b)) < 5 or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(left != right for left, right in zip(a, b)) == 1
+
+    shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+    short_idx = long_idx = differences = 0
+    while short_idx < len(shorter) and long_idx < len(longer):
+        if shorter[short_idx] == longer[long_idx]:
+            short_idx += 1
+            long_idx += 1
+            continue
+        differences += 1
+        if differences > 1:
+            return False
+        long_idx += 1
+    return True
+
+
 _STREET_SUFFIXES = {
     'STREET': 'ST', 'ROAD': 'RD', 'AVENUE': 'AVE', 'BOULEVARD': 'BLVD',
     'PLACE': 'PL', 'LANE': 'LN', 'DRIVE': 'DR', 'COURT': 'CT',
@@ -681,15 +718,21 @@ def _evaluate_apify_item(item, first_name, last_name, street_address=None,
                           city=None, state=None, zipcode=None):
     """Return identity evidence for a result, or ``None`` when unsafe.
 
-    First and last name must match exactly after normalization. When we have
-    property location data, at least street, ZIP, or city must also match the
-    result's current or previous addresses. State alone is not enough.
+    First name must match exactly after normalization. A long surname may
+    differ by one character only when a corroborated street match independently
+    ties the result to the property; this handles known government-source typos
+    without turning the provider response into a fuzzy people search.
+    When we have property location data, at least street, ZIP, or city must
+    also match the result's current or previous addresses. State alone is not
+    enough.
     """
     if not isinstance(item, dict):
         return None
     result_first, result_last = _apify_item_name(item)
-    if (_match_key(result_first) != _match_key(first_name)
-            or _match_key(result_last) != _match_key(last_name)):
+    first_exact = _match_key(result_first) == _match_key(first_name)
+    last_exact = _match_key(result_last) == _match_key(last_name)
+    last_typo = _one_edit_name_typo(result_last, last_name)
+    if not first_exact or not (last_exact or last_typo):
         return None
 
     wanted_street = _street_key(street_address)
@@ -738,8 +781,18 @@ def _evaluate_apify_item(item, first_name, last_name, street_address=None,
     if has_location_target and not location_evidence:
         return None
 
+    # A one-character surname correction needs stronger corroboration than an
+    # exact name. City+state alone is deliberately insufficient.
+    strong_location_evidence = (
+        best_location['street_match']
+        and (best_location['zip_match'] or best_location['state_match']
+             or best_location['city_match'])
+    )
+    if last_typo and not strong_location_evidence:
+        return None
+
     search_option = (item.get('Search Option') or item.get('Search Type') or '')
-    score = 60 + max(best_score, 0)
+    score = (60 if last_exact else 45) + max(best_score, 0)
     confidence = ('high' if best_location['street_match'] or best_location['zip_match']
                   else 'medium' if best_location['city_match']
                   else 'name-only')
@@ -747,6 +800,8 @@ def _evaluate_apify_item(item, first_name, last_name, street_address=None,
         'score': score,
         'confidence': confidence,
         'name_match': True,
+        'name_match_type': ('exact' if last_exact
+                            else 'one-character-surname-typo'),
         'search_option': search_option or None,
         **best_location,
     }
