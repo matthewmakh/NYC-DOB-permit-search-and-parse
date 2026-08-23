@@ -2686,7 +2686,7 @@ function renderContactsTab() {
         
         if (usefulContacts.length > 0) {
             html += '<div class="contacts-section permit-contacts-section">';
-            html += '<h4 class="contacts-section-title">Contractors from Permits</h4>';
+            html += '<h4 class="contacts-section-title">People on the permits</h4>';
             html += '<div class="contacts-list">';
             
             usefulContacts.forEach(contact => {
@@ -2702,7 +2702,7 @@ function renderContactsTab() {
                         </div>
                     ` : ''}
                     ${contact.carrier ? `<div class="contact-carrier">Carrier: ${contact.carrier}</div>` : ''}
-                    ${contact.license ? `<div class="contact-license">License: ${contact.license}</div>` : ''}
+                    ${contact.license || contact.license_number ? `<div class="contact-license">License: ${[contact.license, contact.license_number].filter(Boolean).join(' ')}</div>` : ''}
                     ${contact.permit_count ? `<div class="contact-permits">${formatNumber(contact.permit_count)} permit(s) filed</div>` : ''}
                 </div>`;
             });
