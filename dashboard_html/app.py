@@ -5316,12 +5316,14 @@ def api_building_profile(bbl):
             
             # ===== 2. PERMITS (All construction activity) =====
             cur.execute("""
-            SELECT 
+            SELECT
                 permit_no, job_type, address, applicant,
                 stories, total_units, use_type, issue_date, link,
                     permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
-                    owner_business_name, owner_phone,
-                    superintendent_business_name, site_safety_mgr_business_name,
+                    permittee_first_name, permittee_last_name,
+                    owner_business_name, owner_phone, owner_first_name, owner_last_name,
+                    superintendent_business_name, superintendent_name,
+                    site_safety_mgr_business_name,
                     work_type, permit_status, filing_status,
                     work_description, exp_date, filing_date, proposed_job_start,
                     self_cert, fee_type
@@ -5551,55 +5553,71 @@ def api_building_profile(bbl):
                     'carrier': contact['carrier_name']
                 })
         
-            # Option 2: Get unique contractors from permits (with phone numbers)
-            contractor_contacts = {}
+            # Option 2: every person named on any permit, phone or not. The
+            # properties-list card shows the latest permit's contact without
+            # requiring a phone; this section must never show fewer people
+            # than the card does. One entry per (name, role), permits tallied,
+            # a phone kept from whichever permit carries one.
+            permit_people = {}
+
+            def _note_person(name, role, permit, phone=None, license_type=None,
+                             license_number=None):
+                clean = (name or '').strip()
+                if not clean or clean.upper() in ('N/A', 'NA', 'NONE', '-'):
+                    return
+                key = (clean.upper(), role)
+                entry = permit_people.get(key)
+                if entry is None:
+                    entry = permit_people[key] = {
+                        'name': clean,
+                        'phone': None,
+                        'role': role,
+                        'license': None,
+                        'license_number': None,
+                        'permit_count': 0,
+                    }
+                entry['permit_count'] += 1
+                if phone and not entry['phone']:
+                    entry['phone'] = phone
+                if license_type and not entry['license']:
+                    entry['license'] = license_type
+                if license_number and not entry['license_number']:
+                    entry['license_number'] = license_number
+
             for permit in permits:
-                # Permittee with phone
-                if permit['permittee_business_name'] and permit['permittee_phone']:
-                    key = permit['permittee_business_name']
-                    if key not in contractor_contacts:
-                        contractor_contacts[key] = {
-                            'name': permit['permittee_business_name'],
-                            'phone': permit['permittee_phone'],
-                            'role': 'Contractor/Permittee',
-                            'license': permit['permittee_license_type'],
-                            'permit_count': 0
-                        }
-                    contractor_contacts[key]['permit_count'] += 1
-            
-                # Owner with phone
-                if permit['owner_business_name'] and permit['owner_phone']:
-                    key = f"owner_{permit['owner_business_name']}"
-                    if key not in contractor_contacts:
-                        contractor_contacts[key] = {
-                            'name': permit['owner_business_name'],
-                            'phone': permit['owner_phone'],
-                            'role': 'Property Owner',
-                            'permit_count': 0
-                        }
-                    contractor_contacts[key]['permit_count'] += 1
-        
-            contacts.extend(contractor_contacts.values())
-        
-            # Option 3: Contractors without phone numbers (fallback)
-            contractors_no_phone = {}
-            for permit in permits:
-                if permit['permittee_business_name'] and not permit['permittee_phone']:
-                    key = permit['permittee_business_name']
-                    if key not in contractor_contacts and key not in contractors_no_phone:
-                        contractors_no_phone[key] = {
-                            'name': permit['permittee_business_name'],
-                            'phone': None,
-                            'role': 'Contractor/Permittee',
-                            'license': permit['permittee_license_type'],
-                            'permit_count': 0
-                        }
-                    if key in contractors_no_phone:
-                        contractors_no_phone[key]['permit_count'] += 1
-        
-            # Only add contractors without phones if we have very few contacts
-            if len(contacts) < 5:
-                contacts.extend(list(contractors_no_phone.values())[:10])
+                permittee = (permit['permittee_business_name'] or
+                             f"{permit.get('permittee_first_name') or ''} "
+                             f"{permit.get('permittee_last_name') or ''}".strip())
+                _note_person(permittee, 'Contractor/Permittee', permit,
+                             phone=permit['permittee_phone'],
+                             license_type=permit['permittee_license_type'],
+                             license_number=permit.get('permittee_license_number'))
+
+                # The applicant is often the individual behind the permittee
+                # business — list them when they aren't the same name.
+                applicant = (permit.get('applicant') or '').strip()
+                if applicant and applicant.upper() != (permittee or '').upper():
+                    _note_person(applicant, 'Applicant', permit)
+
+                owner = (permit['owner_business_name'] or
+                         f"{permit.get('owner_first_name') or ''} "
+                         f"{permit.get('owner_last_name') or ''}".strip())
+                _note_person(owner, 'Property Owner (permit)', permit,
+                             phone=permit['owner_phone'])
+
+                _note_person(permit.get('superintendent_business_name') or
+                             permit.get('superintendent_name'),
+                             'Superintendent', permit)
+                _note_person(permit.get('site_safety_mgr_business_name'),
+                             'Site Safety Manager', permit)
+
+            # Phones first, then by how much work the name shows up on.
+            already_listed = {c['name'].upper() for c in contacts}
+            for entry in sorted(permit_people.values(),
+                                key=lambda e: (e['phone'] is None,
+                                               -e['permit_count'])):
+                if entry['name'].upper() not in already_listed:
+                    contacts.append(entry)
             
             # Map borough number to name
             borough_names = {
