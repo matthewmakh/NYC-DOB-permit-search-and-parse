@@ -7,6 +7,7 @@ This script is safe to schedule after the permit sync: the period key is unique
 and repeated runs update rather than duplicate the digest.
 """
 
+import argparse
 import json
 import os
 from datetime import date, datetime, timedelta
@@ -50,11 +51,14 @@ def json_ready(value):
     return value
 
 
-def main():
+def main(store_only=False):
     conn = connect()
     ensure_project_intelligence_schema(conn)
     now = datetime.now().replace(microsecond=0)
-    webhook_url = os.getenv("WATCHLIST_DIGEST_WEBHOOK_URL", "").strip()
+    webhook_url = (
+        "" if store_only
+        else os.getenv("WATCHLIST_DIGEST_WEBHOOK_URL", "").strip()
+    )
     webhook_token = os.getenv("WATCHLIST_DIGEST_WEBHOOK_BEARER_TOKEN", "").strip()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -168,4 +172,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description="Store watchlist digests and optionally deliver them to a webhook"
+    )
+    parser.add_argument(
+        "--store-only", action="store_true",
+        help="Write digests to PostgreSQL without sending an external webhook",
+    )
+    main(store_only=parser.parse_args().store_only)

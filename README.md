@@ -156,6 +156,10 @@ python permit_scraper_api.py --dob-now-only --days 14
 # Run the same source set used by the production permit-intelligence cron
 python permit_scraper_api.py --sources dob_now_filings dob_now_approved dob_now_electrical dob_now_electrical_details dob_now_elevator city_record --days 14
 
+# Production wrapper: sync all active feeds, then store watchlist digests.
+# It deliberately does not send data to an external webhook.
+python run_permit_intelligence_cron.py
+
 # One-time repair after changing DOB NOW permit identity/owner mappings.
 # This is idempotent and can be resumed by rerunning the same command.
 python permit_scraper_api.py --dob-now-only --start 2016-01-01 --end YYYY-MM-DD

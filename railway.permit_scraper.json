@@ -5,7 +5,7 @@
   },
   "deploy": {
     "cronSchedule": "0 1 * * *",
-    "startCommand": "python -u permit_scraper_api.py --sources dob_now_filings dob_now_approved dob_now_electrical dob_now_electrical_details dob_now_elevator city_record --days 14",
+    "startCommand": "python -u run_permit_intelligence_cron.py",
     "restartPolicyType": "NEVER"
   }
 }
