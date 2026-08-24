@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Step 3: ACRIS Enrichment — full transaction history and party intelligence.
+Step 3: ACRIS Enrichment — retained transaction history and party intelligence.
 
 Queries ACRIS Legals -> Master/Parties/References/Remarks (batched), then:
-- populates acris_transactions (all doc types, with remarks)
+- populates acris_transactions (all doc types from 2000 onward, with remarks)
 - populates acris_parties with CORRECT roles per document type
   (for deeds, ACRIS party 1 is the GRANTOR/seller and party 2 the
   GRANTEE/buyer; for mortgages party 1 is the borrower and party 2 the
@@ -56,7 +56,14 @@ if not DATABASE_URL:
 # make the purchase "financed".
 CASH_WINDOW_BEFORE_DAYS = 5
 CASH_WINDOW_AFTER_DAYS = 90
-ACRIS_LOGIC_VERSION = 4  # also separates loan assignments from deed ownership
+ACRIS_RETENTION_START_DATE = date.fromisoformat(
+    os.getenv('ACRIS_RETENTION_START_DATE', '2000-01-01')
+)
+ACRIS_RETENTION_WHERE = (
+    f"recorded_datetime >= '{ACRIS_RETENTION_START_DATE.isoformat()}T00:00:00.000' "
+    "OR recorded_datetime IS NULL"
+)
+ACRIS_LOGIC_VERSION = 5  # v5 enforces the live-database retention boundary
 
 _client = None
 
@@ -100,7 +107,12 @@ def table_has_column(cur, table, column):
 # ---------------------------------------------------------------------------
 
 def get_document_ids_for_bbl(bbl):
-    """All ACRIS document ids recorded against this lot."""
+    """Retained ACRIS document ids recorded against this lot.
+
+    Rows with an unknown recorded date remain live because they cannot be
+    proven to predate the retention boundary. Confirmed older rows belong in
+    the cold archive, not in the operational sales database.
+    """
     boro, block, lot, _, _ = bbl_parts(bbl)
     client = get_client()
     rows = client.get_all(
@@ -112,7 +124,14 @@ def get_document_ids_for_bbl(bbl):
                        f"block={soql_quote(block)} AND lot={soql_quote(lot)}"),
         },
     )
-    return sorted({r['document_id'] for r in rows if r.get('document_id')})
+    legal_doc_ids = sorted({r['document_id'] for r in rows if r.get('document_id')})
+    if not legal_doc_ids:
+        return []
+    retained = client.get_batched(
+        'acris_master', 'document_id', legal_doc_ids,
+        select='document_id', extra_where=ACRIS_RETENTION_WHERE,
+    )
+    return sorted({r['document_id'] for r in retained if r.get('document_id')})
 
 
 def _reference_counterpart_field(client):
@@ -146,7 +165,7 @@ def _reference_counterpart_fields(client):
 
 def get_acris_full_history(bbl):
     """
-    Complete ACRIS history for a BBL, batched.
+    Retained ACRIS history for a BBL, batched.
 
     Returns {'transactions': [...], 'references': [...]}.
     Each transaction: document_id, doc_type, doc_amount, doc_date,
@@ -162,6 +181,7 @@ def get_acris_full_history(bbl):
     masters = client.get_batched(
         'acris_master', 'document_id', doc_ids,
         select='document_id,doc_type,document_amt,document_date,recorded_datetime,crfn,percent_trans',
+        extra_where=ACRIS_RETENTION_WHERE,
     )
     parties_rows = client.get_batched(
         'acris_parties', 'document_id', doc_ids,

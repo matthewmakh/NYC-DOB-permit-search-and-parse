@@ -1361,7 +1361,10 @@ def get_seller_leads():
                 query += " AND ap.state = %s"
                 params.append(state_filter.upper())
         
-            query += " ORDER BY t.doc_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
+            # recorded_date is the reliable timeline field in ACRIS and is
+            # covered by the partial deed-sales index. This avoids sorting
+            # millions of candidate party rows for a 100-row response.
+            query += " ORDER BY t.recorded_date DESC NULLS LAST, t.doc_amount DESC NULLS LAST"
             query += " LIMIT %s"
             params.append(limit)
         

@@ -150,14 +150,19 @@ class AcrisStub:
 
     def get_all(self, dataset, **kw):
         if dataset == 'acris_legals':
-            return [{'document_id': d} for d in ('DEED1', 'MTG1', 'MTG2', 'SAT2')]
+            return [{'document_id': d} for d in
+                    ('OLD1', 'DEED1', 'MTG1', 'MTG2', 'SAT2')]
         if dataset == 'acris_doc_codes':
             return DocCodeStub().get_all(dataset)
         return []
 
     def get_batched(self, dataset, field, values, **kw):
         if dataset == 'acris_master':
-            return [
+            rows = [
+                {'document_id': 'OLD1', 'doc_type': 'DEED', 'document_amt': '10000',
+                 'document_date': '1999-01-01T00:00:00.000',
+                 'recorded_datetime': '1999-01-20T00:00:00.000',
+                 'crfn': 'OLDCRFN', 'percent_trans': '100'},
                 {'document_id': 'DEED1', 'doc_type': 'DEED', 'document_amt': '1000000',
                  'document_date': '2015-06-01T00:00:00.000', 'recorded_datetime': '2015-06-20T00:00:00.000',
                  'crfn': 'CRFN1', 'percent_trans': '100'},
@@ -171,6 +176,14 @@ class AcrisStub:
                  'document_date': '2024-01-05T00:00:00.000', 'recorded_datetime': '2024-01-15T00:00:00.000',
                  'crfn': 'CRFN4', 'percent_trans': ''},
             ]
+            rows = [row for row in rows if row['document_id'] in values]
+            if kw.get('extra_where'):
+                rows = [row for row in rows
+                        if not row.get('recorded_datetime')
+                        or row['recorded_datetime'][:10] >= '2000-01-01']
+            if kw.get('select') == 'document_id':
+                return [{'document_id': row['document_id']} for row in rows]
+            return rows
         if dataset == 'acris_parties':
             return [
                 {'document_id': 'DEED1', 'party_type': '1', 'name': 'OLD OWNER LLC',
@@ -202,7 +215,9 @@ history = step3.get_acris_full_history('3053170021')
 txns = history['transactions']
 by_id = {t['document_id']: t for t in txns}
 
-check("all four documents assembled", len(txns) == 4)
+check("all four retained documents assembled", len(txns) == 4)
+check("confirmed pre-2000 documents stay out of the live history",
+      'OLD1' not in by_id)
 check("deed buyer is the GRANTEE (party 2)",
       by_id['DEED1']['buyers'][0]['name'] == 'NEW OWNER LLC',
       f"got {by_id['DEED1']['buyers']}")

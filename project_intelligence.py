@@ -288,7 +288,11 @@ def ensure_project_intelligence_schema(conn) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_permits_applicant_business ON permits(applicant_business_name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_permits_related_job ON permits(related_job_number)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_status_date ON projects(current_status_date DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_bbl ON projects(bbl)")
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_projects_bbl_status_date
+            ON projects(bbl, current_status_date DESC NULLS LAST)
+            WHERE bbl IS NOT NULL
+        """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sales_alerts_queue ON sales_alerts(status, event_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_electrical_details_project ON electrical_permit_details(project_key)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_electrical_details_filing ON electrical_permit_details(normalized_filing_number)")

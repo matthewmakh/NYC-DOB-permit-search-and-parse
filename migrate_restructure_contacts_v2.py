@@ -74,7 +74,8 @@ try:
         );
         
         -- Indexes for performance
-        CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
+        -- contacts_phone_key, created by UNIQUE(phone), already supplies the
+        -- phone lookup index. A second identical index only wastes storage.
         CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
         CREATE INDEX IF NOT EXISTS idx_contacts_phone_validated ON contacts(phone_validated_at);
     """)
