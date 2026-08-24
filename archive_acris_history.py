@@ -247,13 +247,25 @@ def delete_archived_rows(url, cutoff, max_transaction_id, batch_size, expected_c
             cur.execute("SET lock_timeout = '30s'")
             cur.execute(
                 """
-                UPDATE buildings
-                SET acris_logic_version = GREATEST(COALESCE(acris_logic_version, 0), 5)
-                WHERE acris_last_enriched IS NOT NULL
-                  AND COALESCE(acris_logic_version, 0) < 5
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'buildings'
+                  AND column_name = 'acris_logic_version'
                 """
             )
-            logic_rows = cur.rowcount
+            if cur.fetchone():
+                cur.execute(
+                    """
+                    UPDATE buildings
+                    SET acris_logic_version = GREATEST(COALESCE(acris_logic_version, 0), 5)
+                    WHERE acris_last_enriched IS NOT NULL
+                      AND COALESCE(acris_logic_version, 0) < 5
+                    """
+                )
+                logic_rows = cur.rowcount
+            else:
+                logic_rows = 0
             conn.commit()
 
             cur.execute(
