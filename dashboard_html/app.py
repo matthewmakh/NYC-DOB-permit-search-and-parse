@@ -277,6 +277,84 @@ class DatabaseConnection:
         return False  # Don't suppress exceptions
 
 
+def _fetch_contact_directory(cur, *, permit_id=None, bbl=None):
+    """Return deduplicated canonical, historical, and name-only contacts."""
+    if (permit_id is None) == (bbl is None):
+        raise ValueError("provide exactly one of permit_id or bbl")
+    if permit_id is not None:
+        scope_sql, params = "d.permit_id = %s", (permit_id,)
+    else:
+        # Resolve the small permit set first. Joining the UNION view to every
+        # permit prevented PostgreSQL from pushing the BBL predicate into each
+        # indexed branch and made a one-property contact read scan the world.
+        cur.execute("SELECT id FROM permits WHERE bbl = %s", (bbl,))
+        permit_ids = [row['id'] for row in cur.fetchall()]
+        if not permit_ids:
+            return []
+        scope_sql, params = "d.permit_id = ANY(%s)", (permit_ids,)
+    cur.execute(
+        f"""
+        SELECT d.*, p.permit_no AS permit_number, p.bbl
+        FROM permit_contact_directory d
+        JOIN permits p ON p.id = d.permit_id
+        WHERE {scope_sql}
+        ORDER BY
+            CASE d.verification_status WHEN 'validated' THEN 0
+                 WHEN 'legacy_checked_needs_revalidation' THEN 1 ELSE 2 END,
+            d.role, d.name
+        """,
+        params,
+    )
+    merged = {}
+    for raw in cur.fetchall():
+        item = dict(raw)
+        digits = ''.join(ch for ch in str(item.get('phone') or '') if ch.isdigit())
+        phone_key = digits[-10:] if len(digits) >= 10 else digits
+        key = ('phone', phone_key) if phone_key else (
+            'name', str(item.get('name') or '').strip().upper(), item.get('role')
+        )
+        current = merged.get(key)
+        if current is None:
+            current = item
+            current['_roles'] = {item.get('role') or 'Contact'}
+            current['_sources'] = set(filter(None, str(item.get('source') or '').split(', ')))
+            current['_permits'] = {item.get('permit_number')} if item.get('permit_number') else set()
+            current['evidence_count'] = int(item.get('evidence_count') or 0)
+            merged[key] = current
+        else:
+            current['_roles'].add(item.get('role') or 'Contact')
+            current['_sources'].update(filter(None, str(item.get('source') or '').split(', ')))
+            if item.get('permit_number'):
+                current['_permits'].add(item['permit_number'])
+            current['evidence_count'] += int(item.get('evidence_count') or 0)
+            current['is_mobile'] = bool(current.get('is_mobile') or item.get('is_mobile'))
+            current['legacy_mobile_observed'] = bool(
+                current.get('legacy_mobile_observed') or item.get('legacy_mobile_observed')
+            )
+            current['needs_revalidation'] = bool(
+                current.get('needs_revalidation') and item.get('needs_revalidation')
+            )
+            if item.get('verification_status') == 'validated':
+                current['verification_status'] = 'validated'
+                current['needs_revalidation'] = False
+                current['line_type'] = item.get('line_type') or current.get('line_type')
+                current['carrier_name'] = item.get('carrier_name') or current.get('carrier_name')
+    contacts = []
+    for item in merged.values():
+        item['role'] = ' / '.join(sorted(item.pop('_roles')))
+        item['source'] = ', '.join(sorted(item.pop('_sources')))
+        permits = item.pop('_permits')
+        item['permit_count'] = len(permits)
+        item['permit_numbers'] = sorted(permits)
+        item['phone_type'] = item.get('line_type')
+        item['carrier'] = item.get('carrier_name')
+        item['email'] = None
+        if item.get('role_confidence') is not None:
+            item['role_confidence'] = float(item['role_confidence'])
+        contacts.append(item)
+    return contacts
+
+
 # ============================================================================
 # ACTIVITY LOGGING MIDDLEWARE
 # ============================================================================
@@ -419,28 +497,22 @@ def get_permits():
     """Get all permits with calculated scores, contact info, and building intelligence"""
     try:
         with DatabaseConnection() as cur:
-            # Query with contact information from permits table and building intelligence
+            # Canonical contact directory combines current and recovered evidence.
             query = """
                 SELECT 
                     p.*,
-                    -- Calculate contact count from permits table columns
-                    (
-                        CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                        CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                    ) as contact_count,
-                    false as has_mobile,
-                    -- Aggregate contact names
-                    CONCAT_WS(' | ',
+                    COALESCE(cd.contact_count, 0) AS contact_count,
+                    COALESCE(cd.has_mobile, false) AS has_mobile,
+                    COALESCE(cd.contact_names, CONCAT_WS(' | ',
                         NULLIF(COALESCE(p.permittee_business_name, p.applicant), ''),
                         NULLIF(p.owner_business_name, ''),
                         NULLIF(p.superintendent_business_name, ''),
                         NULLIF(p.site_safety_mgr_business_name, '')
-                    ) as contact_names,
-                    -- Aggregate contact phones
-                    CONCAT_WS(' | ',
+                    )) AS contact_names,
+                    COALESCE(cd.contact_phones, CONCAT_WS(' | ',
                         NULLIF(p.permittee_phone, ''),
                         NULLIF(p.owner_phone, '')
-                    ) as contact_phones,
+                    )) AS contact_phones,
                     b.id as building_id,
                     b.current_owner_name,
                     b.owner_name_rpad,
@@ -460,6 +532,14 @@ def get_permits():
                     b.mortgage_amount
                 FROM permits p
                 LEFT JOIN buildings b ON p.bbl = b.bbl
+                LEFT JOIN (
+                    SELECT pc.permit_id, count(DISTINCT pc.contact_id) AS contact_count,
+                           bool_or(COALESCE(c.is_mobile, false)) AS has_mobile,
+                           string_agg(DISTINCT c.name, ' | ') FILTER (WHERE c.name IS NOT NULL) AS contact_names,
+                           string_agg(DISTINCT c.phone, ' | ') FILTER (WHERE c.phone IS NOT NULL) AS contact_phones
+                    FROM permit_contacts pc JOIN contacts c ON c.id = pc.contact_id
+                    GROUP BY pc.permit_id
+                ) cd ON cd.permit_id = p.id
                 ORDER BY p.issue_date DESC;
             """
             
@@ -494,15 +574,12 @@ def get_stats():
             cur.execute("SELECT COUNT(*) as total FROM permits;")
             total_permits = cur.fetchone()['total']
             
-            # Total contacts (count permits with phone numbers)
-            cur.execute("""
-                SELECT COUNT(*) as total FROM permits 
-                WHERE permittee_phone IS NOT NULL OR owner_phone IS NOT NULL;
-            """)
+            # Canonical identities, rather than permits that happen to carry a phone.
+            cur.execute("SELECT COUNT(*) as total FROM contacts;")
             total_contacts = cur.fetchone()['total']
-            
-            # Mobile contacts (deprecated - always 0 since we don't track mobile vs landline)
-            mobile_contacts = 0
+
+            cur.execute("SELECT COUNT(*) as total FROM contacts WHERE is_mobile IS TRUE;")
+            mobile_contacts = cur.fetchone()['total']
             
             # Building intelligence stats
             cur.execute("SELECT COUNT(*) as total FROM buildings;")
@@ -543,7 +620,7 @@ def get_stats():
 
 @app.route('/api/search-contact')
 def search_contact():
-    """Search for permits by contact name or phone (searches permits table columns)"""
+    """Search current and recovered contact evidence by name or phone."""
     query = request.args.get('q', '').strip()
     
     if len(query) < 2:
@@ -554,34 +631,53 @@ def search_contact():
     
     try:
         with DatabaseConnection() as cur:
-            # Search permits table directly - all contacts now stored in permit columns
             search_query = """
-                SELECT DISTINCT
-                    p.id,
-                    p.permit_no,
-                    p.address,
-                    p.job_type,
-                    p.issue_date,
-                    COALESCE(p.permittee_business_name, p.owner_business_name, p.superintendent_business_name, p.applicant) as contact_name,
-                    COALESCE(p.permittee_phone, p.owner_phone) as contact_phone
-                FROM permits p
-                WHERE 
-                    (
-                        LOWER(p.permittee_business_name) LIKE %s OR
-                        LOWER(p.owner_business_name) LIKE %s OR
-                        LOWER(p.superintendent_business_name) LIKE %s OR
-                        LOWER(p.site_safety_mgr_business_name) LIKE %s OR
-                        LOWER(p.applicant) LIKE %s OR
-                        p.permittee_phone LIKE %s OR
-                        p.owner_phone LIKE %s
-                    )
-                ORDER BY p.issue_date DESC
-                LIMIT 50;
+                WITH matches AS (
+                    SELECT p.id, p.permit_no, p.address, p.job_type, p.issue_date,
+                           c.name AS contact_name, c.phone AS contact_phone,
+                           COALESCE(pc.contact_role, c.role, 'Contact') AS contact_role,
+                           COALESCE(string_agg(DISTINCT ce.source, ', '), 'permit_contact') AS contact_source,
+                           CASE WHEN c.phone_validated_at IS NOT NULL THEN 'validated'
+                                ELSE 'unverified' END AS verification_status
+                    FROM contacts c
+                    JOIN permit_contacts pc ON pc.contact_id = c.id
+                    JOIN permits p ON p.id = pc.permit_id
+                    LEFT JOIN contact_evidence ce
+                      ON ce.permit_id = pc.permit_id AND ce.contact_id = c.id
+                    WHERE LOWER(COALESCE(c.name, '')) LIKE %s OR COALESCE(c.phone, '') LIKE %s
+                    GROUP BY p.id, p.permit_no, p.address, p.job_type, p.issue_date,
+                             c.id, pc.contact_role
+                    UNION ALL
+                    SELECT p.id, p.permit_no, p.address, p.job_type, p.issue_date,
+                           ce.raw_name, NULL, COALESCE(ce.observed_role, 'Legacy Contact'),
+                           ce.source, ce.validation_status
+                    FROM contact_evidence ce JOIN permits p ON p.id = ce.permit_id
+                    WHERE ce.contact_id IS NULL
+                      AND LOWER(COALESCE(ce.raw_name, '')) LIKE %s
+                    UNION ALL
+                    SELECT p.id, p.permit_no, p.address, p.job_type, p.issue_date,
+                           v.name, v.phone, v.role, 'permit_record', 'unverified'
+                    FROM permits p
+                    CROSS JOIN LATERAL (VALUES
+                        (COALESCE(p.permittee_business_name, p.applicant), p.permittee_phone, 'Permittee'),
+                        (p.owner_business_name, p.owner_phone, 'Owner'),
+                        (COALESCE(p.superintendent_business_name, p.superintendent_name), NULL::VARCHAR, 'Superintendent'),
+                        (p.site_safety_mgr_business_name, NULL::VARCHAR, 'Site Safety Manager')
+                    ) v(name, phone, role)
+                    WHERE LOWER(COALESCE(v.name, '')) LIKE %s OR COALESCE(v.phone, '') LIKE %s
+                ), deduped AS (
+                    SELECT DISTINCT ON (id, contact_name, COALESCE(contact_phone, '')) *
+                    FROM matches
+                    ORDER BY id, contact_name, COALESCE(contact_phone, ''), issue_date DESC
+                )
+                SELECT * FROM deduped ORDER BY issue_date DESC NULLS LAST LIMIT 50;
             """
             
             search_pattern = f'%{query.lower()}%'
-            # Need to pass search_pattern 7 times for the 7 fields being searched
-            cur.execute(search_query, (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
+            cur.execute(search_query, (
+                search_pattern, search_pattern, search_pattern,
+                search_pattern, search_pattern,
+            ))
             
             results = cur.fetchall()
         
@@ -900,44 +996,18 @@ def get_permit_details(permit_id):
     """Get detailed information for a single permit"""
     try:
         with DatabaseConnection() as cur:
-            # Get permit details
-            cur.execute("SELECT * FROM permits WHERE permit_id = %s;", (permit_id,))
+            cur.execute("SELECT * FROM permits WHERE permit_no = %s;", (permit_id,))
             permit = cur.fetchone()
-            
             if not permit:
                 return jsonify({
                     'success': False,
                     'error': 'Permit not found'
                 }), 404
-            
-            # Build contacts array from permits table columns
-            contacts = []
-            if permit.get('permittee_business_name') or permit.get('applicant'):
-                contacts.append({
-                    'name': permit.get('permittee_business_name') or permit.get('applicant'),
-                    'phone': permit.get('permittee_phone'),
-                    'role': 'Permittee'
-            })
-        if permit.get('owner_business_name'):
-            contacts.append({
-                'name': permit.get('owner_business_name'),
-                'phone': permit.get('owner_phone'),
-                'role': 'Owner'
-            })
-        if permit.get('superintendent_business_name'):
-            contacts.append({
-                'name': permit.get('superintendent_business_name'),
-                'phone': None,
-                'role': 'Superintendent'
-            })
-        if permit.get('site_safety_mgr_business_name'):
-            contacts.append({
-                'name': permit.get('site_safety_mgr_business_name'),
-                'phone': None,
-                'role': 'Site Safety Manager'
-            })
-        
+            contacts = _fetch_contact_directory(cur, permit_id=permit['id'])
+
         permit['contacts'] = contacts
+        permit['contact_count'] = len(contacts)
+        permit['has_mobile'] = any(c.get('is_mobile') for c in contacts)
         permit['lead_score'] = calculate_lead_score(permit)
         
         return jsonify({
@@ -1047,32 +1117,9 @@ def permit_detail(permit_id):
             if not permit:
                 return "Permit not found", 404
             
-            # Build contacts array from permits table columns
-            contacts = []
-            if permit.get('permittee_business_name') or permit.get('applicant'):
-                contacts.append({
-                    'name': permit.get('permittee_business_name') or permit.get('applicant'),
-                    'phone': permit.get('permittee_phone'),
-                    'is_mobile': False
-                })
-            if permit.get('owner_business_name'):
-                contacts.append({
-                    'name': permit.get('owner_business_name'),
-                    'phone': permit.get('owner_phone'),
-                    'is_mobile': False
-                })
-            if permit.get('superintendent_business_name'):
-                contacts.append({
-                    'name': permit.get('superintendent_business_name'),
-                    'phone': None,
-                    'is_mobile': False
-                })
-            if permit.get('site_safety_mgr_business_name'):
-                contacts.append({
-                    'name': permit.get('site_safety_mgr_business_name'),
-                    'phone': None,
-                    'is_mobile': False
-                })
+            contacts = _fetch_contact_directory(cur, permit_id=permit_id)
+            permit['contact_count'] = len(contacts)
+            permit['has_mobile'] = any(c.get('is_mobile') for c in contacts)
             
             # Get all permits for the same building (if BBL exists)
             related_permits = []
@@ -1092,10 +1139,8 @@ def permit_detail(permit_id):
                         p.applicant,
                         p.permittee_business_name,
                         p.owner_business_name,
-                        (
-                            CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                            CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                        ) as contact_count
+                        (SELECT count(*) FROM permit_contact_directory d
+                          WHERE d.permit_id = p.id) AS contact_count
                     FROM permits p
                     WHERE p.bbl = %s AND p.id != %s
                     ORDER BY p.issue_date DESC
@@ -1168,48 +1213,14 @@ def get_building_detail(building_id):
             # Get all permits for this building
             cur.execute("""
                 SELECT p.*, 
-                       (
-                           CASE WHEN p.permittee_phone IS NOT NULL AND p.permittee_phone != '' THEN 1 ELSE 0 END +
-                           CASE WHEN p.owner_phone IS NOT NULL AND p.owner_phone != '' THEN 1 ELSE 0 END
-                       ) as contact_count
+                       (SELECT count(*) FROM permit_contact_directory d
+                         WHERE d.permit_id = p.id) AS contact_count
                 FROM permits p
                 WHERE p.bbl = %s
                 ORDER BY p.issue_date DESC;
             """, (building['bbl'],))
             permits = cur.fetchall()
-        
-            # Get all contacts from all permits (aggregate from permits table columns)
-            cur.execute("""
-                SELECT DISTINCT 
-                    COALESCE(p.permittee_business_name, p.applicant) as name,
-                    p.permittee_phone as phone,
-                    'Permittee' as role
-                FROM permits p
-                WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-                UNION
-                SELECT DISTINCT 
-                    p.owner_business_name as name,
-                    p.owner_phone as phone,
-                    'Owner' as role
-                FROM permits p
-                WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
-                UNION
-                SELECT DISTINCT 
-                    p.superintendent_business_name as name,
-                    NULL as phone,
-                    'Superintendent' as role
-                FROM permits p
-                WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
-                UNION
-                SELECT DISTINCT 
-                    p.site_safety_mgr_business_name as name,
-                    NULL as phone,
-                    'Site Safety Manager' as role
-                FROM permits p
-                WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
-                ORDER BY name;
-            """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
-            contacts = cur.fetchall()
+            contacts = _fetch_contact_directory(cur, bbl=building['bbl'])
         
             return jsonify({
                 'success': True,
@@ -1238,50 +1249,7 @@ def get_building_contacts(building_id):
             if not building:
                 return jsonify([])
             
-            # Get all unique contacts from all permits for this BBL (from permits table columns)
-            cur.execute("""
-            SELECT DISTINCT 
-                COALESCE(p.permittee_business_name, p.applicant) as name,
-                'Permittee' as role,
-                p.permittee_phone as phone,
-                NULL as phone_type,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND (p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-            UNION
-            SELECT DISTINCT 
-                p.owner_business_name as name,
-                'Owner' as role,
-                p.owner_phone as phone,
-                NULL as phone_type,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.owner_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.superintendent_business_name as name,
-                'Superintendent' as role,
-                NULL as phone,
-                NULL as phone_type,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.superintendent_business_name IS NOT NULL
-            UNION
-            SELECT DISTINCT 
-                p.site_safety_mgr_business_name as name,
-                'Site Safety Manager' as role,
-                NULL as phone,
-                NULL as phone_type,
-                NULL as email,
-                p.permit_no as permit_number
-            FROM permits p
-            WHERE p.bbl = %s AND p.site_safety_mgr_business_name IS NOT NULL
-            ORDER BY name, role;
-        """, (building['bbl'], building['bbl'], building['bbl'], building['bbl']))
-            contacts = cur.fetchall()
+            contacts = _fetch_contact_directory(cur, bbl=building['bbl'])
         
         return jsonify(contacts)
         
@@ -4048,7 +4016,8 @@ def api_properties_export():
             if bbls and ('all_contacts' in requested_fields or 'all_contact_phones' in requested_fields or 'contact_names' in requested_fields):
                 # Get contacts from contacts table via permit_contacts
                 cur.execute("""
-                    SELECT DISTINCT p.bbl, c.name, c.phone, c.role
+                    SELECT DISTINCT p.bbl, c.name, c.phone,
+                           COALESCE(pc.contact_role, c.role) AS role
                     FROM contacts c
                     JOIN permit_contacts pc ON c.id = pc.contact_id
                     JOIN permits p ON pc.permit_id = p.id
@@ -6165,29 +6134,12 @@ def api_building_profile(bbl):
             activity_timeline.sort(key=lambda x: x['date'], reverse=True)
         
             # ===== 9. CONTACT AGGREGATION =====
-            contacts = []
-        
-            # Option 1: Get from contacts table (if linked to permits)
-            cur.execute("""
-                SELECT DISTINCT c.name, c.phone, c.role, c.is_mobile, c.line_type, c.carrier_name
-                FROM contacts c
-                JOIN permit_contacts pc ON c.id = pc.contact_id
-                JOIN permits p ON pc.permit_id = p.id
-                WHERE p.bbl = %s AND c.phone IS NOT NULL
-            """, (bbl,))
-        
-            contacts_from_db = cur.fetchall()
-            for contact in contacts_from_db:
-                contacts.append({
-                    'name': contact['name'],
-                    'phone': contact['phone'],
-                    'role': contact['role'] or 'Contact',
-                    'is_mobile': contact['is_mobile'],
-                    'line_type': contact['line_type'],
-                    'carrier': contact['carrier_name']
-                })
-        
-            # Option 2: every person named on any permit, phone or not. The
+            # The canonical directory contains current permit people, recovered
+            # historical observations, source labels, and validation state.
+            contacts = _fetch_contact_directory(cur, bbl=bbl)
+
+            # Retain permit-specific license metadata that is not part of the
+            # phone identity model. The merge below only adds a missing person.
             # properties-list card shows the latest permit's contact without
             # requiring a phone; this section must never show fewer people
             # than the card does. One entry per (name, role), permits tallied,

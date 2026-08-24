@@ -2701,6 +2701,8 @@ function renderContactsTab() {
                             ${contact.line_type ? ` <span class="line-type-badge">${contact.line_type}</span>` : ''}
                         </div>
                     ` : ''}
+                    ${contact.needs_revalidation ? '<div class="contact-carrier">Needs phone revalidation</div>' : ''}
+                    ${(contact.source || '').includes('legacy_contacts_backup') ? '<div class="contact-carrier">Recovered historical evidence</div>' : ''}
                     ${contact.carrier ? `<div class="contact-carrier">Carrier: ${contact.carrier}</div>` : ''}
                     ${contact.license || contact.license_number ? `<div class="contact-license">License: ${[contact.license, contact.license_number].filter(Boolean).join(' ')}</div>` : ''}
                     ${contact.permit_count ? `<div class="contact-permits">${formatNumber(contact.permit_count)} permit(s) filed</div>` : ''}

@@ -1745,6 +1745,7 @@ async function loadAllContacts(buildingId) {
                             <i class="fas fa-phone"></i>
                             <span>${formatPhoneNumber(contact.phone)}</span>
                             ${contact.phone_type ? `<span class="phone-type-badge">${contact.phone_type}</span>` : ''}
+                            ${contact.needs_revalidation ? '<span class="phone-type-badge">Needs revalidation</span>' : ''}
                         </div>
                     ` : ''}
                     ${contact.email ? `

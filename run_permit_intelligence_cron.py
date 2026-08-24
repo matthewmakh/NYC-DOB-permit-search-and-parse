@@ -30,6 +30,12 @@ def main():
         ],
         check=True,
     )
+    # Canonicalize every newly imported permit contact before scoring alerts.
+    # New phones remain queued for the existing validation worker.
+    subprocess.run(
+        [sys.executable, "-u", "sync_contacts_from_permits.py"],
+        check=True,
+    )
     subprocess.run(
         [
             sys.executable,

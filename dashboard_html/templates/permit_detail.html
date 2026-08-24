@@ -83,89 +83,30 @@
         {% endif %}
     </div>
 
-    <!-- Primary contacts -->
-    {% if permit.applicant or permit.permittee_phone or permit.owner_phone or permit.superintendent_name or permit.superintendent_business_name or permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name or permit.site_safety_mgr_business_name %}
+    <!-- Unified contact directory -->
+    {% if contacts %}
     <div class="info-card pd-section contacts-highlight">
-        <h3>Primary contacts</h3>
-
-        {% if permit.applicant %}
+        <h3>Contact directory <span class="pd-contact-meta">({{ contacts|length }})</span></h3>
+        {% for contact in contacts %}
         <div class="pd-contact">
-            <div class="pd-contact-kind">Applicant</div>
-            <div class="pd-contact-name">{{ permit.applicant }}</div>
-            {% if permit.permittee_business_name %}
-            <div class="pd-contact-business">{{ permit.permittee_business_name }}</div>
+            <div class="pd-contact-kind">{{ contact.role or 'Contact' }}</div>
+            <div class="pd-contact-name">{{ contact.name or 'Name unavailable' }}</div>
+            {% if contact.phone %}
+            <a class="pd-contact-phone" href="tel:{{ contact.phone }}">{{ contact.phone }}</a>
             {% endif %}
-            {% if permit.permittee_phone %}
-            <a class="pd-contact-phone" href="tel:{{ permit.permittee_phone }}">{{ permit.permittee_phone }}</a>
-            {% endif %}
-            {% if permit.permittee_license_number %}
-            <div class="pd-contact-meta">License {{ permit.permittee_license_type or 'N/A' }} #{{ permit.permittee_license_number }}</div>
-            {% endif %}
-        </div>
-        {% endif %}
-
-        {% if permit.permittee_phone and not permit.applicant %}
-        <div class="pd-contact">
-            <div class="pd-contact-kind">Contractor / permittee</div>
-            <div class="pd-contact-name">
-                {% if permit.permittee_first_name or permit.permittee_last_name %}
-                    {{ permit.permittee_first_name }} {{ permit.permittee_last_name }}
+            <div class="pd-contact-meta">
+                {% if contact.verification_status == 'validated' %}
+                    Validated{% if contact.line_type %} · {{ contact.line_type }}{% endif %}
+                {% elif contact.needs_revalidation %}
+                    Needs revalidation
                 {% else %}
-                    Contractor
+                    Name from permit evidence
                 {% endif %}
+                {% if 'legacy_contacts_backup' in (contact.source or '') %} · Recovered historical evidence{% endif %}
+                {% if contact.role_confidence is not none %} · Role confidence {{ (contact.role_confidence * 100)|round|int }}%{% endif %}
             </div>
-            {% if permit.permittee_business_name %}
-            <div class="pd-contact-business">{{ permit.permittee_business_name }}</div>
-            {% endif %}
-            <a class="pd-contact-phone" href="tel:{{ permit.permittee_phone }}">{{ permit.permittee_phone }}</a>
-            {% if permit.permittee_license_number %}
-            <div class="pd-contact-meta">License {{ permit.permittee_license_type or 'N/A' }} #{{ permit.permittee_license_number }}</div>
-            {% endif %}
         </div>
-        {% endif %}
-
-        {% if permit.owner_phone %}
-        <div class="pd-contact">
-            <div class="pd-contact-kind">Property owner</div>
-            <div class="pd-contact-name">
-                {% if permit.owner_first_name or permit.owner_last_name %}
-                    {{ permit.owner_first_name }} {{ permit.owner_last_name }}
-                {% elif permit.owner_business_name and permit.owner_business_name != 'N/A' %}
-                    {{ permit.owner_business_name }}
-                {% else %}
-                    Owner
-                {% endif %}
-            </div>
-            {% if permit.owner_business_name and permit.owner_business_name != 'N/A' %}
-            <div class="pd-contact-business">{{ permit.owner_business_name }}</div>
-            {% endif %}
-            <a class="pd-contact-phone" href="tel:{{ permit.owner_phone }}">{{ permit.owner_phone }}</a>
-            {% if permit.owner_house_number or permit.owner_street_name %}
-            <div class="pd-contact-meta">{{ permit.owner_house_number }} {{ permit.owner_street_name }}, {{ permit.owner_city }} {{ permit.owner_state }} {{ permit.owner_zip_code }}</div>
-            {% endif %}
-            {% if permit.owner_business_type %}
-            <div class="pd-contact-meta">{{ permit.owner_business_type }}{% if permit.non_profit == 'Y' %} · Non-profit{% endif %}</div>
-            {% endif %}
-        </div>
-        {% endif %}
-
-        {% if permit.superintendent_name or permit.superintendent_business_name %}
-        <div class="pd-contact">
-            <div class="pd-contact-kind">Superintendent</div>
-            {% if permit.superintendent_name %}<div class="pd-contact-name">{{ permit.superintendent_name }}</div>{% endif %}
-            {% if permit.superintendent_business_name %}<div class="pd-contact-business">{{ permit.superintendent_business_name }}</div>{% endif %}
-        </div>
-        {% endif %}
-
-        {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name or permit.site_safety_mgr_business_name %}
-        <div class="pd-contact">
-            <div class="pd-contact-kind">Site safety manager</div>
-            {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name %}
-            <div class="pd-contact-name">{{ permit.site_safety_mgr_first_name }} {{ permit.site_safety_mgr_last_name }}</div>
-            {% endif %}
-            {% if permit.site_safety_mgr_business_name %}<div class="pd-contact-business">{{ permit.site_safety_mgr_business_name }}</div>{% endif %}
-        </div>
-        {% endif %}
+        {% endfor %}
     </div>
     {% endif %}
 
@@ -314,25 +255,6 @@
             {% if permit.owner_name_hpd %}<div class="info-item"><span class="info-label">Owner (HPD)</span><span class="info-value">{{ permit.owner_name_hpd }}</span></div>{% endif %}
             {% if permit.owner_business_type %}<div class="info-item"><span class="info-label">Business type</span><span class="info-value">{{ permit.owner_business_type }}</span></div>{% endif %}
             {% if permit.non_profit %}<div class="info-item"><span class="info-label">Non-profit</span><span class="info-value">{{ permit.non_profit }}</span></div>{% endif %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- Additional contacts -->
-    {% if permit.superintendent_business_name or permit.site_safety_mgr_business_name %}
-    <div class="info-card pd-section">
-        <h3>Additional contacts</h3>
-        <div class="info-grid">
-            {% if permit.superintendent_business_name or permit.superintendent_name %}<div class="info-item"><span class="info-label">Superintendent</span><span class="info-value">{{ permit.superintendent_name or permit.superintendent_business_name }}</span></div>{% endif %}
-            {% if permit.site_safety_mgr_business_name or permit.site_safety_mgr_first_name %}
-            <div class="info-item"><span class="info-label">Safety manager</span><span class="info-value">
-                {% if permit.site_safety_mgr_first_name or permit.site_safety_mgr_last_name %}
-                    {{ permit.site_safety_mgr_first_name }} {{ permit.site_safety_mgr_last_name }}
-                {% else %}
-                    {{ permit.site_safety_mgr_business_name }}
-                {% endif %}
-            </span></div>
-            {% endif %}
         </div>
     </div>
     {% endif %}
