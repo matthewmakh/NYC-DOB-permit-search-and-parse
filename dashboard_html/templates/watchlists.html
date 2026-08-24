@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Watchlists — NYC Real Estate Intel{% endblock %}
+
+{% block extra_css %}
+<style>
+    .watch-shell { max-width: 1180px; margin: 0 auto; padding: 36px 24px 64px; }
+    .watch-head { display:flex; justify-content:space-between; gap:18px; align-items:end; margin-bottom:24px; }
+    .watch-head h1 { margin:0 0 7px; } .watch-head p { margin:0; color:#667085; }
+    .watch-grid { display:grid; grid-template-columns: 360px 1fr; gap:18px; }
+    .panel { background:#fff; border:1px solid #e4e7ec; border-radius:12px; padding:19px; }
+    .panel h2 { margin:0 0 14px; font-size:17px; }
+    .watch-list, .digest-list { display:grid; gap:9px; }
+    .watch-item, .digest-item { border:1px solid #eaecf0; border-radius:9px; padding:12px; }
+    .watch-item-top { display:flex; justify-content:space-between; gap:10px; }
+    .type { text-transform:uppercase; letter-spacing:.04em; color:#475467; font-size:11px; font-weight:700; }
+    .remove { border:0; color:#b42318; background:transparent; cursor:pointer; }
+    .digest-item h3 { margin:0 0 5px; font-size:15px; } .digest-item p { margin:0; color:#475467; line-height:1.45; }
+    .digest-meta { margin-top:8px; color:#667085; font-size:12px; }
+    .watch-actions { display:flex; gap:8px; }
+    .watch-actions a { border:1px solid #d0d5dd; border-radius:7px; padding:8px 11px; text-decoration:none; color:#344054; }
+    .empty { color:#667085; padding:20px 4px; }
+    @media(max-width:800px){.watch-grid{grid-template-columns:1fr}.watch-head{align-items:start;flex-direction:column}}
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="watch-shell">
+    <div class="watch-head"><div><h1>Watchlists and daily changes</h1><p>Accounts, projects, and properties your rep has deliberately chosen to follow.</p></div><div id="watchActions" class="watch-actions"></div></div>
+    <div class="watch-grid">
+        <section class="panel"><h2>Watched targets</h2><div id="watchList" class="watch-list"><div class="empty">Loading…</div></div></section>
+        <section class="panel"><h2>Last 24 hours</h2><div id="digestList" class="digest-list"><div class="empty">Loading changes…</div></div></section>
+    </div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const safe = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+async function loadWorkspace(){
+    const [watchResponse, digestResponse] = await Promise.all([fetch('/api/watchlists'), fetch('/api/watchlist-digest?days=1')]);
+    const watch = await watchResponse.json(); const digest = await digestResponse.json();
+    const list = document.getElementById('watchList');
+    if (!watch.success) { list.innerHTML = `<div class="empty">${safe(watch.error)}</div>`; return; }
+    const defaultList = watch.watchlists.find(w => w.is_default) || watch.watchlists[0];
+    if (defaultList) document.getElementById('watchActions').innerHTML = `<a href="/api/crm/export?watchlist_id=${defaultList.id}">Export watchlist to CRM</a>`;
+    list.innerHTML = watch.items.length ? watch.items.map(item => `<div class="watch-item"><div class="watch-item-top"><div><div class="type">${safe(item.entity_type)}</div><strong>${safe(item.display_name)}</strong></div><button class="remove" onclick="removeItem(${item.id})">Remove</button></div></div>`).join('') : '<div class="empty">No targets watched yet. Add repeat buyers from the Buyers page or projects from Alerts.</div>';
+    const digestList = document.getElementById('digestList');
+    if (!digest.success) { digestList.innerHTML = `<div class="empty">${safe(digest.error)}</div>`; return; }
+    digestList.innerHTML = digest.events.length ? digest.events.map(event => `<article class="digest-item"><h3>${safe(event.title)}</h3><p>${safe(event.summary)}</p><div class="digest-meta">${new Date(event.event_at).toLocaleString()} · ${safe(event.owner_business_name || event.address || event.project_key)}</div></article>`).join('') : '<div class="empty">No watched-target changes in the last 24 hours.</div>';
+}
+async function removeItem(id){ await fetch(`/api/watchlists/items/${id}`, {method:'DELETE'}); loadWorkspace(); }
+loadWorkspace();
+</script>
+{% endblock %}

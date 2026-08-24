@@ -839,8 +839,13 @@ _fixture = {
 }
 ours, ours_skipped = PS.prepare_rows_bis([dict(_fixture)])
 theirs, _ = SCRAPER.prepare_rows_bis([dict(_fixture)])
+ours_without_timestamp = list(ours[0])
+theirs_without_timestamp = list(theirs[0])
+timestamp_index = PS.BIS_COLUMNS.index('api_last_updated')
+ours_without_timestamp[timestamp_index] = None
+theirs_without_timestamp[timestamp_index] = None
 check('fixture row maps identically (minus timestamp)',
-      ours[0][:-1], theirs[0][:-1])
+      tuple(ours_without_timestamp), tuple(theirs_without_timestamp))
 check('mapped bbl assembled from parts', ours[0][14], '4099660080')
 check('permit_no comes from NYC row identifier', ours[0][0], '3899021')
 check('issue date parsed from issuance_date', str(ours[0][2]), '2024-03-05')

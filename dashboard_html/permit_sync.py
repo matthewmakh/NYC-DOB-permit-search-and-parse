@@ -73,7 +73,8 @@ BIS_COLUMNS = [
     'owner_business_type', 'non_profit', 'owner_business_name', 'owner_first_name',
     'owner_last_name', 'owner_house_number', 'owner_street_name', 'owner_city',
     'owner_state', 'owner_zip_code', 'owner_phone', 'dob_run_date', 'permit_si_no',
-    'council_district', 'census_tract', 'nta_name', 'api_source', 'api_last_updated'
+    'council_district', 'census_tract', 'nta_name', 'api_source', 'api_last_updated',
+    'project_key', 'participant_role', 'participant_role_confidence'
 ]
 
 
@@ -239,7 +240,13 @@ def prepare_rows_bis(permits: List[Dict]) -> Tuple[List[tuple], int]:
                 trunc(p.get('gis_census_tract'), 20),
                 trunc(p.get('gis_nta_name'), 255),
                 'nyc_open_data',
-                now
+                now,
+                f"BIS:{p.get('job__') or permit_no}"[:140],
+                'permittee' if (
+                    p.get('permittee_s_business_name') or
+                    p.get('permittee_s_first_name') or p.get('permittee_s_last_name')
+                ) else 'owner',
+                1.0,
             )
             rows.append(row)
         except Exception:

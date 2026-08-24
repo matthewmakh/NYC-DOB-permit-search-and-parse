@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ contractor_name }} — Contractor Profile{% endblock %}
+{% block title %}{{ contractor_name }} — Permit Participant Profile{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
@@ -13,10 +13,11 @@
         <div class="dossier-head-inner">
             <div class="dossier-head-row">
                 <div class="dossier-title-block">
-                    <div class="dossier-crumbs"><a href="/contractors">&larr; Contractor directory</a></div>
+                    <div class="dossier-crumbs"><a href="/contractors">&larr; Participant directory</a></div>
                     <h1 id="contractorName">{{ contractor_name }}</h1>
                     <div class="dossier-chips">
                         <span class="id-chip accent mono" id="contractorLicense">License: Loading&hellip;</span>
+                        <span class="id-chip" id="participantRoles" style="display: none;"></span>
                         <span class="id-chip" id="mostRecentJob">Most recent: &ndash;</span>
                         <span class="id-chip" id="jobTypes" style="display: none;"></span>
                     </div>
@@ -112,7 +113,7 @@
 <script>
     {# tojson, not autoescape: names like "T&S HOME IMPROVEMENT INC" must
        reach JS as a real "&" — HTML-escaping here sent "T&amp;S" to the API,
-       which knows no such contractor. #}
+       which knows no such permit participant. #}
     const CONTRACTOR_NAME = {{ contractor_name|tojson }};
 </script>
 {% endblock %}

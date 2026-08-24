@@ -19,6 +19,8 @@ let ownFilters = {
     minActiveJobs: null,
     minProperties: null,
     maxProperties: null,
+    participantRole: '',
+    probableGcOnly: false,
 };
 const OWN_FILTER_PARAMS = {
     minJobs: 'min_jobs',
@@ -58,6 +60,17 @@ function initializeDirectoryPage() {
         currentPage = 1;
         loadContractors();
     }, 500));
+
+    document.getElementById('participantRole')?.addEventListener('change', (e) => {
+        ownFilters.participantRole = e.target.value;
+        currentPage = 1;
+        loadContractors();
+    });
+    document.getElementById('probableGcOnly')?.addEventListener('change', (e) => {
+        ownFilters.probableGcOnly = e.target.checked;
+        currentPage = 1;
+        loadContractors();
+    });
 
     // Contractor-scale filters
     Object.keys(OWN_FILTER_PARAMS).forEach(id => {
@@ -149,6 +162,8 @@ async function loadContractors() {
             const value = ownFilters[id];
             if (value !== null && value !== undefined) params.append(param, value);
         });
+        if (ownFilters.participantRole) params.set('role', ownFilters.participantRole);
+        if (ownFilters.probableGcOnly) params.set('probable_gc', 'true');
         
         const response = await fetch(`/api/contractors/search?${params}`);
         const data = await response.json();
@@ -212,7 +227,7 @@ function displayContractors(contractors) {
         grid.innerHTML = `
             <div class="grid-empty">
                 <i class="fas fa-search"></i>
-                <h3>No contractors found</h3>
+                <h3>No permit participants found</h3>
                 <p>Try adjusting your search criteria</p>
             </div>
         `;
@@ -229,6 +244,15 @@ function displayContractors(contractors) {
                     <h3>${escapeHtml(contractor.contractor_name)}</h3>
                     ${contractor.license ? `
                         <div class="contractor-license">License ${escapeHtml(contractor.license)}</div>
+                    ` : ''}
+                    ${contractor.participant_roles ? `
+                        <div class="contractor-license">${escapeHtml(contractor.participant_roles.replaceAll('_', ' '))}</div>
+                    ` : ''}
+                    ${contractor.role_confidence != null ? `
+                        <div class="contractor-license">Role confidence ${Math.round(Number(contractor.role_confidence) * 100)}%${
+                            contractor.contractor_confidence != null
+                                ? ` · contractor confidence ${Math.round(Number(contractor.contractor_confidence) * 100)}%`
+                                : ''}</div>
                     ` : ''}
                 </div>
             </div>
@@ -283,6 +307,12 @@ function clearFilters() {
         if (node) node.value = '';
         ownFilters[id] = null;
     });
+    const role = document.getElementById('participantRole');
+    const probableGc = document.getElementById('probableGcOnly');
+    if (role) role.value = '';
+    if (probableGc) probableGc.checked = false;
+    ownFilters.participantRole = '';
+    ownFilters.probableGcOnly = false;
     const search = document.getElementById('contractorSearch');
     if (search) search.value = '';
     currentSearch = '';
@@ -370,7 +400,7 @@ async function loadContractorProfile() {
             renderProfileWorkMix(data.permits);
             renderBoroughsFact(data.buildings);
         } else {
-            showError(document.querySelector('.profile-header'), data.error || 'Contractor not found');
+            showError(document.querySelector('.profile-header'), data.error || 'Permit participant not found');
         }
     } catch (error) {
         console.error('Error loading contractor profile:', error);
@@ -389,6 +419,14 @@ function displayContractorStats(contractor) {
     document.getElementById('contractorName').textContent = contractor.contractor_name;
     document.getElementById('contractorLicense').textContent = contractor.license ?
         `Licence ${contractor.license}` : 'No licence on file';
+    const participantRoles = document.getElementById('participantRoles');
+    if (participantRoles && contractor.participant_roles) {
+        const confidence = contractor.role_confidence != null
+            ? ` · ${Math.round(Number(contractor.role_confidence) * 100)}% role confidence`
+            : '';
+        participantRoles.textContent = contractor.participant_roles.replaceAll('_', ' ') + confidence;
+        participantRoles.style.display = '';
+    }
 
     // Licence rail card only appears when there is a number to show.
     const licenseCard = document.getElementById('licenseCard');

@@ -54,6 +54,10 @@ DATASETS = {
     'dob_permits_bis':     'ipu4-2q9a',
     'dob_now_filings':     'w9ak-ipjd',
     'dob_now_permits':     'rbx6-tga4',
+    'dob_now_electrical':  'dm9a-ab7w',
+    'dob_now_electrical_details': 'xmmq-y7za',
+    'dob_now_elevator':    'kfp4-dz4h',
+    'city_record':         'dg92-zbpx',
     'dob_violations':      '3h2n-5cm9',
     'ecb_violations':      '6bgk-3dad',
     'dob_complaints':      'eabe-havv',   # DOB Complaints Received

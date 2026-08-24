@@ -106,6 +106,14 @@ def main():
     if not results['migrations']:
         print_error("Migration failed - cannot safely continue")
         sys.exit(1)
+
+    results['project_migration'] = run_script(
+        'migrate_add_project_intelligence.py',
+        'Create role-aware permit participants, consolidated projects, and sales alerts'
+    )
+    if not results['project_migration']:
+        print_error("Project intelligence migration failed - cannot safely continue")
+        sys.exit(1)
     
     # ===== STEP 1: Link Permits to Buildings =====
     print_step(1, "Link Permits to Buildings (BBL Generation)")
@@ -196,6 +204,15 @@ def main():
     )
     if not results['property_jobs']:
         print_warning("Property enrichment queue processing failed")
+
+    # ===== STEP 9: Store and optionally deliver salesperson watchlist digest =====
+    print_step(9, "Generate Sales Watchlist Digests")
+    results['watchlist_digests'] = run_script(
+        'generate_watchlist_digests.py',
+        'Store daily account/project changes and send them to the configured webhook'
+    )
+    if not results['watchlist_digests']:
+        print_warning("Watchlist digest generation failed - enrichment is still complete")
     
     # ===== SUMMARY =====
     end_time = datetime.now()
@@ -213,7 +230,7 @@ def main():
         print(f"  {step:12} {status}")
     
     # Overall status
-    critical_steps = ['migrations', 'step1', 'step2']  # Must succeed
+    critical_steps = ['migrations', 'project_migration', 'step1', 'step2']  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
     
     if critical_failed:

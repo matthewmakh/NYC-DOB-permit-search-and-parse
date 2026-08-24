@@ -21,7 +21,11 @@
             <div class="nav-links">
                 <a href="/" class="nav-link {% if active_page == 'home' %}active{% endif %}">Home</a>
                 <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">Properties</a>
-                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">Contractors</a>
+                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">Participants</a>
+                <a href="/buyers" class="nav-link {% if active_page == 'buyers' %}active{% endif %}">Buyers</a>
+                <a href="/alerts" class="nav-link {% if active_page == 'alerts' %}active{% endif %}">Alerts</a>
+                <a href="/signals" class="nav-link {% if active_page == 'signals' %}active{% endif %}">Signals</a>
+                <a href="/watchlists" class="nav-link {% if active_page == 'watchlists' %}active{% endif %}">Watchlists</a>
             </div>
             <div class="nav-actions">
                 {% block nav_actions %}{% endblock %}

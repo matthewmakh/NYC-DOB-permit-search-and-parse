@@ -23,6 +23,8 @@ simply shows fewer plays instead of erroring.
 #   required_columns  buildings columns that must exist to offer the play
 #   recommended_sort  optional {'by': ..., 'order': ...} using API sort keys
 #   audience          'investors' | 'contractors' | 'both' (display chip)
+#   family            optional UI grouping; existing plays remain "property_intel"
+#   required_permit_columns  optional permit columns needed by the WHERE clause
 
 PLAYS = [
     {
@@ -185,6 +187,136 @@ PLAYS = [
             'Coverage here is estimated by size; confirm against DOB\'s covered-buildings list before quoting.',
         ],
     },
+    # Smart Installers plays are additive.  They use the same property filter,
+    # export, and enrichment pipeline as the existing investor/contractor plays
+    # but are grouped separately in the UI and target building-technology work.
+    {
+        'id': 'si-major-project-pipeline',
+        'name': 'Major project pipeline',
+        'description': ('Recent DOB projects with at least $250,000 of stated work. '
+                        'These justify a whole-building technology conversation instead of a device quote.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                  "AND p.initial_cost >= 250000 "
+                  "AND COALESCE(p.current_status_date::date, p.filing_date, p.issue_date) "
+                  ">= CURRENT_DATE - INTERVAL '540 days')"),
+        'required_columns': [],
+        'required_permit_columns': ['initial_cost', 'current_status_date'],
+        'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
+        'how_to_use': [
+            'Open the latest consolidated DOB project and confirm the proposed use, units, stories, and stage.',
+            'Map the owner/developer, GC, architect, engineer, and electrical contractor before outreach.',
+            'Lead with a coordinated low-voltage package: network, Wi-Fi, cameras, access, intercom, and infrastructure.',
+        ],
+    },
+    {
+        'id': 'si-building-expansion',
+        'name': 'Buildings adding units or floors',
+        'description': ('Projects where proposed stories or dwelling units exceed existing conditions. '
+                        'Growth creates new pathways, doors, residents, network loads, and security scope.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND ("
+                  "p.proposed_stories_count > p.existing_stories_count OR "
+                  "p.proposed_dwelling_units > p.existing_dwelling_units))"),
+        'required_columns': [],
+        'required_permit_columns': [
+            'existing_stories_count', 'proposed_stories_count',
+            'existing_dwelling_units', 'proposed_dwelling_units',
+        ],
+        'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
+        'how_to_use': [
+            'Prioritize the largest unit and story deltas and projects still in filing or approval.',
+            'Ask for the technology, reflected-ceiling, door, and electrical drawings before pricing.',
+            'Offer a single coordinated riser, MDF/IDF, access, intercom, surveillance, and Wi-Fi scope.',
+        ],
+    },
+    {
+        'id': 'si-electrical-trigger',
+        'name': 'Electrical capacity and wiring triggers',
+        'description': ('DOB NOW Electrical filings showing service work, general wiring, temporary power, '
+                        'HVAC/boiler wiring, or new meters—strong evidence that a building project is moving.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND "
+                  "p.api_source = 'dob_now_electrical' AND ("
+                  "p.electrical_service_work OR p.electrical_general_wiring OR "
+                  "p.electrical_temp_construction_service OR p.electrical_temp_light_power OR "
+                  "p.electrical_hvac_wiring OR p.electrical_boiler_burner_wiring OR "
+                  "COALESCE(p.electrical_new_meters, 0) > 0))"),
+        'required_columns': [],
+        'required_permit_columns': [
+            'electrical_service_work', 'electrical_general_wiring',
+            'electrical_temp_construction_service', 'electrical_temp_light_power',
+            'electrical_hvac_wiring', 'electrical_boiler_burner_wiring',
+            'electrical_new_meters',
+        ],
+        'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
+        'how_to_use': [
+            'Use temporary power as an early construction-stage trigger and new meters as a scale signal.',
+            'Call the owner/GC about the building package; treat the named electrician as a trade partner, not the buyer by default.',
+            'Check whether low-voltage pathways, power, door hardware interfaces, and network rooms are coordinated.',
+        ],
+    },
+    {
+        'id': 'si-elevator-modernization',
+        'name': 'Elevator modernization and access triggers',
+        'description': ('DOB NOW Elevator applications for new installations, alterations, '
+                        'replacements, or removals. These projects create access, intercom, '
+                        'camera, network, life-safety, and electrical coordination opportunities.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                  "AND p.api_source = 'dob_now_elevator' "
+                  "AND p.filing_date >= CURRENT_DATE - INTERVAL '730 days' "
+                  "AND COALESCE(p.elevator_work_type, '') ~* "
+                  "'(new installation|alteration|replacement|remove|dismantle)')"),
+        'required_columns': [],
+        'required_permit_columns': ['elevator_device_type', 'elevator_work_type'],
+        'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
+        'how_to_use': [
+            'Prioritize active new installations and alteration/replacement filings over signed-off work.',
+            'Map the owner, elevator applicant, design professional, and electrical contractor.',
+            'Qualify destination dispatch, credential interfaces, cab cameras/intercom, network pathways, and lobby access scope.',
+        ],
+    },
+    {
+        'id': 'si-tech-scope-keywords',
+        'name': 'Technology scope already visible',
+        'description': ('Recent descriptions mentioning intercom, cameras, access control, telecom, '
+                        'data, Wi-Fi, security, or door systems. These are explicit or adjacent-fit opportunities.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                  "AND COALESCE(p.filing_date, p.issue_date) >= CURRENT_DATE - INTERVAL '730 days' "
+                  "AND COALESCE(p.work_description, '') ~* "
+                  "'(intercom|camera|cctv|access control|telecom|low[ -]?voltage|data cabl|wi[ -]?fi|security|door hardware)')"),
+        'required_columns': [],
+        'required_permit_columns': ['work_description'],
+        'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
+        'how_to_use': [
+            'Read the description in context; a keyword is a reason to research, not proof of an open bid.',
+            'Find who owns the complete technology scope and whether it has already been awarded.',
+            'If awarded, pursue adjacent systems, coordination, service, monitoring, and future phases.',
+        ],
+    },
+    {
+        'id': 'si-turnover-technology',
+        'name': 'Turnover and operations handoff',
+        'description': ('Certificates of Occupancy in the last year identify buildings moving from construction '
+                        'to lease-up and operations—when access, intercom, cameras, Wi-Fi, and support must work reliably.'),
+        'audience': 'contractors',
+        'family': 'smart_installers',
+        'where': "b.latest_co_date >= CURRENT_DATE - INTERVAL '365 days'",
+        'required_columns': ['latest_co_date'],
+        'recommended_sort': {'by': 'co_date', 'order': 'desc'},
+        'how_to_use': [
+            'Identify the owner, operator, and property manager taking possession—not only the construction team.',
+            'Offer commissioning, closeout cleanup, credentials, remote support, monitoring, and service agreements.',
+            'Use completed sites to expand into the buyer’s other buildings.',
+        ],
+    },
 ]
 
 _PLAYS_BY_ID = {p['id']: p for p in PLAYS}
@@ -192,20 +324,26 @@ _PLAYS_BY_ID = {p['id']: p for p in PLAYS}
 
 def public_play(play):
     """The play as sent to the frontend (everything except the SQL)."""
-    return {k: v for k, v in play.items() if k not in ('where', 'required_columns')}
+    return {k: v for k, v in play.items()
+            if k not in ('where', 'required_columns', 'required_permit_columns')}
 
 
-def available_plays(existing_columns):
+def available_plays(existing_columns, permit_columns=None):
     """Plays whose required columns exist in this database."""
+    permit_columns = permit_columns or set()
     return [p for p in PLAYS
-            if all(col in existing_columns for col in p['required_columns'])]
+            if all(col in existing_columns for col in p['required_columns'])
+            and all(col in permit_columns for col in p.get('required_permit_columns', []))]
 
 
-def get_play(play_id, existing_columns):
+def get_play(play_id, existing_columns, permit_columns=None):
     """The play if it exists AND its columns are available, else None."""
     play = _PLAYS_BY_ID.get(play_id)
     if not play:
         return None
     if not all(col in existing_columns for col in play['required_columns']):
+        return None
+    permit_columns = permit_columns or set()
+    if not all(col in permit_columns for col in play.get('required_permit_columns', [])):
         return None
     return play

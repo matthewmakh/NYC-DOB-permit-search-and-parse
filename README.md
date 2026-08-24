@@ -23,6 +23,13 @@
 
 Scrapes NYC DOB permit data, enriches it with property intelligence, and displays it in an interactive dashboard.
 
+The current multi-source importer covers legacy BIS permits, DOB NOW Build job
+filings, DOB NOW approved permits, DOB NOW Electrical applications and scope
+details, DOB NOW Elevator applications, and City Record procurement notices.
+Filing and permit stages are retained as raw records and consolidated into one
+project for sales review. City Record notices remain standalone pre-permit
+signals until an evidence-backed project graph can connect them.
+
 ### Key Features
 
 - ✅ **Permit Scraping**: Gets permit data from NYC DOB BIS website
@@ -126,6 +133,12 @@ NYC_GEOCLIENT_APP_KEY=your_app_key
 BUILDING_BATCH_SIZE=500  # Buildings per enrichment run
 API_DELAY=0.1            # Seconds between API calls
 GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
+
+# Optional sales automations
+CRM_WEBHOOK_URL=https://your-automation-endpoint.example/crm
+CRM_WEBHOOK_BEARER_TOKEN=optional-secret
+WATCHLIST_DIGEST_WEBHOOK_URL=https://your-automation-endpoint.example/digest
+WATCHLIST_DIGEST_WEBHOOK_BEARER_TOKEN=optional-secret
 ```
 
 ### Running Scripts Locally
@@ -137,9 +150,29 @@ source venv-permit/bin/activate
 # Run the incremental permit scraper
 python permit_scraper_api.py --days 14
 
+# Run only DOB NOW Build + Electrical sources
+python permit_scraper_api.py --dob-now-only --days 14
+
+# Run the same source set used by the production permit-intelligence cron
+python permit_scraper_api.py --sources dob_now_filings dob_now_approved dob_now_electrical dob_now_electrical_details dob_now_elevator city_record --days 14
+
 # One-time repair after changing DOB NOW permit identity/owner mappings.
 # This is idempotent and can be resumed by rerunning the same command.
 python permit_scraper_api.py --dob-now-only --start 2016-01-01 --end YYYY-MM-DD
+
+# Bounded, restartable project/signal backfill; Electrical and Elevator
+# naturally begin at their 2017 launches. Electrical Details follows its
+# dated parent applications because the child feed has no date column.
+python backfill_project_intelligence.py --start 2016-01-01 --end YYYY-MM-DD --window-days 31
+
+# Consolidate rows already in PostgreSQL without re-fetching APIs. The cursor
+# form resumes after the last project key printed by a prior run.
+python backfill_project_intelligence.py --refresh-existing-only --project-batch-size 1000
+python backfill_project_intelligence.py --refresh-existing-only --project-batch-size 1000 --after-project-key DOBNOW:M01241021
+
+# Smaller transactions are more resilient through Railway's public TCP proxy.
+# A run inside Railway can use the faster private DATABASE_URL.
+PERMIT_BATCH_SIZE=1000 python backfill_project_intelligence.py --start 2025-01-01 --end YYYY-MM-DD --window-days 31
 
 # Extract contacts (after scraper)
 python add_permit_contacts.py
@@ -147,11 +180,20 @@ python add_permit_contacts.py
 # Run full enrichment pipeline
 python run_enrichment_pipeline.py
 
+# Generate/store the salesperson watchlist digest on demand
+python generate_watchlist_digests.py
+
 # Run dashboard locally
 cd dashboard_html
 python app.py
 # Visit: http://localhost:5001
 ```
+
+Before a full-history run, compare `pg_database_size(current_database())` with
+the Postgres volume limit. The 2016-present feeds contain roughly 944k Build
+filings, 988k approved permits, 585k electrical applications, 1.25m electrical
+detail rows, 71k elevator applications, and 56k filtered City Record notices.
+Expand the volume or backfill recent years first when headroom is tight.
 
 ### Testing Individual Steps
 

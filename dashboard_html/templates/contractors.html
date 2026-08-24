@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contractors — NYC Real Estate Intel</title>
+    <title>Permit Participants — NYC Real Estate Intel</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
@@ -20,7 +20,8 @@
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/properties" class="nav-link">Properties</a>
-                <a href="/contractors" class="nav-link active">Contractors</a>
+                <a href="/contractors" class="nav-link active">Participants</a>
+                <a href="/alerts" class="nav-link">Alerts</a>
             </div>
             <div class="nav-actions">
                 <a href="/auth/logout" class="btn btn-icon" title="Log out">
@@ -42,7 +43,26 @@
             <div class="filter-section">
                 <h3>Search</h3>
                 <input type="text" id="contractorSearch" class="filter-input"
-                    placeholder="Contractor name or licence number">
+                    placeholder="Company, person, or licence number">
+            </div>
+
+            <div class="filter-section">
+                <h3>Participant role</h3>
+                <select id="participantRole" class="filter-input">
+                    <option value="">All roles</option>
+                    <option value="permittee">Permittee</option>
+                    <option value="filing_applicant">Filing applicant</option>
+                    <option value="permit_applicant">Permit applicant</option>
+                    <option value="applicant">Applicant</option>
+                    <option value="legacy_applicant">Legacy applicant (role unknown)</option>
+                    <option value="filing_representative">Filing representative</option>
+                    <option value="owner">Owner</option>
+                </select>
+                <label class="filter-checkbox" style="margin-top: 10px;">
+                    <input type="checkbox" id="probableGcOnly">
+                    Probable general contractors only
+                </label>
+                <small class="filter-hint">Based on an explicit permittee role and GC licence type—not the generic applicant field.</small>
             </div>
 
             {% with page = 'contractors' %}{% include "_filter_sections.html" %}{% endwith %}
@@ -76,12 +96,12 @@
             <div class="page-head">
                 <div class="page-head-row">
                     <div>
-                        <h1>Contractors</h1>
-                        <p>Every contractor pulling permits in NYC, with their work history and portfolio.</p>
+                        <h1>Permit participants</h1>
+                        <p>Role-aware permittees, filing applicants, owners, and filing representatives. Use “probable GC” when you need a defensible contractor list.</p>
                     </div>
                     <div class="head-metric">
                         <div class="stat-value" id="totalContractors">&ndash;</div>
-                        <div class="stat-label">Matching contractors</div>
+                        <div class="stat-label">Matching participants</div>
                     </div>
                 </div>
             </div>

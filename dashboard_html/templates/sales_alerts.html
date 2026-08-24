@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Sales Alerts — NYC Real Estate Intel{% endblock %}
+
+{% block extra_css %}
+<style>
+    .alerts-shell { max-width: 1180px; margin: 0 auto; padding: 36px 24px 64px; }
+    .alerts-head { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }
+    .alerts-head h1 { margin: 0 0 8px; }
+    .alerts-head p { margin: 0; color: #667085; max-width: 720px; }
+    .alert-filters { display: flex; gap: 10px; flex-wrap: wrap; }
+    .alert-filter { border: 1px solid #d0d5dd; background: #fff; border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+    .alert-filter.active { background: #101828; color: #fff; border-color: #101828; }
+    .alert-list { display: grid; gap: 12px; }
+    .alert-card { background: #fff; border: 1px solid #e4e7ec; border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+    .alert-card-head { display: flex; justify-content: space-between; gap: 16px; }
+    .alert-card h3 { margin: 0 0 7px; font-size: 17px; }
+    .alert-card p { margin: 0; color: #475467; line-height: 1.5; }
+    .alert-badge { white-space: nowrap; align-self: flex-start; color: #175cd3; background: #eff8ff; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 650; }
+    .alert-details { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #eaecf0; color: #667085; font-size: 13px; }
+    .alert-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .alert-actions button { border: 1px solid #d0d5dd; border-radius: 7px; background: #fff; padding: 8px 11px; cursor: pointer; }
+    .alert-actions .primary { background: #1570ef; border-color: #1570ef; color: #fff; }
+    .alerts-empty { text-align: center; color: #667085; padding: 60px 20px; background: #fff; border: 1px dashed #d0d5dd; border-radius: 12px; }
+    @media (max-width: 720px) { .alerts-head { align-items: start; flex-direction: column; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="alerts-shell">
+    <div class="alerts-head">
+        <div>
+            <h1>DOB sales alerts</h1>
+            <p>New projects, status movement, and issued permits—grouped at the project level so the rep reviews a buying event once, not three source records.</p>
+        </div>
+        <div class="alert-filters" aria-label="Alert status">
+            <button class="alert-filter active" data-status="new">New <span id="newCount"></span></button>
+            <button class="alert-filter" data-status="reviewed">Reviewed</button>
+            <button class="alert-filter" data-status="dismissed">Dismissed</button>
+            <button class="alert-filter" data-status="all">All</button>
+        </div>
+    </div>
+    <div id="alertList" class="alert-list"><div class="alerts-empty">Loading project alerts…</div></div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentAlertStatus = 'new';
+const money = value => value ? new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 0}).format(value) : null;
+const safe = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+
+async function loadAlerts() {
+    const list = document.getElementById('alertList');
+    list.innerHTML = '<div class="alerts-empty">Loading project alerts…</div>';
+    const response = await fetch(`/api/sales-alerts?status=${encodeURIComponent(currentAlertStatus)}`);
+    const data = await response.json();
+    if (!data.success) { list.innerHTML = `<div class="alerts-empty">${safe(data.error || 'Could not load alerts')}</div>`; return; }
+    document.getElementById('newCount').textContent = data.counts?.new ? `(${data.counts.new})` : '';
+    if (!data.alerts.length) { list.innerHTML = '<div class="alerts-empty">No alerts in this queue.</div>'; return; }
+    list.innerHTML = data.alerts.map(alert => {
+        const storyDelta = alert.proposed_stories_count != null && alert.existing_stories_count != null
+            ? `${alert.existing_stories_count} → ${alert.proposed_stories_count} stories` : null;
+        const unitDelta = alert.proposed_dwelling_units != null && alert.existing_dwelling_units != null
+            ? `${alert.existing_dwelling_units} → ${alert.proposed_dwelling_units} units` : null;
+        const details = [alert.job_number && `Job ${alert.job_number}`, alert.initial_cost && money(alert.initial_cost), storyDelta, unitDelta,
+            alert.has_electrical_filing && `Electrical filing${alert.electrical_new_meters ? ` · ${alert.electrical_new_meters} new meters` : ''}`,
+            alert.electrical_scope_categories && `Electrical scope: ${alert.electrical_scope_categories}`,
+            alert.has_elevator_filing && `Elevator: ${alert.elevator_device_types || 'filing'}${alert.elevator_work_types ? ` · ${alert.elevator_work_types}` : ''}`,
+            alert.applicant_business_name && `Applicant: ${alert.applicant_business_name}`,
+            (alert.design_professional_business_name || alert.design_professional_person_name) && `Design professional: ${alert.design_professional_business_name || alert.design_professional_person_name}`,
+            alert.filing_representative_business_name && `Filing rep: ${alert.filing_representative_business_name}`].filter(Boolean);
+        return `<article class="alert-card">
+            <div class="alert-card-head"><div><h3>${safe(alert.title)}</h3><p>${safe(alert.summary)}</p></div><span class="alert-badge">${safe(alert.alert_type.replaceAll('_', ' '))}</span></div>
+            <div class="alert-details">${details.map(item => `<span>${safe(item)}</span>`).join('')}</div>
+            <div class="alert-actions">
+                <button onclick="watchProject('${encodeURIComponent(alert.project_key)}', '${encodeURIComponent(alert.address || alert.project_key)}')">Watch project</button>
+                <a href="/api/crm/export?project_key=${encodeURIComponent(alert.project_key)}" style="border:1px solid #d0d5dd;border-radius:7px;background:#fff;padding:8px 11px;color:#344054;text-decoration:none">Export to CRM</a>
+                <button onclick="pushProjects(['${encodeURIComponent(alert.project_key)}'])">Push to CRM</button>
+                ${alert.status !== 'reviewed' ? `<button class="primary" onclick="updateAlert(${alert.id}, 'reviewed')">Mark reviewed</button>` : ''}
+                ${alert.status !== 'dismissed' ? `<button onclick="updateAlert(${alert.id}, 'dismissed')">Dismiss</button>` : ''}
+                ${alert.status !== 'new' ? `<button onclick="updateAlert(${alert.id}, 'new')">Reopen</button>` : ''}
+            </div>
+        </article>`;
+    }).join('');
+}
+
+async function updateAlert(id, status) {
+    await fetch(`/api/sales-alerts/${id}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status})});
+    loadAlerts();
+}
+async function watchProject(encodedKey, encodedName) {
+    const projectKey = decodeURIComponent(encodedKey);
+    const displayName = decodeURIComponent(encodedName);
+    const response = await fetch('/api/watchlists/items', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({entity_type: 'project', entity_key: projectKey, display_name: displayName})
+    });
+    const data = await response.json();
+    alert(data.success ? 'Project added to your watchlist.' : (data.error || 'Could not add watch'));
+}
+async function pushProjects(encodedKeys) {
+    const projectKeys = encodedKeys.map(decodeURIComponent);
+    const response = await fetch('/api/crm/push', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({project_keys: projectKeys})
+    });
+    const data = await response.json();
+    alert(data.success ? `${data.pushed} project(s) pushed to CRM.` : (data.error || 'CRM push failed'));
+}
+document.querySelectorAll('.alert-filter').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('.alert-filter').forEach(node => node.classList.remove('active'));
+    button.classList.add('active'); currentAlertStatus = button.dataset.status; loadAlerts();
+}));
+loadAlerts();
+</script>
+{% endblock %}

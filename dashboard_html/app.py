@@ -291,8 +291,9 @@ PAGE_NAMES = {
     'search_results': 'Search Results',
     'property_detail': 'Property Profile',
     'properties_page': 'Properties',
-    'contractors_page': 'Contractors',
-    'contractor_profile': 'Contractor Profile',
+    'contractors_page': 'Permit Participants',
+    'contractor_profile': 'Participant Profile',
+    'sales_alerts_page': 'Sales Alerts',
 }
 
 # Endpoints to skip logging (health checks, static files, etc.)
@@ -3326,6 +3327,7 @@ def _resolve_filter_building_ids(args, limit=None):
 # ---------------------------------------------------------------------------
 
 _buildings_columns_cache = {'at': 0.0, 'cols': set()}
+_permits_columns_cache = {'at': 0.0, 'cols': set()}
 
 
 def _buildings_columns():
@@ -3345,12 +3347,29 @@ def _buildings_columns():
     return _buildings_columns_cache['cols']
 
 
+def _permits_columns():
+    """Column names on permits, cached for 5 minutes."""
+    now = time.time()
+    if now - _permits_columns_cache['at'] > 300:
+        try:
+            with DatabaseConnection() as cur:
+                cur.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'permits'
+                """)
+                _permits_columns_cache['cols'] = {r['column_name'] for r in cur.fetchall()}
+                _permits_columns_cache['at'] = now
+        except Exception as e:
+            print(f"permits-columns probe failed: {e}")
+    return _permits_columns_cache['cols']
+
+
 def _resolve_play_where(play_id):
     """(where_fragment, error) for a ?play= param. Empty play_id -> (None, None)."""
     if not play_id:
         return None, None
     from plays import get_play
-    play = get_play(play_id, _buildings_columns())
+    play = get_play(play_id, _buildings_columns(), _permits_columns())
     if not play:
         return None, f"Unknown or unavailable play: {play_id}"
     return play['where'], None
@@ -3380,7 +3399,7 @@ def api_property_plays():
     """Prebuilt plays available on this database, with live match counts."""
     from plays import available_plays, public_play
     try:
-        plays_list = available_plays(_buildings_columns())
+        plays_list = available_plays(_buildings_columns(), _permits_columns())
         counts = {}
         if plays_list:
             count_exprs = ', '.join(
@@ -4649,6 +4668,585 @@ def contractors_page():
     )
 
 
+@app.route('/alerts')
+@login_required
+def sales_alerts_page():
+    """Render the salesperson-facing DOB project alert queue."""
+    return render_template('sales_alerts.html', active_page='alerts')
+
+
+@app.route('/api/sales-alerts')
+@login_required
+def api_sales_alerts():
+    """Return prioritized, deduplicated project events for daily review."""
+    try:
+        status = request.args.get('status', 'new').strip().lower()
+        alert_type = request.args.get('type', '').strip().lower()
+        limit = min(500, max(1, request.args.get('limit', 100, type=int)))
+        where = []
+        params = []
+        if status and status != 'all':
+            where.append('sa.status = %s')
+            params.append(status)
+        if alert_type:
+            where.append('sa.alert_type = %s')
+            params.append(alert_type)
+        where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+
+        with DatabaseConnection() as cur:
+            cur.execute(f"""
+                SELECT sa.id, sa.alert_type, sa.title, sa.summary,
+                       sa.old_value, sa.new_value, sa.event_at, sa.status,
+                       sa.assigned_to, pr.id AS project_id, pr.project_key,
+                       pr.job_number, pr.address, pr.borough, pr.bbl,
+                       pr.job_type, pr.initial_cost,
+                       pr.existing_stories_count, pr.proposed_stories_count,
+                       pr.existing_dwelling_units, pr.proposed_dwelling_units,
+                       pr.current_status, pr.current_status_date,
+                       pr.owner_business_name, pr.applicant_business_name,
+                       pr.applicant_professional_title,
+                       pr.filing_representative_business_name,
+                       pr.design_professional_business_name,
+                       pr.design_professional_person_name,
+                       pr.design_professional_license,
+                       pr.has_electrical_filing, pr.electrical_service_work,
+                       pr.electrical_general_wiring, pr.electrical_lighting_work,
+                       pr.electrical_temp_power,
+                       pr.electrical_hvac_or_boiler_wiring,
+                       pr.electrical_new_meters,
+                       pr.electrical_detail_count,
+                       pr.electrical_scope_categories,
+                       pr.electrical_floor_names,
+                       pr.has_elevator_filing,
+                       pr.elevator_device_types,
+                       pr.elevator_work_types
+                FROM sales_alerts sa
+                JOIN projects pr ON pr.id = sa.project_id
+                {where_sql}
+                ORDER BY sa.event_at DESC, sa.id DESC
+                LIMIT %s
+            """, params + [limit])
+            alerts = [dict(row) for row in cur.fetchall()]
+            cur.execute("""
+                SELECT status, COUNT(*) AS count
+                FROM sales_alerts GROUP BY status
+            """)
+            counts = {row['status']: row['count'] for row in cur.fetchall()}
+
+        return jsonify({'success': True, 'alerts': alerts, 'counts': counts})
+    except Exception as e:
+        print(f"Sales alerts API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sales-alerts/<int:alert_id>', methods=['POST'])
+@login_required
+def api_update_sales_alert(alert_id):
+    """Review, dismiss, reopen, or assign an alert."""
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get('status', '')).strip().lower()
+    if status not in ('new', 'reviewed', 'dismissed'):
+        return jsonify({'success': False, 'error': 'Invalid alert status'}), 400
+    assigned_to = str(payload.get('assigned_to', '')).strip() or None
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                UPDATE sales_alerts
+                SET status = %s,
+                    assigned_to = COALESCE(%s, assigned_to),
+                    reviewed_at = CASE WHEN %s = 'new' THEN NULL
+                                       ELSE CURRENT_TIMESTAMP END
+                WHERE id = %s
+                RETURNING id, status, assigned_to, reviewed_at
+            """, (status, assigned_to, status, alert_id))
+            updated = cur.fetchone()
+        if not updated:
+            return jsonify({'success': False, 'error': 'Alert not found'}), 404
+        return jsonify({'success': True, 'alert': dict(updated)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# ACCOUNT-BASED SALES WORKSPACE: EXTERNAL SIGNALS, BUYERS, WATCHLISTS, CRM HANDOFF
+# ============================================================================
+
+@app.route('/signals')
+@login_required
+def external_signals_page():
+    return render_template('external_signals.html', active_page='signals')
+
+
+@app.route('/api/external-signals')
+@login_required
+def api_external_signals():
+    """Ranked City Record opportunities kept separate from DOB projects."""
+    days = min(3650, max(1, request.args.get('days', 90, type=int)))
+    min_score = min(100, max(0, request.args.get('min_score', 10, type=int)))
+    status = request.args.get('status', 'new').strip().lower()
+    limit = min(500, max(1, request.args.get('limit', 100, type=int)))
+    clauses = [
+        "source = 'city_record'",
+        "notice_date >= CURRENT_DATE - (%s || ' days')::interval",
+        "relevance_score >= %s",
+    ]
+    params = [days, min_score]
+    if status in ('new', 'reviewed', 'dismissed'):
+        clauses.append('review_status = %s')
+        params.append(status)
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute(f"""
+                SELECT id, source_record_id, signal_type, title, description,
+                       agency_name, category, selection_method, section_name, pin,
+                       notice_date, end_date, due_date, event_date, contact_name,
+                       contact_phone, contact_email, vendor_name, vendor_address,
+                       contract_amount, building_name, street_address_1,
+                       street_address_2, city, state, zip_code, source_url,
+                       relevance_score, relevance_reasons, review_status
+                FROM external_project_signals
+                WHERE {' AND '.join(clauses)}
+                ORDER BY relevance_score DESC,
+                         due_date ASC NULLS LAST, notice_date DESC, id DESC
+                LIMIT %s
+            """, params + [limit])
+            signals = [dict(row) for row in cur.fetchall()]
+        return jsonify({
+            'success': True,
+            'signals': signals,
+            'filters': {'days': days, 'min_score': min_score, 'status': status},
+            'separation_note': (
+                'City Record notices are pre-permit evidence. They are not linked to a DOB '
+                'project until the participant-graph phase can support that relationship.'
+            ),
+        })
+    except Exception as e:
+        print(f"External signals API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/external-signals/<int:signal_id>', methods=['PATCH'])
+@login_required
+def api_update_external_signal(signal_id):
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get('review_status', '')).strip().lower()
+    if status not in ('new', 'reviewed', 'dismissed'):
+        return jsonify({'success': False, 'error': 'Invalid review status'}), 400
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                UPDATE external_project_signals
+                SET review_status = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                RETURNING id, review_status
+            """, (status, signal_id))
+            row = cur.fetchone()
+        if not row:
+            return jsonify({'success': False, 'error': 'Signal not found'}), 404
+        return jsonify({'success': True, 'signal': dict(row)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+_BUYER_KEY_SQL = "UPPER(REGEXP_REPLACE(COALESCE(pr.owner_business_name, ''), '[^A-Za-z0-9]+', '', 'g'))"
+
+
+@app.route('/buyers')
+@login_required
+def repeat_buyers_page():
+    """Rank repeat project buyers/accounts rather than individual permit contacts."""
+    return render_template('repeat_buyers.html', active_page='buyers')
+
+
+@app.route('/api/repeat-buyers')
+@login_required
+def api_repeat_buyers():
+    """Return exact-entity repeat buyers ranked by distinct DOB projects."""
+    search = request.args.get('search', '').strip()
+    min_projects = min(100, max(2, request.args.get('min_projects', 2, type=int)))
+    limit = min(500, max(1, request.args.get('limit', 100, type=int)))
+    where = ["NULLIF(BTRIM(pr.owner_business_name), '') IS NOT NULL",
+             f"{_BUYER_KEY_SQL} NOT IN ('', 'NA', 'NONE', 'NOTAPPLICABLE', 'PR')"]
+    params = []
+    if search:
+        where.append('pr.owner_business_name ILIKE %s')
+        params.append(f'%{search}%')
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute(f"""
+                WITH buyer_projects AS (
+                    SELECT {_BUYER_KEY_SQL} AS buyer_key, pr.*
+                    FROM projects pr
+                    WHERE {' AND '.join(where)}
+                ), ranked AS (
+                    SELECT buyer_key,
+                           (ARRAY_AGG(owner_business_name ORDER BY
+                               current_status_date DESC NULLS LAST, id DESC))[1] AS buyer_name,
+                           COUNT(DISTINCT id) AS distinct_projects,
+                           COUNT(DISTINCT bbl) FILTER (WHERE bbl IS NOT NULL) AS distinct_properties,
+                           COUNT(*) FILTER (WHERE COALESCE(current_status_date::date,
+                               latest_issue_date, first_filing_date) >= CURRENT_DATE - INTERVAL '365 days')
+                               AS recent_projects_12m,
+                           COUNT(*) FILTER (WHERE has_electrical_filing OR
+                               has_elevator_filing OR
+                               COALESCE(work_description, '') ~*
+                               '(intercom|camera|cctv|access control|telecom|low[ -]?voltage|data cabl|wi[ -]?fi|security)')
+                               AS smart_fit_projects,
+                           COALESCE(SUM(initial_cost), 0) AS total_initial_cost,
+                           MAX(COALESCE(current_status_date, latest_issue_date::timestamp,
+                               first_filing_date::timestamp)) AS latest_activity,
+                           (ARRAY_AGG(DISTINCT address) FILTER (WHERE address IS NOT NULL))[1:5]
+                               AS sample_addresses,
+                           STRING_AGG(DISTINCT job_type, ', ' ORDER BY job_type)
+                               FILTER (WHERE job_type IS NOT NULL) AS job_types
+                    FROM buyer_projects
+                    GROUP BY buyer_key
+                )
+                SELECT *, ROUND((recent_projects_12m * 30
+                                  + distinct_projects * 12
+                                  + smart_fit_projects * 8
+                                  + LEAST(total_initial_cost / 100000.0, 50))::numeric, 1)
+                                  AS account_score
+                FROM ranked
+                WHERE distinct_projects >= %s
+                ORDER BY account_score DESC, recent_projects_12m DESC,
+                         distinct_projects DESC, latest_activity DESC NULLS LAST
+                LIMIT %s
+            """, params + [min_projects, limit])
+            buyers = [dict(row) for row in cur.fetchall()]
+        return jsonify({
+            'success': True,
+            'buyers': buyers,
+            'resolution_note': ('Grouped by normalized exact owner name only. Affiliated LLC and '
+                                'corporate-family resolution is intentionally deferred to the graph phase.'),
+        })
+    except Exception as e:
+        print(f"Repeat buyers API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _default_watchlist(cur, user_id):
+    cur.execute("""
+        SELECT id, name FROM watchlists
+        WHERE user_id = %s AND is_default = TRUE LIMIT 1
+    """, (user_id,))
+    watchlist = cur.fetchone()
+    if watchlist:
+        return watchlist
+    cur.execute("""
+        INSERT INTO watchlists (user_id, name, is_default)
+        VALUES (%s, 'My target accounts', TRUE)
+        ON CONFLICT DO NOTHING
+        RETURNING id, name
+    """, (user_id,))
+    watchlist = cur.fetchone()
+    if watchlist:
+        return watchlist
+    cur.execute("""
+        SELECT id, name FROM watchlists
+        WHERE user_id = %s ORDER BY is_default DESC, id LIMIT 1
+    """, (user_id,))
+    return cur.fetchone()
+
+
+@app.route('/watchlists')
+@login_required
+def watchlists_page():
+    return render_template('watchlists.html', active_page='watchlists')
+
+
+@app.route('/api/watchlists', methods=['GET', 'POST'])
+@login_required
+def api_watchlists():
+    user_id = g.user['id']
+    try:
+        with DatabaseConnection() as cur:
+            if request.method == 'POST':
+                payload = request.get_json(silent=True) or {}
+                name = str(payload.get('name', '')).strip()[:120]
+                if not name:
+                    return jsonify({'success': False, 'error': 'Watchlist name is required'}), 400
+                cur.execute("""
+                    INSERT INTO watchlists (user_id, name)
+                    VALUES (%s, %s) RETURNING id, name, is_default, digest_enabled
+                """, (user_id, name))
+                return jsonify({'success': True, 'watchlist': dict(cur.fetchone())})
+
+            _default_watchlist(cur, user_id)
+            cur.execute("""
+                SELECT w.id, w.name, w.is_default, w.digest_enabled,
+                       w.last_digest_at, w.created_at,
+                       COUNT(wi.id) AS item_count
+                FROM watchlists w
+                LEFT JOIN watchlist_items wi ON wi.watchlist_id = w.id
+                WHERE w.user_id = %s
+                GROUP BY w.id
+                ORDER BY w.is_default DESC, w.created_at
+            """, (user_id,))
+            watchlists = [dict(row) for row in cur.fetchall()]
+            cur.execute("""
+                SELECT wi.id, wi.watchlist_id, wi.entity_type, wi.entity_key,
+                       wi.display_name, wi.metadata, wi.created_at
+                FROM watchlist_items wi
+                JOIN watchlists w ON w.id = wi.watchlist_id
+                WHERE w.user_id = %s
+                ORDER BY wi.created_at DESC
+            """, (user_id,))
+            items = [dict(row) for row in cur.fetchall()]
+        return jsonify({'success': True, 'watchlists': watchlists, 'items': items})
+    except Exception as e:
+        print(f"Watchlists API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/watchlists/items', methods=['POST'])
+@login_required
+def api_add_watchlist_item():
+    payload = request.get_json(silent=True) or {}
+    entity_type = str(payload.get('entity_type', '')).strip().lower()
+    entity_key = str(payload.get('entity_key', '')).strip()[:255]
+    display_name = str(payload.get('display_name', '')).strip()[:255]
+    watchlist_id = payload.get('watchlist_id')
+    if entity_type not in ('buyer', 'project', 'property'):
+        return jsonify({'success': False, 'error': 'Invalid watchlist entity type'}), 400
+    if not entity_key or not display_name:
+        return jsonify({'success': False, 'error': 'Entity key and display name are required'}), 400
+    try:
+        with DatabaseConnection() as cur:
+            if watchlist_id:
+                cur.execute("SELECT id FROM watchlists WHERE id = %s AND user_id = %s",
+                            (watchlist_id, g.user['id']))
+                watchlist = cur.fetchone()
+            else:
+                watchlist = _default_watchlist(cur, g.user['id'])
+            if not watchlist:
+                return jsonify({'success': False, 'error': 'Watchlist not found'}), 404
+            cur.execute("""
+                INSERT INTO watchlist_items
+                    (watchlist_id, entity_type, entity_key, display_name, metadata)
+                VALUES (%s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (watchlist_id, entity_type, entity_key)
+                DO UPDATE SET display_name = EXCLUDED.display_name,
+                              metadata = EXCLUDED.metadata
+                RETURNING id, watchlist_id, entity_type, entity_key, display_name
+            """, (watchlist['id'], entity_type, entity_key, display_name,
+                  __import__('json').dumps(payload.get('metadata') or {})))
+            item = dict(cur.fetchone())
+        return jsonify({'success': True, 'item': item})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/watchlists/items/<int:item_id>', methods=['DELETE'])
+@login_required
+def api_delete_watchlist_item(item_id):
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                DELETE FROM watchlist_items wi USING watchlists w
+                WHERE wi.id = %s AND w.id = wi.watchlist_id AND w.user_id = %s
+                RETURNING wi.id
+            """, (item_id, g.user['id']))
+            deleted = cur.fetchone()
+        if not deleted:
+            return jsonify({'success': False, 'error': 'Watchlist item not found'}), 404
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/watchlist-digest')
+@login_required
+def api_watchlist_digest():
+    """Live digest of project changes matching the current user's watches."""
+    days = min(30, max(1, request.args.get('days', 1, type=int)))
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute(f"""
+                SELECT DISTINCT sa.id, sa.alert_type, sa.title, sa.summary,
+                       sa.event_at, pr.project_key, pr.job_number, pr.address,
+                       pr.bbl, pr.owner_business_name, pr.current_status,
+                       pr.initial_cost
+                FROM sales_alerts sa
+                JOIN projects pr ON pr.id = sa.project_id
+                WHERE sa.event_at >= CURRENT_TIMESTAMP - (%s || ' days')::interval
+                  AND EXISTS (
+                      SELECT 1 FROM watchlist_items wi
+                      JOIN watchlists w ON w.id = wi.watchlist_id
+                      WHERE w.user_id = %s AND w.digest_enabled = TRUE AND (
+                          (wi.entity_type = 'project' AND wi.entity_key = pr.project_key)
+                          OR (wi.entity_type = 'property' AND wi.entity_key = pr.bbl)
+                          OR (wi.entity_type = 'buyer' AND wi.entity_key = {_BUYER_KEY_SQL})
+                      )
+                  )
+                ORDER BY sa.event_at DESC
+                LIMIT 500
+            """, (days, g.user['id']))
+            events = [dict(row) for row in cur.fetchall()]
+        return jsonify({'success': True, 'days': days, 'events': events,
+                        'event_count': len(events)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _crm_projects(cur, user_id, project_keys=None, buyer_key=None,
+                  watchlist_id=None, limit=500):
+    """Select explicitly scoped consolidated projects for export/push."""
+    clauses, params = [], []
+    project_keys = [str(key)[:140] for key in (project_keys or []) if str(key).strip()]
+    if project_keys:
+        clauses.append('pr.project_key = ANY(%s)')
+        params.append(project_keys)
+    if buyer_key:
+        clauses.append(f"{_BUYER_KEY_SQL} = %s")
+        params.append(str(buyer_key)[:255])
+    if watchlist_id:
+        clauses.append(f"""EXISTS (
+            SELECT 1 FROM watchlist_items wi JOIN watchlists w ON w.id = wi.watchlist_id
+            WHERE w.user_id = %s AND w.id = %s AND (
+                (wi.entity_type = 'project' AND wi.entity_key = pr.project_key)
+                OR (wi.entity_type = 'property' AND wi.entity_key = pr.bbl)
+                OR (wi.entity_type = 'buyer' AND wi.entity_key = {_BUYER_KEY_SQL})
+            ))""")
+        params.extend([user_id, watchlist_id])
+    if not clauses:
+        return []
+    cur.execute(f"""
+        SELECT pr.project_key, pr.job_number, pr.address, pr.borough, pr.bbl,
+               pr.owner_business_name AS account_name, pr.job_type,
+               pr.work_description, pr.initial_cost, pr.current_status,
+               pr.current_status_date, pr.first_filing_date, pr.latest_issue_date,
+               pr.existing_stories_count, pr.proposed_stories_count,
+               pr.existing_dwelling_units, pr.proposed_dwelling_units,
+               pr.applicant_business_name, pr.applicant_person_name,
+               pr.filing_representative_business_name,
+               pr.design_professional_business_name,
+               pr.design_professional_person_name,
+               pr.design_professional_license,
+               pr.has_electrical_filing,
+               pr.electrical_new_meters, pr.electrical_scope_categories,
+               pr.has_elevator_filing, pr.elevator_device_types,
+               pr.elevator_work_types, pr.source_system
+        FROM projects pr
+        WHERE {' OR '.join(f'({clause})' for clause in clauses)}
+        ORDER BY COALESCE(pr.current_status_date, pr.latest_issue_date::timestamp,
+                         pr.first_filing_date::timestamp) DESC NULLS LAST
+        LIMIT %s
+    """, params + [limit])
+    return [dict(row) for row in cur.fetchall()]
+
+
+@app.route('/api/crm/export')
+@login_required
+def api_crm_export():
+    """CSV shaped as Account + Opportunity records for CRM field mapping."""
+    import csv
+    import io
+    from flask import Response
+    project_keys = request.args.getlist('project_key')
+    buyer_key = request.args.get('buyer_key', '').strip() or None
+    watchlist_id = request.args.get('watchlist_id', type=int)
+    with DatabaseConnection() as cur:
+        rows = _crm_projects(cur, g.user['id'], project_keys, buyer_key, watchlist_id)
+    if not rows:
+        return jsonify({'success': False, 'error': 'Select a buyer, watchlist, or project first'}), 400
+    output = io.StringIO()
+    fields = [
+        'Account Name', 'Account External ID', 'Opportunity Name', 'Opportunity External ID',
+        'Stage', 'Project Address', 'Borough', 'BBL', 'DOB Job Number', 'Source System',
+        'Initial Cost', 'Current Status Date', 'Job Type', 'Work Description',
+        'Existing Stories', 'Proposed Stories', 'Existing Units', 'Proposed Units',
+        'Applicant', 'Design Professional', 'Design Professional License',
+        'Filing Representative',
+        'Electrical Filing', 'New Meters', 'Electrical Scope Categories',
+        'Elevator Filing', 'Elevator Device Types', 'Elevator Work Types',
+        'Recommended Next Step', 'Source URL'
+    ]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        account = row.get('account_name') or 'Account research required'
+        if row.get('source_system') == 'DOB NOW Electrical':
+            source_url = 'https://data.cityofnewyork.us/d/dm9a-ab7w'
+        elif row.get('source_system') == 'DOB NOW Elevator':
+            source_url = 'https://data.cityofnewyork.us/d/kfp4-dz4h'
+        elif row.get('source_system') == 'DOB NOW':
+            source_url = 'https://data.cityofnewyork.us/d/w9ak-ipjd'
+        else:
+            source_url = ("https://a810-bisweb.nyc.gov/bisweb/JobsQueryByNumberServlet"
+                          f"?requestid=3&passjobnumber={row.get('job_number') or ''}")
+        writer.writerow({
+            'Account Name': account,
+            'Account External ID': ''.join(ch for ch in account.upper() if ch.isalnum()),
+            'Opportunity Name': f"{row.get('address') or row['project_key']} — Building technology",
+            'Opportunity External ID': row['project_key'],
+            'Stage': 'Research / qualify',
+            'Project Address': row.get('address'), 'Borough': row.get('borough'),
+            'BBL': row.get('bbl'), 'DOB Job Number': row.get('job_number'),
+            'Source System': row.get('source_system'), 'Initial Cost': row.get('initial_cost'),
+            'Current Status Date': row.get('current_status_date'), 'Job Type': row.get('job_type'),
+            'Work Description': row.get('work_description'),
+            'Existing Stories': row.get('existing_stories_count'),
+            'Proposed Stories': row.get('proposed_stories_count'),
+            'Existing Units': row.get('existing_dwelling_units'),
+            'Proposed Units': row.get('proposed_dwelling_units'),
+            'Applicant': row.get('applicant_business_name') or row.get('applicant_person_name'),
+            'Design Professional': row.get('design_professional_business_name') or row.get('design_professional_person_name'),
+            'Design Professional License': row.get('design_professional_license'),
+            'Filing Representative': row.get('filing_representative_business_name'),
+            'Electrical Filing': row.get('has_electrical_filing'),
+            'New Meters': row.get('electrical_new_meters'),
+            'Electrical Scope Categories': row.get('electrical_scope_categories'),
+            'Elevator Filing': row.get('has_elevator_filing'),
+            'Elevator Device Types': row.get('elevator_device_types'),
+            'Elevator Work Types': row.get('elevator_work_types'),
+            'Recommended Next Step': 'Map buyer, GC and project team; qualify timing and technology scope',
+            'Source URL': source_url,
+        })
+    log_export('crm_account_opportunity_csv', len(rows), {
+        'buyer_key': buyer_key, 'watchlist_id': watchlist_id,
+    })
+    filename = f"smart_installers_crm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(output.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+
+@app.route('/api/crm/push', methods=['POST'])
+@login_required
+def api_crm_push():
+    """Push explicitly selected projects to a configured CRM automation endpoint."""
+    payload = request.get_json(silent=True) or {}
+    webhook_url = os.getenv('CRM_WEBHOOK_URL', '').strip()
+    if not webhook_url:
+        return jsonify({
+            'success': False,
+            'error': 'CRM push is not configured. Set CRM_WEBHOOK_URL; CSV export is ready now.',
+        }), 409
+    with DatabaseConnection() as cur:
+        rows = _crm_projects(
+            cur, g.user['id'], payload.get('project_keys') or [],
+            payload.get('buyer_key'), payload.get('watchlist_id'),
+        )
+    if not rows:
+        return jsonify({'success': False, 'error': 'No selected projects to push'}), 400
+    import json
+    wire_rows = json.loads(json.dumps(rows, default=str))
+    headers = {'Content-Type': 'application/json'}
+    token = os.getenv('CRM_WEBHOOK_BEARER_TOKEN', '').strip()
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    try:
+        response = requests.post(webhook_url, json={
+            'source': 'smart-installers-dob-intelligence',
+            'pushed_by': g.user.get('email'),
+            'projects': wire_rows,
+        }, headers=headers, timeout=30)
+        response.raise_for_status()
+        return jsonify({'success': True, 'pushed': len(rows)})
+    except requests.RequestException as e:
+        print(f"CRM push error: {e}")
+        return jsonify({'success': False, 'error': 'CRM endpoint rejected the push'}), 502
+
+
 # path converter: DOB applicant names contain slashes ("A/C", "D/B/A ...")
 # and WSGI decodes %2F before routing, so the default converter 404s them.
 @app.route('/contractor/<path:contractor_name>')
@@ -4678,17 +5276,20 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
     if not names:
         return
 
-    scoped = list(where_parts) + ['p.applicant = ANY(%s)']
+    scoped = list(where_parts) + [
+        "COALESCE(pp.business_name, pp.person_name) = ANY(%s)"
+    ]
     cur.execute(f"""
         SELECT
-            p.applicant AS contractor_name,
+            COALESCE(pp.business_name, pp.person_name) AS contractor_name,
             COALESCE(
                 NULLIF(UPPER(btrim(p.work_type)), ''),
                 NULLIF(UPPER(btrim(p.permit_type)), ''),
                 NULLIF(UPPER(btrim(p.job_type)), '')
             ) AS code,
-            COUNT(*) AS permit_count
-        FROM permits p
+            COUNT(DISTINCT p.id) AS permit_count
+        FROM permit_participants pp
+        JOIN permits p ON p.id = pp.permit_id
         LEFT JOIN buildings b ON p.bbl = b.bbl
         WHERE {' AND '.join(scoped)}
         GROUP BY 1, 2
@@ -4697,7 +5298,7 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
             NULLIF(UPPER(btrim(p.permit_type)), ''),
             NULLIF(UPPER(btrim(p.job_type)), '')
         ) IS NOT NULL
-        ORDER BY 1, COUNT(*) DESC
+        ORDER BY 1, COUNT(DISTINCT p.id) DESC
     """, where_params + [names])
 
     by_name = {}
@@ -4749,21 +5350,31 @@ def api_contractors_search():
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
             offset = (page - 1) * per_page
 
-            # Exclude NULL, empty and placeholder applicant values
-            where_parts = ["""p.applicant IS NOT NULL
-                AND p.applicant != ''
-                AND p.applicant != 'N/A'
-                AND p.applicant != 'NA'
-                AND p.applicant != 'NONE'
-                AND p.applicant NOT ILIKE 'unknown%%'"""]
+            # The old directory grouped the overloaded permits.applicant field
+            # and called every value a contractor.  The participant view keeps
+            # permittees, applicants, owners and filing reps distinct.
+            participant_name = "COALESCE(pp.business_name, pp.person_name)"
+            where_parts = [f"""{participant_name} IS NOT NULL
+                AND {participant_name} NOT IN ('', 'N/A', 'NA', 'NONE')
+                AND {participant_name} NOT ILIKE 'unknown%%'"""]
             where_params = []
 
             if search:
                 where_parts.append(
-                    '(p.applicant ILIKE %s OR p.permittee_license_number ILIKE %s'
-                    ' OR p.permittee_business_name ILIKE %s)')
+                    f'({participant_name} ILIKE %s OR pp.license_number ILIKE %s)')
                 term = f"%{search}%"
-                where_params.extend([term, term, term])
+                where_params.extend([term, term])
+
+            roles = [role.strip() for role in request.args.get('role', '').split(',')
+                     if role.strip()]
+            if roles:
+                where_parts.append('pp.role = ANY(%s)')
+                where_params.append(roles)
+
+            probable_gc = request.args.get('probable_gc', '').lower() in ('1', 'true', 'yes')
+            if probable_gc:
+                where_parts.append("""pp.role IN ('permittee', 'permit_applicant')
+                    AND pp.contractor_confidence >= 0.85""")
 
             # Permit attributes — the same helper /api/properties uses.
             permit_parts, permit_params = _permit_predicates(request.args, alias='p')
@@ -4811,11 +5422,11 @@ def api_contractors_search():
             # in HAVING rather than WHERE.
             having_parts, having_params = [], []
             for param, expr in (
-                ('min_jobs', 'COUNT(*) >= %s'),
-                ('max_jobs', 'COUNT(*) <= %s'),
+                ('min_jobs', 'COUNT(DISTINCT p.id) >= %s'),
+                ('max_jobs', 'COUNT(DISTINCT p.id) <= %s'),
                 ('min_active_jobs',
-                 "COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days'"
-                 ' THEN 1 END) >= %s'),
+                 "COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days'"
+                 ' THEN p.id END) >= %s'),
                 ('min_properties', 'COUNT(DISTINCT p.bbl) >= %s'),
                 ('max_properties', 'COUNT(DISTINCT p.bbl) <= %s'),
             ):
@@ -4843,23 +5454,29 @@ def api_contractors_search():
             query = f"""
                 WITH contractor_stats AS (
                     SELECT
-                        p.applicant as contractor_name,
-                        p.permittee_license_number as license,
-                        COUNT(*) as total_jobs,
-                        COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
+                        {participant_name} as contractor_name,
+                        pp.license_number as license,
+                        COUNT(DISTINCT p.id) as total_jobs,
+                        COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN p.id END) as active_jobs,
                         COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                         COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
                         MAX(p.issue_date) as most_recent_job,
                         MIN(p.issue_date) as first_job,
                         COUNT(DISTINCT p.bbl) as unique_properties,
-                        COUNT(DISTINCT NULLIF(btrim(p.permittee_license_type), '')) as license_type_count,
-                        (array_agg(DISTINCT UPPER(btrim(p.permittee_license_type)))
-                            FILTER (WHERE btrim(coalesce(p.permittee_license_type, '')) <> ''))[1]
-                            as license_type
-                    FROM permits p
+                        COUNT(DISTINCT NULLIF(btrim(pp.license_type), '')) as license_type_count,
+                        (array_agg(DISTINCT UPPER(btrim(pp.license_type)))
+                            FILTER (WHERE btrim(coalesce(pp.license_type, '')) <> ''))[1]
+                            as license_type,
+                        string_agg(DISTINCT pp.role, ', ' ORDER BY pp.role) AS participant_roles,
+                        MAX(pp.role_confidence) AS role_confidence,
+                        MAX(pp.contractor_confidence) AS contractor_confidence,
+                        BOOL_OR(pp.role IN ('permittee', 'permit_applicant')
+                                AND pp.contractor_confidence >= 0.85) AS probable_gc
+                    FROM permit_participants pp
+                    JOIN permits p ON p.id = pp.permit_id
                     LEFT JOIN buildings b ON p.bbl = b.bbl
                     {where_clause}
-                    GROUP BY p.applicant, p.permittee_license_number
+                    GROUP BY {participant_name}, pp.license_number
                     {having_clause}
                 )
                 SELECT *
@@ -4880,20 +5497,25 @@ def api_contractors_search():
                 count_query = f"""
                     SELECT COUNT(*) AS count FROM (
                         SELECT 1
-                        FROM permits p
+                        FROM permit_participants pp
+                        JOIN permits p ON p.id = pp.permit_id
                         LEFT JOIN buildings b ON p.bbl = b.bbl
                         {where_clause}
-                        GROUP BY p.applicant, p.permittee_license_number
+                        GROUP BY {participant_name}, pp.license_number
                         {having_clause}
                     ) matched
                 """
                 cur.execute(count_query, where_params + having_params)
             else:
                 count_query = f"""
-                    SELECT COUNT(DISTINCT p.applicant) AS count
-                    FROM permits p
-                    LEFT JOIN buildings b ON p.bbl = b.bbl
-                    {where_clause}
+                    SELECT COUNT(*) AS count FROM (
+                        SELECT 1
+                        FROM permit_participants pp
+                        JOIN permits p ON p.id = pp.permit_id
+                        LEFT JOIN buildings b ON p.bbl = b.bbl
+                        {where_clause}
+                        GROUP BY {participant_name}, pp.license_number
+                    ) matched
                 """
                 cur.execute(count_query, where_params)
             total = cur.fetchone()['count']
@@ -4928,11 +5550,17 @@ def api_contractor_profile(contractor_name):
             # Get contractor stats
             cur.execute("""
             SELECT 
-                p.applicant as contractor_name,
-                p.permittee_license_number as license,
-                COUNT(*) as total_jobs,
-                COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN 1 END) as active_jobs,
-                COUNT(CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '365 days' THEN 1 END) as jobs_last_year,
+                COALESCE(pp.business_name, pp.person_name) as contractor_name,
+                (array_agg(DISTINCT pp.license_number)
+                    FILTER (WHERE pp.license_number IS NOT NULL))[1] as license,
+                (array_agg(DISTINCT pp.license_type)
+                    FILTER (WHERE pp.license_type IS NOT NULL))[1] as license_type,
+                string_agg(DISTINCT pp.role, ', ' ORDER BY pp.role) AS participant_roles,
+                MAX(pp.role_confidence) AS role_confidence,
+                MAX(pp.contractor_confidence) AS contractor_confidence,
+                COUNT(DISTINCT p.id) as total_jobs,
+                COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN p.id END) as active_jobs,
+                COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '365 days' THEN p.id END) as jobs_last_year,
                 COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                 COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
                 COALESCE(AVG(b.assessed_total_value), 0) as avg_project_value,
@@ -4941,20 +5569,21 @@ def api_contractor_profile(contractor_name):
                 COUNT(DISTINCT p.bbl) as unique_properties,
                 COUNT(DISTINCT p.job_type) as job_type_variety,
                 string_agg(DISTINCT p.job_type, ', ') as job_types
-            FROM permits p
+            FROM permit_participants pp
+            JOIN permits p ON p.id = pp.permit_id
             LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE p.applicant = %s
-            GROUP BY p.applicant, p.permittee_license_number
+            WHERE COALESCE(pp.business_name, pp.person_name) = %s
+            GROUP BY COALESCE(pp.business_name, pp.person_name)
             """, (contractor_name,))
             
             stats = cur.fetchone()
             
             if not stats:
-                return jsonify({'success': False, 'error': 'Contractor not found'}), 404
+                return jsonify({'success': False, 'error': 'Permit participant not found'}), 404
             
             # Get permits (most recent first)
             cur.execute("""
-                SELECT 
+                SELECT DISTINCT
                     p.id,
                     p.permit_no,
                     p.job_type,
@@ -4967,9 +5596,10 @@ def api_contractor_profile(contractor_name):
                     p.link,
                     b.assessed_total_value,
                     b.current_owner_name
-                FROM permits p
+                FROM permit_participants pp
+                JOIN permits p ON p.id = pp.permit_id
                 LEFT JOIN buildings b ON p.bbl = b.bbl
-                WHERE p.applicant = %s
+                WHERE COALESCE(pp.business_name, pp.person_name) = %s
                 ORDER BY p.issue_date DESC NULLS LAST
                 LIMIT 500
             """, (contractor_name,))
@@ -4987,13 +5617,14 @@ def api_contractor_profile(contractor_name):
                     b.assessed_total_value,
                     b.total_units,
                     b.building_class,
-                    COUNT(p.id) as permit_count,
+                    COUNT(DISTINCT p.id) as permit_count,
                     MAX(p.issue_date) as most_recent_work,
                     MIN(p.issue_date) as first_work,
                     string_agg(DISTINCT p.job_type, ', ') as job_types
                 FROM buildings b
                 INNER JOIN permits p ON p.bbl = b.bbl
-                WHERE p.applicant = %s
+                INNER JOIN permit_participants pp ON pp.permit_id = p.id
+                WHERE COALESCE(pp.business_name, pp.person_name) = %s
                 GROUP BY b.id, b.bbl, b.address, b.borough, b.current_owner_name, 
                          b.assessed_total_value, b.total_units, b.building_class
                 ORDER BY most_recent_work DESC NULLS LAST

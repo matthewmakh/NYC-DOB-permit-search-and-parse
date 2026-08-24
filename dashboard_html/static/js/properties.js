@@ -95,7 +95,11 @@ async function loadPlays() {
 
 function renderPlayCards() {
     const row = document.getElementById('playsRow');
-    row.innerHTML = state.plays.map(play => `
+    const groups = [
+        {id: 'property_intel', label: 'Property intelligence', plays: state.plays.filter(p => p.family !== 'smart_installers')},
+        {id: 'smart_installers', label: 'Smart Installers sales plays', plays: state.plays.filter(p => p.family === 'smart_installers')}
+    ].filter(group => group.plays.length);
+    const card = play => `
         <button class="play-card ${state.filters.play === play.id ? 'active' : ''}"
                 onclick="togglePlay('${play.id}')">
             <div class="play-card-top">
@@ -106,6 +110,12 @@ function renderPlayCards() {
             <span class="play-audience play-audience-${play.audience}">${
                 play.audience === 'both' ? 'investors + contractors' : play.audience}</span>
         </button>
+    `;
+    row.innerHTML = groups.map(group => `
+        <div class="play-family play-family-${group.id}">
+            <div class="play-family-title">${escapeHtml(group.label)}</div>
+            <div class="play-family-grid">${group.plays.map(card).join('')}</div>
+        </div>
     `).join('');
 }
 
