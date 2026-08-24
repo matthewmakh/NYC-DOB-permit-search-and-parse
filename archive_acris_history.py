@@ -57,6 +57,11 @@ def parse_args():
     parser.add_argument("--cutoff", default="2000-01-01")
     parser.add_argument("--archive-dir", required=True)
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume deletion from an existing verified manifest.",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="Delete only rows proven present in the completed archive.",
@@ -155,9 +160,20 @@ def archive_snapshot(url, cutoff, archive_dir):
         conn.close()
 
 
-def delete_archived_rows(url, cutoff, max_transaction_id, batch_size):
-    conn = psycopg2.connect(url)
+def write_connection(url):
+    conn = psycopg2.connect(
+        url,
+        keepalives=1,
+        keepalives_idle=10,
+        keepalives_interval=5,
+        keepalives_count=3,
+    )
     conn.autocommit = False
+    return conn
+
+
+def delete_archived_rows(url, cutoff, max_transaction_id, batch_size, expected_count):
+    conn = write_connection(url)
     removed_references = 0
     removed_transactions = 0
     try:
@@ -181,34 +197,54 @@ def delete_archived_rows(url, cutoff, max_transaction_id, batch_size):
             removed_references = cur.rowcount
             conn.commit()
 
-            while True:
-                cur.execute(
-                    """
-                    WITH doomed AS MATERIALIZED (
-                      SELECT id
-                      FROM acris_transactions
-                      WHERE recorded_date < DATE %s AND id <= %s
-                      ORDER BY id
-                      LIMIT %s
+        retries = 0
+        while True:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SET statement_timeout = 0")
+                    cur.execute("SET lock_timeout = '30s'")
+                    cur.execute(
+                        """
+                        WITH doomed AS MATERIALIZED (
+                          SELECT id
+                          FROM acris_transactions
+                          WHERE recorded_date < DATE %s AND id <= %s
+                          ORDER BY id
+                          LIMIT %s
+                        )
+                        DELETE FROM acris_transactions t
+                        USING doomed d
+                        WHERE t.id = d.id
+                        """,
+                        (cutoff, max_transaction_id, batch_size),
                     )
-                    DELETE FROM acris_transactions t
-                    USING doomed d
-                    WHERE t.id = d.id
-                    """,
-                    (cutoff, max_transaction_id, batch_size),
-                )
-                removed = cur.rowcount
-                conn.commit()
-                removed_transactions += removed
-                if removed:
-                    print(
-                        f"Deleted {removed_transactions:,} archived transactions "
-                        "(party rows cascade automatically)",
-                        flush=True,
-                    )
-                if removed < batch_size:
-                    break
+                    removed = cur.rowcount
+                    conn.commit()
+                    removed_transactions += removed
+                    retries = 0
+                    if removed:
+                        print(
+                            f"Deleted {removed_transactions:,} rows in this run "
+                            "(party rows cascade automatically)",
+                            flush=True,
+                        )
+                    if removed < batch_size:
+                        break
+            except psycopg2.OperationalError as exc:
+                retries += 1
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                if retries > 8:
+                    raise RuntimeError("Database proxy repeatedly interrupted cleanup") from exc
+                print(f"Database connection interrupted; reconnecting ({retries}/8)...", flush=True)
+                time.sleep(min(2 ** retries, 15))
+                conn = write_connection(url)
 
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 0")
+            cur.execute("SET lock_timeout = '30s'")
             cur.execute(
                 """
                 UPDATE buildings
@@ -241,8 +277,9 @@ def delete_archived_rows(url, cutoff, max_transaction_id, batch_size):
             if remaining_archived_rows:
                 raise RuntimeError(f"{remaining_archived_rows} archived transaction rows remain")
             return {
-                "references": removed_references,
-                "transactions": removed_transactions,
+                "references": expected_count["acris_references"],
+                "transactions": expected_count["acris_transactions"],
+                "transactions_removed_this_run": removed_transactions,
                 "buildings_marked_logic_v5": logic_rows,
                 "post_snapshot_old_rows_preserved": post_snapshot_rows,
             }
@@ -261,36 +298,52 @@ def main():
     cutoff = date.fromisoformat(args.cutoff)
     archive_dir = Path(args.archive_dir).resolve()
     archive_dir.mkdir(parents=True, exist_ok=True)
-    if any(archive_dir.iterdir()):
-        raise RuntimeError(f"Archive directory must be empty: {archive_dir}")
 
     url = database_url()
     parsed = urlparse(url)
-    started_at = datetime.now(timezone.utc)
-    manifest = {
-        "archive_format_version": 1,
-        "cutoff_exclusive": cutoff.isoformat(),
-        "database_host": parsed.hostname,
-        "database_name": parsed.path.lstrip("/"),
-        "started_at": started_at.isoformat(),
-        "deletion_requested": args.apply,
-    }
-
-    max_id, counts, schemas, files = archive_snapshot(url, cutoff, archive_dir)
-    manifest.update(
-        {
-            "max_archived_transaction_id": max_id,
-            "row_counts": counts,
-            "schemas": schemas,
-            "files": files,
-            "archive_verified_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
     manifest_path = archive_dir / "manifest.json"
-    write_manifest(manifest_path, manifest)
+    if args.resume:
+        if not manifest_path.exists():
+            raise RuntimeError(f"Resume manifest does not exist: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text())
+        if manifest["cutoff_exclusive"] != cutoff.isoformat():
+            raise RuntimeError("Requested cutoff does not match the archive manifest")
+        max_id = manifest["max_archived_transaction_id"]
+        counts = manifest["row_counts"]
+        for table, metadata in manifest["files"].items():
+            path = archive_dir / metadata["file"]
+            actual_rows, checksum = gzip_row_count_and_sha256(path)
+            if actual_rows != metadata["rows"] or checksum != metadata["sha256"]:
+                raise RuntimeError(f"Existing archive verification failed: {path}")
+        print("Existing archive manifest, row counts, and checksums verified.", flush=True)
+    else:
+        if any(archive_dir.iterdir()):
+            raise RuntimeError(f"Archive directory must be empty: {archive_dir}")
+        started_at = datetime.now(timezone.utc)
+        manifest = {
+            "archive_format_version": 1,
+            "cutoff_exclusive": cutoff.isoformat(),
+            "database_host": parsed.hostname,
+            "database_name": parsed.path.lstrip("/"),
+            "started_at": started_at.isoformat(),
+            "deletion_requested": args.apply,
+        }
+        max_id, counts, schemas, files = archive_snapshot(url, cutoff, archive_dir)
+        manifest.update(
+            {
+                "max_archived_transaction_id": max_id,
+                "row_counts": counts,
+                "schemas": schemas,
+                "files": files,
+                "archive_verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        write_manifest(manifest_path, manifest)
 
     if args.apply:
-        deletion = delete_archived_rows(url, cutoff, max_id, args.batch_size)
+        deletion = delete_archived_rows(
+            url, cutoff, max_id, args.batch_size, expected_count=counts
+        )
         if deletion["transactions"] != counts["acris_transactions"]:
             raise RuntimeError(
                 "Deletion count did not match the verified transaction archive: "
