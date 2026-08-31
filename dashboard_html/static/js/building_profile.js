@@ -200,6 +200,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Setup modal
     setupRiskModal();
+
+    // Keep the top of the profile compact while making the full tax-lot
+    // record one clear action away (expanded by default on wide screens).
+    setupBuildingFactsDisclosure();
     
     // Load building data
     await loadBuildingProfile();
@@ -1091,6 +1095,39 @@ const PLUTO_EXTENSION = {
     EG: 'Extension and garage',
     N: 'None',
 };
+
+function setupBuildingFactsDisclosure() {
+    const button = document.getElementById('building-facts-toggle');
+    const groups = document.getElementById('building-facts-groups');
+    if (!button || !groups) return;
+
+    const wideScreen = window.matchMedia('(min-width: 901px)');
+    let userChangedState = false;
+
+    const setExpanded = (expanded) => {
+        groups.hidden = !expanded;
+        button.setAttribute('aria-expanded', String(expanded));
+        button.textContent = expanded ? 'Hide full record' : 'Show full record';
+    };
+
+    setExpanded(wideScreen.matches);
+    button.addEventListener('click', () => {
+        userChangedState = true;
+        setExpanded(button.getAttribute('aria-expanded') !== 'true');
+    });
+
+    const buildingNav = document.querySelector('[data-tab="building"]');
+    if (buildingNav) {
+        buildingNav.addEventListener('click', () => {
+            userChangedState = true;
+            setExpanded(true);
+        });
+    }
+
+    wideScreen.addEventListener('change', event => {
+        if (!userChangedState) setExpanded(event.matches);
+    });
+}
 
 function decodedPlutoCode(value, labels) {
     if (!hasFactValue(value)) return null;

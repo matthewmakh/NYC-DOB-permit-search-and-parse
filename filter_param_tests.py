@@ -891,6 +891,50 @@ check('missing row id falls back to a work-permit composite',
                             'borough': 'QUEENS', 'block': '9966', 'lot': '80'}])[0][0][0],
       '440776739_01_PL_02')
 
+print('— live PLUTO building facts endpoint —')
+
+
+class PlutoEndpointStub:
+    def __init__(self, rows=None):
+        self.rows = rows if rows is not None else [{
+            'bbl': '1016560001.00000000', 'unitstotal': '1268',
+            'unitsres': '1267', 'numbldgs': '12', 'numfloors': '20',
+            'bldgarea': '846700', 'lotarea': '282839', 'yearbuilt': '1959',
+            'zonedist1': 'R7-2', 'overlay1': 'C1-5', 'spdist1': 'TA',
+            'firm07_flag': '1', 'version': '26v2',
+        }]
+        self.kwargs = None
+
+    def get(self, dataset, **kwargs):
+        self.kwargs = (dataset, kwargs)
+        return self.rows
+
+
+real_socrata = A.socrata
+pluto_stub = PlutoEndpointStub()
+A.socrata = pluto_stub
+A.cache.clear()
+try:
+    response = A.app.test_client().get('/api/property/1016560001/building-facts')
+    payload = response.get_json()
+    check('PLUTO endpoint returns units and physical scale',
+          (response.status_code, payload['facts']['total_units'],
+           payload['facts']['residential_units'], payload['facts']['number_of_buildings']),
+          (200, 1268, 1267, 12))
+    check('PLUTO endpoint returns zoning and source version',
+          (payload['facts']['zoning_districts'], payload['facts']['commercial_overlays'],
+           payload['facts']['pluto_version']),
+          (['R7-2'], ['C1-5'], '26v2'))
+    check('PLUTO endpoint targets exact numeric BBL',
+          (pluto_stub.kwargs[0], pluto_stub.kwargs[1]['$where']),
+          ('pluto', 'bbl=1016560001'))
+    bad = A.app.test_client().get('/api/property/not-a-bbl/building-facts')
+    check('PLUTO endpoint rejects malformed BBL', bad.status_code, 400)
+finally:
+    A.socrata = real_socrata
+    A.cache.clear()
+
+
 print('— live DOB Safety endpoint normalization —')
 
 

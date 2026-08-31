@@ -70,10 +70,16 @@
                     <h3 id="building-facts-heading">Building &amp; lot facts</h3>
                     <p class="card-subtitle">Units, physical scale, zoning, assessment and public-service districts for this tax lot.</p>
                 </div>
-                <a class="freshness-note building-source-link" id="building-facts-source"
-                   href="https://data.cityofnewyork.us/d/64uk-42ks" target="_blank" rel="noopener noreferrer">
-                    Checking latest PLUTO&hellip;
-                </a>
+                <div class="building-facts-actions">
+                    <button class="building-facts-toggle" id="building-facts-toggle"
+                            type="button" aria-expanded="false" aria-controls="building-facts-groups">
+                        Show full record
+                    </button>
+                    <a class="freshness-note building-source-link" id="building-facts-source"
+                       href="https://data.cityofnewyork.us/d/64uk-42ks" target="_blank" rel="noopener noreferrer">
+                        Checking latest PLUTO&hellip;
+                    </a>
+                </div>
             </div>
             <div class="dossier-card-body">
                 <div class="building-facts-highlights" id="building-facts-highlights" aria-live="polite">
@@ -81,7 +87,7 @@
                     <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
                     <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
                 </div>
-                <div class="building-facts-groups" id="building-facts-groups">
+                <div class="building-facts-groups" id="building-facts-groups" hidden>
                     <div class="skeleton-text"></div>
                     <div class="skeleton-text"></div>
                     <div class="skeleton-text"></div>

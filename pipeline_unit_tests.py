@@ -27,7 +27,7 @@ import socrata_client
 from socrata_client import (
     SocrataClient, bbl_parts, soql_quote, in_clause, where_block_lot,
     party_role, is_deed, is_ownership_party, is_mortgage, is_satisfaction,
-    _bucket_label,
+    _bucket_label, normalize_pluto_record,
 )
 
 PASS = 0
@@ -63,6 +63,33 @@ check("where_block_lot includes both padded and stripped forms",
 clause_low = where_block_lot('boro', 'block', 'lot', '1000010001')
 check("where_block_lot handles low block/lot numbers",
       "'1'" in clause_low and "'00001'" in clause_low)
+
+print("\n— PLUTO building fact normalization —")
+
+pluto = normalize_pluto_record({
+    'bbl': '1016560001.00000000', 'unitstotal': '1268', 'unitsres': '1267',
+    'numbldgs': '12', 'numfloors': '20.0000000', 'bldgarea': '846700',
+    'lotarea': '282839', 'resarea': '744000', 'comarea': '102700',
+    'yearbuilt': '1959', 'yearalter1': '0', 'zonedist1': 'R7-2',
+    'overlay1': 'C1-5', 'spdist1': 'TA', 'splitzone': False,
+    'builtfar': '2.99', 'residfar': '3.44', 'commfar': '0',
+    'facilfar': '6.5', 'irrlotcode': False, 'firm07_flag': '1',
+    'ownername': 'NYC HOUSING DEVELOPMENT CORP.', 'ownertype': 'X',
+})
+check("PLUTO keeps tax-lot units and building count",
+      (pluto['total_units'], pluto['residential_units'],
+       pluto['non_residential_units'], pluto['number_of_buildings'])
+      == (1268, 1267, 1, 12))
+check("PLUTO zero alteration years become unknown",
+      pluto['year_built'] == 1959 and pluto['year_altered'] is None)
+check("PLUTO zoning lists and FAR are normalized",
+      pluto['zoning_districts'] == ['R7-2']
+      and pluto['commercial_overlays'] == ['C1-5']
+      and pluto['special_districts'] == ['TA']
+      and pluto['unused_far'] == 0.45)
+check("PLUTO booleans preserve false and true flags",
+      pluto['split_zone'] is False and pluto['irregular_lot'] is False
+      and pluto['fema_2007_flood_zone'] is True)
 
 # ---------------------------------------------------------------------------
 print("\n— B1: party roles —")
