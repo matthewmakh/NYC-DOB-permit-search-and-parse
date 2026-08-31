@@ -30,7 +30,11 @@
             <div class="site-nav__actions">
                 {% if caller is defined %}{{ caller() }}{% endif %}
                 {% if user and user.is_admin %}
-                <a href="/admin/activity" class="site-nav__icon-link{% if active_page == 'admin' %} is-active{% endif %}"
+                <a href="/admin/team" class="site-nav__icon-link{% if active_page == 'admin_team' %} is-active{% endif %}"
+                   aria-label="Team accounts" title="Team accounts">
+                    <i class="fas fa-users-gear" aria-hidden="true"></i>
+                </a>
+                <a href="/admin/activity" class="site-nav__icon-link{% if active_page in ('admin', 'admin_activity') %} is-active{% endif %}"
                    aria-label="Activity logs" title="Activity logs">
                     <i class="fas fa-chart-line" aria-hidden="true"></i>
                 </a>

@@ -339,6 +339,7 @@ function renderProperties() {
         const assessedValue = property.assessed_total_value || 0;
         const salePrice = property.sale_price || 0;
         const permitCount = property.permit_count || 0;
+        const totalUnits = property.total_units ?? property.units ?? property.residential_units;
         const violationCount = property.hpd_violations_count || 0;
         const contractorName = property.contractor_name || null;
         const contractorPhone = property.contractor_phone || null;
@@ -372,10 +373,10 @@ function renderProperties() {
                 ` : ''}
 
                 <div class="property-details">
-                    ${property.units ? `
+                    ${totalUnits !== null && totalUnits !== undefined ? `
                         <div class="detail-item">
                             <div class="detail-label">Units</div>
-                            <div class="detail-value">${property.units}</div>
+                            <div class="detail-value">${formatNumber(totalUnits)}</div>
                         </div>
                     ` : ''}
                     ${property.year_built ? `
@@ -396,6 +397,12 @@ function renderProperties() {
                             <div class="detail-value">${formatDate(property.sale_date)}</div>
                         </div>
                     ` : ''}
+                    <div class="detail-item">
+                        <div class="detail-label">Last permit</div>
+                        <div class="detail-value">${property.last_permit_date
+                            ? formatDate(property.last_permit_date)
+                            : 'No history'}</div>
+                    </div>
                 </div>
 
                 <div class="property-badges">

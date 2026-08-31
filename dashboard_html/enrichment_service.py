@@ -1396,6 +1396,26 @@ def check_user_enrichment_access(user_id, building_id, owner_name=None):
         conn.close()
 
 
+def revoke_owner_enrichment_access(user_id, building_id, owner_name):
+    """Remove a just-created unlock when its corresponding payment fails."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """DELETE FROM user_enrichments
+               WHERE user_id = %s AND building_id = %s
+                 AND UPPER(owner_name_searched) = UPPER(%s)""",
+            (user_id, building_id, owner_name),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Owner dedup + SOS agent helpers
 # ---------------------------------------------------------------------------

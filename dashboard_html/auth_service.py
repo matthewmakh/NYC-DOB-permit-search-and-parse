@@ -11,6 +11,7 @@ from functools import wraps
 from flask import request, redirect, url_for, session, jsonify, g
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from team_service import get_access_context
 
 # Session duration: 48 hours
 SESSION_DURATION_HOURS = 48
@@ -164,14 +165,7 @@ def authenticate_user(email, password):
     cur = conn.cursor()
     
     try:
-        cur.execute("""
-            SELECT id, email, password_hash, is_admin, is_verified,
-                   stripe_customer_id, subscription_status
-            FROM users 
-            WHERE email = %s
-        """, (email,))
-        
-        user = cur.fetchone()
+        user = get_access_context(email=email, connection=conn)
         
         if not user:
             return False, "Invalid email or password", None
@@ -181,8 +175,8 @@ def authenticate_user(email, password):
         
         # Email verification check removed - accounts are auto-verified
         
-        # Check subscription status (admin bypasses)
-        if not user['is_admin'] and user['subscription_status'] != 'active':
+        # Direct subscribers, admins, and active sponsored members may sign in.
+        if not user['has_access']:
             return False, "subscription_required", user
         
         # Update last login
@@ -190,6 +184,7 @@ def authenticate_user(email, password):
                    (datetime.now(), user['id']))
         conn.commit()
         
+        user.pop('password_hash', None)
         return True, "Login successful", dict(user)
         
     except Exception as e:
@@ -240,16 +235,20 @@ def validate_session(session_token):
     
     try:
         cur.execute("""
-            SELECT u.id, u.email, u.is_admin, u.subscription_status,
-                   u.stripe_customer_id, s.expires_at
-            FROM user_sessions s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.session_token = %s AND s.expires_at > %s
+            SELECT user_id, expires_at
+            FROM user_sessions
+            WHERE session_token = %s AND expires_at > %s
         """, (session_token, datetime.now()))
-        
-        result = cur.fetchone()
-        if result:
-            return dict(result)
+
+        session_row = cur.fetchone()
+        if session_row:
+            result = get_access_context(user_id=session_row['user_id'], connection=conn)
+            # Re-check access on every request so revocation and subscription
+            # cancellation take effect immediately, not 48 hours later.
+            if result and result['has_access']:
+                result.pop('password_hash', None)
+                result['expires_at'] = session_row['expires_at']
+                return dict(result)
         return None
         
     except:
@@ -295,14 +294,10 @@ def get_user_by_id(user_id):
     cur = conn.cursor()
     
     try:
-        cur.execute("""
-            SELECT id, email, is_admin, is_verified, subscription_status,
-                   stripe_customer_id, stripe_subscription_id, created_at, last_login
-            FROM users WHERE id = %s
-        """, (user_id,))
-        
-        result = cur.fetchone()
-        return dict(result) if result else None
+        result = get_access_context(user_id=user_id, connection=conn)
+        if result:
+            result.pop('password_hash', None)
+        return result
     finally:
         cur.close()
         conn.close()
@@ -314,14 +309,10 @@ def get_user_by_email(email):
     cur = conn.cursor()
     
     try:
-        cur.execute("""
-            SELECT id, email, is_admin, is_verified, subscription_status,
-                   stripe_customer_id, stripe_subscription_id
-            FROM users WHERE email = %s
-        """, (email.lower().strip(),))
-        
-        result = cur.fetchone()
-        return dict(result) if result else None
+        result = get_access_context(email=email, connection=conn)
+        if result:
+            result.pop('password_hash', None)
+        return result
     finally:
         cur.close()
         conn.close()

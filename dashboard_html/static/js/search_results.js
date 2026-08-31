@@ -97,6 +97,9 @@
             sort_order: params.get('sort_order') === 'asc' ? 'asc' : 'desc',
             current_only: params.get('current_only') === 'true',
             recent_permit_days: params.get('recent_permit_days') || '',
+            permit_activity_mode: params.get('permit_activity_mode') === 'inactive'
+                ? 'inactive'
+                : 'within',
         };
         Object.values(MULTI_CONTROLS).forEach(param => { next[param] = params.getAll(param); });
         Object.values(NUMBER_CONTROLS).forEach(param => { next[param] = params.get(param) || ''; });
@@ -114,7 +117,10 @@
             if (state[param] !== '') params.set(param, state[param]);
         });
         if (state.current_only) params.set('current_only', 'true');
-        if (state.recent_permit_days) params.set('recent_permit_days', state.recent_permit_days);
+        if (state.recent_permit_days) {
+            params.set('recent_permit_days', state.recent_permit_days);
+            params.set('permit_activity_mode', state.permit_activity_mode);
+        }
         if (state.sort_by) params.set('sort_by', state.sort_by);
         params.set('sort_order', state.sort_order);
         if (includePaging !== false) {
@@ -142,7 +148,15 @@
         Object.entries(NUMBER_CONTROLS).forEach(([id, param]) => {
             if (el(id)) el(id).value = state[param] || '';
         });
-        MultiSelect.set('recentPermitDays', state.recent_permit_days ? [state.recent_permit_days] : [''], { silent: true });
+        const dayValues = Array.from(el('recentPermitDays').options).map(option => option.value);
+        const preset = state.recent_permit_days && dayValues.includes(state.recent_permit_days)
+            ? state.recent_permit_days
+            : (state.recent_permit_days ? 'custom' : '');
+        MultiSelect.set('recentPermitDays', [preset], { silent: true });
+        el('recentPermitCustomDays').style.display = preset === 'custom' ? 'block' : 'none';
+        el('recentPermitCustomDays').value = preset === 'custom' ? state.recent_permit_days : '';
+        el('permitActivityMode').value = state.permit_activity_mode;
+        updatePermitActivityHint();
         el('currentOnly').checked = state.current_only;
         el('sortOrder').value = state.sort_order;
         el('perPage').value = String(state.per_page);
@@ -176,16 +190,33 @@
             state[param] = el(id)?.value || '';
         });
         state.current_only = el('currentOnly').checked;
-        state.recent_permit_days = el('recentPermitDays').value || '';
+        state.permit_activity_mode = el('permitActivityMode').value === 'inactive'
+            ? 'inactive'
+            : 'within';
+        state.recent_permit_days = el('recentPermitDays').value === 'custom'
+            ? (el('recentPermitCustomDays').value || '')
+            : (el('recentPermitDays').value || '');
     }
 
     function filterChanged(immediate) {
         pullControlsIntoState();
+        updatePermitActivityHint();
         state.page = 1;
         renderFilterChips();
         clearTimeout(filterTimer);
         if (immediate) return loadResults();
         filterTimer = setTimeout(loadResults, 450);
+    }
+
+    function updatePermitActivityHint() {
+        const inactive = el('permitActivityMode').value === 'inactive';
+        if (!state.recent_permit_days) {
+            el('permitActivityHint').textContent = 'Choose a time window to apply this timing rule.';
+            return;
+        }
+        el('permitActivityHint').textContent = inactive
+            ? 'Excludes a property if any permit was filed or issued inside the window. Buildings with no permit history are included.'
+            : 'Requires at least one matching permit filed or issued inside the selected window.';
     }
 
     function filterCount() {
@@ -218,7 +249,9 @@
         if (state.current_only) chips.push({ param: 'current_only', value: '', text: 'Current / open only' });
         if (state.recent_permit_days) chips.push({
             param: 'recent_permit_days', value: '',
-            text: `Activity: last ${Number(state.recent_permit_days).toLocaleString()} days`,
+            text: state.permit_activity_mode === 'inactive'
+                ? `No permits in ${Number(state.recent_permit_days).toLocaleString()} days`
+                : `Permits within ${Number(state.recent_permit_days).toLocaleString()} days`,
         });
 
         el('activeFilters').innerHTML = chips.map(chip =>
@@ -239,6 +272,7 @@
             state.current_only = false;
         } else {
             state[param] = '';
+            if (param === 'recent_permit_days') state.permit_activity_mode = 'within';
         }
         state.page = 1;
         syncControls();
@@ -534,6 +568,7 @@
         Object.values(NUMBER_CONTROLS).forEach(param => { state[param] = ''; });
         state.current_only = false;
         state.recent_permit_days = '';
+        state.permit_activity_mode = 'within';
         state.page = 1;
         syncControls();
         loadResults();
@@ -567,7 +602,25 @@
         });
 
         Object.keys(MULTI_CONTROLS).forEach(id => el(id).addEventListener('change', () => filterChanged(true)));
-        el('recentPermitDays').addEventListener('change', () => filterChanged(true));
+        el('permitActivityMode').addEventListener('change', () => {
+            updatePermitActivityHint();
+            filterChanged(true);
+        });
+        el('recentPermitDays').addEventListener('change', event => {
+            const custom = el('recentPermitCustomDays');
+            if (event.target.value === 'custom') {
+                custom.style.display = 'block';
+                custom.focus();
+                pullControlsIntoState();
+                updatePermitActivityHint();
+                return;
+            }
+            custom.style.display = 'none';
+            custom.value = '';
+            filterChanged(true);
+        });
+        el('recentPermitCustomDays').addEventListener('input', () => filterChanged(false));
+        el('recentPermitCustomDays').addEventListener('change', () => filterChanged(true));
         el('currentOnly').addEventListener('change', () => filterChanged(true));
         Object.keys(NUMBER_CONTROLS).forEach(id => {
             el(id).addEventListener('input', () => filterChanged(false));

@@ -11,6 +11,7 @@ const AppState = {
         borough: '',
         jobType: '',
         days: '90',  // String to support 'all' option
+        permitActivityMode: 'within',
         searchText: '',
         hasContact: false,
         minLeadScore: 0,
@@ -86,24 +87,51 @@ function initializeMap() {
 function setupEventListeners() {
     const filterMap = {
         'filterBorough': 'borough',
-        'filterJobType': 'jobType',
-        'filterDays': 'days'
+        'filterJobType': 'jobType'
     };
     
     Object.entries(filterMap).forEach(([id, key]) => {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', function() {
-                if (key === 'days') {
-                    // Handle both numeric and 'all' values
-                    AppState.filters[key] = this.value === 'all' ? 'all' : parseInt(this.value);
-                } else {
-                    AppState.filters[key] = this.value;
-                }
+                AppState.filters[key] = this.value;
                 applyFilters();
             });
         }
     });
+
+    const activityMode = document.getElementById('filterActivityMode');
+    activityMode?.addEventListener('change', function() {
+        AppState.filters.permitActivityMode = this.value === 'inactive' ? 'inactive' : 'within';
+        updateConstructionActivityHint();
+        applyFilters();
+    });
+
+    const daysSelect = document.getElementById('filterDays');
+    const customDays = document.getElementById('filterCustomDays');
+    daysSelect?.addEventListener('change', function() {
+        if (this.value === 'custom') {
+            customDays.style.display = 'block';
+            customDays.focus();
+            updateConstructionActivityHint();
+            return;
+        }
+        customDays.style.display = 'none';
+        customDays.value = '';
+        AppState.filters.days = this.value === 'all' ? 'all' : parseInt(this.value, 10);
+        updateConstructionActivityHint();
+        applyFilters();
+    });
+    customDays?.addEventListener('change', function() {
+        const rawDays = parseInt(this.value, 10);
+        if (!Number.isFinite(rawDays) || rawDays <= 0) return;
+        const days = Math.min(3650, rawDays);
+        this.value = days;
+        AppState.filters.days = days;
+        updateConstructionActivityHint();
+        applyFilters();
+    });
+    updateConstructionActivityHint();
     
     const searchInput = document.getElementById('searchInput');
     if (searchInput) {
@@ -128,8 +156,12 @@ function setupQuickFilters() {
             applyFiltersLocal();
         },
         'quickFilterRecent': () => {
+            AppState.filters.permitActivityMode = 'within';
+            document.getElementById('filterActivityMode').value = 'within';
             AppState.filters.days = AppState.filters.days === '7' || AppState.filters.days === 7 ? '90' : '7';
             document.getElementById('filterDays').value = AppState.filters.days;
+            document.getElementById('filterCustomDays').style.display = 'none';
+            updateConstructionActivityHint();
             applyFilters();
         },
         'quickFilterContacts': () => {
@@ -177,8 +209,35 @@ function loadAllData() {
     loadMapData();
 }
 
+function updateConstructionActivityHint() {
+    const hint = document.getElementById('constructionActivityHint');
+    if (!hint) return;
+    const inactive = AppState.filters.permitActivityMode === 'inactive';
+    const dayChoice = document.getElementById('filterDays')?.value;
+    const customDays = document.getElementById('filterCustomDays')?.value;
+    if (dayChoice === 'all') {
+        hint.textContent = 'All permit records are included; the timing rule does not narrow an all-time window.';
+    } else if (dayChoice === 'custom' && !customDays) {
+        hint.textContent = 'Enter a custom number of days to apply this timing rule.';
+    } else {
+        hint.textContent = inactive
+            ? 'Shows individual permit records issued before the selected cutoff.'
+            : 'Shows individual permit records issued inside the selected window.';
+    }
+    const label = dayChoice === 'all' ? 'All permits' : (inactive ? 'Older permits' : 'Recent permits');
+    setTextById('statPermitLabel', label);
+    setTextById('permitsListTitle', label);
+}
+
+function appendPermitTimeParams(params) {
+    params.set('days', AppState.filters.days);
+    params.set('permit_activity_mode', AppState.filters.permitActivityMode);
+    return params;
+}
+
 function loadStats() {
-    fetch(`/api/construction/stats?days=${AppState.filters.days}`)
+    const params = appendPermitTimeParams(new URLSearchParams());
+    fetch(`/api/construction/stats?${params}`)
         .then(r => r.json())
         .then(data => {
             if (data.success) {
@@ -285,12 +344,11 @@ function displayBoroughsChart(boroughs) {
 
 function loadPermits() {
     const offset = (AppState.pagination.currentPage - 1) * AppState.pagination.perPage;
-    const params = new URLSearchParams({ 
-        days: AppState.filters.days, 
+    const params = appendPermitTimeParams(new URLSearchParams({
         limit: AppState.pagination.perPage,
         offset: offset,
         sort: AppState.filters.sortBy
-    });
+    }));
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
     if (AppState.filters.searchText) params.append('q', AppState.filters.searchText);
@@ -435,7 +493,7 @@ function loadMapData() {
         loadingCount.textContent = 'Fetching permit data...';
     }
     
-    const params = new URLSearchParams({ days: AppState.filters.days });
+    const params = appendPermitTimeParams(new URLSearchParams());
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
     
@@ -527,7 +585,8 @@ function displayMapMarkers(locations) {
 }
 
 function loadContractors() {
-    fetch(`/api/construction/contractors?days=${AppState.filters.days}&limit=20`)
+    const params = appendPermitTimeParams(new URLSearchParams({ limit: 20 }));
+    fetch(`/api/construction/contractors?${params}`)
         .then(r => r.json())
         .then(data => {
             if (data.success) {
@@ -613,6 +672,9 @@ function clearFilters() {
     document.getElementById('filterBorough').value = '';
     document.getElementById('filterJobType').value = '';
     document.getElementById('filterDays').value = '90';
+    document.getElementById('filterActivityMode').value = 'within';
+    document.getElementById('filterCustomDays').value = '';
+    document.getElementById('filterCustomDays').style.display = 'none';
     document.getElementById('searchInput').value = '';
     
     document.querySelectorAll('.quick-filter-btn').forEach(btn => btn.classList.remove('active'));
@@ -621,17 +683,20 @@ function clearFilters() {
         borough: '',
         jobType: '',
         days: 90,
+        permitActivityMode: 'within',
         searchText: '',
         hasContact: false,
-        minLeadScore: 0
+        minLeadScore: 0,
+        sortBy: 'date'
     };
+    updateConstructionActivityHint();
     
     showToast('Filters cleared', 'info');
     applyFilters();
 }
 
 function exportPermits() {
-    const params = new URLSearchParams({ days: AppState.filters.days });
+    const params = appendPermitTimeParams(new URLSearchParams());
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
     

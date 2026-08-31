@@ -22,6 +22,7 @@ PUBLIC_TEMPLATES = {
     "building_profile.html",
     "contractor_profile.html",
     "admin_activity.html",
+    "admin_team.html",
 }
 PRIMARY_DESTINATIONS = {
     "/",

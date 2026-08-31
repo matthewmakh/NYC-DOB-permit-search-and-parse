@@ -45,6 +45,7 @@ CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS bulk_enrich_jobs (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    billing_user_id INTEGER REFERENCES users(id),
     status TEXT NOT NULL DEFAULT 'pending',
     owner_strategy TEXT NOT NULL DEFAULT 'recommended',
     provider TEXT NOT NULL DEFAULT 'enformion_fallback',
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS bulk_enrich_jobs (
 # Run after CREATE so the column also lands on existing tables from earlier deploys.
 ALTER_TABLE_SQL = [
     "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'enformion_fallback'",
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS billing_user_id INTEGER REFERENCES users(id)",
 ]
 
 CREATE_INDEXES_SQL = [
@@ -103,6 +105,7 @@ def init_bulk_enrich_jobs_table():
 
 def create_job(user_id, filters, building_ids, total_owners_planned,
                estimated_max_cost, cost_per_lookup, is_admin, owner_strategy,
+               billing_user_id=None,
                provider='enformion_fallback'):
     """Insert a new job row in 'pending' status. Returns the job id."""
     conn = _get_conn()
@@ -111,14 +114,15 @@ def create_job(user_id, filters, building_ids, total_owners_planned,
         cur.execute(
             """
             INSERT INTO bulk_enrich_jobs
-                (user_id, status, owner_strategy, provider, filters_json, building_ids,
+                (user_id, billing_user_id, status, owner_strategy, provider, filters_json, building_ids,
                  total_properties, total_owners_planned,
                  cost_per_lookup, estimated_max_cost, is_admin)
-            VALUES (%s, 'pending', %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, 'pending', %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
-                user_id, owner_strategy, provider, json.dumps(filters or {}), list(building_ids),
+                user_id, billing_user_id, owner_strategy, provider,
+                json.dumps(filters or {}), list(building_ids),
                 len(building_ids), total_owners_planned,
                 cost_per_lookup, estimated_max_cost, is_admin,
             ),
@@ -311,6 +315,7 @@ def _run_job(job_id):
         get_available_owners_for_enrichment,
         enrich_owner,
         filter_owners_by_strategy,
+        revoke_owner_enrichment_access,
     )
     from stripe_service import charge_batch_enrichment_total
 
@@ -383,7 +388,8 @@ def _run_job(job_id):
     if successful > 0 and not is_admin:
         try:
             ok, msg, _charge_id = charge_batch_enrichment_total(
-                user_id, enriched_building_ids, successful, enrichment_details
+                user_id, enriched_building_ids, successful, enrichment_details,
+                idempotency_key=f'bulk-enrich-job-{job_id}',
             )
             if ok:
                 calculated = successful * float(job_after.get('cost_per_lookup', 0.35))
@@ -392,9 +398,18 @@ def _run_job(job_id):
             else:
                 charge_message = f"Enrichment finished but payment failed: {msg}"
                 print(f"[bulk_enrich job {job_id}] CHARGE FAILED: {msg}")
+                for detail in enrichment_details:
+                    revoke_owner_enrichment_access(
+                        user_id, detail['building_id'], detail['owner'])
         except Exception as e:
             charge_message = f"Charge error: {e}"
             print(f"[bulk_enrich job {job_id}] CHARGE ERROR: {e}")
+            for detail in enrichment_details:
+                try:
+                    revoke_owner_enrichment_access(
+                        user_id, detail['building_id'], detail['owner'])
+                except Exception:
+                    pass
 
     # Final state write
     conn = _get_conn()

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set up your team account · NYC Permit Leads</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <h1>NYC Permit Leads</h1>
+                <p>Set up your employee account</p>
+            </div>
+
+            {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+
+            {% if invitation %}
+            <div class="alert alert-success">
+                <strong>{{ invitation.sponsor_email }}</strong> assigned access for
+                <strong>{{ invitation.member_email }}</strong>.
+            </div>
+            <form method="POST" class="auth-form">
+                <div class="form-group">
+                    <label for="email">Email address</label>
+                    <input id="email" type="email" value="{{ invitation.member_email }}" disabled>
+                </div>
+                <div class="form-group">
+                    <label for="password">Create password</label>
+                    <input id="password" name="password" type="password" minlength="8"
+                           autocomplete="new-password" required placeholder="Minimum 8 characters">
+                </div>
+                <div class="form-group">
+                    <label for="confirm_password">Confirm password</label>
+                    <input id="confirm_password" name="confirm_password" type="password" minlength="8"
+                           autocomplete="new-password" required placeholder="Repeat your password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Activate employee account</button>
+                <p class="terms-text">No subscription or card is required. Your sponsor covers access and paid contact-lookup charges.</p>
+            </form>
+            {% else %}
+            <div class="alert alert-error" role="alert">This setup link is invalid, expired, or has already been used.</div>
+            <div class="auth-footer"><p>Ask your admin to create a new setup link.</p></div>
+            {% endif %}
+        </div>
+        <div class="auth-info">
+            <h2>Your team access</h2>
+            <ul>
+                <li>Full property and permit search</li>
+                <li>No separate monthly subscription</li>
+                <li>Paid lookup usage billed to your sponsor</li>
+                <li>Your activity remains attributable to your login</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

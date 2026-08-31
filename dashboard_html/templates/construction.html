@@ -618,7 +618,7 @@
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="statActivePermits">0</div>
-                        <div class="stat-label" style="color: var(--text-secondary);">Active Permits</div>
+                        <div class="stat-label" id="statPermitLabel" style="color: var(--text-secondary);">Recent permits</div>
                     </div>
                 </div>
                 
@@ -692,7 +692,7 @@
                                 <div style="display: flex; align-items: center; gap: var(--spacing-md);">
                                     <i class="fas fa-clipboard-list" style="color: var(--primary); font-size: 1.25rem;"></i>
                                     <div>
-                                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0;">Active Permits</h3>
+                                        <h3 id="permitsListTitle" style="font-size: 1rem; font-weight: 700; margin: 0;">Recent permits</h3>
                                         <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0;" id="permitsListCount">Loading...</p>
                                     </div>
                                 </div>
@@ -814,8 +814,16 @@
                     </div>
                     
                     <div class="filter-group">
-                        <label class="filter-label">Time Period</label>
-                        <select id="filterDays" class="filter-select">
+                        <label class="filter-label" for="filterActivityMode">Timing rule</label>
+                        <select id="filterActivityMode" class="filter-select">
+                            <option value="within">Permits within window</option>
+                            <option value="inactive">Permits older than window</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label class="filter-label" for="filterDays">Time window</label>
+                        <select id="filterDays" class="filter-select" aria-describedby="constructionActivityHint">
                             <option value="7">Last 7 Days</option>
                             <option value="14">Last 14 Days</option>
                             <option value="30">Last 30 Days</option>
@@ -824,8 +832,15 @@
                             <option value="365">Last Year</option>
                             <option value="730">Last 2 Years</option>
                             <option value="1825">Last 5 Years</option>
+                            <option value="custom">Custom…</option>
                             <option value="all">All Time</option>
                         </select>
+                        <input id="filterCustomDays" class="filter-input" type="number"
+                            min="1" max="3650" inputmode="numeric" placeholder="Number of days"
+                            style="display:none; margin-top: var(--spacing-sm);">
+                        <small id="constructionActivityHint" style="display:block; margin-top:var(--spacing-sm); color:var(--text-secondary); font-size:0.75rem; line-height:1.45;">
+                            Shows individual permit records issued inside the selected window.
+                        </small>
                     </div>
                     
                     <button class="btn btn-primary" style="width: 100%; margin-top: var(--spacing-md);" onclick="applyFilters()">

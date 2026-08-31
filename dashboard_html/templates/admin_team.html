@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Team accounts · NYC Permit Leads{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/admin_team.css">
+{% endblock %}
+
+{% block content %}
+<main class="team-page" data-csrf-token="{{ csrf_token }}">
+    <div class="container">
+        <header class="team-page__header">
+            <div>
+                <div class="team-page__eyebrow">Admin</div>
+                <h1>Team accounts</h1>
+                <p>Give employees access without another subscription. Their paid lookups are billed to your account.</p>
+            </div>
+            <a class="btn btn-secondary team-page__activity" href="/admin/activity">
+                <i class="fas fa-chart-line" aria-hidden="true"></i>
+                Activity logs
+            </a>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+            <div class="team-alert team-alert--{{ category }}" role="status">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <section class="team-summary" aria-label="Team summary">
+            <article class="team-stat">
+                <span class="team-stat__label">Active employees</span>
+                <strong id="activeCount">—</strong>
+                <span>Subscription covered by you</span>
+            </article>
+            <article class="team-stat">
+                <span class="team-stat__label">Pending setup</span>
+                <strong id="pendingCount">—</strong>
+                <span>Links waiting to be claimed</span>
+            </article>
+            <article class="team-stat">
+                <span class="team-stat__label">Team usage · 30 days</span>
+                <strong id="spend30d">—</strong>
+                <span>Paid contact lookups only</span>
+            </article>
+        </section>
+
+        <div class="team-grid">
+            <section class="team-panel team-panel--billing" aria-labelledby="billingTitle">
+                <div class="team-panel__head">
+                    <div>
+                        <span class="team-panel__kicker">Payment method</span>
+                        <h2 id="billingTitle">Sponsored usage billing</h2>
+                    </div>
+                    <span class="status-pill" id="billingStatus">Checking…</span>
+                </div>
+                <p class="team-panel__copy">
+                    Employees never enter a card. Single lookups are $0.50 and bulk lookups are $0.35 each;
+                    Stripe charges the card saved on <strong>{{ user.email }}</strong>.
+                </p>
+                <div class="billing-method" id="billingMethod" aria-live="polite">
+                    <div class="billing-method__icon"><i class="fas fa-credit-card" aria-hidden="true"></i></div>
+                    <div>
+                        <strong>Loading payment method</strong>
+                        <span>Checking Stripe securely…</span>
+                    </div>
+                </div>
+                <button class="btn btn-secondary team-action" id="setupBillingBtn" type="button">
+                    <i class="fas fa-lock" aria-hidden="true"></i>
+                    Add or replace card
+                </button>
+                <p class="team-fineprint">Card details are collected and stored by Stripe. This app only displays the brand, last four digits, and expiration.</p>
+            </section>
+
+            <section class="team-panel" aria-labelledby="addEmployeeTitle">
+                <div class="team-panel__head">
+                    <div>
+                        <span class="team-panel__kicker">Onboarding</span>
+                        <h2 id="addEmployeeTitle">Add an employee</h2>
+                    </div>
+                </div>
+                <form id="inviteForm" class="team-form">
+                    <div class="team-field">
+                        <label for="employeeEmail">Work email</label>
+                        <input id="employeeEmail" name="email" type="email" autocomplete="email"
+                               placeholder="employee@company.com" required>
+                    </div>
+                    <div class="team-field">
+                        <label for="employeeName">Name <span>optional</span></label>
+                        <input id="employeeName" name="display_name" type="text" autocomplete="name"
+                               maxlength="120" placeholder="Employee name">
+                    </div>
+                    <button class="btn btn-primary team-action" id="inviteBtn" type="submit">
+                        <i class="fas fa-user-plus" aria-hidden="true"></i>
+                        Assign account
+                    </button>
+                </form>
+                <p class="team-fineprint">New users receive a secure setup link you can copy and send. Existing users are linked immediately.</p>
+            </section>
+        </div>
+
+        <section class="invite-result" id="inviteResult" hidden aria-live="polite">
+            <div>
+                <span class="team-panel__kicker">Setup link created</span>
+                <h2>Send this private link to the employee</h2>
+                <p>It expires in seven days and can be used once.</p>
+            </div>
+            <div class="copy-row">
+                <input id="inviteUrl" type="text" readonly aria-label="Employee setup link">
+                <button class="btn btn-primary team-action" id="copyInviteBtn" type="button">Copy link</button>
+            </div>
+        </section>
+
+        <section class="team-panel team-panel--members" aria-labelledby="membersTitle">
+            <div class="team-panel__head team-panel__head--members">
+                <div>
+                    <span class="team-panel__kicker">Access roster</span>
+                    <h2 id="membersTitle">Employees</h2>
+                </div>
+                <button class="btn btn-secondary" id="refreshTeamBtn" type="button" aria-label="Refresh team accounts">
+                    <i class="fas fa-rotate" aria-hidden="true"></i>
+                    Refresh
+                </button>
+            </div>
+            <div id="teamError" class="team-inline-error" hidden role="alert"></div>
+            <div class="members-list" id="membersList" aria-live="polite">
+                <div class="team-empty">Loading team accounts…</div>
+            </div>
+        </section>
+    </div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/admin_team.js"></script>
+{% endblock %}

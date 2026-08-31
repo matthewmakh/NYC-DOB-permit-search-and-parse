@@ -2085,6 +2085,9 @@ button { font-family: inherit; }
     .main-container { flex-direction: column; }
     .sidebar { width: 100%; position: static; max-height: none; }
     .browse-grid { grid-template-columns: 1fr; }
+    .filter-input,
+    .filter-select,
+    .ms-button { min-height: 44px; }
 }
 
 @media (max-width: 640px) {

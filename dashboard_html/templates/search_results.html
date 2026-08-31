@@ -150,8 +150,15 @@
                     </span>
                 </label>
 
-                <label class="filter-label sr-field-gap" for="recentPermitDays">Activity window</label>
-                <select id="recentPermitDays" class="filter-select" data-multiselect data-placeholder="Any time">
+                <label class="filter-label sr-field-gap" for="permitActivityMode">Timing rule</label>
+                <select id="permitActivityMode" class="filter-input">
+                    <option value="within">Had permits within window</option>
+                    <option value="inactive">No property permits within window</option>
+                </select>
+
+                <label class="filter-label sr-field-gap" for="recentPermitDays">Time window</label>
+                <select id="recentPermitDays" class="filter-select" data-multiselect
+                    data-placeholder="Any time" aria-describedby="permitActivityHint">
                     <option value="">Any time</option>
                     <option value="7">Last 7 days</option>
                     <option value="30">Last 30 days</option>
@@ -159,7 +166,14 @@
                     <option value="180">Last 6 months</option>
                     <option value="365">Last year</option>
                     <option value="730">Last 2 years</option>
+                    <option value="custom">Custom&hellip;</option>
                 </select>
+                <input id="recentPermitCustomDays" class="filter-input" type="number"
+                    min="1" max="3650" inputmode="numeric" placeholder="Number of days"
+                    style="display: none; margin-top: 8px;">
+                <small class="filter-hint" id="permitActivityHint">
+                    Choose a time window to apply this timing rule.
+                </small>
 
                 <label class="filter-label sr-field-gap" for="minMatchingPermits">Minimum matching permits</label>
                 <input id="minMatchingPermits" class="filter-input" type="number" min="0" placeholder="Any count">

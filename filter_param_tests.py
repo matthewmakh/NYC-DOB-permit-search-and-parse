@@ -227,6 +227,21 @@ check('licence type',
       (['UPPER(btrim(p.permittee_license_type)) IN (%s)'], ['GC']))
 parts, prm = permit(MultiDict([('recent_permit_days', '30')]))
 check('recency bound as a parameter', prm, ['30', '30'])
+parts, prm = permit(MultiDict([
+    ('recent_permit_days', '365'),
+    ('permit_activity_mode', 'inactive'),
+]))
+check('participant inactivity selects wholly older dated permit rows',
+      ('filing_date IS NULL' in parts[0], 'issue_date IS NULL' in parts[0], prm),
+      (True, True, ['365', '365']))
+check('unknown activity mode safely falls back to within',
+      '>=' in permit(MultiDict([
+          ('recent_permit_days', '30'),
+          ('permit_activity_mode', 'something-else'),
+      ]))[0][0], True)
+check('activity window is capped at ten years',
+      A._permit_activity_settings({'recent_permit_days': '999999'}),
+      ('within', 3650))
 check('recency can be excluded',
       permit(MultiDict([('recent_permit_days', '30')]), include_recency=False)[0], [])
 check('junk recency ignored',
@@ -237,6 +252,64 @@ check('alias is honoured',
       permit(MultiDict([('work_type', 'PL')]), alias='q')[0],
       ['UPPER(btrim(q.work_type)) IN (%s)'])
 check('nothing set means no predicate', permit(MultiDict([]))[0], [])
+
+print('— property permit inactivity —')
+inactive_where, inactive_params = [], []
+A._append_property_permit_activity_filter(MultiDict([
+    ('recent_permit_days', '730'),
+    ('permit_activity_mode', 'inactive'),
+]), inactive_where, inactive_params)
+check('property inactivity is a NOT EXISTS over every recent permit',
+      ('NOT EXISTS' in inactive_where[0], 'permit_activity.bbl = b.bbl' in inactive_where[0]),
+      (True, True))
+check('property inactivity binds the cutoff twice', inactive_params, ['730', '730'])
+check('property inactivity never uses the incorrect old-permit EXISTS test',
+      '< CURRENT_DATE' in inactive_where[0], False)
+within_where, within_params = [], []
+A._append_property_permit_activity_filter(MultiDict([
+    ('recent_permit_days', '90'),
+]), within_where, within_params)
+check('legacy within-window behavior remains an EXISTS',
+      (within_where[0].startswith('EXISTS'), within_params),
+      (True, ['90', '90']))
+blank_where, blank_params = [], []
+A._append_property_permit_activity_filter(MultiDict([
+    ('permit_activity_mode', 'inactive'),
+]), blank_where, blank_params)
+check('a mode without a day window does not filter', (blank_where, blank_params), ([], []))
+
+inactive_explorer_sql, inactive_explorer_params, inactive_explorer_context = (
+    A._build_search_explorer_cte(MultiDict([
+        ('q', 'AMINOV DESIGN ENGINEER'),
+        ('match_field', 'permittee'),
+        ('recent_permit_days', '365'),
+        ('permit_activity_mode', 'inactive'),
+    ]))
+)
+check('search explorer applies inactivity at the property grain',
+      'NOT EXISTS (SELECT 1 FROM permits recent_activity' in inactive_explorer_sql,
+      True)
+check('inactivity alone does not require a matching recent permit',
+      inactive_explorer_params['require_matching_permit'], False)
+check('search context echoes the validated activity rule',
+      (inactive_explorer_context['permit_activity_mode'],
+       inactive_explorer_context['recent_permit_days']),
+      ('inactive', 365))
+
+print('— permit-leads time filter —')
+construction_sql, construction_params, construction_days, construction_mode = (
+    A._construction_time_filter('180', 'inactive', alias='p'))
+check('permit-leads older mode uses a before-cutoff comparison',
+      ('p.issue_date <' in construction_sql, construction_params,
+       construction_days, construction_mode),
+      (True, ['180'], '180', 'inactive'))
+check('permit-leads default mode keeps the recent comparison',
+      '>=' in A._construction_time_filter('30', 'within')[0], True)
+check('permit-leads all-time mode adds no date predicate',
+      A._construction_time_filter('all', 'inactive'),
+      ('', [], 'all', 'inactive'))
+check('permit-leads invalid days safely fall back to 30',
+      A._construction_time_filter('bad', 'within')[2], '30')
 
 print('— building-only vs full category filters —')
 w1, p1 = [], []

@@ -186,8 +186,10 @@ def complete_subscription():
         flash('Account not found', 'error')
         return redirect(url_for('auth.signup'))
     
-    if user['subscription_status'] == 'active':
-        flash('Your subscription is already active!', 'success')
+    if user.get('has_access'):
+        message = ('Your sponsored team access is already active!'
+                   if user.get('is_sponsored') else 'Your subscription is already active!')
+        flash(message, 'success')
         return redirect(url_for('auth.login'))
     
     try:
@@ -345,7 +347,10 @@ def check_auth():
             'user': {
                 'email': user['email'],
                 'is_admin': user['is_admin'],
-                'subscription_status': user['subscription_status']
+                'subscription_status': user['subscription_status'],
+                'access_source': user.get('access_source'),
+                'is_sponsored': user.get('is_sponsored', False),
+                'billing_email': user.get('billing_email')
             }
         })
     

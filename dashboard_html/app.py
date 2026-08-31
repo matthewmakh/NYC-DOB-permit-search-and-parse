@@ -4,13 +4,14 @@ Flask API Backend for DOB Permit Dashboard
 Serves data from PostgreSQL database to HTML frontend
 """
 
-from flask import Flask, jsonify, request, render_template, redirect, url_for, session, g
+from flask import Flask, jsonify, request, render_template, redirect, url_for, session, g, flash
 from flask_cors import CORS
 from flask_caching import Cache
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import os
+import secrets
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -60,6 +61,8 @@ except ImportError:
     # Create stub classes
     class ActivityType:
         ADMIN_ACTIVITY_VIEW = 'admin_activity_view'
+        ADMIN_USER_VIEW = 'admin_user_view'
+        ADMIN_SETTINGS_CHANGE = 'admin_settings_change'
         BUTTON_CLICK = 'button_click'
         SECTION_CLICK = 'section_click'
         TAB_SWITCH = 'tab_switch'
@@ -170,6 +173,13 @@ def init_db_pool():
             bulk_enrich_service.resume_orphaned_jobs()
         except Exception as e:
             print(f"⚠️  bulk_enrich_service init skipped: {e}", flush=True)
+        try:
+            import team_service
+            team_service.init_team_tables()
+        except Exception as e:
+            # Like the bulk-job migration, this must never prevent a worker
+            # from booting while Postgres is briefly unavailable.
+            print(f"⚠️  sponsored-account init skipped: {e}", flush=True)
     return db_pool
 
 
@@ -1598,6 +1608,23 @@ def construction_legacy_redirect():
 
 # ==================== CONSTRUCTION INTELLIGENCE APIs ====================
 
+def _construction_time_filter(days_raw, mode_raw, alias='p'):
+    """Validated issue-date predicate for permit-row views."""
+    mode = 'inactive' if str(mode_raw or '').lower() == 'inactive' else 'within'
+    if str(days_raw).lower() == 'all':
+        return '', [], 'all', mode
+    try:
+        days = max(1, min(3650, int(days_raw)))
+    except (TypeError, ValueError):
+        days = 30
+    operator = '<' if mode == 'inactive' else '>='
+    return (
+        f"{alias}.issue_date {operator} CURRENT_DATE - (%s || ' days')::interval",
+        [str(days)],
+        str(days),
+        mode,
+    )
+
 @app.route('/api/construction/permits')
 def get_construction_permits():
     """Get filtered permits for construction page with advanced filtering"""
@@ -1607,6 +1634,7 @@ def get_construction_permits():
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
             days = request.args.get('days', '30')
+            activity_mode = request.args.get('permit_activity_mode', 'within')
             search = request.args.get('q', '').strip()
             min_lead_score = request.args.get('min_score', 0, type=int)
             has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
@@ -1665,11 +1693,14 @@ def get_construction_permits():
         
             params = []
         
-            # Handle time period filter
-            if days != 'all':
-                days_int = int(days)
-                query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-                params.append(days_int)
+            # Handle time period filter. On this permit-row page, inactive
+            # means records older than the cutoff (property-level inactivity
+            # lives on Properties and Search Explorer).
+            time_sql, time_params, days, activity_mode = (
+                _construction_time_filter(days, activity_mode, alias='p'))
+            if time_sql:
+                query += f" AND {time_sql}"
+                params.extend(time_params)
         
             # Apply filters
             if job_types:
@@ -1719,10 +1750,9 @@ def get_construction_permits():
             count_params = []
         
             # Apply same filters to count query
-            if days != 'all':
-                days_int = int(days)
-                count_query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-                count_params.append(days_int)
+            if time_sql:
+                count_query += f" AND {time_sql}"
+                count_params.extend(time_params)
         
             if job_types:
                 placeholders = ','.join(['%s'] * len(job_types))
@@ -1779,6 +1809,7 @@ def get_construction_permits():
                     'job_types': job_types,
                     'borough': borough,
                     'days': days,
+                    'permit_activity_mode': activity_mode,
                     'q': search,
                     'min_score': min_lead_score,
                     'has_contact': has_contact
@@ -1794,21 +1825,23 @@ def get_construction_permits():
 
 
 @app.route('/api/construction/stats')
-@cache.cached(timeout=60, key_prefix='construction_stats')
+@cache.cached(timeout=60, query_string=True)
 def get_construction_stats():
     """Get quick stats for construction dashboard"""
     try:
         with DatabaseConnection() as cur:
             days = request.args.get('days', '30')
+            activity_mode = request.args.get('permit_activity_mode', 'within')
+            time_sql, time_params, days, activity_mode = (
+                _construction_time_filter(days, activity_mode, alias='p'))
             
             # Build WHERE clause based on time period
-            if days == 'all':
+            if not time_sql:
                 where_clause = "WHERE 1=1"
                 params = ()
             else:
-                days_int = int(days)
-                where_clause = "WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-                params = (days_int,)
+                where_clause = f"WHERE {time_sql.replace('p.issue_date', 'issue_date')}"
+                params = tuple(time_params)
             
             # Total permits in time period
             cur.execute(f"""
@@ -1900,6 +1933,7 @@ def get_construction_map_data():
     try:
         with DatabaseConnection() as cur:
             days = request.args.get('days', '30')
+            activity_mode = request.args.get('permit_activity_mode', 'within')
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
             
@@ -1930,10 +1964,11 @@ def get_construction_map_data():
             params = []
             
             # Handle time period
-            if days != 'all':
-                days_int = int(days)
-                query += " AND p.issue_date >= CURRENT_DATE - INTERVAL '%s days'"
-                params.append(days_int)
+            time_sql, time_params, _days, _mode = (
+                _construction_time_filter(days, activity_mode, alias='p'))
+            if time_sql:
+                query += f" AND {time_sql}"
+                params.extend(time_params)
             
             if job_types:
                 placeholders = ','.join(['%s'] * len(job_types))
@@ -1980,8 +2015,11 @@ def get_top_contractors():
     """Get top contractors by permit activity"""
     try:
         with DatabaseConnection() as cur:
-            days = request.args.get('days', 90, type=int)
+            days = request.args.get('days', '90')
+            activity_mode = request.args.get('permit_activity_mode', 'within')
             limit_count = request.args.get('limit', 20, type=int)
+            time_sql, time_params, days, activity_mode = (
+                _construction_time_filter(days, activity_mode, alias='p'))
             
             # Top contractors by permit count
             query = """
@@ -1991,16 +2029,17 @@ def get_top_contractors():
                     STRING_AGG(DISTINCT job_type, ', ') as job_types,
                     STRING_AGG(DISTINCT borough, ', ') as boroughs,
                     MAX(issue_date) as most_recent
-                FROM permits
-                WHERE issue_date >= CURRENT_DATE - INTERVAL '%s days'
+                FROM permits p
+                WHERE 1=1
+                {time_clause}
                 AND (permittee_business_name IS NOT NULL OR applicant IS NOT NULL)
                 GROUP BY COALESCE(permittee_business_name, applicant, 'Unknown')
                 HAVING COUNT(*) > 1
                 ORDER BY permit_count DESC
                 LIMIT %s
-            """
+            """.format(time_clause=f'AND {time_sql}' if time_sql else '')
             
-            cur.execute(query, (days, limit_count))
+            cur.execute(query, tuple(time_params + [limit_count]))
             contractors = cur.fetchall()
         
         return jsonify({
@@ -2031,7 +2070,10 @@ def export_construction_permits():
             # Get same filters as main query
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
-            days = request.args.get('days', 30, type=int)
+            days = request.args.get('days', '30')
+            activity_mode = request.args.get('permit_activity_mode', 'within')
+            time_sql, time_params, days, activity_mode = (
+                _construction_time_filter(days, activity_mode, alias='p'))
             
             query = """
             SELECT 
@@ -2052,10 +2094,12 @@ def export_construction_permits():
                 b.current_owner_name
             FROM permits p
             LEFT JOIN buildings b ON p.bbl = b.bbl
-            WHERE p.issue_date >= CURRENT_DATE - INTERVAL '%s days'
+            WHERE 1=1
         """
         
-            params = [days]
+            params = list(time_params)
+            if time_sql:
+                query += f" AND {time_sql}"
         
             if job_types:
                 placeholders = ','.join(['%s'] * len(job_types))
@@ -2114,7 +2158,8 @@ def export_construction_permits():
             filter_params={
                 'job_types': job_types,
                 'borough': borough,
-                'days': days
+                'days': days,
+                'permit_activity_mode': activity_mode,
             }
         )
         
@@ -2799,18 +2844,23 @@ def _build_search_explorer_cte(args):
             permit_filters.append(
                 f"UPPER(BTRIM({expression})) IN ({placeholders})")
 
-    try:
-        recent_days = int(args.get('recent_permit_days')) \
-            if args.get('recent_permit_days') not in (None, '') else None
-    except (TypeError, ValueError):
-        recent_days = None
-    if recent_days is not None and recent_days > 0:
-        recent_days = min(recent_days, 3650)
+    activity_mode, recent_days = _permit_activity_settings(args)
+    if recent_days is not None:
         params['recent_permit_days'] = str(recent_days)
-        permit_filters.append("""(
-            p.filing_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
-            OR p.issue_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
-        )""")
+        recent_named_sql = """(
+            {alias}.filing_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
+            OR {alias}.issue_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
+        )"""
+        if activity_mode == 'inactive':
+            # Property inactivity must check every permit on the building, not
+            # just the permit rows that matched the search text or job filters.
+            building_filters.append(
+                "NOT EXISTS (SELECT 1 FROM permits recent_activity "
+                "WHERE recent_activity.bbl = b.bbl AND "
+                + recent_named_sql.format(alias='recent_activity') + ')'
+            )
+        else:
+            permit_filters.append(recent_named_sql.format(alias='p'))
 
     current_only = str(args.get('current_only', '')).lower() == 'true'
     if current_only:
@@ -2917,6 +2967,8 @@ def _build_search_explorer_cte(args):
         'match_fields': sorted(roles),
         'current_only': current_only,
         'min_matching_permits': min_matching,
+        'permit_activity_mode': activity_mode,
+        'recent_permit_days': recent_days,
     }
 
 
@@ -3603,13 +3655,88 @@ def _multi_param(args, name, allowed=None, upper=False):
     return out
 
 
+_PERMIT_ACTIVITY_MODES = {'within', 'inactive'}
+
+
+def _permit_activity_settings(args):
+    """Return the validated permit timing mode and window.
+
+    ``within`` keeps the legacy meaning: at least one permit date falls inside
+    the last X days. ``inactive`` is interpreted at the correct grain by the
+    caller: property queries exclude any building with a recent permit, while
+    permit-row queries keep records whose dates are older than the cutoff.
+    """
+    if args is None or not hasattr(args, 'get'):
+        return 'within', None
+
+    raw_mode = args.get('permit_activity_mode', 'within')
+    if isinstance(raw_mode, (list, tuple)):
+        raw_mode = raw_mode[0] if raw_mode else 'within'
+    mode = str(raw_mode or 'within').strip().lower()
+    if mode not in _PERMIT_ACTIVITY_MODES:
+        mode = 'within'
+
+    raw_days = args.get('recent_permit_days')
+    if isinstance(raw_days, (list, tuple)):
+        raw_days = raw_days[0] if raw_days else None
+    try:
+        days = int(raw_days) if raw_days not in (None, '') else None
+    except (TypeError, ValueError):
+        days = None
+    if days is None or days <= 0:
+        return mode, None
+    return mode, min(days, 3650)
+
+
+def _recent_permit_date_sql(alias='p'):
+    """Predicate for a filing or issue date inside a bound day window."""
+    return (
+        f"({alias}.filing_date >= CURRENT_DATE - (%s || ' days')::interval"
+        f" OR {alias}.issue_date >= CURRENT_DATE - (%s || ' days')::interval)"
+    )
+
+
+def _older_permit_date_sql(alias='p'):
+    """Predicate for a dated permit row wholly before a bound day window."""
+    return (
+        f"(({alias}.filing_date IS NULL OR {alias}.filing_date < "
+        f"CURRENT_DATE - (%s || ' days')::interval)"
+        f" AND ({alias}.issue_date IS NULL OR {alias}.issue_date < "
+        f"CURRENT_DATE - (%s || ' days')::interval)"
+        f" AND ({alias}.filing_date IS NOT NULL OR {alias}.issue_date IS NOT NULL))"
+    )
+
+
+def _append_property_permit_activity_filter(
+        args, where_clauses, params, building_alias='b'):
+    """Apply permit timing to a building set without false inactivity matches.
+
+    An ``EXISTS`` on an old permit is not enough to prove inactivity because
+    the same property may also have a recent permit. The inactive mode must be
+    a ``NOT EXISTS`` over *all* permits for the building. This also intentionally
+    includes properties with no permit history at all.
+    """
+    mode, days = _permit_activity_settings(args)
+    if days is None:
+        return
+
+    recent_sql = _recent_permit_date_sql('permit_activity')
+    exists_sql = (
+        'EXISTS (SELECT 1 FROM permits permit_activity '
+        f'WHERE permit_activity.bbl = {building_alias}.bbl AND {recent_sql})'
+    )
+    where_clauses.append(f'NOT {exists_sql}' if mode == 'inactive' else exists_sql)
+    params.extend([str(days), str(days)])
+
+
 def _permit_predicates(args, alias='p', include_recency=True):
     """WHERE fragments describing the permits a filter set is asking about.
 
     Returned as (sql_parts, params) so the caller can drop them into an EXISTS
     against the buildings table or straight into a query already scanning
-    permits. The properties page and the contractors page both go through
-    this, which is what makes a given filter set mean the same thing on both.
+    permits. Property queries deliberately call this without recency and then
+    apply timing across the whole building; permit and participant views use
+    the row-level recent/older predicate returned here.
     """
     parts, params = [], []
 
@@ -3638,20 +3765,15 @@ def _permit_predicates(args, alias='p', include_recency=True):
             f'UPPER(btrim({alias}.permittee_license_type)) IN ({placeholders})')
         params.extend(license_types)
 
-    recent_days = None
     if not include_recency:
         return parts, params
-    try:
-        raw = args.get('recent_permit_days') if hasattr(args, 'get') else None
-        if isinstance(raw, (list, tuple)):
-            raw = raw[0] if raw else None
-        recent_days = int(raw) if raw not in (None, '') else None
-    except (TypeError, ValueError):
-        recent_days = None
-    if recent_days is not None and recent_days > 0:
+    mode, recent_days = _permit_activity_settings(args)
+    if recent_days is not None:
         parts.append(
-            f"({alias}.filing_date >= CURRENT_DATE - (%s || ' days')::interval"
-            f" OR {alias}.issue_date >= CURRENT_DATE - (%s || ' days')::interval)")
+            _older_permit_date_sql(alias)
+            if mode == 'inactive'
+            else _recent_permit_date_sql(alias)
+        )
         params.extend([str(recent_days), str(recent_days)])
 
     return parts, params
@@ -3844,7 +3966,6 @@ def _resolve_filter_building_ids(args, limit=None):
     cash_only = str(g('cash_only', default='')).lower() == 'true'
     with_permits = str(g('with_permits', default='')).lower() == 'true'
     min_permits = g('min_permits', type=int)
-    recent_permit_days = g('recent_permit_days', type=int)
     boroughs = _parse_boroughs_param(g('borough', default=''), multi_source=args if hasattr(args, 'getlist') else None)
     min_units = g('min_units', type=int)
     max_units = g('max_units', type=int)
@@ -3919,6 +4040,7 @@ def _resolve_filter_building_ids(args, limit=None):
         where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
         params.extend(boroughs)
     _append_category_filters(args, where_clauses, params)
+    _append_property_permit_activity_filter(args, where_clauses, params)
     if min_units is not None:
         where_clauses.append("COALESCE(b.total_units, 0) >= %s"); params.append(min_units)
     if max_units is not None:
@@ -3928,13 +4050,6 @@ def _resolve_filter_building_ids(args, limit=None):
     if min_permits is not None:
         where_clauses.append("(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
         params.append(min_permits)
-    if recent_permit_days is not None:
-        where_clauses.append("""EXISTS (
-            SELECT 1 FROM permits p WHERE p.bbl = b.bbl
-              AND (p.filing_date >= CURRENT_DATE - (%s || ' days')::interval
-                   OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
-        )""")
-        params.extend([str(recent_permit_days), str(recent_permit_days)])
     if has_enrichable_owner:
         where_clauses.append(_enrichable_owner_sql())
 
@@ -4067,7 +4182,9 @@ def api_properties():
     - cash_only: Filter to cash purchases (true/false)
     - with_permits: Only properties with permits (true/false)
     - min_permits: Minimum permit count
-    - recent_permit_days: Only properties with permits filed/issued within X days
+    - recent_permit_days: Permit activity window in days (1-3650)
+    - permit_activity_mode: within (default) or inactive; inactive means no
+      permit on the property was filed/issued inside the selected window
     - borough: Borough filter (1-5), repeatable or comma-separated
     - building_class: Building class code prefix, repeatable or comma-separated
     - permit_type: DOB permit type, repeatable or comma-separated
@@ -4095,7 +4212,6 @@ def api_properties():
             cash_only = request.args.get('cash_only', '').lower() == 'true'
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
-            recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
@@ -4206,6 +4322,8 @@ def api_properties():
             # all multi-select in the sidebar; one shared helper turns each set
             # of values into an OR'd clause.
             _append_category_filters(request.args, where_clauses, params)
+            _append_property_permit_activity_filter(
+                request.args, where_clauses, params)
 
             # Units range
             if min_units is not None:
@@ -4226,35 +4344,19 @@ def api_properties():
             # Get permit counts subquery using BBL
             permit_count_sql = """
                 LEFT JOIN (
-                    SELECT bbl, COUNT(*) as permit_count
+                    SELECT bbl, COUNT(*) as permit_count,
+                           MAX(GREATEST(filing_date, issue_date)) AS last_permit_date
                     FROM permits
                     WHERE bbl IS NOT NULL
                     GROUP BY bbl
                 ) pc ON b.bbl = pc.bbl
             """
             
-            # Add recent permits subquery if filtering by permit recency
-            recent_permit_sql = ""
-            if recent_permit_days is not None:
-                recent_permit_sql = f"""
-                    LEFT JOIN (
-                        SELECT DISTINCT bbl
-                        FROM permits
-                        WHERE bbl IS NOT NULL
-                          AND (filing_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days'
-                               OR issue_date >= CURRENT_DATE - INTERVAL '{recent_permit_days} days')
-                    ) rp ON b.bbl = rp.bbl
-                """
-
             # Apply permit filters
             if with_permits:
                 where_sql += (" AND " if where_clauses else "WHERE ") + "pc.permit_count > 0"
             if min_permits is not None:
                 where_sql += (" AND " if where_clauses or with_permits else "WHERE ") + f"pc.permit_count >= {min_permits}"
-            if recent_permit_days is not None:
-                has_prior_conditions = where_clauses or with_permits or min_permits is not None
-                where_sql += (" AND " if has_prior_conditions else "WHERE ") + "rp.bbl IS NOT NULL"
-        
             # Validate and sanitize sort column
             valid_sort_columns = {
                 'address': 'b.address',
@@ -4283,7 +4385,6 @@ def api_properties():
                 SELECT COUNT(DISTINCT b.id) as count
                 FROM buildings b
                 {permit_count_sql}
-                {recent_permit_sql}
                 {where_sql}
             """
             cur.execute(count_query, params)
@@ -4327,6 +4428,7 @@ def api_properties():
                     b.acris_total_transactions,
                     b.lot_sqft{_signal_select_sql()},
                     COALESCE(pc.permit_count, 0) as permit_count,
+                    pc.last_permit_date,
                     pcon.contractor_name,
                     pcon.contractor_phone,
                     b.last_updated
@@ -4342,7 +4444,6 @@ def api_properties():
                     ORDER BY p.issue_date DESC NULLS LAST
                     LIMIT 1
                 ) pcon ON true
-                {recent_permit_sql}
                 {where_sql}
                 ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
@@ -4507,7 +4608,6 @@ def api_properties_export():
             cash_only = request.args.get('cash_only', '').lower() == 'true'
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
-            recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
@@ -4597,6 +4697,8 @@ def api_properties_export():
                 where_clauses.append(f"LEFT(b.bbl, 1) IN ({placeholders})")
                 params.extend(boroughs)
             _append_category_filters(request.args, where_clauses, params)
+            _append_property_permit_activity_filter(
+                request.args, where_clauses, params)
             if min_units is not None:
                 where_clauses.append("COALESCE(b.total_units, 0) >= %s")
                 params.append(min_units)
@@ -4605,17 +4707,10 @@ def api_properties_export():
                 params.append(max_units)
             if with_permits:
                 where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+
             if min_permits:
                 where_clauses.append("""(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s""")
                 params.append(min_permits)
-            if recent_permit_days:
-                where_clauses.append("""EXISTS (
-                    SELECT 1 FROM permits p 
-                    WHERE p.bbl = b.bbl 
-                    AND (p.filing_date >= CURRENT_DATE - (%s || ' days')::interval
-                         OR p.issue_date >= CURRENT_DATE - (%s || ' days')::interval)
-                )""")
-                params.extend([str(recent_permit_days), str(recent_permit_days)])
             # Enrichable owner filter
             has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
             if has_enrichable_owner:
@@ -4906,6 +5001,12 @@ def api_properties_export_enrichment_estimate():
 
             if with_permits:
                 where_clauses.append("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl)")
+
+            # Keep the cost estimate on the same permit filters and timing
+            # rule as the visible property list.
+            _append_category_filters(request.args, where_clauses, params)
+            _append_property_permit_activity_filter(
+                request.args, where_clauses, params)
             
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -5004,10 +5105,16 @@ def api_properties_export_with_enrichment():
             grant_permit_contact_access,
             get_enrichable_permit_contacts
         )
-        from stripe_service import charge_enrichment_fee
+        from stripe_service import charge_enrichment_fee, ensure_usage_billing_ready
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
+        should_charge = g.user.get('should_charge_usage', not is_admin)
+
+        if should_charge:
+            billing_ready, billing_message, _billing = ensure_usage_billing_ready(user_id)
+            if not billing_ready:
+                return jsonify({'success': False, 'error': billing_message}), 402
         
         # Get requested fields
         fields_param = request.args.get('fields', '')
@@ -5033,7 +5140,6 @@ def api_properties_export_with_enrichment():
             cash_only = request.args.get('cash_only', '').lower() == 'true'
             with_permits = request.args.get('with_permits', '').lower() == 'true'
             min_permits = request.args.get('min_permits', type=int)
-            recent_permit_days = request.args.get('recent_permit_days', type=int)
             boroughs = _parse_boroughs_param(request.args.get('borough', ''))
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
@@ -5082,6 +5188,13 @@ def api_properties_export_with_enrichment():
             # These were read from the query string but never applied, so an
             # enriched export could bill for rows the filtered screen excluded.
             _append_category_filters(request.args, where_clauses, params)
+            _append_property_permit_activity_filter(
+                request.args, where_clauses, params)
+
+            if min_permits:
+                where_clauses.append(
+                    "(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
+                params.append(min_permits)
 
             # Build query (limit 10000)
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -5147,12 +5260,13 @@ def api_properties_export_with_enrichment():
                     
                     # Need to enrich (or just grant access if already enriched)
                     # For bulk: charge FIRST, then grant access
-                    need_to_charge = not is_admin
+                    need_to_charge = should_charge
                     
                     if need_to_charge:
                         # Charge for this enrichment ($0.35 for bulk)
                         charge_success, charge_msg, charge_id = charge_enrichment_fee(
-                            user_id, building_id, contact_name, is_batch=True
+                            user_id, building_id, contact_name, is_batch=True,
+                            charge_scope='permit_contact'
                         )
                         
                         if not charge_success:
@@ -5612,14 +5726,16 @@ def api_contractors_search():
     """
     Search contractors with aggregated stats.
 
-    Takes the same filter vocabulary as /api/properties, so a filter set means
-    the same thing on both pages: there it returns the buildings that match,
-    here it returns the contractors who worked on them.
+    Takes the same filter vocabulary as /api/properties. Building attributes
+    still describe properties worked on; permit attributes describe the
+    participant's own permit rows. In inactive mode this directory therefore
+    counts older permit records, while /api/properties applies true
+    no-recent-permit logic at the whole-building grain.
 
     Shared with /api/properties:
     - search, borough, property_type, building_class, min_units, max_units,
       min_value, max_value, permit_type, work_type, job_type, license_type,
-      recent_permit_days
+      recent_permit_days, permit_activity_mode
 
     Contractor-specific:
     - min_jobs, max_jobs, min_active_jobs, min_properties, max_properties
@@ -6569,8 +6685,12 @@ def api_building_profile(bbl):
                 # Use the enrichment service function which handles owner tracking properly
                 if current_user:
                     enrichment_info['logged_in'] = True
-                    enrichment_info['cost'] = 0 if current_user.get('is_admin') else 0.50
-                    enrichment_info['batch_cost'] = 0 if current_user.get('is_admin') else 0.35
+                    is_billable = current_user.get(
+                        'should_charge_usage', not current_user.get('is_admin'))
+                    enrichment_info['cost'] = 0.50 if is_billable else 0
+                    enrichment_info['batch_cost'] = 0.35 if is_billable else 0
+                    enrichment_info['billing_email'] = current_user.get('billing_email')
+                    enrichment_info['is_sponsored'] = current_user.get('is_sponsored', False)
                     
                     # Get available owners with enrichment status
                     available_owners = get_available_owners_for_enrichment(building_id, current_user['id'])
@@ -6754,8 +6874,10 @@ def api_available_owners(building_id):
             'already_enriched': has_access,
             'enrichment_data': combined_data,
             'enrichment_data_per_owner': enrichment_data_list if enrichment_data_list else [],
-            'cost': 0 if g.user.get('is_admin') else 0.50,
-            'batch_cost': 0 if g.user.get('is_admin') else 0.35
+            'cost': 0.50 if g.user.get('should_charge_usage', not g.user.get('is_admin')) else 0,
+            'batch_cost': 0.35 if g.user.get('should_charge_usage', not g.user.get('is_admin')) else 0,
+            'billing_email': g.user.get('billing_email'),
+            'is_sponsored': g.user.get('is_sponsored', False)
         })
         
     except Exception as e:
@@ -6781,7 +6903,7 @@ def api_enrich_owner():
             classify_party_name, canonical_name_key, names_compatible,
             get_available_owners_for_enrichment,
         )
-        from stripe_service import charge_enrichment_fee
+        from stripe_service import charge_enrichment_fee, ensure_usage_billing_ready
         
         data = request.get_json() or {}
         
@@ -6804,6 +6926,7 @@ def api_enrich_owner():
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
+        should_charge = g.user.get('should_charge_usage', not is_admin)
         
         # Check if user already has access for THIS SPECIFIC OWNER
         has_access, existing_data_list, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
@@ -6816,6 +6939,11 @@ def api_enrich_owner():
                 'charged': False,
                 'message': f'You already enriched {owner_name}'
             })
+
+        if should_charge:
+            billing_ready, billing_message, _billing = ensure_usage_billing_ready(user_id)
+            if not billing_ready:
+                return jsonify({'success': False, 'error': billing_message}), 402
 
         # Do not let a crafted request spend money looking up an unrelated
         # person. The name must still be one of this building's current,
@@ -6838,11 +6966,18 @@ def api_enrich_owner():
             # Only charge AFTER successful enrichment - single lookup = $0.50
             charge_id = 'admin_free'
             charged = False
-            if not is_admin:
-                charge_success, charge_msg, charge_id = charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False)
+            if should_charge:
+                charge_success, charge_msg, charge_id = charge_enrichment_fee(
+                    user_id, building_id, owner_name, is_batch=False,
+                    charge_scope='owner_enrichment')
                 charged = charge_success
                 if not charge_success:
-                    print(f"WARNING: Enrichment succeeded but charge failed: {charge_msg}")
+                    from enrichment_service import revoke_owner_enrichment_access
+                    revoke_owner_enrichment_access(user_id, building_id, owner_name)
+                    return jsonify({
+                        'success': False,
+                        'error': f'Payment failed: {charge_msg}'
+                    }), 402
             
             return jsonify({
                 'success': True,
@@ -6960,6 +7095,7 @@ def api_bulk_enrichment_estimate():
 
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
+        should_charge = g.user.get('should_charge_usage', not is_admin)
 
         # Only admin can pick a non-default provider. Anyone else is locked into
         # the Apify-with-Enformion-fallback default.
@@ -6982,8 +7118,8 @@ def api_bulk_enrichment_estimate():
         if total_owners > 0 and customer_max_cost < CUSTOMER_MIN_CHARGE:
             customer_max_cost = CUSTOMER_MIN_CHARGE
 
-        cost_per_lookup = 0 if is_admin else CUSTOMER_COST_PER_LOOKUP
-        max_cost = 0 if is_admin else customer_max_cost
+        cost_per_lookup = CUSTOMER_COST_PER_LOOKUP if should_charge else 0
+        max_cost = customer_max_cost if should_charge else 0
 
         # Real upstream provider cost (what we pay the vendor). Only surfaced
         # to admins so they can monitor margin.
@@ -7004,7 +7140,7 @@ def api_bulk_enrichment_estimate():
             'owner_strategy': owner_strategy,
             'provider': provider,
             'is_admin': is_admin,
-            'requires_typed_confirmation': (not is_admin) and max_cost > 500,
+            'requires_typed_confirmation': should_charge and max_cost > 500,
             'max_properties_cap': BULK_ENRICH_MAX_PROPERTIES,
         }
         if is_admin:
@@ -7052,6 +7188,7 @@ def api_bulk_enrich_job_start():
 
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
+        should_charge = g.user.get('should_charge_usage', not is_admin)
 
         # Admin-only provider override (matches the estimate endpoint)
         provider = data.get('provider', DEFAULT_PROVIDER)
@@ -7062,7 +7199,7 @@ def api_bulk_enrich_job_start():
         if err:
             return jsonify({'success': False, 'error': err}), 400
 
-        cost_per_lookup = 0 if is_admin else CUSTOMER_COST_PER_LOOKUP
+        cost_per_lookup = CUSTOMER_COST_PER_LOOKUP if should_charge else 0
 
         # Re-estimate so we know the planned owner count and gate by confirm-string
         total_owners, _props_with_owners, _breakdown, _per_b = (
@@ -7071,9 +7208,9 @@ def api_bulk_enrich_job_start():
         customer_max_cost = total_owners * CUSTOMER_COST_PER_LOOKUP
         if total_owners > 0 and customer_max_cost < CUSTOMER_MIN_CHARGE:
             customer_max_cost = CUSTOMER_MIN_CHARGE
-        max_cost = 0 if is_admin else customer_max_cost
+        max_cost = customer_max_cost if should_charge else 0
 
-        if not is_admin and max_cost > 500:
+        if should_charge and max_cost > 500:
             typed = (data.get('confirm_typed') or '').strip().upper()
             if typed != 'CONFIRM':
                 return jsonify({
@@ -7089,6 +7226,12 @@ def api_bulk_enrich_job_start():
                 'error': "No enrichable owners found in the selected properties.",
             }), 400
 
+        if should_charge:
+            from stripe_service import ensure_usage_billing_ready
+            billing_ready, billing_message, _billing = ensure_usage_billing_ready(user_id)
+            if not billing_ready:
+                return jsonify({'success': False, 'error': billing_message}), 402
+
         # Only persist filters if that's how the user requested it
         persisted_filters = data.get('filters') or {}
         if 'building_ids' in data:
@@ -7102,6 +7245,7 @@ def api_bulk_enrich_job_start():
             estimated_max_cost=max_cost,
             cost_per_lookup=cost_per_lookup,
             is_admin=is_admin,
+            billing_user_id=g.user.get('billing_user_id'),
             owner_strategy=owner_strategy,
             provider=provider,
         )
@@ -7235,8 +7379,16 @@ def api_enrich_permit_contact():
                 'message': 'Contact already unlocked'
             })
         
-        # Need to charge if not admin and (new lookup or user hasn't unlocked)
-        need_to_charge = not is_admin and (not already_enriched or not user_has_access)
+        # Sponsored employees unlock data under their own account while their
+        # sponsor remains the payer.
+        should_charge = g.user.get('should_charge_usage', not is_admin)
+        need_to_charge = should_charge and (not already_enriched or not user_has_access)
+
+        if need_to_charge:
+            from stripe_service import ensure_usage_billing_ready
+            billing_ready, billing_message, _billing = ensure_usage_billing_ready(user_id)
+            if not billing_ready:
+                return jsonify({'success': False, 'error': billing_message}), 402
         
         # Perform enrichment (grant_access=True only for admin, regular users get access after charge)
         success, enrichment_data, message = enrich_permit_contact(
@@ -7258,7 +7410,8 @@ def api_enrich_permit_contact():
                 
                 # Charge FIRST
                 charge_success, charge_msg, charge_id = charge_enrichment_fee(
-                    user_id, building_id or 0, contact_name, is_batch=False
+                    user_id, building_id or 0, contact_name, is_batch=False,
+                    charge_scope='permit_contact'
                 )
                 
                 if charge_success:
@@ -7717,6 +7870,19 @@ def translate_building_class(code):
 # ADMIN ACTIVITY LOGS ROUTES (Admin Only)
 # ============================================================================
 
+def _admin_csrf_token():
+    token = session.get('admin_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['admin_csrf_token'] = token
+    return token
+
+
+def _valid_admin_csrf():
+    expected = session.get('admin_csrf_token') or ''
+    supplied = request.headers.get('X-CSRF-Token', '')
+    return bool(expected and supplied and secrets.compare_digest(expected, supplied))
+
 def admin_required(f):
     """Decorator that requires admin access"""
     from functools import wraps
@@ -7729,6 +7895,199 @@ def admin_required(f):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
         return f(*args, **kwargs)
     return decorated_function
+
+
+@app.route('/admin/team')
+@login_required
+@admin_required
+def admin_team_page():
+    """Manage employee access and the payment method funding their usage."""
+    log_activity(
+        activity_type=ActivityType.ADMIN_USER_VIEW,
+        activity_category=ActivityCategory.ADMIN,
+        description='Admin viewed team accounts',
+        page_name='Admin Team Accounts'
+    )
+    return render_template(
+        'admin_team.html', user=g.user, active_page='admin_team',
+        csrf_token=_admin_csrf_token(),
+    )
+
+
+@app.route('/api/admin/team')
+@login_required
+@admin_required
+def api_admin_team():
+    try:
+        from team_service import list_sponsored_accounts
+        from stripe_service import get_billing_method_summary
+
+        members = list_sponsored_accounts(g.user['id'])
+        billing = get_billing_method_summary(g.user['id'])
+        active = sum(1 for member in members if member['status'] == 'active')
+        pending = sum(1 for member in members if member['status'] == 'pending')
+        spend_30d = sum(float(member.get('spend_30d') or 0) for member in members)
+        for member in members:
+            for field in ('invite_expires_at', 'accepted_at', 'revoked_at',
+                          'created_at', 'last_login'):
+                if member.get(field):
+                    member[field] = member[field].isoformat()
+            member['total_spend'] = float(member.get('total_spend') or 0)
+            member['spend_30d'] = float(member.get('spend_30d') or 0)
+
+        return jsonify({
+            'success': True,
+            'sponsor': {'email': g.user['email']},
+            'billing': billing,
+            'members': members,
+            'summary': {
+                'active': active,
+                'pending': pending,
+                'spend_30d': round(spend_30d, 2),
+            },
+        })
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/admin/team/invitations', methods=['POST'])
+@login_required
+@admin_required
+def api_admin_create_team_invitation():
+    if not _valid_admin_csrf():
+        return jsonify({'success': False, 'error': 'Invalid request token. Refresh and try again.'}), 403
+    try:
+        from team_service import create_sponsorship
+
+        data = request.get_json() or {}
+        success, message, result = create_sponsorship(
+            g.user['id'], data.get('email'), data.get('display_name'), g.user['id'])
+        if not success:
+            return jsonify({'success': False, 'error': message}), 400
+        if result.get('invite_token'):
+            result['invite_url'] = url_for(
+                'accept_team_invitation', token=result.pop('invite_token'), _external=True)
+        if result.get('invite_expires_at'):
+            result['invite_expires_at'] = result['invite_expires_at'].isoformat()
+        log_activity(
+            activity_type=ActivityType.ADMIN_SETTINGS_CHANGE,
+            activity_category=ActivityCategory.ADMIN,
+            description=f"Admin assigned sponsored access to {result['email']}",
+            action_result=result['status'],
+            metadata={'sponsorship_id': result['id'], 'member_email': result['email']},
+        )
+        return jsonify({'success': True, 'message': message, 'account': result})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/admin/team/<int:sponsorship_id>/regenerate', methods=['POST'])
+@login_required
+@admin_required
+def api_admin_regenerate_team_invitation(sponsorship_id):
+    if not _valid_admin_csrf():
+        return jsonify({'success': False, 'error': 'Invalid request token. Refresh and try again.'}), 403
+    from team_service import regenerate_invitation
+    success, message, result = regenerate_invitation(g.user['id'], sponsorship_id)
+    if not success:
+        return jsonify({'success': False, 'error': message}), 400
+    result['invite_url'] = url_for(
+        'accept_team_invitation', token=result.pop('invite_token'), _external=True)
+    result['invite_expires_at'] = result['invite_expires_at'].isoformat()
+    return jsonify({'success': True, 'message': message, 'account': result})
+
+
+@app.route('/api/admin/team/<int:sponsorship_id>/revoke', methods=['POST'])
+@login_required
+@admin_required
+def api_admin_revoke_team_account(sponsorship_id):
+    if not _valid_admin_csrf():
+        return jsonify({'success': False, 'error': 'Invalid request token. Refresh and try again.'}), 403
+    from team_service import revoke_sponsorship
+    success, message, result = revoke_sponsorship(g.user['id'], sponsorship_id)
+    if not success:
+        return jsonify({'success': False, 'error': message}), 404
+    log_activity(
+        activity_type=ActivityType.ADMIN_SETTINGS_CHANGE,
+        activity_category=ActivityCategory.ADMIN,
+        description=f"Admin revoked sponsored access for {result['member_email']}",
+        metadata={'sponsorship_id': sponsorship_id, 'member_email': result['member_email']},
+    )
+    return jsonify({'success': True, 'message': message})
+
+
+@app.route('/api/admin/team/<int:sponsorship_id>/reactivate', methods=['POST'])
+@login_required
+@admin_required
+def api_admin_reactivate_team_account(sponsorship_id):
+    if not _valid_admin_csrf():
+        return jsonify({'success': False, 'error': 'Invalid request token. Refresh and try again.'}), 403
+    from team_service import reactivate_sponsorship
+    success, message, result = reactivate_sponsorship(g.user['id'], sponsorship_id)
+    if not success:
+        return jsonify({'success': False, 'error': message}), 400
+    return jsonify({'success': True, 'message': message, 'account': result})
+
+
+@app.route('/api/admin/team/billing/setup', methods=['POST'])
+@login_required
+@admin_required
+def api_admin_team_billing_setup():
+    if not _valid_admin_csrf():
+        return jsonify({'success': False, 'error': 'Invalid request token. Refresh and try again.'}), 403
+    try:
+        from stripe_service import create_payment_method_setup_session
+        checkout = create_payment_method_setup_session(
+            g.user['id'], g.user['email'],
+            success_url=url_for(
+                'admin_team_billing_complete', _external=True) +
+                '?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=url_for('admin_team_page', _external=True),
+        )
+        return jsonify({'success': True, 'checkout_url': checkout.url})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/admin/team/billing/complete')
+@login_required
+@admin_required
+def admin_team_billing_complete():
+    session_id = request.args.get('session_id', '')
+    try:
+        from stripe_service import finalize_payment_method_setup
+        finalize_payment_method_setup(session_id, g.user['id'])
+        flash('Payment method saved. Employee lookup charges will use this card.', 'success')
+    except Exception as exc:
+        flash(f'Payment method could not be saved: {exc}', 'error')
+    return redirect(url_for('admin_team_page'))
+
+
+@app.route('/team/setup/<token>', methods=['GET', 'POST'])
+def accept_team_invitation(token):
+    from team_service import get_invitation, accept_invitation
+    invitation = get_invitation(token)
+    error = None
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        confirmation = request.form.get('confirm_password', '')
+        if password != confirmation:
+            error = 'Passwords do not match.'
+        elif invitation:
+            success, message, user_id = accept_invitation(token, password)
+            if success:
+                from auth_service import create_session
+                session_token = create_session(
+                    user_id, request.remote_addr, request.user_agent.string[:500])
+                session['session_token'] = session_token
+                session.permanent = True
+                flash('Your employee account is ready. Welcome!', 'success')
+                return redirect(url_for('index'))
+            error = message
+    return render_template(
+        'team_setup.html', invitation=invitation, error=error,
+        token=token,
+    ), (200 if invitation else 410)
 
 
 @app.route('/admin/activity')

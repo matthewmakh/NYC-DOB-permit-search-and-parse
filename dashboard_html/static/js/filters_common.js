@@ -41,7 +41,12 @@
 
     /** Current value of every shared filter, ready to merge into page state. */
     function read() {
-        const out = { recentPermitDays: null };
+        const out = {
+            recentPermitDays: null,
+            permitActivityMode: el('permitActivityMode')?.value === 'inactive'
+                ? 'inactive'
+                : 'within',
+        };
 
         Object.keys(MULTI_FILTERS).forEach(id => {
             out[id] = el(id) ? MultiSelect.values(id) : [];
@@ -75,6 +80,10 @@
         });
         if (filters.recentPermitDays) {
             params.append('recent_permit_days', filters.recentPermitDays);
+            params.append(
+                'permit_activity_mode',
+                filters.permitActivityMode === 'inactive' ? 'inactive' : 'within'
+            );
         }
         return params;
     }
@@ -94,6 +103,9 @@
         });
         if (filters.recentPermitDays) {
             payload.recent_permit_days = filters.recentPermitDays;
+            payload.permit_activity_mode = filters.permitActivityMode === 'inactive'
+                ? 'inactive'
+                : 'within';
         }
         return payload;
     }
@@ -121,6 +133,13 @@
 
         const recent = el('recentPermitDays');
         const custom = el('recentPermitCustomDays');
+        const mode = el('permitActivityMode');
+        if (mode) {
+            mode.addEventListener('change', () => {
+                updateActivityHint();
+                onChange();
+            });
+        }
         if (recent) {
             recent.addEventListener('change', e => {
                 if (!custom) return onChange();
@@ -128,14 +147,44 @@
                     // Wait for a number before refetching.
                     custom.style.display = 'block';
                     custom.focus();
+                    updateActivityHint();
                     return;
                 }
                 custom.style.display = 'none';
                 custom.value = '';
+                updateActivityHint();
                 onChange();
             });
         }
-        if (custom) custom.addEventListener('change', () => onChange());
+        if (custom) custom.addEventListener('change', () => {
+            updateActivityHint();
+            onChange();
+        });
+        updateActivityHint();
+    }
+
+    function updateActivityHint() {
+        const hint = el('permitActivityHint');
+        const mode = el('permitActivityMode');
+        if (!hint || !mode) return;
+        const recent = el('recentPermitDays');
+        const custom = el('recentPermitCustomDays');
+        const hasWindow = recent?.value &&
+            (recent.value !== 'custom' || Boolean(custom?.value));
+        if (!hasWindow) {
+            hint.textContent = 'Choose a time window to apply this timing rule.';
+            return;
+        }
+        const context = hint.dataset.context || 'properties';
+        if (mode.value === 'inactive') {
+            hint.textContent = context === 'contractors'
+                ? 'Counts permit records dated before the selected cutoff.'
+                : 'Excludes buildings with any recent permit. Buildings with no history remain eligible unless “Only properties with permits” is on.';
+        } else {
+            hint.textContent = context === 'contractors'
+                ? 'Counts permit records filed or issued inside the selected window.'
+                : 'Requires at least one permit filed or issued inside the selected window.';
+        }
     }
 
     /** Reset every shared control without firing a fetch per control. */
@@ -151,6 +200,9 @@
             custom.value = '';
             custom.style.display = 'none';
         }
+        const mode = el('permitActivityMode');
+        if (mode) mode.value = 'within';
+        updateActivityHint();
     }
 
     /**
