@@ -1,0 +1,45 @@
+{% macro site_nav(active_page='', user=None) %}
+{% set nav_items = [
+    ('home', '/', 'Home'),
+    ('permits', '/permits', 'Permits'),
+    ('properties', '/properties', 'Properties'),
+    ('contractors', '/contractors', 'Participants'),
+    ('buyers', '/buyers', 'Buyers'),
+    ('alerts', '/alerts', 'Project alerts'),
+    ('signals', '/signals', 'Pre-permit signals')
+] %}
+<nav class="site-nav" aria-label="Primary navigation">
+    <div class="site-nav__inner">
+        <a href="/" class="site-nav__brand" aria-label="NYC Permit Leads home">
+            <span class="site-nav__mark" aria-hidden="true">NY</span>
+            <span>NYC Permit Leads</span>
+        </a>
+
+        <button class="site-nav__toggle" type="button" aria-expanded="false"
+                aria-controls="primaryNavLinks" aria-label="Open navigation">
+            <span></span><span></span><span></span>
+        </button>
+
+        <div class="site-nav__panel" id="primaryNavLinks">
+            <div class="site-nav__links">
+                {% for key, href, label in nav_items %}
+                <a href="{{ href }}" class="site-nav__link{% if active_page == key %} is-active{% endif %}"
+                   {% if active_page == key %}aria-current="page"{% endif %}>{{ label }}</a>
+                {% endfor %}
+            </div>
+            <div class="site-nav__actions">
+                {% if caller is defined %}{{ caller() }}{% endif %}
+                {% if user and user.is_admin %}
+                <a href="/admin/activity" class="site-nav__icon-link{% if active_page == 'admin' %} is-active{% endif %}"
+                   aria-label="Activity logs" title="Activity logs">
+                    <i class="fas fa-chart-line" aria-hidden="true"></i>
+                </a>
+                {% endif %}
+                <a href="/auth/logout" class="site-nav__icon-link" aria-label="Log out" title="Log out">
+                    <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</nav>
+{% endmacro %}

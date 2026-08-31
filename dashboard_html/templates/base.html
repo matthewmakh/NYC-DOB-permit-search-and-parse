@@ -3,41 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}NYC Real Estate Intel{% endblock %}</title>
+    <title>{% block title %}NYC Permit Leads{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/navigation.css">
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <nav class="top-nav">
-        <div class="nav-container">
-            <a href="/" class="nav-brand">
-                <span class="brand-mark">RE</span>
-                NYC Real Estate Intel
-            </a>
-            <div class="nav-links">
-                <a href="/" class="nav-link {% if active_page == 'home' %}active{% endif %}">Home</a>
-                <a href="/properties" class="nav-link {% if active_page == 'properties' %}active{% endif %}">Properties</a>
-                <a href="/contractors" class="nav-link {% if active_page == 'contractors' %}active{% endif %}">Participants</a>
-                <a href="/buyers" class="nav-link {% if active_page == 'buyers' %}active{% endif %}">Buyers</a>
-                <a href="/alerts" class="nav-link {% if active_page == 'alerts' %}active{% endif %}">Alerts</a>
-                <a href="/signals" class="nav-link {% if active_page == 'signals' %}active{% endif %}">Signals</a>
-                <a href="/watchlists" class="nav-link {% if active_page == 'watchlists' %}active{% endif %}">Watchlists</a>
-            </div>
-            <div class="nav-actions">
-                {% block nav_actions %}{% endblock %}
-                <a href="/auth/logout" class="btn btn-icon" title="Log out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
-        </div>
-    </nav>
+    {% from "_site_nav.html" import site_nav with context %}
+    {% call site_nav(active_page|default(''), g.user if g.user is defined else none) %}
+        {% block nav_actions %}{% endblock %}
+    {% endcall %}
 
     {% block content %}{% endblock %}
 
+    <script src="/static/js/navigation.js"></script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

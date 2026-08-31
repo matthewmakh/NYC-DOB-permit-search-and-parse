@@ -59,6 +59,7 @@ DATASETS = {
     'dob_now_elevator':    'kfp4-dz4h',
     'city_record':         'dg92-zbpx',
     'dob_violations':      '3h2n-5cm9',
+    'dob_safety_violations': '855j-jady', # DOB NOW: Safety Violations (daily)
     'ecb_violations':      '6bgk-3dad',
     'dob_complaints':      'eabe-havv',   # DOB Complaints Received
     'dob_co_bis':          'bs8b-p36w',   # DOB Certificate Of Occupancy (legacy)
@@ -115,6 +116,162 @@ def where_block_lot(boro_field, block_field, lot_field, bbl):
     return (f"{boro_field}={soql_quote(boro)} AND "
             f"{in_clause(block_field, sorted(block_forms))} AND "
             f"{in_clause(lot_field, sorted(lot_forms))}")
+
+
+def _pluto_number(value, cast=float):
+    """Normalize Socrata's string-encoded PLUTO numbers."""
+    try:
+        return cast(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _pluto_year(value):
+    year = _pluto_number(value, int)
+    return year if year and year > 0 else None
+
+
+def _pluto_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None or str(value).strip() == '':
+        return False
+    return str(value).strip().upper() in {'1', 'Y', 'YES', 'T', 'TRUE'}
+
+
+def _pluto_values(record, prefix, count):
+    """Return populated numbered PLUTO fields such as zonedist1..4."""
+    values = []
+    for index in range(1, count + 1):
+        value = (record.get(f'{prefix}{index}') or '').strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def normalize_pluto_record(record):
+    """Convert one PLUTO API row into stable, display-ready building facts.
+
+    PLUTO is tax-lot data, not a building-by-building survey. Keeping this
+    normalization beside the shared Socrata client gives the nightly pipeline
+    and live property panel the same meaning for units, areas, flags and codes.
+    """
+    record = record or {}
+    built_far = _pluto_number(record.get('builtfar'))
+    max_resid_far = _pluto_number(record.get('residfar'))
+    max_comm_far = _pluto_number(record.get('commfar'))
+    allowed = max(max_resid_far or 0, max_comm_far or 0)
+    unused_far = None
+    if built_far is not None and allowed > 0:
+        unused_far = round(max(allowed - built_far, 0), 2)
+
+    raw_bbl = record.get('bbl')
+    normalized_bbl = str(raw_bbl).split('.', 1)[0] if raw_bbl is not None else None
+    total_units = _pluto_number(record.get('unitstotal'), int)
+    residential_units = _pluto_number(record.get('unitsres'), int)
+    non_residential_units = None
+    if total_units is not None and residential_units is not None:
+        non_residential_units = max(total_units - residential_units, 0)
+
+    return {
+        # Identity and classification
+        'bbl': normalized_bbl,
+        'bin': record.get('bin'),
+        'borough_code': record.get('borough'),
+        'address': record.get('address'),
+        'zip_code': record.get('zipcode'),
+        'building_class': record.get('bldgclass'),
+        'land_use': record.get('landuse'),
+        'owner_name': record.get('ownername'),
+        'pluto_owner_type': record.get('ownertype'),
+
+        # Scale and use
+        'residential_units': residential_units,
+        'total_units': total_units,
+        'non_residential_units': non_residential_units,
+        'number_of_buildings': _pluto_number(record.get('numbldgs'), int),
+        'num_floors': _pluto_number(record.get('numfloors')),
+        'building_sqft': _pluto_number(record.get('bldgarea'), int),
+        'lot_sqft': _pluto_number(record.get('lotarea'), int),
+        'residential_sqft': _pluto_number(record.get('resarea'), int),
+        'commercial_sqft': _pluto_number(record.get('comarea'), int),
+        'office_sqft': _pluto_number(record.get('officearea'), int),
+        'retail_sqft': _pluto_number(record.get('retailarea'), int),
+        'garage_sqft': _pluto_number(record.get('garagearea'), int),
+        'storage_sqft': _pluto_number(record.get('strgearea'), int),
+        'factory_sqft': _pluto_number(record.get('factryarea'), int),
+        'other_sqft': _pluto_number(record.get('otherarea'), int),
+        'area_source_code': record.get('areasource'),
+
+        # Age and physical form
+        'year_built': _pluto_year(record.get('yearbuilt')),
+        'year_altered': _pluto_year(record.get('yearalter1')),
+        'year_altered_2': _pluto_year(record.get('yearalter2')),
+        'lot_front_ft': _pluto_number(record.get('lotfront')),
+        'lot_depth_ft': _pluto_number(record.get('lotdepth')),
+        'building_front_ft': _pluto_number(record.get('bldgfront')),
+        'building_depth_ft': _pluto_number(record.get('bldgdepth')),
+        'extension_code': record.get('ext'),
+        'proximity_code': record.get('proxcode'),
+        'irregular_lot': _pluto_flag(record.get('irrlotcode')),
+        'lot_type_code': record.get('lottype'),
+        'basement_code': record.get('bsmtcode'),
+        'easement_count': _pluto_number(record.get('easements'), int),
+
+        # Zoning and development envelope
+        'zoning_district': record.get('zonedist1'),
+        'zoning_districts': _pluto_values(record, 'zonedist', 4),
+        'commercial_overlays': _pluto_values(record, 'overlay', 2),
+        'special_districts': _pluto_values(record, 'spdist', 3),
+        'limited_height_district': record.get('ltdheight'),
+        'split_zone': _pluto_flag(record.get('splitzone')),
+        'zoning_map': record.get('zonemap'),
+        'zoning_map_code': record.get('zmcode'),
+        'built_far': built_far,
+        'max_resid_far': max_resid_far,
+        'max_comm_far': max_comm_far,
+        'max_facility_far': _pluto_number(record.get('facilfar')),
+        'max_affordable_res_far': _pluto_number(record.get('affresfar')),
+        'max_manufacturing_far': _pluto_number(record.get('mnffar')),
+        'unused_far': unused_far,
+
+        # Assessment and exemptions (PLUTO's current DOF-derived values)
+        'assessed_land_value_pluto': _pluto_number(record.get('assessland'), int),
+        'assessed_total_value_pluto': _pluto_number(record.get('assesstot'), int),
+        'exempt_total_value': _pluto_number(record.get('exempttot'), int),
+
+        # Districts and services
+        'community_district': record.get('cd'),
+        'census_tract_2010': record.get('ct2010') or record.get('tract2010'),
+        'census_block_2010': record.get('cb2010'),
+        'census_tract_2020': record.get('bct2020'),
+        'census_block_2020': record.get('bctcb2020'),
+        'school_district': record.get('schooldist'),
+        'council_district': record.get('council'),
+        'fire_company': record.get('firecomp'),
+        'police_precinct': record.get('policeprct'),
+        'health_area': record.get('healtharea'),
+        'health_center_district': record.get('healthcenterdistrict'),
+        'sanitation_borough': record.get('sanitboro'),
+        'sanitation_district': record.get('sanitdistrict'),
+        'sanitation_subsection': record.get('sanitsub'),
+        'transit_zone': record.get('transitzone'),
+
+        # Planning, landmark, flood and source metadata
+        'historic_district': record.get('histdist'),
+        'landmark_name': record.get('landmark'),
+        'environmental_designation': record.get('edesignum'),
+        'condo_number': record.get('condono'),
+        'fema_2007_flood_zone': _pluto_flag(record.get('firm07_flag')),
+        'preliminary_2015_flood_zone': _pluto_flag(record.get('pfirm15_flag')),
+        'latitude': _pluto_number(record.get('latitude')),
+        'longitude': _pluto_number(record.get('longitude')),
+        'sanborn_map': record.get('sanborn'),
+        'tax_map': record.get('taxmap'),
+        'pluto_map_id': record.get('plutomapid'),
+        'pluto_version': record.get('version'),
+        'dcp_edited': _pluto_flag(record.get('dcpedited')),
+    }
 
 
 # ---------------------------------------------------------------------------

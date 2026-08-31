@@ -134,11 +134,6 @@ BUILDING_BATCH_SIZE=500  # Buildings per enrichment run
 API_DELAY=0.1            # Seconds between API calls
 GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
 
-# Optional sales automations
-CRM_WEBHOOK_URL=https://your-automation-endpoint.example/crm
-CRM_WEBHOOK_BEARER_TOKEN=optional-secret
-WATCHLIST_DIGEST_WEBHOOK_URL=https://your-automation-endpoint.example/digest
-WATCHLIST_DIGEST_WEBHOOK_BEARER_TOKEN=optional-secret
 ```
 
 ### Running Scripts Locally
@@ -156,8 +151,7 @@ python permit_scraper_api.py --dob-now-only --days 14
 # Run the same source set used by the production permit-intelligence cron
 python permit_scraper_api.py --sources dob_now_filings dob_now_approved dob_now_electrical dob_now_electrical_details dob_now_elevator city_record --days 14
 
-# Production wrapper: sync all active feeds, then store watchlist digests.
-# It deliberately does not send data to an external webhook.
+# Production wrapper: sync all active feeds, then canonicalize imported contacts.
 python run_permit_intelligence_cron.py
 
 # One-time repair after changing DOB NOW permit identity/owner mappings.
@@ -183,9 +177,6 @@ python add_permit_contacts.py
 
 # Run full enrichment pipeline
 python run_enrichment_pipeline.py
-
-# Generate/store the salesperson watchlist digest on demand
-python generate_watchlist_digests.py
 
 # Run dashboard locally
 cd dashboard_html

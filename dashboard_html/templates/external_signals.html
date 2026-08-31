@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}External Signals — NYC Real Estate Intel{% endblock %}
+{% block title %}Pre-permit Signals — NYC Permit Leads{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -9,7 +9,8 @@
     .signals-head h1 { margin: 0 0 8px; }
     .signals-head p { margin: 0; color: #667085; max-width: 750px; line-height: 1.5; }
     .signals-tools { display: flex; gap: 9px; flex-wrap: wrap; }
-    .signals-tools select { border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; padding: 9px 11px; }
+    .signals-tools input, .signals-tools select { min-height: 44px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; padding: 9px 11px; }
+    .signals-tools input { min-width: 250px; }
     .signals-note { color: #667085; font-size: 13px; margin-bottom: 16px; }
     .signals-list { display: grid; gap: 12px; }
     .signal-card { background: #fff; border: 1px solid #e4e7ec; border-radius: 12px; padding: 20px; }
@@ -22,8 +23,8 @@
     .signal-reasons { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
     .signal-reasons span { background: #eff8ff; color: #175cd3; border-radius: 999px; padding: 5px 8px; font-size: 12px; }
     .signal-actions { margin-top: 15px; display: flex; gap: 8px; }
-    .signal-actions button, .signal-actions a { border: 1px solid #d0d5dd; background: #fff; color: #344054; border-radius: 7px; padding: 8px 11px; text-decoration: none; cursor: pointer; font: inherit; }
-    .signal-actions .primary { background: #1570ef; border-color: #1570ef; color: #fff; }
+    .signal-actions a { min-height: 40px; display: inline-flex; align-items: center; border: 1px solid #d0d5dd; background: #fff; color: #344054; border-radius: 7px; padding: 8px 11px; text-decoration: none; font: inherit; }
+    .signal-actions .primary { background: #0369a1; border-color: #0369a1; color: #fff; }
     .signals-empty { text-align: center; color: #667085; padding: 55px 20px; border: 1px dashed #d0d5dd; border-radius: 12px; background: #fff; }
     @media (max-width: 760px) { .signals-head { align-items: start; flex-direction: column; } }
 </style>
@@ -34,12 +35,12 @@
     <div class="signals-head">
         <div>
             <h1>Pre-permit signals</h1>
-            <p>City Record procurement and contract notices ranked for Smart Installers. These are research leads—not DOB projects—until the project-participant graph supplies evidence for a match.</p>
+            <p>Search City Record procurement and contract notices ranked for building-technology fit. These are research leads—not DOB projects—until public evidence supports a match.</p>
         </div>
         <div class="signals-tools">
+            <input id="signalSearch" type="search" aria-label="Search pre-permit signals" placeholder="Agency, title, vendor, location…">
             <select id="signalDays"><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last year</option></select>
             <select id="signalScore"><option value="10">Relevant (10+)</option><option value="25">Strong (25+)</option><option value="50">Highest fit (50+)</option><option value="0">All procurement</option></select>
-            <select id="signalStatus"><option value="new">New</option><option value="reviewed">Reviewed</option><option value="dismissed">Dismissed</option><option value="all">All</option></select>
         </div>
     </div>
     <div id="signalsNote" class="signals-note"></div>
@@ -51,13 +52,14 @@
 <script>
 const safeSignal = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const signalMoney = value => value == null ? null : new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits:0}).format(Number(value));
-const signalDate = value => value ? new Date(value).toLocaleDateString() : null;
+const signalDate = value => value ? new Intl.DateTimeFormat('en-US', {timeZone:'UTC'}).format(new Date(value)) : null;
+let signalTimer;
 
 async function loadSignals() {
     const days = document.getElementById('signalDays').value;
     const minScore = document.getElementById('signalScore').value;
-    const status = document.getElementById('signalStatus').value;
-    const response = await fetch(`/api/external-signals?days=${days}&min_score=${minScore}&status=${status}&limit=200`);
+    const query = document.getElementById('signalSearch').value.trim();
+    const response = await fetch(`/api/external-signals?days=${days}&min_score=${minScore}&status=all&q=${encodeURIComponent(query)}&limit=200`);
     const data = await response.json();
     const list = document.getElementById('signalsList');
     if (!data.success) { list.innerHTML = `<div class="signals-empty">${safeSignal(data.error || 'Could not load signals')}</div>`; return; }
@@ -73,19 +75,19 @@ async function loadSignals() {
             <div class="signal-reasons">${(signal.relevance_reasons || []).map(reason => `<span>${safeSignal(reason)}</span>`).join('')}</div>
             <div class="signal-details">${details.map(item => `<span>${safeSignal(item)}</span>`).join('')}</div>
             <div class="signal-actions">
-                <a href="${safeSignal(signal.source_url)}" target="_blank" rel="noopener">Open source</a>
+                <a class="primary" href="${safeSignal(signal.source_url)}" target="_blank" rel="noopener">Open source</a>
                 ${signal.contact_email ? `<a href="mailto:${safeSignal(signal.contact_email)}">Email contact</a>` : ''}
-                ${signal.review_status !== 'reviewed' ? `<button class="primary" onclick="updateSignal(${signal.id}, 'reviewed')">Mark reviewed</button>` : ''}
-                ${signal.review_status !== 'dismissed' ? `<button onclick="updateSignal(${signal.id}, 'dismissed')">Dismiss</button>` : ''}
-                ${signal.review_status !== 'new' ? `<button onclick="updateSignal(${signal.id}, 'new')">Reopen</button>` : ''}
+                ${signal.contact_phone ? `<a href="tel:${safeSignal(signal.contact_phone)}">Call contact</a>` : ''}
             </div>
         </article>`;
     }).join('');
 }
-async function updateSignal(id, reviewStatus) {
-    await fetch(`/api/external-signals/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({review_status:reviewStatus})});
-    loadSignals();
-}
+const initialSignalQuery = new URLSearchParams(window.location.search).get('q') || '';
+document.getElementById('signalSearch').value = initialSignalQuery;
+document.getElementById('signalSearch').addEventListener('input', () => {
+    clearTimeout(signalTimer);
+    signalTimer = setTimeout(loadSignals, 250);
+});
 document.querySelectorAll('.signals-tools select').forEach(select => select.addEventListener('change', loadSignals));
 loadSignals();
 </script>

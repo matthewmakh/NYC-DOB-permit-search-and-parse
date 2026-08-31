@@ -119,6 +119,38 @@ check('injection attempt is bound, never inlined',
       clauses(MultiDict([('permit_type', "PL'); DROP TABLE permits; --")]))[1],
       ["PL'); DROP TABLE PERMITS; --"])
 
+print('— grouped universal-search explorer —')
+explorer_args = MultiDict([
+    ('q', 'AMINOV DESIGN ENGINEER'),
+    ('match_field', 'permittee'),
+    ('borough', '4'),
+    ('job_type', 'A2'),
+    ('job_type', 'NB'),
+    ('permit_status', 'ISSUED'),
+    ('current_only', 'true'),
+    ('min_units', '2'),
+    ('min_matching_permits', '3'),
+])
+explorer_sql, explorer_params, explorer_context = A._build_search_explorer_cte(explorer_args)
+check('explorer keeps one qualified-property set for all grains',
+      all(name in explorer_sql for name in
+          ('matching_permits AS', 'qualified_properties AS', 'qualified_permits AS')), True)
+check('permittee-only search does not pretend the building itself matched',
+      'FALSE' in explorer_sql and 'permittee_business_name' in explorer_sql, True)
+check('job and status filters stay parameterized',
+      (explorer_params['job_type_0'], explorer_params['job_type_1'],
+       explorer_params['permit_status_0']),
+      ('A2', 'NB', 'ISSUED'))
+check('current/open and minimum-permit filters are represented',
+      ('CURRENT_DATE' in explorer_sql, explorer_params['min_matching_permits']),
+      (True, 3))
+check('search text never appears in generated SQL',
+      'AMINOV DESIGN ENGINEER' in explorer_sql, False)
+check('search context reports the constrained role',
+      explorer_context['match_fields'], ['permittee'])
+check('permit status is available as a real-data facet',
+      'permit_status' in A._FACET_COLUMNS, True)
+
 PROPERTY_SORTS = {
     'address': 'b.address',
     'value': 'b.assessed_total_value',
@@ -858,6 +890,48 @@ check('missing row id falls back to a work-permit composite',
                             'work_type': 'PL', 'permit_sequence__': '02',
                             'borough': 'QUEENS', 'block': '9966', 'lot': '80'}])[0][0][0],
       '440776739_01_PL_02')
+
+print('— live DOB Safety endpoint normalization —')
+
+
+class SafetyEndpointStub:
+    def __init__(self):
+        self.kwargs = None
+
+    def get_all(self, dataset, **kwargs):
+        self.kwargs = (dataset, kwargs)
+        return [
+            {'violation_number': 'V-1', 'violation_status': 'Active',
+             'device_type': 'Boiler', 'violation_issue_date': '2026-08-30T00:00:00.000'},
+            {'violation_number': 'V-2', 'violation_status': 'Waived/Pending',
+             'device_type': 'Facades', 'violation_issue_date': '2026-08-29T00:00:00.000'},
+            {'violation_number': 'V-3', 'violation_status': 'Dismissed',
+             'device_type': 'Boiler', 'violation_issue_date': '2026-08-28T00:00:00.000'},
+        ]
+
+
+real_socrata = A.socrata
+stub_socrata = SafetyEndpointStub()
+A.socrata = stub_socrata
+A.cache.clear()
+try:
+    response = A.app.test_client().get('/api/property/5012340056/safety-violations')
+    payload = response.get_json()
+    check('Safety endpoint returns live summary',
+          (response.status_code, payload['total_count'], payload['open_count']),
+          (200, 3, 2))
+    check('Safety endpoint returns program facets',
+          payload['by_device_type'],
+          [{'count': 2, 'device_type': 'Boiler'},
+           {'count': 1, 'device_type': 'Facades'}])
+    check('Safety endpoint targets exact numeric BBL',
+          (stub_socrata.kwargs[0], stub_socrata.kwargs[1]['$where']),
+          ('dob_safety_violations', 'bbl=5012340056'))
+    bad = A.app.test_client().get('/api/property/not-a-bbl/safety-violations')
+    check('Safety endpoint rejects malformed BBL', bad.status_code, 400)
+finally:
+    A.socrata = real_socrata
+    A.cache.clear()
 
 print()
 print('=' * 50)

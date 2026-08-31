@@ -23,7 +23,9 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 
-from socrata_client import SocrataClient, soql_quote, bbl_parts
+from socrata_client import (
+    SocrataClient, soql_quote, bbl_parts, normalize_pluto_record,
+)
 
 # Force unbuffered output for Railway logging
 sys.stdout.reconfigure(line_buffering=True)
@@ -91,43 +93,13 @@ def get_pluto_data_for_bbl(bbl):
         if not data:
             return None, None  # Not found, but not an error
 
-        record = data[0]
-
-        # Development upside: how much buildable floor area the zoning allows
-        # beyond what's built. residfar/commfar are the zoning maxima;
-        # builtfar is what exists today.
-        built_far = _num(record.get('builtfar'))
-        max_resid_far = _num(record.get('residfar'))
-        max_comm_far = _num(record.get('commfar'))
-        allowed = max(max_resid_far or 0, max_comm_far or 0)
-        unused_far = None
-        if built_far is not None and allowed > 0:
-            unused_far = round(max(allowed - built_far, 0), 2)
-
-        result = {
-            'owner_name': record.get('ownername'),
-            'address': record.get('address'),
-            'bin': record.get('bin'),
-            'building_class': record.get('bldgclass'),
-            'land_use': record.get('landuse'),
-            'residential_units': _num(record.get('unitsres'), int) or 0,
-            'total_units': _num(record.get('unitstotal'), int) or 0,
-            'num_floors': _num(record.get('numfloors'), int) or 0,
-            'building_sqft': _num(record.get('bldgarea'), int) or 0,
-            'lot_sqft': _num(record.get('lotarea'), int) or 0,
-            'year_built': _num(record.get('yearbuilt'), int),
-            'year_altered': _num(record.get('yearalter1'), int),
-            'zip_code': record.get('zipcode'),
-            # Previously fetched-and-discarded PLUTO fields:
-            'latitude': _num(record.get('latitude')),
-            'longitude': _num(record.get('longitude')),
-            'zoning_district': record.get('zonedist1'),
-            'built_far': built_far,
-            'max_resid_far': max_resid_far,
-            'max_comm_far': max_comm_far,
-            'unused_far': unused_far,
-            'pluto_owner_type': record.get('ownertype'),
-        }
+        result = normalize_pluto_record(data[0])
+        # Historical pipeline behavior stores zeros rather than NULL for
+        # measured counts/areas when PLUTO has no value.
+        for field in ('residential_units', 'total_units', 'num_floors',
+                      'building_sqft', 'lot_sqft'):
+            if result.get(field) is None:
+                result[field] = 0
         return result, None
 
     except Exception as e:

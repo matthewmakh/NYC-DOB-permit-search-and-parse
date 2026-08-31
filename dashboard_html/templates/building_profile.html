@@ -40,6 +40,7 @@
         <div class="section-nav-bar">
             <nav class="section-nav" id="section-nav">
                 <button class="tab-btn active" data-tab="overview"><span class="tab-label">Overview</span></button>
+                <button class="tab-btn" data-tab="building"><span class="tab-label">Building</span></button>
                 <button class="tab-btn" data-tab="owners"><span class="tab-label">Ownership</span><span class="tab-badge" id="owners-badge"></span></button>
                 <button class="tab-btn" data-tab="financials"><span class="tab-label">Financials</span></button>
                 <button class="tab-btn" data-tab="activity"><span class="tab-label">Timeline</span><span class="tab-badge" id="activity-badge"></span></button>
@@ -62,6 +63,34 @@
             <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
             <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
         </div>
+
+        <section class="dossier-card building-intelligence-card" id="tab-building" aria-labelledby="building-facts-heading">
+            <div class="dossier-card-head">
+                <div>
+                    <h3 id="building-facts-heading">Building &amp; lot facts</h3>
+                    <p class="card-subtitle">Units, physical scale, zoning, assessment and public-service districts for this tax lot.</p>
+                </div>
+                <a class="freshness-note building-source-link" id="building-facts-source"
+                   href="https://data.cityofnewyork.us/d/64uk-42ks" target="_blank" rel="noopener noreferrer">
+                    Checking latest PLUTO&hellip;
+                </a>
+            </div>
+            <div class="dossier-card-body">
+                <div class="building-facts-highlights" id="building-facts-highlights" aria-live="polite">
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                </div>
+                <div class="building-facts-groups" id="building-facts-groups">
+                    <div class="skeleton-text"></div>
+                    <div class="skeleton-text"></div>
+                    <div class="skeleton-text"></div>
+                </div>
+                <p class="building-facts-note" id="building-facts-note">
+                    PLUTO reports at the tax-lot level; condominium units are generally aggregated to the billing lot.
+                </p>
+            </div>
+        </section>
 
         <div class="dossier-columns">
 
@@ -136,7 +165,7 @@
                         <span class="freshness-note">Checked live from NYC Open Data on page load</span>
                     </div>
                     <div class="dossier-card-body">
-                        <p class="data-freshness-note">Status reflects the agency's current record &mdash; HPD only closes a violation once the owner certifies the fix, so old violations can legitimately still be open.</p>
+                        <p class="data-freshness-note">Status reflects each agency's current record. The daily DOB NOW Safety feed is shown separately from legacy DOB/BIS, HPD housing, and ECB penalty records.</p>
                         <div id="violations-content">Loading&hellip;</div>
                     </div>
                 </section>
@@ -159,17 +188,6 @@
                 <div class="dossier-card rail-card" id="signals-card" style="display: none;">
                     <div class="dossier-card-head"><h3>Signals</h3></div>
                     <div class="dossier-card-body" id="signals-list"></div>
-                </div>
-
-                <div class="dossier-card rail-card">
-                    <div class="dossier-card-head"><h3>Building facts</h3></div>
-                    <div class="dossier-card-body">
-                        <div class="info-rows" id="building-basics">
-                            <div class="skeleton-text"></div>
-                            <div class="skeleton-text"></div>
-                            <div class="skeleton-text"></div>
-                        </div>
-                    </div>
                 </div>
 
                 <div class="dossier-card rail-card">
@@ -197,10 +215,12 @@
                 <div class="dossier-card rail-card">
                     <div class="dossier-card-head"><h3>Data sources</h3></div>
                     <div class="dossier-card-body">
-                        <div class="source-row"><span>PLUTO / RPAD / HPD</span><span class="source-when">refreshed nightly</span></div>
+                        <div class="source-row"><span>PLUTO building facts</span><span class="source-when">live on page load</span></div>
+                        <div class="source-row"><span>RPAD / HPD</span><span class="source-when">refreshed nightly</span></div>
                         <div class="source-row"><span>DOB permits</span><span class="source-when">nightly + on lookup</span></div>
                         <div class="source-row"><span>ACRIS deeds &amp; mortgages</span><span class="source-when">refreshed nightly</span></div>
-                        <div class="source-row"><span>Violations</span><span class="source-when">live on page load</span></div>
+                        <div class="source-row"><span>HPD / ECB violations</span><span class="source-when">live on page load</span></div>
+                        <div class="source-row"><span>DOB NOW Safety</span><span class="source-when">daily feed + live check</span></div>
                         <div class="source-row"><span>Secretary of State</span><span class="source-when">on ownership change</span></div>
                     </div>
                 </div>

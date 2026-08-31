@@ -136,11 +136,10 @@ async function performSearch() {
             } else {
                 showNotification('No results found. Try a different search term or check your spelling.', 'info');
             }
-        } else if (results.length === 1) {
-            // Single result - go directly to property page
-            window.location.href = `/property/${results[0].bbl}`;
         } else {
-            // Multiple results - go to results page
+            // Keep even a single match inside the explorer. A one-property
+            // result can still contain many permits, job types and owners to
+            // filter or regroup, and the user can open the property from it.
             window.location.href = `/search-results?q=${encodeURIComponent(query)}`;
         }
     } catch (error) {

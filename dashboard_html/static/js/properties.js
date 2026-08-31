@@ -68,6 +68,17 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
     MultiSelect.init();
     state.shared = SharedFilters.read();
+    const initialParams = new URLSearchParams(window.location.search);
+    const initialOwner = initialParams.get('owner') || '';
+    const initialSearch = initialParams.get('q') || '';
+    if (initialOwner) {
+        state.filters.owner = initialOwner;
+        document.getElementById('ownerSearch').value = initialOwner;
+    }
+    if (initialSearch) {
+        state.filters.search = initialSearch;
+        document.getElementById('universalSearch').value = initialSearch;
+    }
     SharedFilters.loadFacets();
     initializeEventListeners();
     loadPlays();

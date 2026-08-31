@@ -3,38 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NYC Real Estate Intel</title>
+    <title>NYC Permit Leads</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <nav class="top-nav">
-        <div class="nav-container">
-            <a href="/" class="nav-brand">
-                <span class="brand-mark">RE</span>
-                NYC Real Estate Intel
-            </a>
-            <div class="nav-links">
-                <a href="/" class="nav-link active">Home</a>
-                <a href="/properties" class="nav-link">Properties</a>
-                <a href="/contractors" class="nav-link">Participants</a>
-                <a href="/alerts" class="nav-link">Alerts</a>
-            </div>
-            <div class="nav-actions">
-                <a href="/auth/logout" class="btn btn-icon" title="Log out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
-        </div>
-    </nav>
+    {% from "_site_nav.html" import site_nav with context %}
+    {% call site_nav('home', g.user if g.user is defined else none) %}{% endcall %}
 
     <section class="hero">
         <div class="hero-inner">
-            <h1 class="hero-title">Know any building in New York</h1>
-            <p class="hero-subtitle">Permits, ownership, sales history, and violations across the five boroughs. Search by address, BBL, or owner name.</p>
+            <h1 class="hero-title">Find the next NYC building lead</h1>
+            <p class="hero-subtitle">Search permits, ownership, buyers, project teams, sales history, and early public signals across all five boroughs.</p>
 
             <div class="search-container">
                 <div class="search-bar-large">
@@ -87,6 +71,11 @@
         <div class="container">
             <div class="section-label">Browse</div>
             <div class="browse-grid">
+                <a href="/permits" class="browse-card">
+                    <h3>Permit leads</h3>
+                    <p>Search current and historical permits by address, applicant, permit number, borough, job type, recency, and available contact data.</p>
+                    <span class="card-cta">Search permits <i class="fas fa-arrow-right"></i></span>
+                </a>
                 <a href="/properties" class="browse-card">
                     <h3>Properties</h3>
                     <p>Filter the full building database by owner, value, sales, permit activity, financing, and violations. Drill into any property's ownership and transaction history.</p>
@@ -98,9 +87,19 @@
                     <span class="card-cta">Browse participants <i class="fas fa-arrow-right"></i></span>
                 </a>
                 <a href="/alerts" class="browse-card">
-                    <h3>Sales alerts</h3>
-                    <p>Review new DOB projects, status changes, and permit issuances once at the project level, with cost and proposed building changes attached.</p>
-                    <span class="card-cta">Review alerts <i class="fas fa-arrow-right"></i></span>
+                    <h3>Project alerts</h3>
+                    <p>Search new DOB projects, status changes, and permit issuances once at the project level, with cost and proposed building changes attached.</p>
+                    <span class="card-cta">Search project alerts <i class="fas fa-arrow-right"></i></span>
+                </a>
+                <a href="/buyers" class="browse-card">
+                    <h3>Repeat buyers</h3>
+                    <p>Find owners with multiple DOB projects, recent buying activity, and a strong fit for building technology work.</p>
+                    <span class="card-cta">Search repeat buyers <i class="fas fa-arrow-right"></i></span>
+                </a>
+                <a href="/signals" class="browse-card">
+                    <h3>Pre-permit signals</h3>
+                    <p>Search City Record procurement and contract notices for opportunities that may surface before a DOB permit is filed.</p>
+                    <span class="card-cta">Search early signals <i class="fas fa-arrow-right"></i></span>
                 </a>
             </div>
         </div>
@@ -112,6 +111,7 @@
         </div>
     </footer>
 
+    <script src="/static/js/navigation.js"></script>
     <script src="/static/js/home.js"></script>
 </body>
 </html>

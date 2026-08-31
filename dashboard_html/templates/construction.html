@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Construction Intelligence - NYC Real Estate Intel</title>
+    <title>Permit Leads — NYC Permit Leads</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/navigation.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
@@ -436,10 +437,57 @@
             .construction-container {
                 grid-template-columns: 1fr;
             }
+
+            .map-section,
+            .bottom-tabs,
+            .permits-list-container {
+                min-width: 0;
+            }
             
             .sidebar {
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            }
+        }
+
+        @media (max-width: 768px) {
+            .construction-container {
+                display: block;
+                min-width: 0;
+            }
+
+            #constructionMap {
+                width: 100%;
+                max-width: 100%;
+                height: 380px;
+            }
+
+            .tab-nav {
+                width: 100%;
+                max-width: 100%;
+                overflow-x: auto;
+                overscroll-behavior-inline: contain;
+            }
+
+            .tab-btn {
+                flex: 0 0 auto;
+                min-height: 44px;
+                padding: 12px 14px;
+            }
+
+            .list-header {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 12px;
+            }
+
+            .list-header > div:last-child {
+                flex-wrap: wrap;
+            }
+
+            .list-header select {
+                min-width: 0;
+                flex: 1 1 140px;
             }
         }
         
@@ -549,32 +597,18 @@
     </style>
 </head>
 <body>
-    <!-- Top Navigation -->
-    <nav class="top-nav">
-        <div class="nav-content">
-            <div class="nav-title">
-                🏙️ NYC Real Estate Intel
-            </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link active">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
-            </div>
-        </div>
-    </nav>
+    {% from "_site_nav.html" import site_nav with context %}
+    {% call site_nav('permits', g.user if g.user is defined else none) %}{% endcall %}
 
     <!-- Main Content -->
     <div class="container">
         <!-- Stats Bar -->
         <section style="padding: var(--spacing-xl) 0 var(--spacing-md) 0;">
             <h1 style="font-size: 2rem; font-weight: 800; margin-bottom: var(--spacing-md);">
-                🏗️ Construction Intelligence
+                Permit leads
             </h1>
             <p style="color: var(--text-secondary); margin-bottom: var(--spacing-xl);">
-                Real-time insights into NYC's active construction projects, contractors, and market trends
+                Search NYC permits by address, permit number, applicant, job type, borough, recency, and contact availability.
             </p>
             
             <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
@@ -666,7 +700,7 @@
                                     <select id="sortBy" class="filter-select" style="width: auto; padding: 0.5rem;" onchange="sortPermitsList()">
                                         <option value="date_desc">Newest First</option>
                                         <option value="date_asc">Oldest First</option>
-                                        <option value="score">🔥 Hottest to Coldest</option>
+                                        <option value="score">Highest lead score</option>
                                         <option value="contacts">Most Contacts</option>
                                         <option value="address">Address A-Z</option>
                                         <option value="applicant">Applicant A-Z</option>
@@ -748,6 +782,12 @@
                         <i class="fas fa-filter"></i> Filters
                     </h3>
                     
+                    <div class="filter-group">
+                        <label class="filter-label" for="searchInput">Search permits</label>
+                        <input id="searchInput" class="filter-input" type="search"
+                               placeholder="Address, permit, applicant, owner">
+                    </div>
+
                     <div class="filter-group">
                         <label class="filter-label">Borough</label>
                         <select id="filterBorough" class="filter-select">
@@ -831,6 +871,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ url_for('static', filename='js/navigation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/loading.js') }}"></script>
     <script src="{{ url_for('static', filename='js/construction.js') }}"></script>
 </body>

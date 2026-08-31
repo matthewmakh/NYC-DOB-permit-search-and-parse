@@ -381,6 +381,46 @@ step4._client = LienStub([])
 result, err = step4.get_tax_delinquency_data('3053170021')
 check("no rows means no delinquency", result['has_tax_delinquency'] is False)
 
+print("\n— DOB NOW Safety violation freshness —")
+check("ACTIVE Safety violation remains open",
+      step4.safety_violation_is_open('Active') is True)
+check("WAIVED/PENDING Safety violation remains open",
+      step4.safety_violation_is_open('Waived/Pending') is True)
+check("cured and dismissed Safety violations are closed",
+      not step4.safety_violation_is_open('Cured')
+      and not step4.safety_violation_is_open('Dismissed'))
+
+
+class SafetyStub:
+    def __init__(self):
+        self.calls = []
+
+    def get_all(self, dataset, **kwargs):
+        self.calls.append((dataset, kwargs))
+        return [
+            {'violation_status': 'Active', 'violation_count': '3'},
+            {'violation_status': 'Waived/Pending', 'violation_count': '2'},
+            {'violation_status': 'Dismissed', 'violation_count': '7'},
+            {'violation_status': 'Cured', 'violation_count': '4'},
+        ]
+
+
+safety_stub = SafetyStub()
+step4._client = safety_stub
+result, err = step4.get_dob_safety_violations_data('3053170021')
+check("Safety aggregate counts every status",
+      err is None and result['dob_safety_violation_count'] == 16, f"{result} {err}")
+check("Safety aggregate counts only active/pending as open",
+      result['dob_safety_open_violations'] == 5, f"got {result}")
+check("Safety query uses the new daily dataset and exact numeric BBL",
+      safety_stub.calls[0][0] == 'dob_safety_violations'
+      and safety_stub.calls[0][1]['$where'] == 'bbl=3053170021')
+check("successful Safety refresh receives its own timestamp",
+      result['dob_safety_last_checked'] is not None)
+bad_result, bad_error = step4.get_dob_safety_violations_data('not-a-bbl')
+check("invalid BBL is rejected before a Safety request",
+      bad_result is None and 'invalid BBL' in bad_error and len(safety_stub.calls) == 1)
+
 # ---------------------------------------------------------------------------
 print("\n— permit ingestion identities and owner updates —")
 

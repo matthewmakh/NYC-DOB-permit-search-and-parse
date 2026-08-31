@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests
+from socrata_client import SocrataClient, normalize_pluto_record
 
 # Load environment variables
 load_dotenv()
@@ -78,6 +79,9 @@ cache = Cache(app, config={
     'CACHE_TYPE': 'SimpleCache',  # In-memory cache
     'CACHE_DEFAULT_TIMEOUT': 300  # 5 minutes
 })
+
+# Reuse one token-aware, retrying HTTP session for live NYC Open Data panels.
+socrata = SocrataClient(timeout=20, max_retries=3)
 
 # Force unbuffered output for Railway logging
 import sys
@@ -483,13 +487,7 @@ def calculate_lead_score(permit):
 @login_required
 def index():
     """Serve the new homepage"""
-    return render_template('home.html', user=g.user)
-
-@app.route('/old-dashboard')
-@login_required
-def old_dashboard():
-    """Serve the old dashboard (for reference)"""
-    return render_template('index.html')
+    return render_template('home.html', user=g.user, active_page='home')
 
 
 @app.route('/api/permits')
@@ -791,6 +789,13 @@ _FACET_COLUMNS = {
     'work_type': ('work_type', WORK_TYPE_LABELS),
     'permit_type': ('permit_type', PERMIT_TYPE_LABELS),
     'license_type': ('permittee_license_type', LICENSE_TYPE_LABELS),
+    # The three DOB feeds represented in `permits` do not all use the same
+    # status column.  One combined facet keeps the UI honest across them.
+    'permit_status': (
+        "COALESCE(NULLIF(permit_status, ''), NULLIF(status, ''), "
+        "NULLIF(filing_status, ''))",
+        {},
+    ),
 }
 
 
@@ -1154,7 +1159,8 @@ def permit_detail(permit_id):
         return render_template('permit_detail.html', 
                              permit=permit, 
                              contacts=contacts,
-                             related_permits=related_permits)
+                             related_permits=related_permits,
+                             active_page='permits')
         
     except Exception as e:
         print(f"Error fetching permit detail: {e}")
@@ -1576,11 +1582,18 @@ def get_permit_detail(permit_id):
         }), 500
 
 
+@app.route('/permits')
+@login_required
+def permits_page():
+    """Search and filter NYC permit leads."""
+    return render_template('construction.html', active_page='permits')
+
+
 @app.route('/construction')
 @login_required
-def construction():
-    """Construction intelligence page"""
-    return render_template('construction.html')
+def construction_legacy_redirect():
+    """Preserve old bookmarks while keeping one canonical permits page."""
+    return redirect(url_for('permits_page'), code=301)
 
 
 # ==================== CONSTRUCTION INTELLIGENCE APIs ====================
@@ -1594,6 +1607,7 @@ def get_construction_permits():
             job_types = request.args.getlist('job_type')
             borough = request.args.get('borough')
             days = request.args.get('days', '30')
+            search = request.args.get('q', '').strip()
             min_lead_score = request.args.get('min_score', 0, type=int)
             has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
             sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
@@ -1666,6 +1680,15 @@ def get_construction_permits():
             if borough:
                 query += " AND p.borough = %s"
                 params.append(borough)
+
+            if search:
+                query += """ AND (
+                    p.address ILIKE %s OR p.permit_no ILIKE %s OR
+                    p.applicant ILIKE %s OR p.permittee_business_name ILIKE %s OR
+                    p.owner_business_name ILIKE %s OR p.bbl ILIKE %s
+                )"""
+                term = f'%{search}%'
+                params.extend([term] * 6)
         
             if has_contact == 'true':
                 query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
@@ -1709,6 +1732,15 @@ def get_construction_permits():
             if borough:
                 count_query += " AND p.borough = %s"
                 count_params.append(borough)
+
+            if search:
+                count_query += """ AND (
+                    p.address ILIKE %s OR p.permit_no ILIKE %s OR
+                    p.applicant ILIKE %s OR p.permittee_business_name ILIKE %s OR
+                    p.owner_business_name ILIKE %s OR p.bbl ILIKE %s
+                )"""
+                term = f'%{search}%'
+                count_params.extend([term] * 6)
         
             if has_contact == 'true':
                 count_query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
@@ -1747,6 +1779,7 @@ def get_construction_permits():
                     'job_types': job_types,
                     'borough': borough,
                     'days': days,
+                    'q': search,
                     'min_score': min_lead_score,
                     'has_contact': has_contact
                 }
@@ -2095,33 +2128,24 @@ def export_construction_permits():
         }), 500
 
 
-@app.route('/investments')
-@login_required
-def investments():
-    """Investment opportunities page"""
-    return render_template('investments.html')
-
-
-@app.route('/analytics')
-@login_required
-def analytics():
-    """Market analytics page"""
-    return render_template('analytics.html')
-
-
 @app.route('/search-results')
 @login_required
 def search_results():
-    """Search results page"""
+    """Grouped, filterable universal-search explorer."""
     query = request.args.get('q', '')
-    return render_template('search_results.html', query=query)
+    return render_template(
+        'search_results.html',
+        query=query,
+        building_class_groups=building_class_options(),
+        active_page='home',
+    )
 
 
 @app.route('/property/<bbl>')
 @login_required
 def property_detail(bbl):
     """Comprehensive building intelligence profile page"""
-    return render_template('building_profile.html', bbl=bbl)
+    return render_template('building_profile.html', bbl=bbl, active_page='properties')
 
 
 @app.route('/api/property/<bbl>/violations')
@@ -2218,6 +2242,140 @@ def api_property_violations(bbl):
             'success': False,
             'error': str(e)
         })
+
+
+def _safety_violation_is_open(status):
+    """Lifecycle states in DOB NOW: Safety that still require attention."""
+    normalized = (status or '').strip().upper()
+    return normalized == 'ACTIVE' or 'PENDING' in normalized
+
+
+@app.route('/api/property/<bbl>/safety-violations')
+@cache.cached(timeout=300)
+def api_property_safety_violations(bbl):
+    """Live DOB NOW Safety violations, a separate daily feed from BIS.
+
+    The legacy DOB Violations table does not contain the newer boiler,
+    elevator, facade, benchmarking, gas-piping and Local Law civil-penalty
+    records. This endpoint deliberately keeps the two sources distinct.
+    """
+    if len(bbl) != 10 or not bbl.isdigit():
+        return jsonify({'success': False, 'error': 'BBL must contain 10 digits'}), 400
+
+    try:
+        rows = socrata.get_all(
+            'dob_safety_violations', page_size=1000, max_rows=10000,
+            **{
+                '$where': f'bbl={int(bbl)}',
+                '$select': (
+                    'bin,violation_issue_date,violation_number,violation_type,'
+                    'violation_remarks,violation_status,device_number,device_type,'
+                    'cycle_end_date,borough,house_number,street,zip,bbl'
+                ),
+                '$order': 'violation_issue_date DESC, violation_number DESC',
+            },
+        )
+
+        status_counts = {}
+        device_counts = {}
+        violations = []
+        open_count = 0
+        for row in rows:
+            status = (row.get('violation_status') or 'Unknown').strip()
+            device = (row.get('device_type') or 'Other safety').strip()
+            is_open = _safety_violation_is_open(status)
+            open_count += int(is_open)
+            status_counts[status] = status_counts.get(status, 0) + 1
+            device_counts[device] = device_counts.get(device, 0) + 1
+            if len(violations) < 500:
+                violations.append({
+                    'violation_number': row.get('violation_number'),
+                    'violation_type': row.get('violation_type'),
+                    'remarks': row.get('violation_remarks'),
+                    'status': status,
+                    'is_open': is_open,
+                    'issue_date': row.get('violation_issue_date'),
+                    'cycle_end_date': row.get('cycle_end_date'),
+                    'device_type': device,
+                    'device_number': row.get('device_number'),
+                    'bin': row.get('bin'),
+                })
+
+        return jsonify({
+            'success': True,
+            'bbl': bbl,
+            'total_count': len(rows),
+            'open_count': open_count,
+            'closed_count': len(rows) - open_count,
+            'by_status': [
+                {'status': key, 'count': value}
+                for key, value in sorted(
+                    status_counts.items(), key=lambda item: (-item[1], item[0]))
+            ],
+            'by_device_type': [
+                {'device_type': key, 'count': value}
+                for key, value in sorted(
+                    device_counts.items(), key=lambda item: (-item[1], item[0]))
+            ],
+            'violations': violations,
+            'has_more': len(rows) > len(violations),
+            'checked_at': datetime.utcnow().isoformat(timespec='seconds') + 'Z',
+            'source': {
+                'name': 'DOB NOW: Safety Violations',
+                'dataset_id': '855j-jady',
+                'update_frequency': 'Daily',
+                'url': 'https://data.cityofnewyork.us/d/855j-jady',
+            },
+        })
+    except Exception as exc:
+        print(f'Error fetching DOB Safety violations for {bbl}: {exc}')
+        return jsonify({
+            'success': False,
+            'error': 'DOB Safety violations are temporarily unavailable',
+        }), 502
+
+
+@app.route('/api/property/<bbl>/building-facts')
+@cache.cached(timeout=3600)
+def api_property_building_facts(bbl):
+    """Return the latest tax-lot and building facts from NYC PLUTO.
+
+    Property profiles otherwise use the nightly warehouse row. This small live
+    check prevents missing units or physical details from lingering on a lead
+    when PLUTO has already published them.
+    """
+    if len(bbl) != 10 or not bbl.isdigit():
+        return jsonify({'success': False, 'error': 'BBL must contain 10 digits'}), 400
+
+    try:
+        rows = socrata.get('pluto', **{
+            '$where': f'bbl={int(bbl)}',
+            '$limit': 1,
+        })
+        if not rows:
+            return jsonify({
+                'success': False,
+                'error': 'No current PLUTO tax-lot record was found for this BBL',
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'bbl': bbl,
+            'facts': normalize_pluto_record(rows[0]),
+            'checked_at': datetime.utcnow().isoformat(timespec='seconds') + 'Z',
+            'source': {
+                'name': 'NYC Primary Land Use Tax Lot Output (PLUTO)',
+                'dataset_id': '64uk-42ks',
+                'update_frequency': 'Quarterly',
+                'url': 'https://data.cityofnewyork.us/d/64uk-42ks',
+            },
+        })
+    except Exception as exc:
+        print(f'Error fetching live PLUTO facts for {bbl}: {exc}')
+        return jsonify({
+            'success': False,
+            'error': 'Latest PLUTO building facts are temporarily unavailable',
+        }), 502
 
 
 @app.route('/api/property/<bbl>/hpd-info')
@@ -2402,6 +2560,509 @@ def build_token_search_clause(field, tokens, params_dict, param_prefix):
         clauses.append(f"{field} ILIKE %({param_name})s")
         params_dict[param_name] = f'%{escape_like_pattern(token)}%'
     return ' AND '.join(clauses), params_dict
+
+
+# Universal-search explorer -------------------------------------------------
+#
+# The homepage search used to collapse every match to one flat property card.
+# That made a permittee search look like a list of unrelated addresses and
+# discarded the dimensions that make the result useful.  The explorer keeps
+# one candidate set and lets the user change only its grain: property, owner,
+# job type, or individual permit.
+
+_SEARCH_MATCH_FIELDS = {
+    'permittee', 'applicant', 'property_owner', 'permit_owner', 'address',
+    'permit', 'phone',
+}
+
+
+def _search_bind_values(params, prefix, values):
+    """Named placeholders for a safe IN list."""
+    placeholders = []
+    for index, value in enumerate(values):
+        key = f'{prefix}_{index}'
+        params[key] = value
+        placeholders.append(f'%({key})s')
+    return ','.join(placeholders)
+
+
+def _search_match_sql(query, match_fields, params, permit_alias='p', building_alias='b'):
+    """Return separate building and permit text-match expressions.
+
+    Separating them is important.  A permittee query should only count the
+    permittee's permits; an address/owner query should include every related
+    permit on the directly matched property.
+    """
+    roles = set(match_fields) & _SEARCH_MATCH_FIELDS
+    if not roles:
+        roles = set(_SEARCH_MATCH_FIELDS)
+
+    pattern = f'%{escape_like_pattern(query)}%'
+    params['search_pattern'] = pattern
+    params['search_exact'] = query.strip()
+    params['search_variants'] = [
+        f'%{escape_like_pattern(value)}%' for value in get_search_variants(query)
+    ] or [pattern]
+
+    building_parts = []
+    permit_parts = []
+
+    if 'address' in roles:
+        building_parts.extend([
+            f"{building_alias}.bbl ILIKE %(search_pattern)s",
+            f"{building_alias}.address ILIKE ANY(%(search_variants)s)",
+        ])
+        permit_parts.extend([
+            f"{permit_alias}.bbl ILIKE %(search_pattern)s",
+            f"{permit_alias}.address ILIKE ANY(%(search_variants)s)",
+            f"{permit_alias}.zip_code = %(search_exact)s",
+        ])
+    if 'property_owner' in roles:
+        building_parts.extend([
+            f"{building_alias}.current_owner_name ILIKE %(search_pattern)s",
+            f"{building_alias}.owner_name_rpad ILIKE %(search_pattern)s",
+            f"{building_alias}.owner_name_hpd ILIKE %(search_pattern)s",
+            f"{building_alias}.sale_buyer_primary ILIKE %(search_pattern)s",
+        ])
+    if 'permittee' in roles:
+        permit_parts.extend([
+            f"{permit_alias}.permittee_business_name ILIKE %(search_pattern)s",
+            f"CONCAT_WS(' ', {permit_alias}.permittee_first_name, "
+            f"{permit_alias}.permittee_last_name) ILIKE %(search_pattern)s",
+        ])
+    if 'applicant' in roles:
+        permit_parts.append(
+            f"{permit_alias}.applicant ILIKE %(search_pattern)s")
+    if 'permit_owner' in roles:
+        permit_parts.extend([
+            f"{permit_alias}.owner_business_name ILIKE %(search_pattern)s",
+            f"CONCAT_WS(' ', {permit_alias}.owner_first_name, "
+            f"{permit_alias}.owner_last_name) ILIKE %(search_pattern)s",
+        ])
+    if 'permit' in roles:
+        permit_parts.extend([
+            f"{permit_alias}.permit_no ILIKE %(search_pattern)s",
+            f"{permit_alias}.job_number ILIKE %(search_pattern)s",
+        ])
+    if 'phone' in roles:
+        permit_parts.extend([
+            f"{permit_alias}.permittee_phone ILIKE %(search_pattern)s",
+            f"{permit_alias}.owner_phone ILIKE %(search_pattern)s",
+        ])
+
+    return (
+        '(' + ' OR '.join(building_parts) + ')' if building_parts else 'FALSE',
+        '(' + ' OR '.join(permit_parts) + ')' if permit_parts else 'FALSE',
+        roles,
+    )
+
+
+def _current_permit_sql(alias='p'):
+    """Best available definition of a current/open permit across DOB feeds."""
+    status = (
+        f"UPPER(BTRIM(COALESCE(NULLIF({alias}.permit_status, ''), "
+        f"NULLIF({alias}.status, ''), NULLIF({alias}.filing_status, ''), '')))"
+    )
+    return f"""(
+        (
+            {alias}.exp_date >= CURRENT_DATE
+            AND {status} NOT IN (
+                'EXPIRED', 'CANCELLED', 'CANCELED', 'REVOKED',
+                'SIGNED OFF', 'WITHDRAWN', 'DISAPPROVED'
+            )
+        )
+        OR (
+            {status} IN (
+                'ACTIVE', 'ISSUED', 'PERMIT ISSUED', 'PERMIT ENTIRE',
+                'APPROVED', 'IN PROCESS'
+            )
+            AND ({alias}.exp_date IS NULL OR {alias}.exp_date >= CURRENT_DATE)
+            AND (
+                {alias}.issue_date IS NULL
+                OR {alias}.issue_date >= CURRENT_DATE - INTERVAL '2 years'
+            )
+        )
+    )"""
+
+
+def _search_match_role_case(roles, permit_alias='p', building_alias='b'):
+    """Human explanation for why a permit belongs to the current result."""
+    parts = []
+    if 'permittee' in roles:
+        parts.append(
+            f"WHEN ({permit_alias}.permittee_business_name ILIKE %(search_pattern)s OR "
+            f"CONCAT_WS(' ', {permit_alias}.permittee_first_name, "
+            f"{permit_alias}.permittee_last_name) ILIKE %(search_pattern)s) "
+            "THEN 'Permittee'")
+    if 'applicant' in roles:
+        parts.append(
+            f"WHEN {permit_alias}.applicant ILIKE %(search_pattern)s THEN 'Applicant'")
+    if 'permit_owner' in roles:
+        parts.append(
+            f"WHEN ({permit_alias}.owner_business_name ILIKE %(search_pattern)s OR "
+            f"CONCAT_WS(' ', {permit_alias}.owner_first_name, "
+            f"{permit_alias}.owner_last_name) ILIKE %(search_pattern)s) "
+            "THEN 'Permit owner'")
+    if 'permit' in roles:
+        parts.append(
+            f"WHEN ({permit_alias}.permit_no ILIKE %(search_pattern)s OR "
+            f"{permit_alias}.job_number ILIKE %(search_pattern)s) THEN 'Permit number'")
+    if 'phone' in roles:
+        parts.append(
+            f"WHEN ({permit_alias}.permittee_phone ILIKE %(search_pattern)s OR "
+            f"{permit_alias}.owner_phone ILIKE %(search_pattern)s) THEN 'Phone'")
+    if 'address' in roles:
+        parts.append(
+            f"WHEN ({permit_alias}.address ILIKE ANY(%(search_variants)s) OR "
+            f"{building_alias}.address ILIKE ANY(%(search_variants)s)) THEN 'Address'")
+    if 'property_owner' in roles:
+        parts.append(
+            f"WHEN ({building_alias}.sale_buyer_primary ILIKE %(search_pattern)s OR "
+            f"{building_alias}.current_owner_name ILIKE %(search_pattern)s OR "
+            f"{building_alias}.owner_name_hpd ILIKE %(search_pattern)s OR "
+            f"{building_alias}.owner_name_rpad ILIKE %(search_pattern)s) "
+            "THEN 'Property owner'")
+    return 'CASE ' + ' '.join(parts) + " ELSE 'Related permit' END"
+
+
+def _build_search_explorer_cte(args):
+    """Build the shared, parameterized candidate set for every grouping."""
+    query = (args.get('q') or '').strip()
+    if len(query) < 2:
+        raise ValueError('Search for at least two characters')
+
+    params = {}
+    fields = _multi_param(args, 'match_field', allowed=_SEARCH_MATCH_FIELDS)
+    building_match, permit_match, roles = _search_match_sql(
+        query, fields, params)
+
+    building_filters = []
+    property_types = _multi_param(
+        args, 'property_type', allowed=set(_PROPERTY_TYPE_SQL))
+    if property_types:
+        building_filters.append(
+            '(' + ' OR '.join(_PROPERTY_TYPE_SQL[value]
+                              for value in property_types) + ')')
+
+    building_classes = _multi_param(args, 'building_class', upper=True)
+    if building_classes:
+        values = [f'{value}%' for value in building_classes]
+        placeholders = _search_bind_values(
+            params, 'building_class', values)
+        building_filters.append(
+            f"UPPER(COALESCE(b.building_class, '')) LIKE ANY(ARRAY[{placeholders}])")
+
+    boroughs = _parse_boroughs_param(
+        args.get('borough', ''), multi_source=args)
+    if boroughs:
+        placeholders = _search_bind_values(params, 'borough', boroughs)
+        building_filters.append(
+            f"LEFT(b.bbl, 1) IN ({placeholders})")
+
+    numeric_building_filters = (
+        ('min_units', 'COALESCE(b.total_units, 0) >=', int),
+        ('max_units', 'COALESCE(b.total_units, 0) <=', int),
+        ('min_sqft', 'COALESCE(b.building_sqft, 0) >=', int),
+        ('max_sqft', 'COALESCE(b.building_sqft, 0) <=', int),
+        ('min_value', 'COALESCE(b.assessed_total_value, 0) >=', float),
+        ('max_value', 'COALESCE(b.assessed_total_value, 0) <=', float),
+    )
+    for name, expression, caster in numeric_building_filters:
+        try:
+            value = caster(args.get(name)) if args.get(name) not in (None, '') else None
+        except (TypeError, ValueError):
+            value = None
+        if value is not None:
+            params[name] = value
+            building_filters.append(f'{expression} %({name})s')
+
+    violations = {value.lower() for value in _multi_param(args, 'has_violations')}
+    if violations == {'true'}:
+        building_filters.append('COALESCE(b.hpd_open_violations, 0) > 0')
+    elif violations == {'false'}:
+        building_filters.append('COALESCE(b.hpd_open_violations, 0) = 0')
+
+    permit_filters = []
+    permit_dimensions = (
+        ('job_type', 'p.job_type'),
+        ('work_type', 'p.work_type'),
+        ('permit_type', 'p.permit_type'),
+        ('license_type', 'p.permittee_license_type'),
+        ('permit_status',
+         "COALESCE(NULLIF(p.permit_status, ''), NULLIF(p.status, ''), "
+         "NULLIF(p.filing_status, ''), '')"),
+    )
+    for name, expression in permit_dimensions:
+        values = _multi_param(args, name, upper=True)
+        if values:
+            placeholders = _search_bind_values(params, name, values)
+            permit_filters.append(
+                f"UPPER(BTRIM({expression})) IN ({placeholders})")
+
+    try:
+        recent_days = int(args.get('recent_permit_days')) \
+            if args.get('recent_permit_days') not in (None, '') else None
+    except (TypeError, ValueError):
+        recent_days = None
+    if recent_days is not None and recent_days > 0:
+        recent_days = min(recent_days, 3650)
+        params['recent_permit_days'] = str(recent_days)
+        permit_filters.append("""(
+            p.filing_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
+            OR p.issue_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
+        )""")
+
+    current_only = str(args.get('current_only', '')).lower() == 'true'
+    if current_only:
+        permit_filters.append(_current_permit_sql('p'))
+
+    try:
+        min_matching = max(0, min(10000, int(args.get('min_matching_permits', 0))))
+    except (TypeError, ValueError):
+        min_matching = 0
+    params['min_matching_permits'] = min_matching
+
+    building_where = ' AND '.join(building_filters) if building_filters else 'TRUE'
+    permit_where = ' AND '.join(permit_filters) if permit_filters else 'TRUE'
+    require_matching_permit = bool(permit_filters)
+    params['require_matching_permit'] = require_matching_permit
+
+    owner_expression = """COALESCE(
+        NULLIF(BTRIM(b.sale_buyer_primary), ''),
+        NULLIF(BTRIM(b.current_owner_name), ''),
+        NULLIF(BTRIM(b.owner_name_hpd), ''),
+        NULLIF(BTRIM(b.owner_name_rpad), ''),
+        'Owner unknown'
+    )"""
+    match_role = _search_match_role_case(roles)
+    current_sql = _current_permit_sql('p')
+
+    cte = f"""
+        WITH search_bbls AS (
+            SELECT b.bbl
+            FROM buildings b
+            WHERE {building_match}
+            UNION
+            SELECT p.bbl
+            FROM permits p
+            WHERE p.bbl IS NOT NULL
+              AND {permit_match}
+        ),
+        filtered_buildings AS (
+            SELECT b.*, {owner_expression} AS owner_display
+            FROM buildings b
+            JOIN search_bbls sb ON sb.bbl = b.bbl
+            WHERE {building_where}
+        ),
+        matching_permits AS (
+            SELECT
+                p.*,
+                b.owner_display,
+                b.total_units AS property_units,
+                b.building_sqft AS property_sqft,
+                b.building_class AS property_building_class,
+                b.assessed_total_value AS property_assessed_value,
+                b.address AS property_address,
+                GREATEST(p.filing_date, p.issue_date) AS activity_date,
+                {current_sql} AS is_current,
+                {match_role} AS match_role
+            FROM filtered_buildings b
+            JOIN permits p ON p.bbl = b.bbl
+            WHERE ({building_match} OR {permit_match})
+              AND {permit_where}
+        ),
+        property_rollup AS (
+            SELECT
+                b.bbl,
+                b.address,
+                LEFT(b.bbl, 1) AS borough,
+                b.owner_display,
+                b.total_units,
+                b.residential_units,
+                b.building_sqft,
+                b.building_class,
+                b.assessed_total_value,
+                b.sale_price,
+                b.hpd_open_violations,
+                COUNT(mp.id) AS matching_permit_count,
+                COUNT(mp.id) FILTER (WHERE mp.is_current) AS current_open_permit_count,
+                MAX(mp.activity_date) AS latest_activity,
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT NULLIF(UPPER(BTRIM(mp.job_type)), '')), NULL)
+                    AS job_types,
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT NULLIF(UPPER(BTRIM(mp.work_type)), '')), NULL)
+                    AS work_types,
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT mp.match_role), NULL) AS match_reasons,
+                (SELECT COUNT(*) FROM permits ap WHERE ap.bbl = b.bbl)
+                    AS total_permit_count
+            FROM filtered_buildings b
+            LEFT JOIN matching_permits mp ON mp.bbl = b.bbl
+            GROUP BY
+                b.bbl, b.address, b.owner_display, b.total_units,
+                b.residential_units, b.building_sqft, b.building_class,
+                b.assessed_total_value, b.sale_price, b.hpd_open_violations
+            HAVING (NOT %(require_matching_permit)s OR COUNT(mp.id) > 0)
+        ),
+        qualified_properties AS (
+            SELECT * FROM property_rollup
+            WHERE matching_permit_count >= %(min_matching_permits)s
+        ),
+        qualified_permits AS (
+            SELECT mp.*
+            FROM matching_permits mp
+            JOIN qualified_properties qp ON qp.bbl = mp.bbl
+        )
+    """
+    return cte, params, {
+        'query': query,
+        'match_fields': sorted(roles),
+        'current_only': current_only,
+        'min_matching_permits': min_matching,
+    }
+
+
+@app.route('/api/search/explore')
+def api_search_explore():
+    """One search, switchable grain, shared filters, and URL-backed paging."""
+    group_by = request.args.get('group_by', 'property').strip().lower()
+    if group_by not in {'property', 'owner', 'job_type', 'permit'}:
+        group_by = 'property'
+    try:
+        cte, params, context = _build_search_explorer_cte(request.args)
+        page = max(1, request.args.get('page', 1, type=int))
+        per_page = min(100, max(10, request.args.get('per_page', 25, type=int)))
+        params.update(limit=per_page, offset=(page - 1) * per_page)
+
+        summaries_sql = cte + """
+            SELECT
+                (SELECT COUNT(*) FROM qualified_properties) AS properties,
+                (SELECT COUNT(*) FROM qualified_permits) AS permits,
+                (SELECT COUNT(DISTINCT owner_display) FROM qualified_properties) AS owners,
+                (SELECT COUNT(DISTINCT COALESCE(NULLIF(BTRIM(job_type), ''), 'Unknown'))
+                   FROM qualified_permits) AS job_types,
+                (SELECT COALESCE(SUM(current_open_permit_count), 0)
+                   FROM qualified_properties) AS current_open_permits,
+                (SELECT COALESCE(SUM(total_units), 0)
+                   FROM qualified_properties) AS total_units
+        """
+
+        sort_order = 'ASC' if request.args.get('sort_order', 'desc').lower() == 'asc' else 'DESC'
+        sort_key = request.args.get('sort_by', '').strip()
+        selects = {
+            'property': {
+                'sorts': {
+                    'latest': 'latest_activity', 'matching_permits': 'matching_permit_count',
+                    'open_permits': 'current_open_permit_count', 'units': 'total_units',
+                    'value': 'assessed_total_value', 'address': 'address',
+                    'owner': 'owner_display',
+                },
+                'default': 'latest',
+                'sql': "SELECT * FROM qualified_properties",
+            },
+            'permit': {
+                'sorts': {
+                    'latest': 'activity_date', 'expiry': 'exp_date',
+                    'units': 'property_units', 'address': 'property_address',
+                    'job_type': 'job_type',
+                },
+                'default': 'latest',
+                'sql': """SELECT id, bbl, permit_no, job_number, job_type, work_type,
+                            permit_type, permit_status, status, filing_status, issue_date,
+                            filing_date, exp_date, activity_date, is_current, match_role,
+                            applicant, permittee_business_name, permittee_license_type,
+                            owner_business_name, property_address, property_units,
+                            property_sqft, property_building_class, property_assessed_value,
+                            owner_display, work_description
+                         FROM qualified_permits""",
+            },
+            'owner': {
+                'sorts': {
+                    'properties': 'property_count', 'matching_permits': 'matching_permit_count',
+                    'open_permits': 'current_open_permit_count', 'units': 'total_units',
+                    'latest': 'latest_activity', 'owner': 'owner_display',
+                },
+                'default': 'properties',
+                'sql': """SELECT owner_display,
+                            COUNT(*) AS property_count,
+                            SUM(matching_permit_count) AS matching_permit_count,
+                            SUM(current_open_permit_count) AS current_open_permit_count,
+                            SUM(COALESCE(total_units, 0)) AS total_units,
+                            SUM(COALESCE(assessed_total_value, 0)) AS assessed_value,
+                            MAX(latest_activity) AS latest_activity,
+                            (ARRAY_AGG(address ORDER BY latest_activity DESC NULLS LAST))[1:4]
+                                AS sample_addresses
+                         FROM qualified_properties
+                         GROUP BY owner_display""",
+            },
+            'job_type': {
+                'sorts': {
+                    'permits': 'permit_count', 'properties': 'property_count',
+                    'open_permits': 'current_open_permit_count', 'latest': 'latest_activity',
+                    'job_type': 'job_type',
+                },
+                'default': 'permits',
+                'sql': """SELECT COALESCE(NULLIF(BTRIM(job_type), ''), 'Unknown') AS job_type,
+                            COUNT(*) AS permit_count,
+                            COUNT(DISTINCT bbl) AS property_count,
+                            COUNT(*) FILTER (WHERE is_current) AS current_open_permit_count,
+                            MAX(activity_date) AS latest_activity,
+                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT NULLIF(UPPER(BTRIM(work_type)), '')), NULL)
+                                AS work_types
+                         FROM qualified_permits
+                         GROUP BY COALESCE(NULLIF(BTRIM(job_type), ''), 'Unknown')""",
+            },
+        }
+        selected = selects[group_by]
+        if sort_key not in selected['sorts']:
+            sort_key = selected['default']
+        order_expression = selected['sorts'][sort_key]
+        tie_breaker = {
+            'property': ', bbl ASC',
+            'permit': ', bbl ASC, id ASC',
+            'owner': ', owner_display ASC',
+            'job_type': ', job_type ASC',
+        }[group_by]
+        result_sql = (
+            cte + selected['sql'] +
+            f" ORDER BY {order_expression} {sort_order} NULLS LAST" +
+            tie_breaker +
+            " LIMIT %(limit)s OFFSET %(offset)s"
+        )
+
+        with DatabaseConnection() as cur:
+            cur.execute(summaries_sql, params)
+            summary = dict(cur.fetchone())
+            cur.execute(result_sql, params)
+            results = [dict(row) for row in cur.fetchall()]
+
+        total_count = int(summary[{
+            'property': 'properties', 'permit': 'permits',
+            'owner': 'owners', 'job_type': 'job_types',
+        }[group_by]] or 0)
+        total_pages = (total_count + per_page - 1) // per_page
+        log_search(
+            query=context['query'], result_count=total_count,
+            filter_params={**context, 'group_by': group_by},
+        )
+        return jsonify({
+            'success': True,
+            'group_by': group_by,
+            'results': results,
+            'summary': summary,
+            'context': context,
+            'sort': {'by': sort_key, 'order': sort_order.lower()},
+            'pagination': {
+                'page': page, 'per_page': per_page, 'total_count': total_count,
+                'total_pages': total_pages, 'has_prev': page > 1,
+                'has_next': page < total_pages,
+            },
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception as exc:
+        print(f'Search explorer error: {exc}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Search could not be completed'}), 500
 
 
 @app.route('/api/search')
@@ -2877,6 +3538,7 @@ def properties_page():
     return render_template(
         'properties.html',
         building_class_groups=building_class_options(),
+        active_page='properties',
     )
 
 
@@ -4637,6 +5299,7 @@ def contractors_page():
     return render_template(
         'contractors.html',
         building_class_groups=building_class_options(),
+        active_page='contractors',
     )
 
 
@@ -4650,10 +5313,11 @@ def sales_alerts_page():
 @app.route('/api/sales-alerts')
 @login_required
 def api_sales_alerts():
-    """Return prioritized, deduplicated project events for daily review."""
+    """Return searchable, deduplicated DOB project events."""
     try:
-        status = request.args.get('status', 'new').strip().lower()
+        status = request.args.get('status', 'all').strip().lower()
         alert_type = request.args.get('type', '').strip().lower()
+        search = request.args.get('q', '').strip()
         limit = min(500, max(1, request.args.get('limit', 100, type=int)))
         where = []
         params = []
@@ -4663,6 +5327,16 @@ def api_sales_alerts():
         if alert_type:
             where.append('sa.alert_type = %s')
             params.append(alert_type)
+        if search:
+            where.append("""(
+                sa.title ILIKE %s OR sa.summary ILIKE %s OR pr.address ILIKE %s OR
+                pr.owner_business_name ILIKE %s OR pr.job_number ILIKE %s OR
+                pr.applicant_business_name ILIKE %s OR
+                pr.filing_representative_business_name ILIKE %s OR
+                pr.design_professional_business_name ILIKE %s
+            )""")
+            term = f'%{search}%'
+            params.extend([term] * 8)
         where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
 
         with DatabaseConnection() as cur:
@@ -4711,36 +5385,8 @@ def api_sales_alerts():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/sales-alerts/<int:alert_id>', methods=['POST'])
-@login_required
-def api_update_sales_alert(alert_id):
-    """Review, dismiss, reopen, or assign an alert."""
-    payload = request.get_json(silent=True) or {}
-    status = str(payload.get('status', '')).strip().lower()
-    if status not in ('new', 'reviewed', 'dismissed'):
-        return jsonify({'success': False, 'error': 'Invalid alert status'}), 400
-    assigned_to = str(payload.get('assigned_to', '')).strip() or None
-    try:
-        with DatabaseConnection() as cur:
-            cur.execute("""
-                UPDATE sales_alerts
-                SET status = %s,
-                    assigned_to = COALESCE(%s, assigned_to),
-                    reviewed_at = CASE WHEN %s = 'new' THEN NULL
-                                       ELSE CURRENT_TIMESTAMP END
-                WHERE id = %s
-                RETURNING id, status, assigned_to, reviewed_at
-            """, (status, assigned_to, status, alert_id))
-            updated = cur.fetchone()
-        if not updated:
-            return jsonify({'success': False, 'error': 'Alert not found'}), 404
-        return jsonify({'success': True, 'alert': dict(updated)})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
 # ============================================================================
-# ACCOUNT-BASED SALES WORKSPACE: EXTERNAL SIGNALS, BUYERS, WATCHLISTS, CRM HANDOFF
+# LEAD DISCOVERY: EXTERNAL SIGNALS AND REPEAT BUYERS
 # ============================================================================
 
 @app.route('/signals')
@@ -4755,7 +5401,8 @@ def api_external_signals():
     """Ranked City Record opportunities kept separate from DOB projects."""
     days = min(3650, max(1, request.args.get('days', 90, type=int)))
     min_score = min(100, max(0, request.args.get('min_score', 10, type=int)))
-    status = request.args.get('status', 'new').strip().lower()
+    status = request.args.get('status', 'all').strip().lower()
+    search = request.args.get('q', '').strip()
     limit = min(500, max(1, request.args.get('limit', 100, type=int)))
     clauses = [
         "source = 'city_record'",
@@ -4766,6 +5413,14 @@ def api_external_signals():
     if status in ('new', 'reviewed', 'dismissed'):
         clauses.append('review_status = %s')
         params.append(status)
+    if search:
+        clauses.append("""(
+            title ILIKE %s OR description ILIKE %s OR agency_name ILIKE %s OR
+            vendor_name ILIKE %s OR contact_name ILIKE %s OR
+            street_address_1 ILIKE %s OR building_name ILIKE %s OR pin ILIKE %s
+        )""")
+        term = f'%{search}%'
+        params.extend([term] * 8)
     try:
         with DatabaseConnection() as cur:
             cur.execute(f"""
@@ -4796,28 +5451,6 @@ def api_external_signals():
         print(f"External signals API error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
-@app.route('/api/external-signals/<int:signal_id>', methods=['PATCH'])
-@login_required
-def api_update_external_signal(signal_id):
-    payload = request.get_json(silent=True) or {}
-    status = str(payload.get('review_status', '')).strip().lower()
-    if status not in ('new', 'reviewed', 'dismissed'):
-        return jsonify({'success': False, 'error': 'Invalid review status'}), 400
-    try:
-        with DatabaseConnection() as cur:
-            cur.execute("""
-                UPDATE external_project_signals
-                SET review_status = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                RETURNING id, review_status
-            """, (status, signal_id))
-            row = cur.fetchone()
-        if not row:
-            return jsonify({'success': False, 'error': 'Signal not found'}), 404
-        return jsonify({'success': True, 'signal': dict(row)})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 _BUYER_KEY_SQL = "UPPER(REGEXP_REPLACE(COALESCE(pr.owner_business_name, ''), '[^A-Za-z0-9]+', '', 'g'))"
 
@@ -4896,336 +5529,17 @@ def api_repeat_buyers():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _default_watchlist(cur, user_id):
-    cur.execute("""
-        SELECT id, name FROM watchlists
-        WHERE user_id = %s AND is_default = TRUE LIMIT 1
-    """, (user_id,))
-    watchlist = cur.fetchone()
-    if watchlist:
-        return watchlist
-    cur.execute("""
-        INSERT INTO watchlists (user_id, name, is_default)
-        VALUES (%s, 'My target accounts', TRUE)
-        ON CONFLICT DO NOTHING
-        RETURNING id, name
-    """, (user_id,))
-    watchlist = cur.fetchone()
-    if watchlist:
-        return watchlist
-    cur.execute("""
-        SELECT id, name FROM watchlists
-        WHERE user_id = %s ORDER BY is_default DESC, id LIMIT 1
-    """, (user_id,))
-    return cur.fetchone()
-
-
-@app.route('/watchlists')
-@login_required
-def watchlists_page():
-    return render_template('watchlists.html', active_page='watchlists')
-
-
-@app.route('/api/watchlists', methods=['GET', 'POST'])
-@login_required
-def api_watchlists():
-    user_id = g.user['id']
-    try:
-        with DatabaseConnection() as cur:
-            if request.method == 'POST':
-                payload = request.get_json(silent=True) or {}
-                name = str(payload.get('name', '')).strip()[:120]
-                if not name:
-                    return jsonify({'success': False, 'error': 'Watchlist name is required'}), 400
-                cur.execute("""
-                    INSERT INTO watchlists (user_id, name)
-                    VALUES (%s, %s) RETURNING id, name, is_default, digest_enabled
-                """, (user_id, name))
-                return jsonify({'success': True, 'watchlist': dict(cur.fetchone())})
-
-            _default_watchlist(cur, user_id)
-            cur.execute("""
-                SELECT w.id, w.name, w.is_default, w.digest_enabled,
-                       w.last_digest_at, w.created_at,
-                       COUNT(wi.id) AS item_count
-                FROM watchlists w
-                LEFT JOIN watchlist_items wi ON wi.watchlist_id = w.id
-                WHERE w.user_id = %s
-                GROUP BY w.id
-                ORDER BY w.is_default DESC, w.created_at
-            """, (user_id,))
-            watchlists = [dict(row) for row in cur.fetchall()]
-            cur.execute("""
-                SELECT wi.id, wi.watchlist_id, wi.entity_type, wi.entity_key,
-                       wi.display_name, wi.metadata, wi.created_at
-                FROM watchlist_items wi
-                JOIN watchlists w ON w.id = wi.watchlist_id
-                WHERE w.user_id = %s
-                ORDER BY wi.created_at DESC
-            """, (user_id,))
-            items = [dict(row) for row in cur.fetchall()]
-        return jsonify({'success': True, 'watchlists': watchlists, 'items': items})
-    except Exception as e:
-        print(f"Watchlists API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/watchlists/items', methods=['POST'])
-@login_required
-def api_add_watchlist_item():
-    payload = request.get_json(silent=True) or {}
-    entity_type = str(payload.get('entity_type', '')).strip().lower()
-    entity_key = str(payload.get('entity_key', '')).strip()[:255]
-    display_name = str(payload.get('display_name', '')).strip()[:255]
-    watchlist_id = payload.get('watchlist_id')
-    if entity_type not in ('buyer', 'project', 'property'):
-        return jsonify({'success': False, 'error': 'Invalid watchlist entity type'}), 400
-    if not entity_key or not display_name:
-        return jsonify({'success': False, 'error': 'Entity key and display name are required'}), 400
-    try:
-        with DatabaseConnection() as cur:
-            if watchlist_id:
-                cur.execute("SELECT id FROM watchlists WHERE id = %s AND user_id = %s",
-                            (watchlist_id, g.user['id']))
-                watchlist = cur.fetchone()
-            else:
-                watchlist = _default_watchlist(cur, g.user['id'])
-            if not watchlist:
-                return jsonify({'success': False, 'error': 'Watchlist not found'}), 404
-            cur.execute("""
-                INSERT INTO watchlist_items
-                    (watchlist_id, entity_type, entity_key, display_name, metadata)
-                VALUES (%s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (watchlist_id, entity_type, entity_key)
-                DO UPDATE SET display_name = EXCLUDED.display_name,
-                              metadata = EXCLUDED.metadata
-                RETURNING id, watchlist_id, entity_type, entity_key, display_name
-            """, (watchlist['id'], entity_type, entity_key, display_name,
-                  __import__('json').dumps(payload.get('metadata') or {})))
-            item = dict(cur.fetchone())
-        return jsonify({'success': True, 'item': item})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/watchlists/items/<int:item_id>', methods=['DELETE'])
-@login_required
-def api_delete_watchlist_item(item_id):
-    try:
-        with DatabaseConnection() as cur:
-            cur.execute("""
-                DELETE FROM watchlist_items wi USING watchlists w
-                WHERE wi.id = %s AND w.id = wi.watchlist_id AND w.user_id = %s
-                RETURNING wi.id
-            """, (item_id, g.user['id']))
-            deleted = cur.fetchone()
-        if not deleted:
-            return jsonify({'success': False, 'error': 'Watchlist item not found'}), 404
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/watchlist-digest')
-@login_required
-def api_watchlist_digest():
-    """Live digest of project changes matching the current user's watches."""
-    days = min(30, max(1, request.args.get('days', 1, type=int)))
-    try:
-        with DatabaseConnection() as cur:
-            cur.execute(f"""
-                SELECT DISTINCT sa.id, sa.alert_type, sa.title, sa.summary,
-                       sa.event_at, pr.project_key, pr.job_number, pr.address,
-                       pr.bbl, pr.owner_business_name, pr.current_status,
-                       pr.initial_cost
-                FROM sales_alerts sa
-                JOIN projects pr ON pr.id = sa.project_id
-                WHERE sa.event_at >= CURRENT_TIMESTAMP - (%s || ' days')::interval
-                  AND EXISTS (
-                      SELECT 1 FROM watchlist_items wi
-                      JOIN watchlists w ON w.id = wi.watchlist_id
-                      WHERE w.user_id = %s AND w.digest_enabled = TRUE AND (
-                          (wi.entity_type = 'project' AND wi.entity_key = pr.project_key)
-                          OR (wi.entity_type = 'property' AND wi.entity_key = pr.bbl)
-                          OR (wi.entity_type = 'buyer' AND wi.entity_key = {_BUYER_KEY_SQL})
-                      )
-                  )
-                ORDER BY sa.event_at DESC
-                LIMIT 500
-            """, (days, g.user['id']))
-            events = [dict(row) for row in cur.fetchall()]
-        return jsonify({'success': True, 'days': days, 'events': events,
-                        'event_count': len(events)})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-def _crm_projects(cur, user_id, project_keys=None, buyer_key=None,
-                  watchlist_id=None, limit=500):
-    """Select explicitly scoped consolidated projects for export/push."""
-    clauses, params = [], []
-    project_keys = [str(key)[:140] for key in (project_keys or []) if str(key).strip()]
-    if project_keys:
-        clauses.append('pr.project_key = ANY(%s)')
-        params.append(project_keys)
-    if buyer_key:
-        clauses.append(f"{_BUYER_KEY_SQL} = %s")
-        params.append(str(buyer_key)[:255])
-    if watchlist_id:
-        clauses.append(f"""EXISTS (
-            SELECT 1 FROM watchlist_items wi JOIN watchlists w ON w.id = wi.watchlist_id
-            WHERE w.user_id = %s AND w.id = %s AND (
-                (wi.entity_type = 'project' AND wi.entity_key = pr.project_key)
-                OR (wi.entity_type = 'property' AND wi.entity_key = pr.bbl)
-                OR (wi.entity_type = 'buyer' AND wi.entity_key = {_BUYER_KEY_SQL})
-            ))""")
-        params.extend([user_id, watchlist_id])
-    if not clauses:
-        return []
-    cur.execute(f"""
-        SELECT pr.project_key, pr.job_number, pr.address, pr.borough, pr.bbl,
-               pr.owner_business_name AS account_name, pr.job_type,
-               pr.work_description, pr.initial_cost, pr.current_status,
-               pr.current_status_date, pr.first_filing_date, pr.latest_issue_date,
-               pr.existing_stories_count, pr.proposed_stories_count,
-               pr.existing_dwelling_units, pr.proposed_dwelling_units,
-               pr.applicant_business_name, pr.applicant_person_name,
-               pr.filing_representative_business_name,
-               pr.design_professional_business_name,
-               pr.design_professional_person_name,
-               pr.design_professional_license,
-               pr.has_electrical_filing,
-               pr.electrical_new_meters, pr.electrical_scope_categories,
-               pr.has_elevator_filing, pr.elevator_device_types,
-               pr.elevator_work_types, pr.source_system
-        FROM projects pr
-        WHERE {' OR '.join(f'({clause})' for clause in clauses)}
-        ORDER BY COALESCE(pr.current_status_date, pr.latest_issue_date::timestamp,
-                         pr.first_filing_date::timestamp) DESC NULLS LAST
-        LIMIT %s
-    """, params + [limit])
-    return [dict(row) for row in cur.fetchall()]
-
-
-@app.route('/api/crm/export')
-@login_required
-def api_crm_export():
-    """CSV shaped as Account + Opportunity records for CRM field mapping."""
-    import csv
-    import io
-    from flask import Response
-    project_keys = request.args.getlist('project_key')
-    buyer_key = request.args.get('buyer_key', '').strip() or None
-    watchlist_id = request.args.get('watchlist_id', type=int)
-    with DatabaseConnection() as cur:
-        rows = _crm_projects(cur, g.user['id'], project_keys, buyer_key, watchlist_id)
-    if not rows:
-        return jsonify({'success': False, 'error': 'Select a buyer, watchlist, or project first'}), 400
-    output = io.StringIO()
-    fields = [
-        'Account Name', 'Account External ID', 'Opportunity Name', 'Opportunity External ID',
-        'Stage', 'Project Address', 'Borough', 'BBL', 'DOB Job Number', 'Source System',
-        'Initial Cost', 'Current Status Date', 'Job Type', 'Work Description',
-        'Existing Stories', 'Proposed Stories', 'Existing Units', 'Proposed Units',
-        'Applicant', 'Design Professional', 'Design Professional License',
-        'Filing Representative',
-        'Electrical Filing', 'New Meters', 'Electrical Scope Categories',
-        'Elevator Filing', 'Elevator Device Types', 'Elevator Work Types',
-        'Recommended Next Step', 'Source URL'
-    ]
-    writer = csv.DictWriter(output, fieldnames=fields)
-    writer.writeheader()
-    for row in rows:
-        account = row.get('account_name') or 'Account research required'
-        if row.get('source_system') == 'DOB NOW Electrical':
-            source_url = 'https://data.cityofnewyork.us/d/dm9a-ab7w'
-        elif row.get('source_system') == 'DOB NOW Elevator':
-            source_url = 'https://data.cityofnewyork.us/d/kfp4-dz4h'
-        elif row.get('source_system') == 'DOB NOW':
-            source_url = 'https://data.cityofnewyork.us/d/w9ak-ipjd'
-        else:
-            source_url = ("https://a810-bisweb.nyc.gov/bisweb/JobsQueryByNumberServlet"
-                          f"?requestid=3&passjobnumber={row.get('job_number') or ''}")
-        writer.writerow({
-            'Account Name': account,
-            'Account External ID': ''.join(ch for ch in account.upper() if ch.isalnum()),
-            'Opportunity Name': f"{row.get('address') or row['project_key']} — Building technology",
-            'Opportunity External ID': row['project_key'],
-            'Stage': 'Research / qualify',
-            'Project Address': row.get('address'), 'Borough': row.get('borough'),
-            'BBL': row.get('bbl'), 'DOB Job Number': row.get('job_number'),
-            'Source System': row.get('source_system'), 'Initial Cost': row.get('initial_cost'),
-            'Current Status Date': row.get('current_status_date'), 'Job Type': row.get('job_type'),
-            'Work Description': row.get('work_description'),
-            'Existing Stories': row.get('existing_stories_count'),
-            'Proposed Stories': row.get('proposed_stories_count'),
-            'Existing Units': row.get('existing_dwelling_units'),
-            'Proposed Units': row.get('proposed_dwelling_units'),
-            'Applicant': row.get('applicant_business_name') or row.get('applicant_person_name'),
-            'Design Professional': row.get('design_professional_business_name') or row.get('design_professional_person_name'),
-            'Design Professional License': row.get('design_professional_license'),
-            'Filing Representative': row.get('filing_representative_business_name'),
-            'Electrical Filing': row.get('has_electrical_filing'),
-            'New Meters': row.get('electrical_new_meters'),
-            'Electrical Scope Categories': row.get('electrical_scope_categories'),
-            'Elevator Filing': row.get('has_elevator_filing'),
-            'Elevator Device Types': row.get('elevator_device_types'),
-            'Elevator Work Types': row.get('elevator_work_types'),
-            'Recommended Next Step': 'Map buyer, GC and project team; qualify timing and technology scope',
-            'Source URL': source_url,
-        })
-    log_export('crm_account_opportunity_csv', len(rows), {
-        'buyer_key': buyer_key, 'watchlist_id': watchlist_id,
-    })
-    filename = f"smart_installers_crm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return Response(output.getvalue(), mimetype='text/csv',
-                    headers={'Content-Disposition': f'attachment; filename={filename}'})
-
-
-@app.route('/api/crm/push', methods=['POST'])
-@login_required
-def api_crm_push():
-    """Push explicitly selected projects to a configured CRM automation endpoint."""
-    payload = request.get_json(silent=True) or {}
-    webhook_url = os.getenv('CRM_WEBHOOK_URL', '').strip()
-    if not webhook_url:
-        return jsonify({
-            'success': False,
-            'error': 'CRM push is not configured. Set CRM_WEBHOOK_URL; CSV export is ready now.',
-        }), 409
-    with DatabaseConnection() as cur:
-        rows = _crm_projects(
-            cur, g.user['id'], payload.get('project_keys') or [],
-            payload.get('buyer_key'), payload.get('watchlist_id'),
-        )
-    if not rows:
-        return jsonify({'success': False, 'error': 'No selected projects to push'}), 400
-    import json
-    wire_rows = json.loads(json.dumps(rows, default=str))
-    headers = {'Content-Type': 'application/json'}
-    token = os.getenv('CRM_WEBHOOK_BEARER_TOKEN', '').strip()
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-    try:
-        response = requests.post(webhook_url, json={
-            'source': 'smart-installers-dob-intelligence',
-            'pushed_by': g.user.get('email'),
-            'projects': wire_rows,
-        }, headers=headers, timeout=30)
-        response.raise_for_status()
-        return jsonify({'success': True, 'pushed': len(rows)})
-    except requests.RequestException as e:
-        print(f"CRM push error: {e}")
-        return jsonify({'success': False, 'error': 'CRM endpoint rejected the push'}), 502
-
-
 # path converter: DOB applicant names contain slashes ("A/C", "D/B/A ...")
 # and WSGI decodes %2F before routing, so the default converter 404s them.
 @app.route('/contractor/<path:contractor_name>')
 @login_required
 def contractor_profile(contractor_name):
     """Render contractor profile page"""
-    return render_template('contractor_profile.html', contractor_name=contractor_name)
+    return render_template(
+        'contractor_profile.html',
+        contractor_name=contractor_name,
+        active_page='contractors',
+    )
 
 
 def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):

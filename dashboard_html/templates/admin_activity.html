@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Activity Logs - Admin Panel</title>
     <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         /* Admin-specific styles */
@@ -507,30 +508,8 @@
     </style>
 </head>
 <body>
-    <!-- Top Navigation -->
-    <nav class="top-nav">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
-                {% if user and user.is_admin %}
-                <a href="/admin/activity" class="nav-link active">🔐 Activity Logs</a>
-                {% endif %}
-            </div>
-            <div class="nav-actions">
-                <a href="/auth/logout" class="btn btn-outline logout-btn" title="Logout">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
-        </div>
-    </nav>
+    {% from "_site_nav.html" import site_nav with context %}
+    {% call site_nav('admin', user) %}{% endcall %}
 
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
@@ -717,6 +696,7 @@
         </div>
     </div>
 
+    <script src="/static/js/navigation.js"></script>
     <script>
         // State
         let currentFilters = {

@@ -6,16 +6,20 @@ Enriches buildings with:
 - Tax delinquency status from NYC DOF
 - ECB violations with financial balances (can become liens)
 - DOB building violations
+- DOB NOW Safety violations (boilers, elevators, facades, LL33/84/87/97, etc.)
 
 Data Sources:
 - NYC DOF Property Tax Delinquencies (9rz4-mjek)
 - NYC ECB Violations (6bgk-3dad) - includes penalty_imposed and balance_due
 - NYC DOB Violations (3h2n-5cm9)
+- NYC DOB NOW: Safety Violations (855j-jady, updated daily)
 
 Updates buildings table fields:
 - has_tax_delinquency, tax_delinquency_count, tax_delinquency_water_only
 - ecb_violation_count, ecb_total_balance, ecb_open_violations
 - dob_violation_count, dob_open_violations
+- dob_safety_violation_count, dob_safety_open_violations
+- dob_safety_last_checked
 - tax_lien_last_checked
 """
 
@@ -288,6 +292,49 @@ def get_dob_violations_data(bbl):
         return None, f"DOB violations API error: {str(e)}"
 
 
+def safety_violation_is_open(status):
+    """DOB Safety uses explicit lifecycle labels, not the BIS category.
+
+    ACTIVE and WAIVED/PENDING still require attention. CURED, DISMISSED,
+    DISPUTED SUCCESSFULLY and the other terminal states do not.
+    """
+    normalized = (status or '').strip().upper()
+    return normalized == 'ACTIVE' or 'PENDING' in normalized
+
+
+def get_dob_safety_violations_data(bbl):
+    """Daily DOB NOW Safety violations for a numeric 10-digit BBL."""
+    try:
+        numeric_bbl = str(bbl).strip()
+        if len(numeric_bbl) != 10 or not numeric_bbl.isdigit():
+            return None, f"DOB Safety violations: invalid BBL {bbl!r}"
+        data = _get_client().get_all(
+            'dob_safety_violations', page_size=1000, max_rows=10000,
+            **{
+                '$where': f'bbl={int(numeric_bbl)}',
+                '$select': 'violation_status, count(*) AS violation_count',
+                '$group': 'violation_status',
+                '$order': 'violation_count DESC',
+            },
+        )
+        time.sleep(API_DELAY)
+
+        total = 0
+        open_count = 0
+        for row in data:
+            count = int(row.get('violation_count') or 0)
+            total += count
+            if safety_violation_is_open(row.get('violation_status')):
+                open_count += count
+        return {
+            'dob_safety_violation_count': total,
+            'dob_safety_open_violations': open_count,
+            'dob_safety_last_checked': datetime.now(),
+        }, None
+    except Exception as e:
+        return None, f"DOB Safety violations API error: {str(e)}"
+
+
 def enrich_building(building_id, bbl):
     """
     Enrich a single building with tax delinquency and lien data
@@ -312,15 +359,23 @@ def enrich_building(building_id, bbl):
     if dob_error:
         print(f"      ⚠️  {dob_error}")
         errors.append(dob_error)
+
+    # The Safety dataset is distinct from the legacy BIS violations above
+    # and publishes daily. Keep its success/freshness independent so an ECB
+    # outage cannot make a successful Safety refresh look stale.
+    safety_data, safety_error = get_dob_safety_violations_data(bbl)
+    if safety_error:
+        print(f"      ⚠️  {safety_error}")
+        errors.append(safety_error)
     
     # Combine all data
     # A failed source contributes no keys. This preserves the last known good
     # figures instead of replacing a real balance/violation count with zero.
     result = {}
-    for data in (tax_data, ecb_data, dob_data):
+    for data in (tax_data, ecb_data, dob_data, safety_data):
         if data:
             result.update(data)
-    if not errors:
+    if not any((tax_error, ecb_error, dob_error)):
         result['tax_lien_last_checked'] = datetime.now()
     result['_errors'] = errors
     
@@ -338,6 +393,8 @@ def update_building_tax_lien_data(cursor, building_id, data):
         'ecb_respondent_name', 'ecb_respondent_address',
         'ecb_respondent_city', 'ecb_respondent_zip',
         'dob_violation_count', 'dob_open_violations', 'tax_lien_last_checked',
+        'dob_safety_violation_count', 'dob_safety_open_violations',
+        'dob_safety_last_checked',
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
@@ -395,6 +452,8 @@ def process_single_building(building, position, total):
                 indicators.append(f"ECB Respondent: {data['ecb_respondent_name']}")
             if data.get('dob_open_violations', 0) > 0:
                 indicators.append(f"DOB Open: {data['dob_open_violations']}")
+            if data.get('dob_safety_open_violations', 0) > 0:
+                indicators.append(f"DOB Safety Open: {data['dob_safety_open_violations']}")
             
             with progress_lock:
                 if indicators:
@@ -443,6 +502,8 @@ def main():
             AND (
                 tax_lien_last_checked IS NULL 
                 OR tax_lien_last_checked < NOW() - INTERVAL '30 days'
+                OR dob_safety_last_checked IS NULL
+                OR dob_safety_last_checked < NOW() - INTERVAL '1 day'
             )
             ORDER BY id
             LIMIT %s

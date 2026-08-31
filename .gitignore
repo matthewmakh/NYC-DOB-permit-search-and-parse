@@ -39,6 +39,7 @@ dob_debug_dump.html
 # Test files
 test_*.py
 test2.py
+!dashboard_html/test_navigation.py
 
 # Data files
 *.csv

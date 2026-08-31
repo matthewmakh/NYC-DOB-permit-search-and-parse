@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the daily permit sync, then generate salesperson watchlist digests."""
+"""Run the daily permit sync and canonicalize newly imported contacts."""
 
 import os
 import subprocess
@@ -36,16 +36,5 @@ def main():
         [sys.executable, "-u", "sync_contacts_from_permits.py"],
         check=True,
     )
-    subprocess.run(
-        [
-            sys.executable,
-            "-u",
-            "generate_watchlist_digests.py",
-            "--store-only",
-        ],
-        check=True,
-    )
-
-
 if __name__ == "__main__":
     main()

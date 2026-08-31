@@ -36,7 +36,10 @@ def main():
                 ADD COLUMN IF NOT EXISTS property_last_error TEXT,
                 ADD COLUMN IF NOT EXISTS acris_last_attempted TIMESTAMP,
                 ADD COLUMN IF NOT EXISTS acris_last_error TEXT,
-                ADD COLUMN IF NOT EXISTS acris_logic_version INTEGER NOT NULL DEFAULT 0
+                ADD COLUMN IF NOT EXISTS acris_logic_version INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS dob_safety_violation_count INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS dob_safety_open_violations INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS dob_safety_last_checked TIMESTAMP
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS property_enrichment_jobs (

@@ -48,6 +48,11 @@ function showToast(message, type) {
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('🏗️ Construction Intelligence initializing...');
+
+    const initialQuery = new URLSearchParams(window.location.search).get('q') || '';
+    AppState.filters.searchText = initialQuery.trim();
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) searchInput.value = initialQuery;
     
     if (typeof L === 'undefined') {
         showToast('Map library failed to load', 'error');
@@ -106,8 +111,9 @@ function setupEventListeners() {
         searchInput.addEventListener('input', function() {
             clearTimeout(timeout);
             timeout = setTimeout(() => {
-                AppState.filters.searchText = this.value.toLowerCase();
-                applyFiltersLocal();
+                AppState.filters.searchText = this.value.trim();
+                AppState.pagination.currentPage = 1;
+                loadPermits();
             }, 300);
         });
     }
@@ -287,6 +293,7 @@ function loadPermits() {
     });
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
+    if (AppState.filters.searchText) params.append('q', AppState.filters.searchText);
     
     showLoadingSkeleton('permitsList', 5);
     

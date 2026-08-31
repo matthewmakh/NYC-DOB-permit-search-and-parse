@@ -205,15 +205,6 @@ def main():
     if not results['property_jobs']:
         print_warning("Property enrichment queue processing failed")
 
-    # ===== STEP 9: Store and optionally deliver salesperson watchlist digest =====
-    print_step(9, "Generate Sales Watchlist Digests")
-    results['watchlist_digests'] = run_script(
-        'generate_watchlist_digests.py',
-        'Store daily account/project changes and send them to the configured webhook'
-    )
-    if not results['watchlist_digests']:
-        print_warning("Watchlist digest generation failed - enrichment is still complete")
-    
     # ===== SUMMARY =====
     end_time = datetime.now()
     duration = end_time - start_time

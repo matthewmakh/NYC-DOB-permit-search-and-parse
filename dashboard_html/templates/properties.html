@@ -3,39 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Properties — NYC Real Estate Intel</title>
+    <title>Properties — NYC Permit Leads</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <nav class="top-nav">
-        <div class="nav-container">
-            <a href="/" class="nav-brand">
-                <span class="brand-mark">RE</span>
-                NYC Real Estate Intel
-            </a>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/properties" class="nav-link active">Properties</a>
-                <a href="/contractors" class="nav-link">Participants</a>
-                <a href="/alerts" class="nav-link">Alerts</a>
-            </div>
-            <div class="nav-actions">
-                <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
-                    <i class="fas fa-phone"></i> Bulk enrich
-                </button>
-                <button class="btn btn-primary" id="exportBtn">
-                    <i class="fas fa-download"></i> Export
-                </button>
-                <a href="/auth/logout" class="btn btn-icon" title="Log out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
-        </div>
-    </nav>
+    {% from "_site_nav.html" import site_nav with context %}
+    {% call site_nav('properties', g.user if g.user is defined else none) %}
+        <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
+            <i class="fas fa-phone" aria-hidden="true"></i> Bulk enrich
+        </button>
+        <button class="btn btn-primary" id="exportBtn">
+            <i class="fas fa-download" aria-hidden="true"></i> Export
+        </button>
+    {% endcall %}
 
     <div class="main-container">
         <!-- Sidebar filters -->
@@ -293,6 +278,7 @@
         </div>
     </div>
 
+    <script src="/static/js/navigation.js"></script>
     <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/properties.js"></script>

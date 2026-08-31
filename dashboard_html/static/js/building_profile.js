@@ -76,6 +76,26 @@ function formatNumber(num) {
     return parsed.toLocaleString('en-US');
 }
 
+function hasFactValue(value) {
+    return value !== null && value !== undefined && value !== '';
+}
+
+function formatFactNumber(value, maximumFractionDigits = 2) {
+    if (!hasFactValue(value)) return null;
+    const parsed = typeof value === 'string' ? Number(value) : value;
+    if (!Number.isFinite(parsed)) return String(value);
+    return parsed.toLocaleString('en-US', { maximumFractionDigits });
+}
+
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 /**
  * Format phone number to (XXX) XXX-XXXX format
  */
@@ -222,6 +242,10 @@ async function loadBuildingProfile() {
         // on the one-page dossier they load the first time the section
         // scrolls into view instead.
         setupViolationsLazyLoad();
+
+        // Refresh high-value physical facts independently of the nightly row.
+        // The rest of the dossier stays usable if NYC Open Data is slow.
+        loadLiveBuildingFacts();
         
     } catch (error) {
         console.error('Error loading building profile:', error);
@@ -262,7 +286,8 @@ function updateTabBadges() {
     // Violations badge - total violations across all types
     const totalViolations = (building.hpd_total_violations || 0) + 
                            (building.ecb_violation_count || 0) + 
-                           (building.dob_violation_count || 0);
+                           (building.dob_violation_count || 0) +
+                           (building.dob_safety_violation_count || 0);
     if (totalViolations > 0) {
         setBadge('violations-badge', totalViolations);
     }
@@ -418,7 +443,8 @@ function renderGlanceStrip() {
 
     const openViolations = (building.hpd_open_violations || 0) +
                            (building.ecb_open_violations || 0) +
-                           (building.dob_open_violations || 0);
+                           (building.dob_open_violations || 0) +
+                           (building.dob_safety_open_violations || 0);
 
     const tiles = [
         { label: 'Assessed value',
@@ -980,6 +1006,12 @@ function loadViolationDetailsOnce() {
     if (hpdContainer && hpdContainer.innerHTML === '' && building.hpd_total_violations > 0) {
         loadHPDViolationDetails();
     }
+    // Always check the daily Safety feed. It can contain a new violation even
+    // when every stored/legacy count was zero at the last enrichment run.
+    const safetyContainer = document.getElementById('dob-safety-violations-container');
+    if (safetyContainer && safetyContainer.innerHTML === '') {
+        loadSafetyViolationDetails();
+    }
 }
 
 function setupViolationsLazyLoad() {
@@ -999,68 +1031,291 @@ function setupViolationsLazyLoad() {
 }
 
 // ============================================================================
+// LIVE PLUTO BUILDING + LOT FACTS
+// ============================================================================
+
+const PLUTO_LAND_USE = {
+    '1': 'One & two family buildings',
+    '2': 'Multi-family walk-up buildings',
+    '3': 'Multi-family elevator buildings',
+    '4': 'Mixed residential & commercial',
+    '5': 'Commercial & office buildings',
+    '6': 'Industrial & manufacturing',
+    '7': 'Transportation & utility',
+    '8': 'Public facilities & institutions',
+    '9': 'Open space & outdoor recreation',
+    '10': 'Parking facilities',
+    '11': 'Vacant land',
+};
+
+const PLUTO_OWNER_TYPE = {
+    C: 'City ownership',
+    M: 'Mixed city & private ownership',
+    O: 'Public authority, state or federal ownership',
+    P: 'Private ownership',
+    X: 'Fully tax-exempt ownership',
+};
+
+const PLUTO_LOT_TYPE = {
+    '0': 'Unknown',
+    '1': 'Block assemblage',
+    '2': 'Waterfront',
+    '3': 'Corner lot',
+    '4': 'Through lot',
+    '5': 'Inside lot',
+    '6': 'Interior lot',
+    '7': 'Island lot',
+    '8': 'Alley lot',
+    '9': 'Submerged land lot',
+};
+
+const PLUTO_BASEMENT_TYPE = {
+    '0': 'No basement',
+    '1': 'Above-grade full basement',
+    '2': 'Below-grade full basement',
+    '3': 'Above-grade partial basement',
+    '4': 'Below-grade partial basement',
+    '5': 'Unknown basement type',
+};
+
+const PLUTO_PROXIMITY = {
+    '0': 'Not available',
+    '1': 'Detached',
+    '2': 'Semi-attached',
+    '3': 'Attached',
+};
+
+const PLUTO_EXTENSION = {
+    E: 'Extension',
+    G: 'Garage',
+    EG: 'Extension and garage',
+    N: 'None',
+};
+
+function decodedPlutoCode(value, labels) {
+    if (!hasFactValue(value)) return null;
+    const code = String(value);
+    return labels[code] ? `${labels[code]} · ${code}` : code;
+}
+
+function factArea(value) {
+    const formatted = formatFactNumber(value, 0);
+    return formatted === null ? null : `${formatted} sq ft`;
+}
+
+function factCurrency(value) {
+    const formatted = formatFactNumber(value, 0);
+    return formatted === null ? null : `$${formatted}`;
+}
+
+function factDimensions(front, depth) {
+    if (!hasFactValue(front) && !hasFactValue(depth)) return null;
+    if (hasFactValue(front) && hasFactValue(depth)) {
+        return `${formatFactNumber(front)} × ${formatFactNumber(depth)} ft`;
+    }
+    return hasFactValue(front)
+        ? `${formatFactNumber(front)} ft frontage`
+        : `${formatFactNumber(depth)} ft depth`;
+}
+
+function factList(value) {
+    if (!Array.isArray(value) || !value.length) return null;
+    return value.join(', ');
+}
+
+function factRow(label, value, options = {}) {
+    if (!hasFactValue(value)) return '';
+    const className = options.mono ? 'building-fact-value mono' : 'building-fact-value';
+    return `
+        <div class="building-fact-row">
+            <dt>${escapeHtml(label)}</dt>
+            <dd class="${className}">${escapeHtml(value)}</dd>
+        </div>`;
+}
+
+function factGroup(title, rows) {
+    const populated = rows.filter(Boolean);
+    if (!populated.length) return '';
+    return `
+        <article class="building-fact-group">
+            <h4>${escapeHtml(title)}</h4>
+            <dl>${populated.join('')}</dl>
+        </article>`;
+}
+
+function renderBuildingFacts(building) {
+    const highlightsEl = document.getElementById('building-facts-highlights');
+    const groupsEl = document.getElementById('building-facts-groups');
+    if (!highlightsEl || !groupsEl) return;
+
+    const nonResidentialUnits = hasFactValue(building.non_residential_units)
+        ? building.non_residential_units
+        : (hasFactValue(building.total_units) && hasFactValue(building.residential_units)
+            ? Math.max(Number(building.total_units) - Number(building.residential_units), 0)
+            : null);
+    const buildingType = building.building_class
+        ? `${building.building_class}${buildingData.building_class_description ? ` · ${buildingData.building_class_description}` : ''}`
+        : null;
+    const zoningDistricts = factList(building.zoning_districts)
+        || building.zoning_district
+        || null;
+
+    const highlights = [
+        ['Total units', formatFactNumber(building.total_units, 0)],
+        ['Residential units', formatFactNumber(building.residential_units, 0)],
+        ['Buildings on lot', formatFactNumber(building.number_of_buildings, 0)],
+        ['Floors', formatFactNumber(building.num_floors)],
+        ['Building area', factArea(building.building_sqft)],
+        ['Lot area', factArea(building.lot_sqft)],
+    ].filter(([, value]) => hasFactValue(value));
+
+    highlightsEl.innerHTML = highlights.length
+        ? highlights.map(([label, value]) => `
+            <div class="building-fact-highlight">
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(value)}</strong>
+            </div>`).join('')
+        : '<div class="building-facts-empty">No physical building facts are stored yet.</div>';
+
+    const useAndScale = [
+        factRow('Building class', buildingType),
+        factRow('Land use', decodedPlutoCode(building.land_use, PLUTO_LAND_USE)),
+        factRow('Year built', building.year_built),
+        factRow('First alteration', building.year_altered),
+        factRow('Second alteration', building.year_altered_2),
+        factRow('Total units', formatFactNumber(building.total_units, 0)),
+        factRow('Residential units', formatFactNumber(building.residential_units, 0)),
+        factRow('Non-residential units', formatFactNumber(nonResidentialUnits, 0)),
+        factRow('Buildings on lot', formatFactNumber(building.number_of_buildings, 0)),
+        factRow('Floors', formatFactNumber(building.num_floors)),
+    ];
+
+    const floorArea = [
+        factRow('Total building area', factArea(building.building_sqft)),
+        factRow('Residential area', factArea(building.residential_sqft)),
+        factRow('Commercial area', factArea(building.commercial_sqft)),
+        factRow('Retail area', factArea(building.retail_sqft)),
+        factRow('Office area', factArea(building.office_sqft)),
+        factRow('Garage area', factArea(building.garage_sqft)),
+        factRow('Storage area', factArea(building.storage_sqft)),
+        factRow('Factory area', factArea(building.factory_sqft)),
+        factRow('Other area', factArea(building.other_sqft)),
+    ];
+
+    const lotAndForm = [
+        factRow('Lot area', factArea(building.lot_sqft)),
+        factRow('Lot dimensions', factDimensions(building.lot_front_ft, building.lot_depth_ft)),
+        factRow('Primary building dimensions', factDimensions(building.building_front_ft, building.building_depth_ft)),
+        factRow('Lot type', decodedPlutoCode(building.lot_type_code, PLUTO_LOT_TYPE)),
+        factRow('Building relationship', decodedPlutoCode(building.proximity_code, PLUTO_PROXIMITY)),
+        factRow('Basement', decodedPlutoCode(building.basement_code, PLUTO_BASEMENT_TYPE)),
+        factRow('Extension / garage', decodedPlutoCode(building.extension_code, PLUTO_EXTENSION)),
+        factRow('Irregular lot', hasFactValue(building.irregular_lot) ? (building.irregular_lot ? 'Yes' : 'No') : null),
+        factRow('Easements', formatFactNumber(building.easement_count, 0)),
+    ];
+
+    const zoning = [
+        factRow('Zoning district', zoningDistricts, { mono: true }),
+        factRow('Commercial overlay', factList(building.commercial_overlays), { mono: true }),
+        factRow('Special district', factList(building.special_districts), { mono: true }),
+        factRow('Limited-height district', building.limited_height_district, { mono: true }),
+        factRow('Split zoning lot', hasFactValue(building.split_zone) ? (building.split_zone ? 'Yes' : 'No') : null),
+        factRow('Zoning map', building.zoning_map, { mono: true }),
+        factRow('Built FAR', formatFactNumber(building.built_far)),
+        factRow('Maximum residential FAR', formatFactNumber(building.max_resid_far)),
+        factRow('Affordable residential FAR', formatFactNumber(building.max_affordable_res_far)),
+        factRow('Maximum commercial FAR', formatFactNumber(building.max_comm_far)),
+        factRow('Maximum facility FAR', formatFactNumber(building.max_facility_far)),
+        factRow('Maximum manufacturing FAR', formatFactNumber(building.max_manufacturing_far)),
+        factRow('Residential / commercial FAR headroom', formatFactNumber(building.unused_far)),
+    ];
+
+    const assessment = [
+        factRow('PLUTO owner of record', building.owner_name || building.current_owner_name),
+        factRow('Ownership type', decodedPlutoCode(building.pluto_owner_type, PLUTO_OWNER_TYPE)),
+        factRow('Assessed land value', factCurrency(building.assessed_land_value_pluto || building.assessed_land_value)),
+        factRow('Assessed total value', factCurrency(building.assessed_total_value_pluto || building.assessed_total_value)),
+        factRow('Tax-exempt value', factCurrency(building.exempt_total_value)),
+        factRow('PLUTO release', building.pluto_version, { mono: true }),
+    ];
+
+    const location = [
+        factRow('ZIP code', building.zip_code, { mono: true }),
+        factRow('Community district', building.community_district),
+        factRow('City Council district', building.council_district),
+        factRow('School district', building.school_district),
+        factRow('Police precinct', building.police_precinct),
+        factRow('Fire company', building.fire_company, { mono: true }),
+        factRow('Sanitation district', [building.sanitation_district, building.sanitation_subsection].filter(hasFactValue).join(' · ') || null),
+        factRow('2020 census tract', building.census_tract_2020, { mono: true }),
+        factRow('Transit zone', building.transit_zone),
+        factRow('Historic district', building.historic_district),
+        factRow('Landmark', building.landmark_name),
+        factRow('Environmental designation', building.environmental_designation, { mono: true }),
+        factRow('2007 FEMA flood flag', hasFactValue(building.fema_2007_flood_zone) ? (building.fema_2007_flood_zone ? 'Yes' : 'No') : null),
+        factRow('2015 preliminary flood flag', hasFactValue(building.preliminary_2015_flood_zone) ? (building.preliminary_2015_flood_zone ? 'Yes' : 'No') : null),
+        factRow('Coordinates', hasFactValue(building.latitude) && hasFactValue(building.longitude)
+            ? `${Number(building.latitude).toFixed(6)}, ${Number(building.longitude).toFixed(6)}` : null, { mono: true }),
+        factRow('Tax map', building.tax_map, { mono: true }),
+        factRow('Sanborn map', building.sanborn_map, { mono: true }),
+    ];
+
+    groupsEl.innerHTML = [
+        factGroup('Use & scale', useAndScale),
+        factGroup('Floor area', floorArea),
+        factGroup('Lot & building form', lotAndForm),
+        factGroup('Zoning & capacity', zoning),
+        factGroup('Assessment & ownership', assessment),
+        factGroup('Districts, services & flags', location),
+    ].filter(Boolean).join('');
+}
+
+async function loadLiveBuildingFacts() {
+    const sourceEl = document.getElementById('building-facts-source');
+    const noteEl = document.getElementById('building-facts-note');
+    try {
+        const response = await fetch(`/api/property/${BBL}/building-facts`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'PLUTO building facts unavailable');
+        }
+
+        Object.entries(data.facts || {}).forEach(([key, value]) => {
+            if (hasFactValue(value)) buildingData.building[key] = value;
+        });
+        renderBuildingFacts(buildingData.building);
+        renderGlanceStrip();
+
+        if (sourceEl) {
+            const checked = data.checked_at ? new Date(data.checked_at).toLocaleTimeString([], {
+                hour: 'numeric', minute: '2-digit',
+            }) : 'just now';
+            sourceEl.textContent = `${data.facts.pluto_version || 'Latest PLUTO'} · checked ${checked}`;
+            sourceEl.href = data.source.url;
+            sourceEl.classList.remove('source-warning');
+        }
+        if (noteEl) {
+            noteEl.textContent = 'Live PLUTO tax-lot record. Condominium units are generally aggregated to the billing lot; floor areas are NYC estimates.';
+        }
+    } catch (error) {
+        console.warn('Live PLUTO building facts unavailable:', error);
+        if (sourceEl) {
+            sourceEl.textContent = 'Showing nightly PLUTO data · live check unavailable';
+            sourceEl.classList.add('source-warning');
+        }
+        if (noteEl) {
+            noteEl.textContent = 'Showing the latest stored tax-lot facts. The live NYC PLUTO check could not be completed; other profile sections are unaffected.';
+        }
+    }
+}
+
+// ============================================================================
 // OVERVIEW TAB
 // ============================================================================
 
 function renderOverviewTab() {
-    const { building, building_class_description, stats } = buildingData;
-    
-    // Building Basics
-    const basicsEl = document.getElementById('building-basics');
-    basicsEl.innerHTML = `
-        <div class="info-row">
-            <span class="info-label">Building Type:</span>
-            <span class="info-value">
-                <strong>${building.building_class || 'Unknown'}</strong> - ${building_class_description}
-            </span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Borough:</span>
-            <span class="info-value">${getBoroughName(building.borough)}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Year Built:</span>
-            <span class="info-value">${building.year_built || 'Unknown'}</span>
-        </div>
-        ${building.year_altered ? `
-        <div class="info-row">
-            <span class="info-label">Year Altered:</span>
-            <span class="info-value">${building.year_altered}</span>
-        </div>
-        ` : ''}
-        <div class="info-row">
-            <span class="info-label">Units:</span>
-            <span class="info-value">${building.total_units ? formatNumber(building.total_units) : 'Unknown'}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Square Footage:</span>
-            <span class="info-value">${building.building_sqft ? formatNumber(building.building_sqft) + ' sq ft' : 'Unknown'}</span>
-        </div>
-        ${building.lot_sqft ? `
-        <div class="info-row">
-            <span class="info-label">Lot:</span>
-            <span class="info-value">${formatNumber(building.lot_sqft)} sq ft</span>
-        </div>
-        ` : ''}
-        ${building.num_floors ? `
-        <div class="info-row">
-            <span class="info-label">Floors:</span>
-            <span class="info-value">${building.num_floors}</span>
-        </div>
-        ` : ''}
-        ${building.zoning_district ? `
-        <div class="info-row">
-            <span class="info-label">Zoning:</span>
-            <span class="info-value">${building.zoning_district}</span>
-        </div>
-        ` : ''}
-        ${building.built_far ? `
-        <div class="info-row">
-            <span class="info-label">Built FAR / max:</span>
-            <span class="info-value">${Number(building.built_far).toFixed(1)}${building.max_resid_far ? ' / ' + Number(building.max_resid_far).toFixed(1) : ''}</span>
-        </div>
-        ` : ''}
-    `;
+    const { building, stats } = buildingData;
+    renderBuildingFacts(building);
     
     // Property Stats
     const statsEl = document.getElementById('property-stats');
@@ -2201,13 +2456,6 @@ function renderViolationsTab() {
     const { building } = buildingData;
     const container = document.getElementById('violations-content');
     
-    const hasViolations = building.ecb_violation_count || building.dob_violation_count || building.hpd_total_violations;
-    
-    if (!hasViolations) {
-        container.innerHTML = '<div class="no-data">No violations on record</div>';
-        return;
-    }
-    
     // Calculate total amounts owed
     const ecbBalance = building.ecb_total_balance || 0;
     const hpdBalance = 0; // HPD doesn't have financial penalties in our data
@@ -2243,6 +2491,21 @@ function renderViolationsTab() {
         html += '<div class="no-data">No ECB violations on record</div>';
     }
     html += '</div>';
+
+    // Daily DOB NOW Safety feed. This source is intentionally rendered on
+    // every property, even when all stored counts are zero, because the live
+    // call is what closes the freshness gap.
+    html += `
+        <section class="dob-safety-section">
+            <div class="dob-safety-head">
+                <div>
+                    <h3>DOB NOW Safety violations <span class="source-pill">Daily feed</span></h3>
+                    <p>Boilers, elevators, façades, gas piping, sprinklers, energy and Local Law civil penalties.</p>
+                </div>
+                <a href="https://data.cityofnewyork.us/d/855j-jady" target="_blank" rel="noopener">View source</a>
+            </div>
+            <div id="dob-safety-violations-container"></div>
+        </section>`;
     
     // Right side: HPD Violations
     html += '<div class="violations-column">';
@@ -2264,7 +2527,7 @@ function renderViolationsTab() {
     if (building.dob_violation_count && building.dob_violation_count > 0) {
         html += `
         <div class="dob-violations-summary">
-            <h4>DOB Violations Summary</h4>
+            <h4>Legacy DOB / BIS violations summary</h4>
             <div class="violation-stats">
                 <div class="viol-stat">
                     <div class="viol-stat-value">${building.dob_violation_count}</div>
@@ -2279,6 +2542,148 @@ function renderViolationsTab() {
     }
     
     container.innerHTML = html;
+}
+
+// ============================================================================
+// LOAD DAILY DOB NOW SAFETY VIOLATIONS
+// ============================================================================
+
+function escapeSafetyText(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+async function loadSafetyViolationDetails() {
+    const container = document.getElementById('dob-safety-violations-container');
+    if (!container) return;
+    container.innerHTML = '<div class="loading">Checking the daily DOB Safety feed…</div>';
+
+    try {
+        const response = await fetch(`/api/property/${BBL}/safety-violations`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Safety feed unavailable');
+        }
+
+        buildingData.building.dob_safety_violation_count = data.total_count;
+        buildingData.building.dob_safety_open_violations = data.open_count;
+        updateTabBadges();
+        renderGlanceStrip();
+
+        if (!data.total_count) {
+            const checked = data.checked_at ? new Date(data.checked_at).toLocaleString() : 'just now';
+            container.innerHTML = `
+                <div class="safety-clear-state">
+                    <strong>No DOB Safety violations found</strong>
+                    <span>Live check completed ${escapeSafetyText(checked)}.</span>
+                </div>`;
+            return;
+        }
+
+        window.dobSafetyViolationsData = data.violations || [];
+        const deviceOptions = (data.by_device_type || []).map(item =>
+            `<option value="${escapeSafetyText(item.device_type)}">${escapeSafetyText(item.device_type)} (${formatNumber(item.count)})</option>`
+        ).join('');
+        const checked = data.checked_at ? new Date(data.checked_at).toLocaleString() : 'just now';
+
+        container.innerHTML = `
+            <div class="violation-stats safety-violation-stats">
+                <div class="viol-stat">
+                    <div class="viol-stat-value">${formatNumber(data.total_count)}</div>
+                    <div class="viol-stat-label">Total in daily feed</div>
+                </div>
+                <div class="viol-stat ${data.open_count ? 'has-open' : ''}">
+                    <div class="viol-stat-value">${formatNumber(data.open_count)}</div>
+                    <div class="viol-stat-label">Active / pending</div>
+                </div>
+                <div class="viol-stat">
+                    <div class="viol-stat-value">${formatNumber(data.closed_count)}</div>
+                    <div class="viol-stat-label">Closed / cured</div>
+                </div>
+            </div>
+            <div class="violations-controls">
+                <div class="filter-group">
+                    <label for="filter-safety-status">Status:</label>
+                    <select id="filter-safety-status" onchange="filterSafetyViolations()">
+                        <option value="all">All</option>
+                        <option value="open">Active / pending</option>
+                        <option value="closed">Closed / cured</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filter-safety-device">Program:</label>
+                    <select id="filter-safety-device" onchange="filterSafetyViolations()">
+                        <option value="all">All programs</option>
+                        ${deviceOptions}
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="sort-safety">Sort:</label>
+                    <select id="sort-safety" onchange="filterSafetyViolations()">
+                        <option value="date-desc">Newest first</option>
+                        <option value="date-asc">Oldest first</option>
+                    </select>
+                </div>
+                <span class="safety-checked">Checked ${escapeSafetyText(checked)}</span>
+            </div>
+            <div class="violations-list" id="dob-safety-violations-list"></div>
+            ${data.has_more ? '<div class="note">Showing the 500 newest records. Summary counts include the full result.</div>' : ''}`;
+        filterSafetyViolations();
+    } catch (error) {
+        console.error('Error loading DOB Safety violations:', error);
+        container.innerHTML = `
+            <div class="safety-error-state">
+                <strong>Daily DOB Safety check unavailable</strong>
+                <span>${escapeSafetyText(error.message)}</span>
+                <button type="button" class="linklike" onclick="loadSafetyViolationDetails()">Retry</button>
+            </div>`;
+    }
+}
+
+function filterSafetyViolations() {
+    const rows = window.dobSafetyViolationsData || [];
+    const status = document.getElementById('filter-safety-status')?.value || 'all';
+    const device = document.getElementById('filter-safety-device')?.value || 'all';
+    const sort = document.getElementById('sort-safety')?.value || 'date-desc';
+    const container = document.getElementById('dob-safety-violations-list');
+    if (!container) return;
+
+    const filtered = rows.filter(row => {
+        if (status === 'open' && !row.is_open) return false;
+        if (status === 'closed' && row.is_open) return false;
+        return device === 'all' || row.device_type === device;
+    }).sort((a, b) => {
+        const comparison = String(a.issue_date || '').localeCompare(String(b.issue_date || ''));
+        return sort === 'date-asc' ? comparison : -comparison;
+    });
+
+    if (!filtered.length) {
+        container.innerHTML = '<div class="no-data">No Safety violations match these filters</div>';
+        return;
+    }
+
+    container.innerHTML = filtered.map(row => `
+        <article class="violation-detail-card ${row.is_open ? 'violation-open' : 'violation-closed'}">
+            <div class="viol-detail-header">
+                <span class="viol-id">${escapeSafetyText(row.violation_number || 'Number unavailable')}</span>
+                <span class="viol-class">${escapeSafetyText(row.device_type || 'DOB Safety')}</span>
+                <span class="viol-status ${row.is_open ? 'status-open' : 'status-closed'}">${escapeSafetyText(row.status || 'Unknown')}</span>
+            </div>
+            <div class="viol-detail-description">
+                <strong>${escapeSafetyText(row.violation_type || 'Safety violation')}</strong>
+                ${row.remarks ? `<br>${escapeSafetyText(row.remarks)}` : ''}
+            </div>
+            <div class="viol-detail-info">
+                ${row.issue_date ? `<div><strong>Issued:</strong> ${escapeSafetyText(formatDate(row.issue_date))}</div>` : ''}
+                ${row.cycle_end_date ? `<div><strong>Cycle ends:</strong> ${escapeSafetyText(formatDate(row.cycle_end_date))}</div>` : ''}
+                ${row.device_number ? `<div><strong>Device:</strong> ${escapeSafetyText(row.device_number)}</div>` : ''}
+                ${row.bin ? `<div><strong>BIN:</strong> ${escapeSafetyText(row.bin)}</div>` : ''}
+            </div>
+        </article>`).join('');
 }
 
 // ============================================================================
