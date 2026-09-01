@@ -30,7 +30,7 @@
     <button type="button" class="is-primary js-contacted" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ primary.number if primary else '' }}" data-last-touch="{{ last_touch }}"><i class="fas fa-phone"></i>Contacted</button>
     {% endif %}
     {% if primary %}
-    <a href="tel:+1{{ primary.digits }}"><i class="fas fa-phone-volume"></i>Call</a>
+    <a href="{{ primary|crm_tel }}"><i class="fas fa-phone-volume"></i>Call</a>
     <a href="sms:+1{{ primary.digits }}"><i class="fas fa-comment"></i>Text</a>
     {% endif %}
     {% if c.email %}<a href="mailto:{{ c.email }}"><i class="fas fa-envelope"></i>Email</a>{% endif %}

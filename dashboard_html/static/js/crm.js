@@ -119,9 +119,17 @@
 
     // ---------- sheets ----------
 
+    function resetButtons(root) {
+        $all('button[disabled]', root).forEach(b => {
+            b.disabled = false;
+            if (b.dataset.origHtml) { b.innerHTML = b.dataset.origHtml; delete b.dataset.origHtml; }
+        });
+    }
+
     function openSheet(id) {
         const sheet = document.getElementById(id);
         if (!sheet) return null;
+        resetButtons(sheet);
         sheet.classList.add('is-open');
         const first = $('input:not([type=hidden]):not([type=checkbox]), textarea, select', sheet);
         if (first && window.innerWidth > 860) setTimeout(() => first.focus(), 30);
@@ -183,21 +191,22 @@
             });
         });
         $('[data-role="save"]', sContacted).addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
             const note = $('[data-role="note"]', sContacted).value.trim();
             if (!note && !nudged) {
                 nudged = true;
                 $('[data-role="nudge"]', sContacted).hidden = false;
-                e.currentTarget.textContent = 'Save without note';
+                btn.textContent = 'Save without note';
                 return;
             }
-            busy(e.currentTarget, true);
+            busy(btn, true);
             const data = await post('/crm/api/contacted', {
                 building_id: touch.buildingId, contact_id: touch.contactId,
                 method: chipValue($('[data-role="methods"]', sContacted)) || 'call',
                 outcome: chipValue($('[data-role="outcomes"]', sContacted)),
                 note, phone: touch.phone, complete_followup_id: touch.followupId,
             });
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             document.dispatchEvent(new CustomEvent('crm:touch-logged', { detail: touch }));
             $('[data-role="step1"]', sContacted).hidden = true;
@@ -237,13 +246,14 @@
     }
     if (sVisit) {
         $('[data-role="save"]', sVisit).addEventListener('click', async (e) => {
-            busy(e.currentTarget, true);
+            const btn = e.currentTarget;
+            busy(btn, true);
             const data = await post('/crm/api/visit', {
                 building_id: visitBuilding,
                 visited_on: $('[data-role="visit-date"]', sVisit).value,
                 note: $('[data-role="note"]', sVisit).value.trim(),
             });
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             closeSheet(sVisit); toast('Visit logged', 'success'); changed();
         });
@@ -282,9 +292,10 @@
             $('[data-role="fu-date"]', sFollowup).value = localISODate(parseInt(btn.dataset.days, 10));
         }));
         $('[data-role="save"]', sFollowup).addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
             const due = $('[data-role="fu-date"]', sFollowup).value;
             if (!due) { toast('Pick a date', 'warning'); return; }
-            busy(e.currentTarget, true);
+            busy(btn, true);
             const body = {
                 title: $('[data-role="title"]', sFollowup).value.trim() || 'Follow up',
                 note: $('[data-role="note"]', sFollowup).value.trim(),
@@ -294,7 +305,7 @@
             let data;
             if (fu.id) data = await post('/crm/api/followup/' + fu.id + '/update', body);
             else data = await post('/crm/api/followup', Object.assign(body, { building_id: fu.buildingId, contact_id: fu.contactId }));
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             closeSheet(sFollowup); toast(fu.id ? 'Follow-up updated' : 'Follow-up set', 'success'); changed();
         });
@@ -321,17 +332,18 @@
     }
     if (sList) {
         $('[data-role="save"]', sList).addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
             const listId = $('[data-role="list-select"]', sList).value;
             const newName = $('[data-role="new-list"]', sList).value.trim();
             if (!listId && !newName) { toast('Pick a list or name a new one', 'warning'); return; }
-            busy(e.currentTarget, true);
+            busy(btn, true);
             let data;
             if (listTarget.bulkIds) {
                 data = await post('/crm/api/buildings/bulk', { ids: listTarget.bulkIds, action: 'list', value: listId || null, new_list_name: newName || null });
             } else {
                 data = await post('/crm/api/list-item', { list_id: listId || null, new_list_name: newName || null, building_id: listTarget.buildingId, contact_id: listTarget.contactId });
             }
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             closeSheet(sList); toast('Added to list', 'success');
             if (listTarget.bulkIds) { clearBulk(); } else { changed(); }
@@ -342,58 +354,84 @@
 
     const sPerson = $('#sheetPerson');
     let person = null;
+    const PERSON_FIELDS = ['name', 'title-field', 'email', 'company', 'phone', 'phone-ext', 'phone-label', 'source-detail'];
+
     function openPerson(trigger, editData) {
         person = editData ? { id: editData.id } : { buildingId: (trigger && trigger.dataset.buildingId) || null, force: false };
         $('[data-role="title-text"]', sPerson).textContent = editData ? 'Edit person' : 'Add a person';
         $('[data-role="add-only"]', sPerson).style.display = editData ? 'none' : '';
         $('[data-role="dup-warning"]', sPerson).hidden = true;
         $('[data-role="building-role-wrap"]', sPerson).style.display = (!editData && person.buildingId) ? '' : 'none';
+        $('[data-role="save-another"]', sPerson).classList.toggle('js-hidden', !!editData);
         const set = (role, v) => { $('[data-role="' + role + '"]', sPerson).value = v || ''; };
-        set('name', editData ? editData.name : ''); set('title-field', editData ? editData.title : '');
-        set('email', editData ? editData.email : ''); set('company', editData ? editData.company : '');
-        set('phone', ''); set('phone-label', ''); set('source-detail', '');
+        PERSON_FIELDS.forEach(f => set(f, ''));
+        if (editData) {
+            set('name', editData.name); set('title-field', editData.title);
+            set('email', editData.email); set('company', editData.company);
+        }
         $('[data-role="save"]', sPerson).textContent = editData ? 'Save changes' : 'Add person';
+        $('[data-role="save-another"]', sPerson).textContent = 'Save & add another';
         openSheet('sheetPerson');
     }
+
+    function resetPersonForm() {
+        person.force = false;
+        PERSON_FIELDS.forEach(f => { $('[data-role="' + f + '"]', sPerson).value = ''; });
+        $('[data-role="dup-warning"]', sPerson).hidden = true;
+        $('[data-role="save"]', sPerson).textContent = 'Add person';
+        $('[data-role="save-another"]', sPerson).textContent = 'Save & add another';
+        $('[data-role="name"]', sPerson).focus();
+    }
+
+    async function savePerson(btn, keepOpen) {
+        const name = $('[data-role="name"]', sPerson).value.trim();
+        if (!name) { toast('A name is required', 'warning'); $('[data-role="name"]', sPerson).focus(); return; }
+        const fields = {
+            name, title: $('[data-role="title-field"]', sPerson).value,
+            email: $('[data-role="email"]', sPerson).value, company: $('[data-role="company"]', sPerson).value,
+        };
+        busy(btn, true);
+        let data;
+        if (person.id) {
+            data = await post('/crm/api/contact/' + person.id + '/update', fields);
+        } else {
+            data = await post('/crm/api/contact', Object.assign(fields, {
+                phone: $('[data-role="phone"]', sPerson).value,
+                phone_ext: $('[data-role="phone-ext"]', sPerson).value,
+                phone_label: $('[data-role="phone-label"]', sPerson).value,
+                source_detail: $('[data-role="source-detail"]', sPerson).value,
+                building_id: person.buildingId,
+                building_role: $('[data-role="building-role"]', sPerson).value,
+                force: person.force,
+            }));
+        }
+        busy(btn, false);
+        if (data.duplicate) {
+            person.force = true;
+            const warn = $('[data-role="dup-warning"]', sPerson);
+            warn.innerHTML = '<i class="fas fa-circle-exclamation"></i><span>' + esc(data.error) +
+                (data.matches && data.matches.length ? ' — <a href="/crm/contacts/' + data.matches[0].id + '">open theirs</a>' : '') +
+                '. Press again if this really is a different person.</span>';
+            warn.hidden = false;
+            btn.textContent = keepOpen ? 'Add anyway & continue' : 'Add anyway';
+            return;
+        }
+        if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
+        if (keepOpen) {
+            toast(name + ' added — next one', 'success');
+            resetPersonForm();
+            refreshPartials();
+            return;
+        }
+        closeSheet(sPerson);
+        if (person.id || person.buildingId) { toast('Saved', 'success'); changed(); }
+        else if (data.contact_id) { window.location.href = '/crm/contacts/' + data.contact_id; }
+        else { changed(); }
+    }
+
     if (sPerson) {
-        $('[data-role="save"]', sPerson).addEventListener('click', async (e) => {
-            const name = $('[data-role="name"]', sPerson).value.trim();
-            if (!name) { toast('A name is required', 'warning'); return; }
-            busy(e.currentTarget, true);
-            const fields = {
-                name, title: $('[data-role="title-field"]', sPerson).value,
-                email: $('[data-role="email"]', sPerson).value, company: $('[data-role="company"]', sPerson).value,
-            };
-            let data;
-            if (person.id) {
-                data = await post('/crm/api/contact/' + person.id + '/update', fields);
-            } else {
-                data = await post('/crm/api/contact', Object.assign(fields, {
-                    phone: $('[data-role="phone"]', sPerson).value,
-                    phone_label: $('[data-role="phone-label"]', sPerson).value,
-                    source_detail: $('[data-role="source-detail"]', sPerson).value,
-                    building_id: person.buildingId,
-                    building_role: $('[data-role="building-role"]', sPerson).value,
-                    force: person.force,
-                }));
-            }
-            busy(e.currentTarget, false);
-            if (data.duplicate) {
-                person.force = true;
-                const warn = $('[data-role="dup-warning"]', sPerson);
-                warn.innerHTML = '<i class="fas fa-circle-exclamation"></i><span>' + esc(data.error) +
-                    (data.matches && data.matches.length ? ' — <a href="/crm/contacts/' + data.matches[0].id + '">open theirs</a>' : '') +
-                    '. Press <strong>Add anyway</strong> if this really is a different person.</span>';
-                warn.hidden = false;
-                e.currentTarget.textContent = 'Add anyway';
-                return;
-            }
-            if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
-            closeSheet(sPerson);
-            if (person.id || person.buildingId) { toast('Saved', 'success'); changed(); }
-            else if (data.contact_id) { window.location.href = '/crm/contacts/' + data.contact_id; }
-            else { changed(); }
-        });
+        $('[data-role="save"]', sPerson).addEventListener('click', (e) => savePerson(e.currentTarget, false));
+        $('[data-role="save-another"]', sPerson).addEventListener('click', (e) => savePerson(e.currentTarget, true));
     }
 
     // ---------- Phone (add / edit) ----------
@@ -408,6 +446,7 @@
         $('[data-role="number-wrap"]', sPhone).style.display = editData ? 'none' : '';
         $('[data-role="source-wrap"]', sPhone).style.display = editData ? 'none' : '';
         $('[data-role="phone"]', sPhone).value = '';
+        $('[data-role="phone-ext"]', sPhone).value = editData ? (editData.ext || '') : '';
         $('[data-role="phone-label"]', sPhone).value = editData ? editData.label : '';
         $('[data-role="source-detail"]', sPhone).value = '';
         $('[data-role="make-primary"]', sPhone).checked = editData ? editData.primary : false;
@@ -417,28 +456,31 @@
     }
     if (sPhone) {
         $('[data-role="save"]', sPhone).addEventListener('click', async (e) => {
-            busy(e.currentTarget, true);
+            const btn = e.currentTarget;
+            busy(btn, true);
             let data;
             if (phone.id) {
                 data = await post('/crm/api/phone/' + phone.id + '/update', {
                     label: $('[data-role="phone-label"]', sPhone).value,
+                    extension: $('[data-role="phone-ext"]', sPhone).value,
                     make_primary: $('[data-role="make-primary"]', sPhone).checked,
                 });
             } else {
                 data = await post('/crm/api/phone', {
                     contact_id: phone.contactId, number: $('[data-role="phone"]', sPhone).value,
+                    extension: $('[data-role="phone-ext"]', sPhone).value,
                     label: $('[data-role="phone-label"]', sPhone).value,
                     source_detail: $('[data-role="source-detail"]', sPhone).value,
                     make_primary: $('[data-role="make-primary"]', sPhone).checked, force: phone.force,
                 });
             }
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (data.duplicate) {
                 phone.force = true;
                 const warn = $('[data-role="dup-warning"]', sPhone);
                 warn.innerHTML = '<i class="fas fa-circle-exclamation"></i><span>' + esc(data.error) + '. Press <strong>Add anyway</strong> to keep it here too.</span>';
                 warn.hidden = false;
-                e.currentTarget.textContent = 'Add anyway';
+                btn.textContent = 'Add anyway';
                 return;
             }
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
@@ -462,12 +504,13 @@
     }
     if (sBuilding) {
         $('[data-role="save"]', sBuilding).addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
             const fields = {};
             $all('[data-field]', sBuilding).forEach(input => { fields[input.dataset.field] = input.value; });
             if (!fields.address.trim()) { toast('Address is required', 'warning'); return; }
-            busy(e.currentTarget, true);
+            busy(btn, true);
             const data = await post('/crm/api/building/' + editingBuilding + '/update', fields);
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             closeSheet(sBuilding); toast('Building updated', 'success'); changed();
         });
@@ -522,10 +565,11 @@
             if (pick) pickMergeTarget(pick.dataset.id, pick.dataset.name);
         });
         $('[data-role="save"]', sMerge).addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
             if (!merge.targetId) return;
-            busy(e.currentTarget, true);
+            busy(btn, true);
             const data = await post('/crm/api/contact/merge', { source_id: merge.sourceId, target_id: merge.targetId });
-            busy(e.currentTarget, false);
+            busy(btn, false);
             if (!data.success) { toast(data.error || 'Merge failed', 'error'); return; }
             toast('Merged', 'success');
             window.location.href = '/crm/contacts/' + data.target_id;
@@ -634,6 +678,7 @@
     // ---------- delegated clicks ----------
 
     document.addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
         const t = e.target;
         const openPal = t.closest('.js-open-palette');
         if (openPal) { e.preventDefault(); closeAllSheets(); openPalette(); return; }
@@ -658,7 +703,7 @@
         const addPhone = t.closest('.js-add-phone');
         if (addPhone) { openPhone(addPhone); return; }
         const editPhone = t.closest('.js-edit-phone');
-        if (editPhone) { openPhone(null, { id: editPhone.dataset.id, label: editPhone.dataset.label, number: editPhone.dataset.number, primary: editPhone.dataset.primary === '1' }); return; }
+        if (editPhone) { openPhone(null, { id: editPhone.dataset.id, label: editPhone.dataset.label, ext: editPhone.dataset.ext, number: editPhone.dataset.number, primary: editPhone.dataset.primary === '1' }); return; }
         const editBuilding = t.closest('.js-edit-building');
         if (editBuilding) { openBuildingEdit(JSON.parse(editBuilding.dataset.building)); return; }
         const mergeBtn = t.closest('.js-merge');
@@ -786,6 +831,7 @@
     // ---------- note composer (delegated: partial swaps recreate it) ----------
 
     document.addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
         const save = e.target.closest('.js-note-save');
         if (!save) return;
         const form = save.closest('.js-note-composer');

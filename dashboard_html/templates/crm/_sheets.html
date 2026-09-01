@@ -141,9 +141,10 @@
                 <div><span class="crm-label">Company</span><input type="text" class="crm-input" data-role="company" placeholder="optional" maxlength="255"></div>
             </div>
             <div data-role="add-only">
-                <div class="crm-field crm-field-row">
+                <div class="crm-field crm-field-row is-phone">
                     <div><span class="crm-label">Phone</span><input type="tel" class="crm-input" data-role="phone" placeholder="(917) 555-0142"></div>
-                    <div><span class="crm-label">Phone label</span><input type="text" class="crm-input" data-role="phone-label" placeholder="Cell" maxlength="50"></div>
+                    <div><span class="crm-label">Ext.</span><input type="text" class="crm-input" data-role="phone-ext" placeholder="204" inputmode="numeric" maxlength="12"></div>
+                    <div><span class="crm-label">Label</span><input type="text" class="crm-input" data-role="phone-label" placeholder="Cell" maxlength="50"></div>
                 </div>
                 <div class="crm-field" data-role="building-role-wrap">
                     <span class="crm-label">Relationship to this building</span>
@@ -158,6 +159,7 @@
             </div>
             <div class="crm-sheet__foot">
                 <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-tinted" data-role="save-another">Save &amp; add another</button>
                 <button type="button" class="cbtn cbtn-primary" data-role="save">Add person</button>
             </div>
         </div>
@@ -171,8 +173,9 @@
         <div class="crm-sheet__body">
             <p class="crm-sheet__entity">For <strong data-role="entity"></strong></p>
             <div class="crm-collision" data-role="dup-warning" hidden></div>
-            <div class="crm-field crm-field-row">
+            <div class="crm-field crm-field-row is-phone">
                 <div data-role="number-wrap"><span class="crm-label">Phone</span><input type="tel" class="crm-input" data-role="phone" placeholder="(917) 555-0142"></div>
+                <div><span class="crm-label">Ext.</span><input type="text" class="crm-input" data-role="phone-ext" placeholder="204" inputmode="numeric" maxlength="12"></div>
                 <div><span class="crm-label">Label</span><input type="text" class="crm-input" data-role="phone-label" placeholder="Cell" maxlength="50"></div>
             </div>
             <div class="crm-field" data-role="source-wrap"><span class="crm-label">Where did you find this?</span><input type="text" class="crm-input" data-role="source-detail" placeholder="TruePeopleSearch, voicemail callback…" maxlength="255"></div>

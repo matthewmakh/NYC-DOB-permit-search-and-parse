@@ -50,7 +50,7 @@
             <div class="crm-cell__sub">{% if c.title %}{{ c.title }} · {% endif %}{% if c.company %}{{ c.company }} · {% endif %}{{ c.building_count }} building{{ 's' if c.building_count != 1 }} · via {{ c.source_detail or c.source }}</div>
         </div>
         <div class="crm-cell__trail">
-            {% if c.primary_phone %}<a class="crm-tag tag-mono" href="tel:+1{{ c.primary_phone|crm_phone_digits }}">{{ c.primary_phone }}</a>{% endif %}
+            {% if c.primary_phone %}<a class="crm-tag tag-mono" href="{{ c.primary_phone|crm_tel }}">{{ c.primary_phone }}</a>{% endif %}
             {{ recency(c.last_contacted_at) }}
             {% if not c.do_not_contact %}{{ contacted_btn(c.name, contact_id=c.id, phone=c.primary_phone, small=True, label='') }}{% endif %}
         </div>

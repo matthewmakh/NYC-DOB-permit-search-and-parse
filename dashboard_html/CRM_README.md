@@ -89,10 +89,19 @@ system is the team system:
   (label / primary / delete), follow-ups (title / date / assignee / delete),
   building-person roles and links. Merging two people moves numbers, links,
   history, follow-ups, stars, and list items onto the kept record.
-* Phones are stored with a normalized 10-digit key (`crm_phones.digits`);
-  duplicate numbers warn at entry (`409` with matches, `force: true`
-  overrides). Every phone and contact carries provenance (`source`,
-  `source_detail`, `added_by`).
+* Phones are stored with a normalized 10-digit key (`crm_phones.digits`)
+  plus an optional `extension`. An extension can be typed into the number
+  itself (`(212) 555-0100 x204`, `ext. 204`, `,204`, `#204`) or into the
+  dedicated **Ext.** field — either way the extension never pollutes the
+  10-digit key, and `tel:` links dial it (`tel:+12125550100;ext=204`).
+* Duplicate numbers warn at entry (`409` with matches, `force: true`
+  overrides), but an office main line with a *different* extension is not
+  treated as a duplicate — several people share one switchboard number.
+  Every phone and contact carries provenance (`source`, `source_detail`,
+  `added_by`).
+* **Save & add another** on the Add-person sheet keeps the dialog open and
+  clears it, so a building's owner, super, and manager go in one after
+  another; the People list updates behind the sheet as each one lands.
 * Contacts have a `do_not_contact` flag; phones have `good/bad/do_not_call`.
 * Follow-up dues are **dates** in America/New_York; "today"/"overdue" in
   queues and counters are computed against the NY calendar, not UTC.
@@ -106,7 +115,9 @@ system is the team system:
 ## Migration story
 
 Purely additive: `init_crm_tables()` is a list of `CREATE TABLE IF NOT
-EXISTS` / `CREATE INDEX IF NOT EXISTS` statements executed at startup from
+EXISTS` / `CREATE INDEX IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`
+statements executed at startup from
 `init_db_pool()` (same pattern as `team_service.init_team_tables()`). No
-existing table is altered. Safe on a live database; a failed init never
+scraper-owned table is ever touched, and the only ALTERs add nullable
+columns to `crm_*` tables. Safe on a live database; a failed init never
 blocks worker boot.

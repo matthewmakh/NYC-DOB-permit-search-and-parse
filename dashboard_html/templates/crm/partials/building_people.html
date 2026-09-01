@@ -24,7 +24,7 @@
     {% if c.do_not_contact %}<div class="crm-dnc"><i class="fas fa-ban"></i> Do not contact</div>{% endif %}
     {% for p in c.phones %}
     <div class="crm-phone{{ ' is-bad' if p.status != 'good' }}">
-        <a class="tel" href="tel:+1{{ p.digits }}">{{ p.number }}</a>
+        <a class="tel" href="{{ p|crm_tel }}">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
         {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
         {% if p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% elif p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% endif %}
         <span class="src" title="{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}">{{ p.source_detail or p.source }}</span>

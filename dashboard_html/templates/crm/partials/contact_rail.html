@@ -5,7 +5,7 @@
     <div class="crm-cell">
         <div class="crm-cell__body">
             <div class="crm-cell__title" style="font-variant-numeric:tabular-nums">
-                <a href="tel:+1{{ p.digits }}" {% if p.status != 'good' %}style="text-decoration:line-through;color:var(--c-label-3)"{% endif %}>{{ p.number }}</a>
+                <a href="{{ p|crm_tel }}" {% if p.status != 'good' %}style="text-decoration:line-through;color:var(--c-label-3)"{% endif %}>{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
                 {% if p.is_primary %}<span class="crm-tag tag-blue">Primary</span>{% endif %}
                 {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
                 {% if p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% elif p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% endif %}
@@ -19,7 +19,7 @@
             {% else %}
             <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="good" title="Mark good again"><i class="fas fa-rotate-left"></i></button>
             {% endif %}
-            <button type="button" class="cbtn cbtn-icon cbtn-sm js-edit-phone" data-id="{{ p.id }}" data-label="{{ p.label or '' }}" data-number="{{ p.number }}" data-primary="{{ 1 if p.is_primary else 0 }}" title="Edit"><i class="fas fa-pen"></i></button>
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-edit-phone" data-id="{{ p.id }}" data-label="{{ p.label or '' }}" data-ext="{{ p.extension or '' }}" data-number="{{ p.number }}" data-primary="{{ 1 if p.is_primary else 0 }}" title="Edit"><i class="fas fa-pen"></i></button>
         </div>
     </div>
     {% else %}

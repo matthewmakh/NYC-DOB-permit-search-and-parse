@@ -32,7 +32,7 @@
             </div>
             {% for p in c.phones if p.status == 'good' %}
             <div class="crm-phone">
-                <a class="tel" href="tel:+1{{ p.digits }}" style="font-size:16px">{{ p.number }}</a>
+                <a class="tel" href="{{ p|crm_tel }}" style="font-size:16px">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
                 {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
                 <span class="src">{{ p.source_detail or p.source }}</span>
                 <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>
@@ -58,7 +58,7 @@
         {% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
         {% for p in c.phones if p.status == 'good' %}
         <div class="crm-phone" style="padding-left:0">
-            <a class="tel" href="tel:+1{{ p.digits }}" style="font-size:18px">{{ p.number }}</a>
+            <a class="tel" href="{{ p|crm_tel }}" style="font-size:18px">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
             {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
             <span class="src">{{ p.source_detail or p.source }}</span>
             <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>

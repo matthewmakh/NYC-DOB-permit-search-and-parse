@@ -130,6 +130,26 @@ def crm_phone_digits(value):
     return crm_service.normalize_phone_digits(value)
 
 
+@crm_bp.app_template_filter('crm_tel')
+def crm_tel(phone):
+    """tel: URI for a phone row (dict) or a raw string, extension included."""
+    if isinstance(phone, dict):
+        return crm_service.tel_href(phone.get('digits'), phone.get('extension'))
+    digits = crm_service.normalize_phone_digits(phone)
+    _, extension = crm_service.split_phone_extension(phone)
+    return crm_service.tel_href(digits, extension)
+
+
+@crm_bp.app_template_filter('crm_phone_text')
+def crm_phone_text(phone):
+    """Human-readable number: (212) 555-0100 ext. 204."""
+    if isinstance(phone, dict):
+        return crm_service.format_phone(phone.get('digits'), phone.get('extension'))
+    digits = crm_service.normalize_phone_digits(phone)
+    _, extension = crm_service.split_phone_extension(phone)
+    return crm_service.format_phone(digits, extension)
+
+
 @crm_bp.app_template_filter('crm_initials')
 def crm_initials(value):
     parts = [p for p in str(value or '').replace(',', ' ').split() if p]
@@ -906,7 +926,9 @@ def api_contact_create():
     if building_id and not crm_service.entity_in_team(ctx, building_id=building_id):
         return jsonify({'success': False, 'error': 'Not found'}), 404
     digits = crm_service.normalize_phone_digits(data.get('phone'))
-    duplicates = crm_service.find_contacts_by_digits(ctx, digits) if digits else []
+    extension = (crm_service.normalize_extension(data.get('phone_ext'))
+                 or crm_service.split_phone_extension(data.get('phone'))[1])
+    duplicates = crm_service.find_contacts_by_digits(ctx, digits, extension) if digits else []
     if duplicates and not data.get('force'):
         return jsonify({
             'success': False, 'duplicate': True, 'matches': duplicates,
@@ -924,6 +946,7 @@ def api_contact_create():
         building_role=data.get('building_role') or 'other',
         phone=data.get('phone') or None,
         phone_label=(data.get('phone_label') or '').strip() or None,
+        phone_extension=extension,
     )
     return jsonify({'success': True, 'contact_id': contact_id})
 
@@ -1003,9 +1026,11 @@ def api_phone_add():
     if not crm_service.entity_in_team(ctx, contact_id=contact_id):
         return jsonify({'success': False, 'error': 'Not found'}), 404
     digits = crm_service.normalize_phone_digits(data.get('number'))
+    extension = (crm_service.normalize_extension(data.get('extension'))
+                 or crm_service.split_phone_extension(data.get('number'))[1])
     if not digits:
         return jsonify({'success': False, 'error': 'Enter a phone number'}), 400
-    duplicates = [d for d in crm_service.find_contacts_by_digits(ctx, digits)
+    duplicates = [d for d in crm_service.find_contacts_by_digits(ctx, digits, extension)
                   if d['id'] != contact_id]
     if duplicates and not data.get('force'):
         return jsonify({
@@ -1015,6 +1040,7 @@ def api_phone_add():
     phone_id = crm_service.add_phone(
         ctx, contact_id,
         number=data.get('number'),
+        extension=extension,
         label=(data.get('label') or '').strip() or None,
         source='rep_found',
         source_detail=(data.get('source_detail') or '').strip() or None,
@@ -1040,6 +1066,7 @@ def api_phone_update(phone_id):
     ok = crm_service.update_phone(
         _ctx(), phone_id,
         label=data['label'] if 'label' in data else '__keep__',
+        extension=data['extension'] if 'extension' in data else '__keep__',
         make_primary=bool(data.get('make_primary')),
     )
     return jsonify({'success': ok}), (200 if ok else 404)

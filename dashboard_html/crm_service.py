@@ -154,6 +154,7 @@ CRM_SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         UNIQUE (contact_id, digits)
     )""",
+    """ALTER TABLE crm_phones ADD COLUMN IF NOT EXISTS extension VARCHAR(12)""",
     """CREATE INDEX IF NOT EXISTS idx_crm_phones_digits ON crm_phones (digits)""",
 
     """CREATE TABLE IF NOT EXISTS crm_building_contacts (
@@ -304,19 +305,66 @@ def init_crm_tables():
 # Small shared helpers
 # ============================================================
 
-def normalize_phone_digits(raw):
-    """US-normalized digit key: last 10 digits (drops a leading country 1)."""
+# "x204", "ext 204", "ext. 204", "extension 204", "#204" trailing an entered number.
+EXTENSION_RE = re.compile(
+    r'(?:[,;]|(?:extension|extn|ext|x)\.?|#)\s*(\d{1,10})\s*$',
+    re.IGNORECASE,
+)
+
+
+def split_phone_extension(raw):
+    """Split a typed number into (number_without_extension, extension or None).
+
+    Office lines are usually entered as one string — "(212) 555-0100 x204" —
+    and the extension digits must never be folded into the 10-digit key, or
+    the number itself comes out wrong.
+    """
+    text = str(raw or '').strip()
+    if not text:
+        return '', None
+    match = EXTENSION_RE.search(text)
+    if not match:
+        return text, None
+    base = text[:match.start()].strip(' ,;.-')
+    extension = match.group(1)
+    # Only treat it as an extension when a real number precedes it.
+    if len(re.sub(r'\D', '', base)) < 7:
+        return text, None
+    return base, extension
+
+
+def normalize_extension(raw):
     digits = re.sub(r'\D', '', str(raw or ''))
+    return digits[:12] or None
+
+
+def normalize_phone_digits(raw):
+    """US-normalized digit key: last 10 digits (drops a leading country 1).
+
+    Any trailing extension is stripped first so it never corrupts the key.
+    """
+    base, _ = split_phone_extension(raw)
+    digits = re.sub(r'\D', '', base)
     if len(digits) == 11 and digits.startswith('1'):
         digits = digits[1:]
     return digits[-10:] if len(digits) > 10 else digits
 
 
-def format_phone(digits):
+def format_phone(digits, extension=None):
     digits = str(digits or '')
-    if len(digits) == 10:
-        return f'({digits[0:3]}) {digits[3:6]}-{digits[6:]}'
-    return digits
+    formatted = f'({digits[0:3]}) {digits[3:6]}-{digits[6:]}' if len(digits) == 10 else digits
+    if extension:
+        formatted = f'{formatted} ext. {extension}'
+    return formatted
+
+
+def tel_href(digits, extension=None):
+    """RFC 3966 tel: URI — iOS and Android both dial the extension from ;ext=."""
+    digits = str(digits or '')
+    if not digits:
+        return ''
+    href = f'+1{digits}' if len(digits) == 10 else digits
+    return f'tel:{href};ext={extension}' if extension else f'tel:{href}'
 
 
 def ny_now():
@@ -816,19 +864,24 @@ def permit_building_prefill(bbl):
 # Contacts & phones
 # ============================================================
 
-def find_contacts_by_digits(ctx, digits):
-    """Duplicate-defense lookup: existing team contacts holding this number."""
+def find_contacts_by_digits(ctx, digits, extension=None):
+    """Duplicate-defense lookup: existing team contacts holding this number.
+
+    An office main line shared by several people is normal, so a row whose
+    extension differs from the one being entered is not a duplicate.
+    """
     if not digits:
         return []
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT DISTINCT c.id, c.name, c.company
+            """SELECT DISTINCT c.id, c.name, c.company, p.extension
                FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
                WHERE p.digits = %s AND (c.team_id = %s OR c.team_id IS NULL)
+                 AND (%s IS NULL OR p.extension IS NULL OR p.extension = %s)
                ORDER BY c.name""",
-            (digits, ctx['team_id']),
+            (digits, ctx['team_id'], extension, extension),
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
@@ -838,7 +891,8 @@ def find_contacts_by_digits(ctx, digits):
 
 def create_contact(ctx, *, name, title=None, company=None, email=None,
                    source='manual', source_detail=None, building_id=None,
-                   building_role='other', phone=None, phone_label=None):
+                   building_role='other', phone=None, phone_label=None,
+                   phone_extension=None):
     """Create a contact, optionally with a first phone and a building link."""
     conn = get_db_connection()
     cur = conn.cursor()
@@ -853,14 +907,15 @@ def create_contact(ctx, *, name, title=None, company=None, email=None,
         contact_id = cur.fetchone()['id']
         if phone:
             digits = normalize_phone_digits(phone)
+            extension = normalize_extension(phone_extension) or split_phone_extension(phone)[1]
             if digits:
                 cur.execute(
                     """INSERT INTO crm_phones
-                       (contact_id, number, digits, label, source, source_detail,
+                       (contact_id, number, digits, extension, label, source, source_detail,
                         is_primary, added_by_id)
-                       VALUES (%s,%s,%s,%s,%s,%s,TRUE,%s)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,TRUE,%s)
                        ON CONFLICT (contact_id, digits) DO NOTHING""",
-                    (contact_id, format_phone(digits), digits, phone_label or None,
+                    (contact_id, format_phone(digits), digits, extension, phone_label or None,
                      source, source_detail or None, ctx['user_id']),
                 )
         if building_id:
@@ -880,9 +935,10 @@ def create_contact(ctx, *, name, title=None, company=None, email=None,
         conn.close()
 
 
-def add_phone(ctx, contact_id, *, number, label=None, source='rep_found',
-              source_detail=None, make_primary=False):
+def add_phone(ctx, contact_id, *, number, extension=None, label=None,
+              source='rep_found', source_detail=None, make_primary=False):
     digits = normalize_phone_digits(number)
+    extension = normalize_extension(extension) or split_phone_extension(number)[1]
     if not digits:
         raise ValueError('phone number needs digits')
     conn = get_db_connection()
@@ -895,13 +951,14 @@ def add_phone(ctx, contact_id, *, number, label=None, source='rep_found',
             )
         cur.execute(
             """INSERT INTO crm_phones
-               (contact_id, number, digits, label, source, source_detail,
+               (contact_id, number, digits, extension, label, source, source_detail,
                 is_primary, added_by_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (contact_id, digits) DO UPDATE
-                   SET label = COALESCE(EXCLUDED.label, crm_phones.label)
+                   SET label = COALESCE(EXCLUDED.label, crm_phones.label),
+                       extension = COALESCE(EXCLUDED.extension, crm_phones.extension)
                RETURNING id""",
-            (contact_id, format_phone(digits), digits, label or None, source,
+            (contact_id, format_phone(digits), digits, extension, label or None, source,
              source_detail or None, bool(make_primary), ctx['user_id']),
         )
         phone_id = cur.fetchone()['id']
@@ -981,7 +1038,7 @@ def list_contacts(ctx, *, q=None, starred=False, cold=False, limit=200):
         cur.execute(
             f"""
             SELECT c.*, (st.id IS NOT NULL) AS starred,
-                   (SELECT p.number FROM crm_phones p
+                   (SELECT p.number || COALESCE(' ext. ' || p.extension, '') FROM crm_phones p
                     WHERE p.contact_id = c.id AND p.status = 'good'
                     ORDER BY p.is_primary DESC, p.created_at LIMIT 1) AS primary_phone,
                    (SELECT COUNT(*) FROM crm_building_contacts bc
@@ -1665,7 +1722,7 @@ def get_list(ctx, list_id):
                    b.last_contacted_at AS b_last_contacted, b.contact_count,
                    c.id AS contact_id, c.name AS contact_name, c.company,
                    c.last_contacted_at AS c_last_contacted,
-                   (SELECT p.number FROM crm_phones p
+                   (SELECT p.number || COALESCE(' ext. ' || p.extension, '') FROM crm_phones p
                     WHERE p.contact_id = c.id AND p.status = 'good'
                     ORDER BY p.is_primary DESC, p.created_at LIMIT 1) AS contact_phone
             FROM crm_list_items li
@@ -2158,7 +2215,7 @@ def delete_follow_up(ctx, follow_up_id):
         conn.close()
 
 
-def update_phone(ctx, phone_id, *, label='__keep__', make_primary=None):
+def update_phone(ctx, phone_id, *, label='__keep__', extension='__keep__', make_primary=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -2173,6 +2230,9 @@ def update_phone(ctx, phone_id, *, label='__keep__', make_primary=None):
         if label != '__keep__':
             cur.execute("UPDATE crm_phones SET label = %s WHERE id = %s",
                         ((label or '').strip() or None, phone_id))
+        if extension != '__keep__':
+            cur.execute("UPDATE crm_phones SET extension = %s WHERE id = %s",
+                        (normalize_extension(extension), phone_id))
         if make_primary:
             cur.execute("UPDATE crm_phones SET is_primary = FALSE WHERE contact_id = %s", (row['contact_id'],))
             cur.execute("UPDATE crm_phones SET is_primary = TRUE WHERE id = %s", (phone_id,))

@@ -1040,6 +1040,7 @@ html[data-crm-theme="dark"] .crm-col { background: rgba(255, 255, 255, 0.04); }
 
 .crm-field { margin-bottom: 14px; }
 .crm-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.crm-field-row.is-phone { grid-template-columns: 1.7fr 0.8fr 1.1fr; }
 .crm-label {
     display: block;
     margin-bottom: 6px;
@@ -1300,6 +1301,8 @@ html[data-crm-theme="dark"] .crm-hbar .hb-track { background: rgba(255, 255, 255
 .crm-help-grid div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--c-sep); }
 .crm-muted { color: var(--c-label-3); }
 .crm-hidden { display: none !important; }
+/* Toggled from crm.js to hide contextual buttons (delete, save-another). */
+.js-hidden { display: none !important; }
 
 /* ============================================================
    Responsive
@@ -1323,7 +1326,7 @@ html[data-crm-theme="dark"] .crm-hbar .hb-track { background: rgba(255, 255, 255
     .crm-detail-head { flex-direction: column; }
     .crm-detail-head__actions { justify-content: flex-start; }
     .crm-grid { grid-template-columns: 1fr; }
-    .crm-field-row { grid-template-columns: 1fr; }
+    .crm-field-row, .crm-field-row.is-phone { grid-template-columns: 1fr; }
     .crm-quick a, .crm-quick button { flex: 1; min-width: 64px; }
     .crm-day, .crm-alpha__letter { top: 0; }
 

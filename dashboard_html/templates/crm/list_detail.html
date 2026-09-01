@@ -31,7 +31,7 @@
             {{ stage_dot(item.stage, stage_labels) }}{{ recency(item.b_last_contacted) }}
             {{ contacted_btn(item.address, building_id=item.building_id, small=True, label='') }}
             {% else %}
-            {% if item.contact_phone %}<a class="crm-tag tag-mono" href="tel:+1{{ item.contact_phone|crm_phone_digits }}">{{ item.contact_phone }}</a>{% endif %}
+            {% if item.contact_phone %}<a class="crm-tag tag-mono" href="{{ item.contact_phone|crm_tel }}">{{ item.contact_phone }}</a>{% endif %}
             {{ recency(item.c_last_contacted) }}
             {{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True, label='') }}
             {% endif %}
