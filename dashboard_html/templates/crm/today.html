@@ -1,129 +1,17 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import followup_row, feed_item, stage_dot, recency, contacted_btn %}
-
 {% block title %}CRM — Today{% endblock %}
-
 {% block crm_content %}
-<div class="crm-head">
+<div class="crm-title">
     <div>
-        <h1>Today</h1>
-        <p class="crm-head-sub">{{ today_ny.strftime('%A, %B %-d') }} — what needs a call, a visit, or a nudge.</p>
+        <h1 class="crm-large-title">{{ 'Good morning' if ny_hour < 12 else ('Good afternoon' if ny_hour < 17 else 'Good evening') }}, {{ crm_user_name.split(' ')[0] }}</h1>
+        <p class="crm-subtitle">{{ today_ny.strftime('%A, %B %-d') }} — here's what needs a call, a visit, or a nudge.</p>
     </div>
-    <div class="crm-head-actions">
-        <a href="/properties" class="btn btn-secondary"><i class="fas fa-magnifying-glass"></i> Discover buildings</a>
-        <a href="/crm/buildings/add" class="btn btn-primary"><i class="fas fa-plus"></i> Add building</a>
-    </div>
-</div>
-
-<div class="crm-kpis">
-    <div class="crm-kpi">
-        <div class="kpi-label">Contacted today</div>
-        <div class="kpi-value">{{ counters.contacted_today }}</div>
-    </div>
-    <div class="crm-kpi">
-        <div class="kpi-label">Visits today</div>
-        <div class="kpi-value">{{ counters.visits_today }}</div>
-    </div>
-    <div class="crm-kpi {{ 'kpi-danger' if overdue }}">
-        <div class="kpi-label">Overdue follow-ups</div>
-        <div class="kpi-value">{{ overdue|length }}</div>
-    </div>
-    <div class="crm-kpi">
-        <div class="kpi-label">Due today</div>
-        <div class="kpi-value">{{ due_today|length }}</div>
+    <div class="crm-title-actions">
+        <a href="/properties" class="cbtn"><i class="fas fa-magnifying-glass-location"></i> Discover</a>
+        <a href="/crm/focus" class="cbtn cbtn-primary"><i class="fas fa-bullseye"></i> Start calling</a>
     </div>
 </div>
-
-{% if overdue %}
-<div class="crm-panel panel-danger">
-    <div class="crm-panel-head">
-        <h3><i class="fas fa-triangle-exclamation"></i> Overdue</h3>
-        <a href="/crm/followups">All follow-ups</a>
-    </div>
-    {% for f in overdue[:8] %}{{ followup_row(f, today_ny) }}{% endfor %}
-    {% if overdue|length > 8 %}
-    <div class="crm-row"><div class="row-main"><a href="/crm/followups">+ {{ overdue|length - 8 }} more overdue</a></div></div>
-    {% endif %}
-</div>
-{% endif %}
-
-<div class="crm-panel">
-    <div class="crm-panel-head">
-        <h3>Due today</h3>
-        <span class="panel-count">{{ due_today|length }}</span>
-    </div>
-    {% for f in due_today %}{{ followup_row(f, today_ny) }}{% else %}
-    <div class="crm-empty"><i class="far fa-circle-check"></i>Nothing due today — go find the next one.
-        <div><a class="btn btn-secondary btn-sm" href="/properties">Browse buildings</a></div>
-    </div>
-    {% endfor %}
-</div>
-
-{% if upcoming %}
-<div class="crm-panel">
-    <div class="crm-panel-head">
-        <h3>Coming up this week</h3>
-        <a href="/crm/followups">See all</a>
-    </div>
-    {% for f in upcoming %}{{ followup_row(f, today_ny) }}{% endfor %}
-</div>
-{% endif %}
-
-<div class="crm-columns">
-    <div class="crm-col-main">
-        {% if attention %}
-        <div class="crm-panel">
-            <div class="crm-panel-head">
-                <h3>Needs attention</h3>
-                <span class="panel-count">{{ attention|length }}</span>
-            </div>
-            {% for b in attention %}
-            <div class="crm-row">
-                <div class="row-main">
-                    <div class="row-title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
-                    <div class="row-sub">
-                        {% if b.reason == 'stale' %}
-                        In {{ stage_labels.get(b.stage, b.stage) }} but untouched since {{ (b.last_contacted_at or b.created_at)|crm_timeago }}
-                        {% else %}
-                        Added {{ b.created_at|crm_timeago }} and never contacted
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="row-side">
-                    {{ stage_dot(b.stage, stage_labels) }}
-                    {{ contacted_btn(b.address, building_id=b.id, small=True) }}
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        {% if my_lists %}
-        <div class="crm-panel">
-            <div class="crm-panel-head">
-                <h3>My lists</h3>
-                <a href="/crm/lists">All lists</a>
-            </div>
-            {% for l in my_lists %}
-            <div class="crm-row">
-                <div class="row-main">
-                    <div class="row-title"><a href="/crm/lists/{{ l.id }}">{{ l.name }}</a></div>
-                    <div class="row-sub">{{ l.item_count }} lead{{ 's' if l.item_count != 1 }}{% if l.assigned_to_name %} · assigned to {{ l.assigned_to_name }}{% endif %}</div>
-                </div>
-                <div class="row-side"><a class="btn btn-secondary btn-sm" href="/crm/lists/{{ l.id }}">Work it</a></div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
-    </div>
-
-    <div class="crm-col-rail">
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>Team pulse</h3></div>
-            {% for a in feed %}{{ feed_item(a) }}{% else %}
-            <div class="crm-empty"><i class="far fa-comments"></i>No team activity yet.</div>
-            {% endfor %}
-        </div>
-    </div>
+<div id="todayBody" data-partial="/crm/partials/today">
+    {% include "crm/partials/today_body.html" %}
 </div>
 {% endblock %}

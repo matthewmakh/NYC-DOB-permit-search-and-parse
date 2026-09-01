@@ -1,19 +1,34 @@
 {% extends "base.html" %}
 
 {% block extra_css %}
+<script>
+    // Appearance: 'auto' | 'light' | 'dark', applied before first paint.
+    (function () {
+        try {
+            var pref = localStorage.getItem('crm-theme') || 'auto';
+            var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (dark) document.documentElement.setAttribute('data-crm-theme', 'dark');
+            document.documentElement.setAttribute('data-crm-pref', pref);
+        } catch (e) { /* no storage: stay light */ }
+    })();
+</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/crm.css') }}">
 {% endblock %}
 
 {% block content %}
-{% from "crm/_macros.html" import crm_subnav %}
-<div class="crm-shell">
-    {{ crm_subnav(crm_tab, crm_ctx) }}
-    {% block crm_content %}{% endblock %}
+{% from "crm/_macros.html" import sidebar, tabbar %}
+<div class="crm-app">
+    {{ sidebar(crm_tab, crm_ctx, crm_user_name, due_count) }}
+    <main class="crm-main" id="crm-main">
+        {% block crm_content %}{% endblock %}
+    </main>
 </div>
-{% include "crm/_modals.html" %}
+{{ tabbar(crm_tab, due_count) }}
+{% include "crm/_sheets.html" %}
 {% endblock %}
 
 {% block extra_js %}
-<script src="{{ url_for('static', filename='js/crm.js') }}"></script>
+{# Page config (window.CRM_RECORD / window.CRM_FOCUS) must exist before crm.js boots. #}
 {% block crm_js %}{% endblock %}
+<script src="{{ url_for('static', filename='js/crm.js') }}"></script>
 {% endblock %}

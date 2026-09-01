@@ -1,0 +1,32 @@
+{% from "crm/_macros.html" import star_btn, recency, stepper, next_step, bavatar %}
+<div class="crm-detail-head">
+    {{ bavatar('crm-avatar-lg') }}
+    <div class="crm-detail-head__body">
+        <h1>{{ b.address }}</h1>
+        {{ star_btn(b.starred, building_id=b.id) }}
+        <div class="crm-detail-head__meta">
+            {% if b.borough %}<span class="crm-tag">{{ b.borough }}{% if b.zip_code %} {{ b.zip_code }}{% endif %}</span>{% endif %}
+            {% if b.unit_count %}<span class="crm-tag">{{ b.unit_count }} units</span>{% endif %}
+            {% if b.year_built %}<span class="crm-tag">Built {{ b.year_built }}</span>{% endif %}
+            {% if b.owner_name %}<span class="crm-tag" title="Owner of record">{{ b.owner_name|truncate(40) }}</span>{% endif %}
+            {% if b.bbl %}<span class="crm-tag tag-mono">BBL {{ b.bbl }}</span>{% endif %}
+            {{ recency(b.last_contacted_at, 'touched') }}
+            {% if b.last_visited_at %}{{ recency(b.last_visited_at, 'visited') }}{% endif %}
+            {% if b.starred_by %}<span class="crm-tag tag-orange" title="Starred by"><i class="fas fa-star" style="font-size:9px"></i> {{ b.starred_by|map(attribute='name')|join(', ') }}</span>{% endif %}
+            {% if b.assigned_to_name %}<span class="crm-tag tag-blue"><i class="far fa-user" style="font-size:9px"></i> {{ b.assigned_to_name }}</span>{% endif %}
+        </div>
+    </div>
+    <div class="crm-detail-head__actions">
+        <select class="crm-native-select js-assign-select" data-building-id="{{ b.id }}" aria-label="Assigned rep">
+            <option value="">Unassigned</option>
+            {% for u in roster %}<option value="{{ u.id }}" {{ 'selected' if b.assigned_to_id == u.id }}>{{ u.name }}</option>{% endfor %}
+        </select>
+        <button type="button" class="cbtn js-edit-building" data-building='{{ {"id": b.id, "address": b.address, "borough": b.borough, "zip_code": b.zip_code, "neighborhood": b.neighborhood, "unit_count": b.unit_count, "year_built": b.year_built, "num_floors": b.num_floors, "building_class": b.building_class, "owner_name": b.owner_name}|tojson|forceescape }}'><i class="fas fa-pen"></i> Edit</button>
+        {% if b.bbl %}<a class="cbtn" href="/property/{{ b.bbl }}" target="_blank" rel="noopener"><i class="fas fa-building-columns"></i> Full profile</a>{% endif %}
+        <a class="cbtn cbtn-icon" href="https://maps.apple.com/?q={{ (b.address ~ ' ' ~ (b.borough or '') ~ ' NY')|urlencode }}" target="_blank" rel="noopener" title="Open in Maps"><i class="fas fa-map-location-dot"></i></a>
+        {% if crm_ctx.is_admin %}<button type="button" class="cbtn cbtn-icon js-building-delete" data-id="{{ b.id }}" title="Remove from CRM"><i class="fas fa-trash-can"></i></button>{% endif %}
+    </div>
+</div>
+{{ stepper(b.stage, stages, stage_labels, b.id) }}
+{% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}. Worth a look before calling again.</div>{% endif %}
+{{ next_step(b, today_ny) }}

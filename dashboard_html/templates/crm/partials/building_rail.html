@@ -1,0 +1,35 @@
+{% from "crm/_macros.html" import followup_cell %}
+{% if b.follow_ups %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Open follow-ups</h3><span class="count">{{ b.follow_ups|length }}</span></div>
+    {% for f in b.follow_ups %}{{ followup_cell(f, today_ny, show_assignee=True) }}{% endfor %}
+</div>
+{% endif %}
+{% if b.lists %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>On lists</h3></div>
+    <div class="crm-inline-list">{% for l in b.lists %}<a class="crm-tag tag-blue" href="/crm/lists/{{ l.id }}">{{ l.name }}</a>{% endfor %}</div>
+</div>
+{% endif %}
+{% if snapshot %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Permit intel</h3>{% if b.bbl %}<a href="/property/{{ b.bbl }}" target="_blank" rel="noopener">Full profile</a>{% endif %}</div>
+    {% if snapshot.enrichment %}{% set e = snapshot.enrichment %}
+    <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Owner (PLUTO)</div><div class="crm-cell__title">{{ e.current_owner_name or '—' }}</div></div></div>
+    {% if e.owner_name_rpad and e.owner_name_rpad != e.current_owner_name %}
+    <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Taxpayer (RPAD)</div><div class="crm-cell__title">{{ e.owner_name_rpad }}</div></div></div>{% endif %}
+    {% if e.estimated_value %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Estimated value</div><div class="crm-cell__title">${{ '{:,.0f}'.format(e.estimated_value) }}</div></div></div>{% endif %}
+    {% if e.purchase_date %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Purchased</div><div class="crm-cell__title">{{ e.purchase_date.strftime('%b %Y') }}{% if e.purchase_price %} · ${{ '{:,.0f}'.format(e.purchase_price) }}{% endif %}</div></div></div>{% endif %}
+    {% if e.hpd_open_violations %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">HPD open violations</div><div class="crm-cell__title" style="color:var(--c-orange-ink)">{{ e.hpd_open_violations }}</div></div></div>{% endif %}
+    {% endif %}
+    {% for p in snapshot.recent_permits %}
+    <div class="crm-cell">
+        <div class="crm-cell__body" style="white-space:normal">
+            <div class="crm-cell__sub">{{ p.permit_type or p.work_type or 'Permit' }} · {{ (p.filing_date or p.issue_date).strftime('%b %Y') if (p.filing_date or p.issue_date) else '' }} · {{ p.permit_status or '' }}</div>
+            <div style="font-size:12.5px;line-height:1.45;white-space:normal">{{ p.work_description or p.permit_no }}</div>
+        </div>
+    </div>
+    {% else %}{% if not snapshot.enrichment %}<div class="crm-cell crm-muted" style="font-size:12.5px">No permit records for this BBL.</div>{% endif %}{% endfor %}
+</div>
+{% endif %}
+<p class="crm-provenance">Added by {{ b.added_by_name }} {{ b.created_at|crm_timeago }} from {{ 'the permit database' if b.source == 'permit' else 'manual entry' }}. Scraped data stays read-only; everything your team adds lives in the CRM and never gets overwritten.</p>

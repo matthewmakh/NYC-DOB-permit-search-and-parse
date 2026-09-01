@@ -1,49 +1,37 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import followup_row %}
-
+{% from "crm/_macros.html" import followup_cell, empty %}
 {% block title %}CRM — Follow-ups{% endblock %}
-
 {% block crm_content %}
-<div class="crm-head">
+<div class="crm-title">
     <div>
-        <h1>Follow-ups</h1>
-        <p class="crm-head-sub">Dates you set so nothing falls through the cracks.</p>
+        <h1 class="crm-large-title">Follow-ups</h1>
+        <p class="crm-subtitle">Dates you set so nothing falls through the cracks.</p>
     </div>
-    {% if crm_ctx.is_admin %}
-    <div class="crm-head-actions">
-        <div class="crm-pills">
-            <a class="crm-pill {{ 'is-active' if not scope_team }}" href="/crm/followups">Mine</a>
-            <a class="crm-pill {{ 'is-active' if scope_team }}" href="/crm/followups?scope=team">Whole team</a>
-        </div>
+    <div class="crm-title-actions">
+        {% if crm_ctx.is_admin %}
+        <div class="crm-seg"><a class="crm-seg__opt{{ ' is-active' if not scope_team }}" href="/crm/followups">Mine</a><a class="crm-seg__opt{{ ' is-active' if scope_team }}" href="/crm/followups?scope=team">Whole team</a></div>
+        {% endif %}
+        <button type="button" class="cbtn cbtn-primary js-followup" data-entity="something"><i class="far fa-calendar-plus"></i> New</button>
     </div>
-    {% endif %}
 </div>
-
 {% if queues.overdue %}
-<div class="crm-panel panel-danger">
-    <div class="crm-panel-head"><h3><i class="fas fa-triangle-exclamation"></i> Overdue</h3><span class="panel-count">{{ queues.overdue|length }}</span></div>
-    {% for f in queues.overdue %}{{ followup_row(f, today_ny, show_assignee=scope_team) }}{% endfor %}
+<div class="crm-group is-danger">
+    <div class="crm-group__head"><h3><i class="fas fa-triangle-exclamation"></i> Overdue</h3><span class="count">{{ queues.overdue|length }}</span></div>
+    {% for f in queues.overdue %}{{ followup_cell(f, today_ny, show_assignee=scope_team) }}{% endfor %}
 </div>
 {% endif %}
-
-<div class="crm-panel">
-    <div class="crm-panel-head"><h3>Due today</h3><span class="panel-count">{{ queues.due_today|length }}</span></div>
-    {% for f in queues.due_today %}{{ followup_row(f, today_ny, show_assignee=scope_team) }}{% else %}
-    <div class="crm-empty"><i class="far fa-circle-check"></i>Nothing due today.</div>
-    {% endfor %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Due today</h3><span class="count">{{ queues.due_today|length }}</span></div>
+    {% for f in queues.due_today %}{{ followup_cell(f, today_ny, show_assignee=scope_team) }}{% else %}{{ empty('fa-circle-check', 'Nothing due today', 'Set follow-ups right after each call so tomorrow plans itself.') }}{% endfor %}
 </div>
-
-<div class="crm-panel">
-    <div class="crm-panel-head"><h3>Upcoming</h3><span class="panel-count">{{ queues.upcoming|length }}</span></div>
-    {% for f in queues.upcoming %}{{ followup_row(f, today_ny, show_assignee=scope_team) }}{% else %}
-    <div class="crm-empty"><i class="far fa-calendar"></i>Nothing scheduled ahead — set follow-ups right after each call.</div>
-    {% endfor %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Upcoming</h3><span class="count">{{ queues.upcoming|length }}</span></div>
+    {% for f in queues.upcoming %}{{ followup_cell(f, today_ny, show_assignee=scope_team) }}{% else %}{{ empty('far fa-calendar', 'Nothing scheduled ahead', 'Every logged touch offers a one-tap follow-up — take it.') }}{% endfor %}
 </div>
-
 {% if queues.completed %}
-<div class="crm-panel">
-    <div class="crm-panel-head"><h3>Recently completed</h3></div>
-    {% for f in queues.completed %}{{ followup_row(f, today_ny, show_assignee=scope_team) }}{% endfor %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Recently completed</h3></div>
+    {% for f in queues.completed %}{{ followup_cell(f, today_ny, show_assignee=scope_team) }}{% endfor %}
 </div>
 {% endif %}
 {% endblock %}

@@ -1,68 +1,71 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import recency, star_btn, contacted_btn %}
-
+{% from "crm/_macros.html" import avatar, recency, star_btn, contacted_btn, empty %}
 {% block title %}CRM — Contacts{% endblock %}
-
 {% block crm_content %}
-<div class="crm-head">
+<div class="crm-title">
     <div>
-        <h1>Contacts</h1>
-        <p class="crm-head-sub">Every person your team works — imported from permits, found by reps, or added by hand.</p>
+        <h1 class="crm-large-title">Contacts <small>{{ contacts|length }}</small></h1>
+        <p class="crm-subtitle">Every person your team works — imported from permits, found by reps, or added by hand.</p>
     </div>
-    <div class="crm-head-actions">
-        <button type="button" class="btn btn-primary js-add-contact"><i class="fas fa-user-plus"></i> Add person</button>
-    </div>
+    <div class="crm-title-actions"><button type="button" class="cbtn cbtn-primary js-add-person"><i class="fas fa-user-plus"></i> Add person</button></div>
 </div>
 
-<div class="crm-filterbar">
-    <form class="search-bar" method="get" action="/crm/contacts">
+<div class="crm-toolbar">
+    <form class="crm-search" method="get" action="/crm/contacts">
         <i class="fas fa-magnifying-glass"></i>
-        <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="Name, company, or phone digits…">
+        <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="Name, company, or phone digits" data-role="contact-filter">
     </form>
     <div class="crm-pills">
-        <a class="crm-pill {{ 'is-active' if filters.starred }}"
-           href="?{{ 'q=' ~ (filters.q|urlencode) ~ '&' if filters.q }}{{ '' if filters.starred else 'starred=1' }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
-        <a class="crm-pill {{ 'is-active' if filters.cold }}"
-           href="?{{ 'q=' ~ (filters.q|urlencode) ~ '&' if filters.q }}{{ '' if filters.cold else 'cold=1' }}">Not contacted 30d+</a>
+        <a class="crm-pill{{ ' is-active' if filters.starred }}" href="?{{ 'q=' ~ (filters.q|urlencode) ~ '&' if filters.q }}{{ '' if filters.starred else 'starred=1' }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
+        <a class="crm-pill{{ ' is-active' if filters.cold }}" href="?{{ 'q=' ~ (filters.q|urlencode) ~ '&' if filters.q }}{{ '' if filters.cold else 'cold=1' }}">Not contacted 30d+</a>
     </div>
 </div>
 
-<div class="crm-panel">
-    {% for c in contacts %}
-    <div class="crm-row">
-        {{ star_btn(c.starred, contact_id=c.id) }}
-        <div class="row-main">
-            <div class="row-title">
-                <a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a>
-                {% if c.do_not_contact %}<span class="crm-chip chip-bad">DNC</span>{% endif %}
-            </div>
-            <div class="row-sub">
-                {% if c.title %}{{ c.title }} · {% endif %}
-                {% if c.company %}{{ c.company }} · {% endif %}
-                {{ c.building_count }} building{{ 's' if c.building_count != 1 }}
-                · via {{ c.source_detail or c.source }}
-            </div>
+{% if duplicates %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3><i class="fas fa-code-merge" style="color:var(--c-orange)"></i> Possible duplicates</h3><span class="count">{{ duplicates|length }} shared number{{ 's' if duplicates|length != 1 }}</span></div>
+    {% for d in duplicates %}
+    <div class="crm-cell">
+        <div class="crm-cell__body">
+            <div class="crm-cell__title">{% for n in d.names %}{{ n }}{{ ' · ' if not loop.last }}{% endfor %}</div>
+            <div class="crm-cell__sub">Both hold {{ d.number }}</div>
         </div>
-        <div class="row-side">
-            {% if c.primary_phone %}
-            <a class="crm-chip" style="font-variant-numeric:tabular-nums" href="tel:+1{{ c.primary_phone|crm_phone_digits }}">{{ c.primary_phone }}</a>
-            {% endif %}
-            {{ recency(c.last_contacted_at) }}
-            {% if not c.do_not_contact %}
-            {{ contacted_btn(c.name, contact_id=c.id, phone=c.primary_phone, small=True) }}
-            {% endif %}
+        <div class="crm-cell__trail">
+            <button type="button" class="cbtn cbtn-sm js-merge" data-contact-id="{{ d.ids[1] }}" data-entity="{{ d.names[1] }}" data-target-id="{{ d.ids[0] }}" data-target-name="{{ d.names[0] }}"><i class="fas fa-code-merge"></i> Merge</button>
         </div>
-    </div>
-    {% else %}
-    <div class="crm-empty">
-        <i class="far fa-user"></i>
-        {% if filters.q or filters.starred or filters.cold %}
-        Nobody matches. <div><a class="btn btn-secondary btn-sm" href="/crm/contacts">Clear filters</a></div>
-        {% else %}
-        No contacts yet — import them when you add a building, or add someone by hand.
-        <div><button type="button" class="btn btn-primary btn-sm js-add-contact">Add a person</button></div>
-        {% endif %}
     </div>
     {% endfor %}
 </div>
+{% endif %}
+
+{% if groups %}
+<div class="crm-group crm-alpha" id="contactsList">
+    {% for letter, rows in groups %}
+    <div class="crm-alpha__letter" id="alpha-{{ letter if letter != '#' else 'other' }}">{{ letter }}</div>
+    {% for c in rows %}
+    <div class="crm-cell js-contact-row" data-search="{{ (c.name ~ ' ' ~ (c.company or '') ~ ' ' ~ (c.primary_phone or ''))|lower }}">
+        <span class="crm-cell__lead">{{ avatar(c.name) }}</span>
+        <div class="crm-cell__body">
+            <div class="crm-cell__title"><a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a>{% if c.do_not_contact %} <span class="crm-tag tag-red">DNC</span>{% endif %}{% if c.starred %} <i class="fas fa-star" style="color:var(--c-orange);font-size:10px"></i>{% endif %}</div>
+            <div class="crm-cell__sub">{% if c.title %}{{ c.title }} · {% endif %}{% if c.company %}{{ c.company }} · {% endif %}{{ c.building_count }} building{{ 's' if c.building_count != 1 }} · via {{ c.source_detail or c.source }}</div>
+        </div>
+        <div class="crm-cell__trail">
+            {% if c.primary_phone %}<a class="crm-tag tag-mono" href="tel:+1{{ c.primary_phone|crm_phone_digits }}">{{ c.primary_phone }}</a>{% endif %}
+            {{ recency(c.last_contacted_at) }}
+            {% if not c.do_not_contact %}{{ contacted_btn(c.name, contact_id=c.id, phone=c.primary_phone, small=True, label='') }}{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+    {% endfor %}
+</div>
+<nav class="crm-alpha__index" aria-label="Jump to letter">
+    {% for letter, rows in groups %}<a href="#alpha-{{ letter if letter != '#' else 'other' }}">{{ letter }}</a>{% endfor %}
+</nav>
+{% else %}
+<div class="crm-group">
+    {% call empty('fa-user-group', 'No people yet' if not (filters.q or filters.starred or filters.cold) else 'Nobody matches', 'Contacts come in with buildings from the permit database, or add someone by hand — their number stays on record with who found it.' if not (filters.q or filters.starred or filters.cold) else 'Try a different name, company, or phone number.') %}
+        {% if filters.q or filters.starred or filters.cold %}<a class="cbtn" href="/crm/contacts">Clear filters</a>{% else %}<button type="button" class="cbtn cbtn-primary js-add-person">Add a person</button><a class="cbtn" href="/properties">Discover buildings</a>{% endif %}
+    {% endcall %}
+</div>
+{% endif %}
 {% endblock %}

@@ -1,0 +1,13 @@
+{% from "crm/_macros.html" import timeline as render_timeline, empty %}
+<div class="crm-group__head"><h3>Timeline</h3><span class="count">{{ timeline|length }} event{{ 's' if timeline|length != 1 }}</span></div>
+<div class="crm-composer js-note-composer" data-contact-id="{{ c.id }}">
+    <div class="crm-composer__field">
+        <textarea placeholder="Add a note about {{ c.name }}…" rows="1"></textarea>
+        <div class="crm-composer__foot">
+            <span class="crm-composer__hint"><span class="crm-kbd">⌘</span> + <span class="crm-kbd">↵</span> to save</span>
+            <button type="button" class="cbtn cbtn-primary cbtn-sm js-note-save">Add note</button>
+        </div>
+    </div>
+</div>
+{% if timeline %}{{ render_timeline(timeline, method_labels, outcome_labels, show_entity=True) }}
+{% else %}{{ empty('fa-clock-rotate-left', 'No touches yet', 'Every call, text, and note with this person lands here.') }}{% endif %}

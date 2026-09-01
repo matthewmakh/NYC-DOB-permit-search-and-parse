@@ -1,24 +1,9 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import stage_dot, recency, star_btn, contacted_btn %}
-
+{% from "crm/_macros.html" import building_card, bcard, stage_dot, recency, star_btn, contacted_btn, empty, avatar %}
 {% block title %}CRM — Buildings{% endblock %}
 
-{% block crm_content %}
-<div class="crm-head">
-    <div>
-        <h1>Buildings</h1>
-        <p class="crm-head-sub">{{ counts.all or 0 }} building{{ 's' if counts.all != 1 }} in your team's pipeline.</p>
-    </div>
-    <div class="crm-head-actions">
-        {% if crm_ctx.is_admin %}
-        <a href="/crm/api/export/buildings.csv" class="btn btn-secondary btn-sm"><i class="fas fa-download"></i> CSV</a>
-        {% endif %}
-        <a href="/crm/buildings/add" class="btn btn-primary"><i class="fas fa-plus"></i> Add building</a>
-    </div>
-</div>
-
 {% macro qs(overrides) -%}
-    {%- set args = {'stage': filters.stage, 'q': filters.q, 'borough': filters.borough,
+    {%- set args = {'view': view if view != 'cards' else None, 'stage': filters.stage, 'q': filters.q, 'borough': filters.borough,
                     'starred': '1' if filters.starred else None, 'cold': '1' if filters.cold else None,
                     'mine': '1' if filters.mine else None,
                     'sort': filters.sort if filters.sort != 'recent' else None} -%}
@@ -26,79 +11,124 @@
     ?{% for k, v in args.items() if v %}{{ k }}={{ v|urlencode }}{{ '&' if not loop.last }}{% endfor %}
 {%- endmacro %}
 
-<div class="crm-filterbar">
+{% block crm_content %}
+<div class="crm-title">
+    <div>
+        <h1 class="crm-large-title">Buildings <small>{{ counts.all or 0 }}</small></h1>
+        <p class="crm-subtitle">Your team's pipeline — every building you're working, by stage.</p>
+    </div>
+    <div class="crm-title-actions">
+        <div class="crm-seg" role="tablist" aria-label="View">
+            <a class="crm-seg__opt{{ ' is-active' if view == 'cards' }}" href="{{ qs({'view': None}) }}"><i class="fas fa-grip"></i> Cards</a>
+            <a class="crm-seg__opt{{ ' is-active' if view == 'board' }}" href="{{ qs({'view': 'board', 'stage': None}) }}"><i class="fas fa-table-columns"></i> Board</a>
+            <a class="crm-seg__opt{{ ' is-active' if view == 'table' }}" href="{{ qs({'view': 'table'}) }}"><i class="fas fa-table-list"></i> Table</a>
+        </div>
+        {% if crm_ctx.is_admin %}<a href="/crm/api/export/buildings.csv" class="cbtn cbtn-icon" title="Export CSV"><i class="fas fa-download"></i></a>{% endif %}
+        <a href="/crm/buildings/add" class="cbtn cbtn-primary"><i class="fas fa-plus"></i> Add</a>
+    </div>
+</div>
+
+<div class="crm-toolbar">
+    <form class="crm-search" method="get" action="/crm/buildings">
+        {% if view != 'cards' %}<input type="hidden" name="view" value="{{ view }}">{% endif %}
+        {% if filters.stage %}<input type="hidden" name="stage" value="{{ filters.stage }}">{% endif %}
+        <i class="fas fa-magnifying-glass"></i>
+        <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="Address, owner, or BBL">
+    </form>
     <div class="crm-pills">
-        <a class="crm-pill {{ 'is-active' if not filters.stage }}" href="{{ qs({'stage': None}) }}">All <span class="pill-count">{{ counts.all or 0 }}</span></a>
+        <a class="crm-pill{{ ' is-active' if filters.starred }}" href="{{ qs({'starred': None if filters.starred else '1'}) }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
+        <a class="crm-pill{{ ' is-active' if filters.cold }}" href="{{ qs({'cold': None if filters.cold else '1'}) }}">Cold 30d+</a>
+        <a class="crm-pill{{ ' is-active' if filters.mine }}" href="{{ qs({'mine': None if filters.mine else '1'}) }}">Mine</a>
+    </div>
+    <span class="spacer"></span>
+    <select class="crm-native-select" aria-label="Sort" onchange="location.href=this.value">
+        <option value="{{ qs({'sort': None}) }}" {{ 'selected' if filters.sort == 'recent' }}>Recent activity</option>
+        <option value="{{ qs({'sort': 'last_contacted'}) }}" {{ 'selected' if filters.sort == 'last_contacted' }}>Last contacted</option>
+        <option value="{{ qs({'sort': 'last_visited'}) }}" {{ 'selected' if filters.sort == 'last_visited' }}>Last visited</option>
+        <option value="{{ qs({'sort': 'newest'}) }}" {{ 'selected' if filters.sort == 'newest' }}>Newest</option>
+        <option value="{{ qs({'sort': 'most_contacted'}) }}" {{ 'selected' if filters.sort == 'most_contacted' }}>Most contacted</option>
+        <option value="{{ qs({'sort': 'address'}) }}" {{ 'selected' if filters.sort == 'address' }}>Address A–Z</option>
+    </select>
+</div>
+
+{% if view != 'board' %}
+<div class="crm-toolbar" style="margin-top:-6px">
+    <div class="crm-pills">
+        <a class="crm-pill{{ ' is-active' if not filters.stage }}" href="{{ qs({'stage': None}) }}">All <span class="n">{{ counts.all or 0 }}</span></a>
         {% for s in stages %}
-        <a class="crm-pill {{ 'is-active' if filters.stage == s }}" href="{{ qs({'stage': s}) }}">{{ stage_labels[s] }} <span class="pill-count">{{ counts.get(s, 0) }}</span></a>
+        <a class="crm-pill{{ ' is-active' if filters.stage == s }}" href="{{ qs({'stage': s}) }}"><span class="crm-dot dot-{{ s }}"></span>{{ stage_labels[s] }} <span class="n">{{ counts.get(s, 0) }}</span></a>
         {% endfor %}
     </div>
 </div>
+{% endif %}
 
-<div class="crm-filterbar">
-    <form class="search-bar" method="get" action="/crm/buildings">
-        {% if filters.stage %}<input type="hidden" name="stage" value="{{ filters.stage }}">{% endif %}
-        <i class="fas fa-magnifying-glass"></i>
-        <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="Address, owner, or BBL…">
-    </form>
-    <div class="crm-pills">
-        <a class="crm-pill {{ 'is-active' if filters.starred }}" href="{{ qs({'starred': None if filters.starred else '1'}) }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
-        <a class="crm-pill {{ 'is-active' if filters.cold }}" href="{{ qs({'cold': None if filters.cold else '1'}) }}">Cold 30d+</a>
-        <a class="crm-pill {{ 'is-active' if filters.mine }}" href="{{ qs({'mine': None if filters.mine else '1'}) }}">Assigned to me</a>
-    </div>
-    <div class="filter-group" style="margin-left:auto">
-        <label for="crmSort">Sort</label>
-        <select id="crmSort" class="filter-select" onchange="location.href=this.value">
-            <option value="{{ qs({'sort': None}) }}" {{ 'selected' if filters.sort == 'recent' }}>Recent activity</option>
-            <option value="{{ qs({'sort': 'last_contacted'}) }}" {{ 'selected' if filters.sort == 'last_contacted' }}>Last contacted</option>
-            <option value="{{ qs({'sort': 'last_visited'}) }}" {{ 'selected' if filters.sort == 'last_visited' }}>Last visited</option>
-            <option value="{{ qs({'sort': 'newest'}) }}" {{ 'selected' if filters.sort == 'newest' }}>Newest</option>
-            <option value="{{ qs({'sort': 'most_contacted'}) }}" {{ 'selected' if filters.sort == 'most_contacted' }}>Most contacted</option>
-            <option value="{{ qs({'sort': 'address'}) }}" {{ 'selected' if filters.sort == 'address' }}>Address A–Z</option>
-        </select>
-    </div>
-</div>
+{% set has_filters = filters.q or filters.stage or filters.starred or filters.cold or filters.mine %}
 
-{% if buildings %}
-<div class="crm-grid">
-    {% for b in buildings %}
-    <div class="crm-card">
-        <div class="crm-card-top">
-            <div>
-                <div class="crm-card-title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
-                <div class="crm-card-sub">
-                    {{ b.borough or '' }}{% if b.unit_count %} · {{ b.unit_count }} units{% endif %}{% if b.owner_name %} · {{ b.owner_name|truncate(34) }}{% endif %}
-                </div>
-            </div>
-            {{ star_btn(b.starred, building_id=b.id) }}
-        </div>
-        <div class="crm-card-meta">
-            {{ stage_dot(b.stage, stage_labels) }}
-            {{ recency(b.last_contacted_at, 'touched') }}
-            {% if b.last_visited_at %}{{ recency(b.last_visited_at, 'visited') }}{% endif %}
-            {% if b.assigned_to_name %}<span class="crm-chip">{{ b.assigned_to_name }}</span>{% endif %}
-        </div>
-        <div class="crm-card-actions">
-            {{ contacted_btn(b.address, building_id=b.id, small=True) }}
-            <a class="btn btn-secondary btn-sm" href="/crm/buildings/{{ b.id }}">Open</a>
-            {% if b.bbl %}<a class="btn btn-icon btn-sm" href="/property/{{ b.bbl }}" title="Full property intel">
-                <i class="fas fa-building-columns"></i></a>{% endif %}
+{% if view == 'board' %}
+<div class="crm-board" id="crmBoard">
+    {% for s in stages %}
+    <div class="crm-col js-col" data-stage="{{ s }}">
+        <div class="crm-col__head"><span class="crm-dot dot-{{ s }}"></span>{{ stage_labels[s] }}<span class="n js-col-count">{{ board[s]|length }}</span></div>
+        <div class="crm-col__body">
+            {% for b in board[s] %}{{ bcard(b, stage_labels) }}{% else %}<div class="crm-col__empty js-col-empty">Drop here</div>{% endfor %}
         </div>
     </div>
     {% endfor %}
 </div>
-{% else %}
-<div class="crm-panel">
-    <div class="crm-empty">
-        <i class="far fa-building"></i>
-        {% if filters.q or filters.stage or filters.starred or filters.cold or filters.mine %}
-        Nothing matches these filters.
-        <div><a class="btn btn-secondary btn-sm" href="/crm/buildings">Clear filters</a></div>
-        {% else %}
-        No buildings yet. Pull your first ones straight from the permit database.
-        <div><a class="btn btn-primary btn-sm" href="/properties">Discover buildings</a></div>
-        {% endif %}
-    </div>
+
+{% elif view == 'table' %}
+{% if buildings %}
+<div class="crm-table-wrap">
+    <table class="crm-table">
+        <thead><tr>
+            <th><input type="checkbox" class="js-bulk-all" aria-label="Select all"></th>
+            <th><a href="{{ qs({'sort': 'address'}) }}">Address</a></th><th>Stage</th><th>Rep</th>
+            <th><a href="{{ qs({'sort': 'last_contacted'}) }}">Last touched</a></th>
+            <th><a href="{{ qs({'sort': 'last_visited'}) }}">Visited</a></th>
+            <th class="t-num"><a href="{{ qs({'sort': 'most_contacted'}) }}">Touches</a></th>
+            <th class="t-num">Units</th><th>Borough</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for b in buildings %}
+        <tr>
+            <td><input type="checkbox" class="js-bulk-check" value="{{ b.id }}" aria-label="Select"></td>
+            <td class="t-name"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a>{% if b.starred %} <i class="fas fa-star" style="color:var(--c-orange);font-size:10px"></i>{% endif %}</td>
+            <td>{{ stage_dot(b.stage, stage_labels) }}</td>
+            <td>{% if b.assigned_to_name %}{{ b.assigned_to_name }}{% else %}<span class="t-muted">—</span>{% endif %}</td>
+            <td>{{ recency(b.last_contacted_at) }}</td>
+            <td>{% if b.last_visited_at %}{{ recency(b.last_visited_at) }}{% else %}<span class="t-muted">—</span>{% endif %}</td>
+            <td class="t-num">{{ b.contact_count }}</td>
+            <td class="t-num">{{ b.unit_count or '—' }}</td>
+            <td>{{ b.borough or '—' }}</td>
+            <td>{{ contacted_btn(b.address, building_id=b.id, small=True, label='') }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
 </div>
+{% else %}
+<div class="crm-group">{% call empty('fa-building', 'Nothing here yet', 'No buildings match these filters.' if has_filters else 'Pull your first buildings straight from the permit database.') %}
+    {% if has_filters %}<a class="cbtn" href="/crm/buildings?view=table">Clear filters</a>{% else %}<a class="cbtn cbtn-primary" href="/properties">Discover buildings</a>{% endif %}
+{% endcall %}</div>
 {% endif %}
+
+{% else %}
+{% if buildings %}
+<div class="crm-grid">{% for b in buildings %}{{ building_card(b, stage_labels) }}{% endfor %}</div>
+{% else %}
+<div class="crm-group">{% call empty('fa-building', 'Nothing here yet', 'No buildings match these filters.' if has_filters else 'Pull your first buildings straight from the permit database — every card there has an Add to CRM button.') %}
+    {% if has_filters %}<a class="cbtn" href="/crm/buildings">Clear filters</a>{% else %}<a class="cbtn cbtn-primary" href="/properties"><i class="fas fa-magnifying-glass-location"></i> Discover buildings</a><a class="cbtn" href="/crm/buildings/add">Add by hand</a>{% endif %}
+{% endcall %}</div>
+{% endif %}
+{% endif %}
+
+<!-- Bulk actions bar (cards + table) -->
+<div class="crm-bulkbar" id="crmBulkBar" hidden>
+    <span class="bulk-count" data-role="count">0 selected</span>
+    <select class="crm-native-select js-bulk-stage" aria-label="Set stage"><option value="">Stage…</option>{% for s in stages %}<option value="{{ s }}">{{ stage_labels[s] }}</option>{% endfor %}</select>
+    <select class="crm-native-select js-bulk-assign" aria-label="Assign"><option value="">Assign…</option><option value="__none">Unassign</option>{% for u in roster %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}</select>
+    <button type="button" class="cbtn cbtn-sm js-bulk-list"><i class="fas fa-list-ul"></i> List</button>
+    <button type="button" class="cbtn cbtn-sm js-bulk-star"><i class="fas fa-star"></i></button>
+    <button type="button" class="cbtn cbtn-sm js-bulk-clear">Clear</button>
+</div>
 {% endblock %}

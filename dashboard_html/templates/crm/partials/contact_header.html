@@ -1,0 +1,39 @@
+{% from "crm/_macros.html" import avatar, star_btn, recency %}
+<div class="crm-detail-head">
+    {{ avatar(c.name, 'crm-avatar-xl') }}
+    <div class="crm-detail-head__body">
+        <h1>{{ c.name }}</h1>
+        {{ star_btn(c.starred, contact_id=c.id) }}
+        <div class="crm-detail-head__meta">
+            {% if c.title %}<span class="crm-tag">{{ c.title }}</span>{% endif %}
+            {% if c.company %}<span class="crm-tag">{{ c.company }}</span>{% endif %}
+            {{ recency(c.last_contacted_at, 'touched') }}
+            <span class="crm-tag" title="Provenance">via {{ c.source_detail or c.source }}</span>
+            {% if c.do_not_contact %}<span class="crm-tag tag-red"><i class="fas fa-ban" style="font-size:9px"></i> Do not contact</span>{% endif %}
+        </div>
+    </div>
+    <div class="crm-detail-head__actions">
+        <button type="button" class="cbtn js-edit-person" data-contact='{{ {"id": c.id, "name": c.name, "title": c.title, "company": c.company, "email": c.email}|tojson|forceescape }}'><i class="fas fa-pen"></i> Edit</button>
+        <button type="button" class="cbtn js-merge" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" title="Merge a duplicate into this person"><i class="fas fa-code-merge"></i> Merge</button>
+        {% if c.do_not_contact %}
+        <button type="button" class="cbtn js-dnc" data-contact-id="{{ c.id }}" data-value="0"><i class="fas fa-rotate-left"></i> Allow contact</button>
+        {% else %}
+        <button type="button" class="cbtn cbtn-icon js-dnc" data-contact-id="{{ c.id }}" data-value="1" title="Mark do-not-contact"><i class="fas fa-ban"></i></button>
+        {% endif %}
+        {% if crm_ctx.is_admin %}<button type="button" class="cbtn cbtn-icon js-contact-delete" data-id="{{ c.id }}" title="Delete person"><i class="fas fa-trash-can"></i></button>{% endif %}
+    </div>
+</div>
+{% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
+{% set primary = (c.phones|selectattr('status', 'equalto', 'good')|list|first) if c.phones else None %}
+<div class="crm-quick">
+    {% if not c.do_not_contact %}
+    <button type="button" class="is-primary js-contacted" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ primary.number if primary else '' }}" data-last-touch="{{ last_touch }}"><i class="fas fa-phone"></i>Contacted</button>
+    {% endif %}
+    {% if primary %}
+    <a href="tel:+1{{ primary.digits }}"><i class="fas fa-phone-volume"></i>Call</a>
+    <a href="sms:+1{{ primary.digits }}"><i class="fas fa-comment"></i>Text</a>
+    {% endif %}
+    {% if c.email %}<a href="mailto:{{ c.email }}"><i class="fas fa-envelope"></i>Email</a>{% endif %}
+    <button type="button" class="js-followup" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}"><i class="far fa-calendar-plus"></i>Follow up</button>
+    <button type="button" class="js-add-to-list" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}"><i class="fas fa-list-ul"></i>List</button>
+</div>

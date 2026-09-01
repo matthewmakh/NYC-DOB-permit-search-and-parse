@@ -1,0 +1,23 @@
+{% from "crm/_macros.html" import timeline as render_timeline, empty %}
+{% set pinned = timeline|selectattr('is_pinned')|list %}
+<div class="crm-group__head"><h3>Timeline</h3><span class="count">{{ timeline|length }} event{{ 's' if timeline|length != 1 }}</span></div>
+{% if pinned %}
+<div class="crm-pinned">
+    <div class="crm-pinned__label"><i class="fas fa-thumbtack"></i> Pinned</div>
+    {% for p in pinned %}<p><strong>{{ p.user_name }}:</strong> {{ p.note }}</p>{% endfor %}
+</div>
+{% endif %}
+<div class="crm-composer js-note-composer" data-building-id="{{ b.id }}">
+    <div class="crm-composer__field">
+        <textarea placeholder="Add a note for the team…" rows="1"></textarea>
+        <div class="crm-composer__foot">
+            <span class="crm-composer__hint"><span class="crm-kbd">⌘</span> + <span class="crm-kbd">↵</span> to save</span>
+            <button type="button" class="cbtn cbtn-primary cbtn-sm js-note-save">Add note</button>
+        </div>
+    </div>
+</div>
+{% if timeline %}
+{{ render_timeline(timeline, method_labels, outcome_labels) }}
+{% else %}
+{{ empty('fa-clock-rotate-left', 'No activity yet', 'Press Contacted after your first call and the story of this building starts here.') }}
+{% endif %}

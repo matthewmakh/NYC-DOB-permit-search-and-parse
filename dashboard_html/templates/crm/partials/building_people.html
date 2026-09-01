@@ -1,0 +1,46 @@
+{% from "crm/_macros.html" import avatar, contacted_btn, empty %}
+<div class="crm-group__head">
+    <h3>People</h3>
+    <button type="button" class="cbtn cbtn-sm js-add-person" data-building-id="{{ b.id }}"><i class="fas fa-user-plus"></i> Add</button>
+</div>
+{% for c in b.contacts %}
+<div class="crm-person">
+    <div class="crm-person__head">
+        {{ avatar(c.name) }}
+        <div class="crm-person__body">
+            <div class="crm-person__name"><a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a></div>
+            <div class="crm-person__role">
+                <select class="crm-native-select js-role-select" style="padding:2px 22px 2px 6px;font-size:11px;background-position:right 6px center" data-building-id="{{ b.id }}" data-contact-id="{{ c.id }}" aria-label="Relationship">
+                    {% for r in building_roles %}<option value="{{ r }}" {{ 'selected' if c.building_role == r }}>{{ r|replace('_', ' ')|capitalize }}</option>{% endfor %}
+                </select>
+                {% if c.title and c.title|lower != c.building_role|replace('_', ' ') %} {{ c.title }}{% endif %}
+            </div>
+        </div>
+        <div class="crm-person__tools">
+            {% if not c.do_not_contact %}{{ contacted_btn(c.name, building_id=b.id, contact_id=c.id, phone=(c.phones[0].number if c.phones else ''), small=True, last_touch=last_touch, label='') }}{% endif %}
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-unlink" data-building-id="{{ b.id }}" data-contact-id="{{ c.id }}" title="Remove from this building"><i class="fas fa-link-slash"></i></button>
+        </div>
+    </div>
+    {% if c.do_not_contact %}<div class="crm-dnc"><i class="fas fa-ban"></i> Do not contact</div>{% endif %}
+    {% for p in c.phones %}
+    <div class="crm-phone{{ ' is-bad' if p.status != 'good' }}">
+        <a class="tel" href="tel:+1{{ p.digits }}">{{ p.number }}</a>
+        {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
+        {% if p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% elif p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% endif %}
+        <span class="src" title="{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}">{{ p.source_detail or p.source }}</span>
+        <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>
+        {% if p.status == 'good' %}
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark number bad"><i class="fas fa-phone-slash"></i></button>
+        {% else %}
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="good" title="Mark number good"><i class="fas fa-rotate-left"></i></button>
+        {% endif %}
+    </div>
+    {% endfor %}
+    {% if c.email %}<div class="crm-phone"><a class="tel" href="mailto:{{ c.email }}">{{ c.email }}</a></div>{% endif %}
+    <div class="crm-phone"><button type="button" class="cbtn cbtn-plain cbtn-sm js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}"><i class="fas fa-plus"></i> Add number</button></div>
+</div>
+{% else %}
+{% call empty('fa-user-plus', 'No people yet', 'Add the owner, the super, the property manager — anyone worth calling.') %}
+    <button type="button" class="cbtn cbtn-tinted js-add-person" data-building-id="{{ b.id }}">Add the first person</button>
+{% endcall %}
+{% endfor %}

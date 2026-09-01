@@ -1,72 +1,45 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import stage_dot, recency, contacted_btn %}
-
+{% from "crm/_macros.html" import stage_dot, recency, contacted_btn, avatar, bavatar, empty %}
 {% block title %}{{ l.name }} — CRM{% endblock %}
-
 {% block crm_content %}
-<div class="crm-detail-head">
-    <div class="crm-detail-title">
-        <h1>{{ l.name }}</h1>
-        <div class="crm-detail-chips">
-            <span class="crm-chip">{{ l['items']|length }} lead{{ 's' if l['items']|length != 1 }}</span>
-            <span class="crm-chip">by {{ l.owner_name }}</span>
-            {% if l.description %}<span class="crm-chip">{{ l.description|truncate(60) }}</span>{% endif %}
-        </div>
+<div class="crm-title">
+    <div>
+        <h1 class="crm-large-title">{{ l.name }} <small>{{ l['items']|length }}</small></h1>
+        <p class="crm-subtitle">by {{ l.owner_name }}{% if l.description %} · {{ l.description }}{% endif %}</p>
     </div>
-    <div class="crm-head-actions">
-        <div class="filter-group">
-            <label for="listAssign">Assigned to</label>
-            <select id="listAssign" class="filter-select js-list-assign" data-list-id="{{ l.id }}" style="width:auto">
-                <option value="">Nobody</option>
-                {% for u in roster %}
-                <option value="{{ u.id }}" {{ 'selected' if l.assigned_to_id == u.id }}>{{ u.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <button type="button" class="btn btn-icon js-list-delete" data-id="{{ l.id }}" title="Delete list">
-            <i class="fas fa-trash-can"></i>
-        </button>
+    <div class="crm-title-actions">
+        <select class="crm-native-select js-list-assign" data-list-id="{{ l.id }}" aria-label="Assigned to">
+            <option value="">Nobody assigned</option>
+            {% for u in roster %}<option value="{{ u.id }}" {{ 'selected' if l.assigned_to_id == u.id }}>{{ u.name }}</option>{% endfor %}
+        </select>
+        <button type="button" class="cbtn js-list-rename" data-list-id="{{ l.id }}" data-name="{{ l.name }}"><i class="fas fa-pen"></i> Rename</button>
+        <button type="button" class="cbtn cbtn-icon js-list-delete" data-id="{{ l.id }}" title="Delete list"><i class="fas fa-trash-can"></i></button>
+        {% if l['items'] %}<a class="cbtn cbtn-primary" href="/crm/focus?source=list&list={{ l.id }}"><i class="fas fa-bullseye"></i> Call through</a>{% endif %}
     </div>
 </div>
-
-<div class="crm-panel">
+<div class="crm-group">
     {% for item in l['items'] %}
-    <div class="crm-row">
-        <span class="row-num">{{ loop.index }}</span>
-        <div class="row-main">
-            <div class="row-title">
-                {% if item.building_id %}
-                <a href="/crm/buildings/{{ item.building_id }}">{{ item.address }}</a>
-                {% else %}
-                <a href="/crm/contacts/{{ item.contact_id }}">{{ item.contact_name }}</a>
-                {% endif %}
-            </div>
-            <div class="row-sub">
-                {% if item.building_id %}
-                {{ item.borough or '' }}{% if item.contact_count %} · {{ item.contact_count }} touches{% endif %}
-                {% else %}
-                {{ item.company or 'Contact' }}
-                {% endif %}
-                {% if item.item_note %} · “{{ item.item_note }}”{% endif %}
-            </div>
+    <div class="crm-cell">
+        <span class="crm-cell__lead"><span class="row-num">{{ loop.index }}</span></span>
+        <span class="crm-cell__lead">{% if item.building_id %}{{ bavatar() }}{% else %}{{ avatar(item.contact_name) }}{% endif %}</span>
+        <div class="crm-cell__body">
+            <div class="crm-cell__title">{% if item.building_id %}<a href="/crm/buildings/{{ item.building_id }}">{{ item.address }}</a>{% else %}<a href="/crm/contacts/{{ item.contact_id }}">{{ item.contact_name }}</a>{% endif %}</div>
+            <div class="crm-cell__sub">{% if item.building_id %}{{ item.borough or '' }}{% if item.contact_count %} · {{ item.contact_count }} touches{% endif %}{% else %}{{ item.company or 'Contact' }}{% endif %}{% if item.item_note %} · “{{ item.item_note }}”{% endif %}</div>
         </div>
-        <div class="row-side">
+        <div class="crm-cell__trail">
             {% if item.building_id %}
-            {{ stage_dot(item.stage, stage_labels) }}
-            {{ recency(item.b_last_contacted) }}
-            {{ contacted_btn(item.address, building_id=item.building_id, small=True) }}
+            {{ stage_dot(item.stage, stage_labels) }}{{ recency(item.b_last_contacted) }}
+            {{ contacted_btn(item.address, building_id=item.building_id, small=True, label='') }}
             {% else %}
-            {% if item.contact_phone %}<a class="crm-chip" href="tel:+1{{ item.contact_phone|crm_phone_digits }}">{{ item.contact_phone }}</a>{% endif %}
+            {% if item.contact_phone %}<a class="crm-tag tag-mono" href="tel:+1{{ item.contact_phone|crm_phone_digits }}">{{ item.contact_phone }}</a>{% endif %}
             {{ recency(item.c_last_contacted) }}
-            {{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True) }}
+            {{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True, label='') }}
             {% endif %}
-            <button type="button" class="btn btn-icon btn-sm js-item-remove" data-id="{{ item.item_id }}" title="Remove from list">
-                <i class="fas fa-xmark"></i>
-            </button>
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-item-remove" data-id="{{ item.item_id }}" title="Remove from list"><i class="fas fa-xmark"></i></button>
         </div>
     </div>
     {% else %}
-    <div class="crm-empty"><i class="far fa-rectangle-list"></i>Empty list. Add buildings or people from their pages, or from Discover.</div>
+    {{ empty('fa-list-ul', 'Empty list', 'Add buildings or people from their pages, from Discover, or select several buildings and use the bulk bar.') }}
     {% endfor %}
 </div>
 {% endblock %}

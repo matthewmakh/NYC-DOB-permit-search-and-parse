@@ -1,61 +1,37 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import stage_dot, recency, contacted_btn %}
-
+{% from "crm/_macros.html" import stage_dot, recency, contacted_btn, avatar, bavatar, empty %}
 {% block title %}CRM — Starred{% endblock %}
-
 {% block crm_content %}
-<div class="crm-head">
+<div class="crm-title">
     <div>
-        <h1>Starred</h1>
-        <p class="crm-head-sub">
-            {% if everyone %}Everyone's shortlists, grouped by who starred what.
-            {% elif view_user %}One rep's shortlist.
-            {% else %}Your shortlist — buildings and people you want at your fingertips.{% endif %}
-        </p>
+        <h1 class="crm-large-title">Starred</h1>
+        <p class="crm-subtitle">{% if everyone %}Everyone's shortlists, by who starred what.{% elif view_user %}One rep's shortlist.{% else %}Your shortlist — the buildings and people you want at your fingertips.{% endif %}</p>
     </div>
     {% if roster %}
-    <div class="crm-head-actions">
+    <div class="crm-title-actions">
         <div class="crm-pills">
-            <a class="crm-pill {{ 'is-active' if not view_user and not everyone }}" href="/crm/starred">Mine</a>
-            {% for u in roster %}
-            <a class="crm-pill {{ 'is-active' if view_user == u.id }}" href="/crm/starred?user={{ u.id }}">{{ u.name }}</a>
-            {% endfor %}
-            <a class="crm-pill {{ 'is-active' if everyone }}" href="/crm/starred?user=all">Everyone</a>
+            <a class="crm-pill{{ ' is-active' if not view_user and not everyone }}" href="/crm/starred">Mine</a>
+            {% for u in roster %}<a class="crm-pill{{ ' is-active' if view_user == u.id }}" href="/crm/starred?user={{ u.id }}">{{ u.name }}</a>{% endfor %}
+            <a class="crm-pill{{ ' is-active' if everyone }}" href="/crm/starred?user=all">Everyone</a>
         </div>
     </div>
     {% endif %}
 </div>
-
-<div class="crm-panel">
+<div class="crm-group">
     {% for s in stars %}
-    <div class="crm-row">
-        <div class="row-main">
-            <div class="row-title">
-                {% if s.building_id %}
-                <a href="/crm/buildings/{{ s.building_id }}">{{ s.address }}</a>
-                {% else %}
-                <a href="/crm/contacts/{{ s.contact_id }}">{{ s.contact_name }}</a>
-                {% endif %}
-            </div>
-            <div class="row-sub">
-                {% if everyone %}⭐ {{ s.starred_by_name }} · {% endif %}
-                {% if s.building_id %}{{ s.borough or 'Building' }}{% else %}{{ s.company or 'Contact' }}{% endif %}
-                · starred {{ s.starred_at|crm_timeago }}
-            </div>
+    <div class="crm-cell">
+        <span class="crm-cell__lead">{% if s.building_id %}{{ bavatar() }}{% else %}{{ avatar(s.contact_name) }}{% endif %}</span>
+        <div class="crm-cell__body">
+            <div class="crm-cell__title">{% if s.building_id %}<a href="/crm/buildings/{{ s.building_id }}">{{ s.address }}</a>{% else %}<a href="/crm/contacts/{{ s.contact_id }}">{{ s.contact_name }}</a>{% endif %}</div>
+            <div class="crm-cell__sub">{% if everyone %}<i class="fas fa-star" style="color:var(--c-orange);font-size:9px"></i> {{ s.starred_by_name }} · {% endif %}{% if s.building_id %}{{ s.borough or 'Building' }}{% else %}{{ s.company or 'Contact' }}{% endif %} · starred {{ s.starred_at|crm_timeago }}</div>
         </div>
-        <div class="row-side">
-            {% if s.building_id %}
-            {{ stage_dot(s.stage, stage_labels) }}
-            {{ recency(s.b_last_contacted) }}
-            {{ contacted_btn(s.address, building_id=s.building_id, small=True) }}
-            {% else %}
-            {{ recency(s.c_last_contacted) }}
-            {{ contacted_btn(s.contact_name, contact_id=s.contact_id, small=True) }}
-            {% endif %}
+        <div class="crm-cell__trail">
+            {% if s.building_id %}{{ stage_dot(s.stage, stage_labels) }}{{ recency(s.b_last_contacted) }}{{ contacted_btn(s.address, building_id=s.building_id, small=True, label='') }}
+            {% else %}{{ recency(s.c_last_contacted) }}{{ contacted_btn(s.contact_name, contact_id=s.contact_id, small=True, label='') }}{% endif %}
         </div>
     </div>
     {% else %}
-    <div class="crm-empty"><i class="far fa-star"></i>Nothing starred yet — hit the star on any building or person.</div>
+    {{ empty('fa-star', 'Nothing starred yet', 'Hit the star on any building or person to keep it one tap away.') }}
     {% endfor %}
 </div>
 {% endblock %}

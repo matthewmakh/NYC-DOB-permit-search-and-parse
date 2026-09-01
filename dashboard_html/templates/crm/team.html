@@ -1,92 +1,117 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import feed_item %}
-
-{% block title %}CRM — Team{% endblock %}
-
+{% from "crm/_macros.html" import feed_item, hbar, avatar, empty %}
+{% block title %}CRM — Team & reports{% endblock %}
 {% block crm_content %}
-<div class="crm-head">
+<div class="crm-title">
     <div>
-        <h1>Team</h1>
-        <p class="crm-head-sub">Who did what, when — every touch, visit, and view, by rep.</p>
+        <h1 class="crm-large-title">Team &amp; reports</h1>
+        <p class="crm-subtitle">Who did what, when — every touch, visit, and view, by rep.</p>
     </div>
-    <div class="crm-head-actions">
-        <a href="/crm/api/export/activity.csv" class="btn btn-secondary btn-sm"><i class="fas fa-download"></i> Activity CSV</a>
-        <a href="/admin/team" class="btn btn-secondary btn-sm"><i class="fas fa-users-gear"></i> Manage reps</a>
+    <div class="crm-title-actions">
+        <a href="/crm/api/export/activity.csv" class="cbtn"><i class="fas fa-download"></i> Activity CSV</a>
+        <a href="/admin/team" class="cbtn"><i class="fas fa-users-gear"></i> Manage reps</a>
     </div>
 </div>
 
-<div class="crm-panel">
-    <div class="crm-panel-head"><h3>Performance</h3></div>
-    <div class="crm-table-wrap">
+{% set total14 = touches|sum(attribute='n') %}
+{% set mx = (touches|map(attribute='n')|max) or 1 %}
+<div class="crm-charts">
+    <div class="crm-group crm-chart" style="margin-bottom:0">
+        <h4>Touches per day</h4>
+        <div class="c-sub">Last 14 days · {{ total14 }} total</div>
+        {# Column chart: 14 bars, ≤24px thick, 4px rounded data-end, square baseline, one mid gridline. #}
+        {% set W = 420 %}{% set H = 120 %}{% set pad_l = 6 %}{% set base = 100 %}{% set slot = (W - pad_l * 2) / touches|length %}{% set bw = [slot - 8, 24]|min %}
+        <svg viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Touches per day, last 14 days">
+            <line class="grid" x1="{{ pad_l }}" x2="{{ W - pad_l }}" y1="{{ base }}" y2="{{ base }}"></line>
+            <line class="grid" x1="{{ pad_l }}" x2="{{ W - pad_l }}" y1="{{ base - 80 }}" y2="{{ base - 80 }}"></line>
+            {% for p in touches %}
+            {% set x = pad_l + loop.index0 * slot + (slot - bw) / 2 %}
+            {% set h = (80 * p.n / mx) if p.n else 0 %}
+            {% set y = base - h %}
+            {% set r = [4, h]|min %}
+            {% if p.n %}
+            <path class="bar{{ ' is-soft' if not loop.last }}" data-tip="{{ p.day|crm_date }} · {{ p.n }} touch{{ 'es' if p.n != 1 }}"
+                  d="M{{ x }},{{ base }} V{{ y + r }} Q{{ x }},{{ y }} {{ x + r }},{{ y }} H{{ x + bw - r }} Q{{ x + bw }},{{ y }} {{ x + bw }},{{ y + r }} V{{ base }} Z"></path>
+            {% else %}
+            <rect class="bar is-soft" data-tip="{{ p.day|crm_date }} · 0" x="{{ x }}" y="{{ base - 2 }}" width="{{ bw }}" height="2"></rect>
+            {% endif %}
+            {% if p.n == mx and mx > 0 %}<text class="val" x="{{ x + bw / 2 }}" y="{{ y - 4 }}" text-anchor="middle">{{ p.n }}</text>{% endif %}
+            {% if loop.index0 % 2 == (touches|length - 1) % 2 %}<text class="axis" x="{{ x + bw / 2 }}" y="{{ base + 13 }}" text-anchor="middle">{{ p.day.strftime('%-d') }}</text>{% endif %}
+            {% endfor %}
+        </svg>
+    </div>
+    <div class="crm-group crm-chart" style="margin-bottom:0">
+        <h4>Leaderboard</h4>
+        <div class="c-sub">Touches logged, last 7 days</div>
+        {% set lmx = (leaderboard|map(attribute='contacted_7d')|max) or 1 %}
+        {% for r in leaderboard %}{{ hbar(r.name, r.contacted_7d, lmx) }}{% endfor %}
+    </div>
+    <div class="crm-group crm-chart" style="margin-bottom:0">
+        <h4>Outcomes</h4>
+        <div class="c-sub">Last 30 days · {{ outcomes|sum(attribute='n') }} touches</div>
+        {% set omx = (outcomes|map(attribute='n')|max) or 1 %}
+        {% for o in outcomes %}
+        {{ hbar(outcome_labels.get(o.outcome, o.outcome|replace('_', ' ')|capitalize), o.n, omx,
+                'is-good' if o.outcome in ('spoke', 'meeting_set', 'callback_requested') else ('is-bad' if o.outcome in ('wrong_number', 'not_interested') else '')) }}
+        {% else %}<p class="crm-muted" style="font-size:13px">No touches logged in the last 30 days.</p>{% endfor %}
+    </div>
+    <div class="crm-group crm-chart" style="margin-bottom:0">
+        <h4>Pipeline</h4>
+        <div class="c-sub">Buildings by stage</div>
+        {% set fmx = (funnel|map(attribute='n')|max) or 1 %}
+        {% for s in funnel %}{{ hbar(s.label, s.n, fmx, 'is-good' if s.stage in ('won', 'client') else ('is-bad' if s.stage == 'lost' else '')) }}{% endfor %}
+    </div>
+</div>
+
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Performance</h3><span class="count">{{ performance|length }} on the team</span></div>
+    <div class="crm-table-wrap" style="box-shadow:none;border-radius:0">
         <table class="crm-table">
-            <thead>
-                <tr>
-                    <th>Rep</th>
-                    <th>Contacted today</th>
-                    <th>Contacted 7d</th>
-                    <th>Visits 7d</th>
-                    <th>Notes 7d</th>
-                    <th>Follow-ups open</th>
-                    <th>Overdue</th>
-                    <th>Done 7d</th>
-                    <th>Views today</th>
-                    <th>Last login</th>
-                </tr>
-            </thead>
+            <thead><tr><th>Rep</th><th class="t-num">Today</th><th class="t-num">7 days</th><th class="t-num">Visits 7d</th><th class="t-num">Notes 7d</th><th class="t-num">Open</th><th class="t-num">Overdue</th><th class="t-num">Done 7d</th><th class="t-num">Views today</th><th>Last login</th></tr></thead>
             <tbody>
-                {% for r in performance %}
-                <tr>
-                    <td class="cell-name">{{ r.name }}{% if r.is_team_owner %} <span class="crm-chip chip-accent">Admin</span>{% endif %}</td>
-                    <td>{{ r.contacted_today }}</td>
-                    <td>{{ r.contacted_7d }}</td>
-                    <td>{{ r.visits_7d }}</td>
-                    <td>{{ r.notes_7d }}</td>
-                    <td>{{ r.followups_open }}</td>
-                    <td class="{{ 'cell-danger' if r.followups_overdue else 'cell-muted' }}">{{ r.followups_overdue }}</td>
-                    <td>{{ r.followups_done_7d }}</td>
-                    <td>{{ r.views_today }}</td>
-                    <td class="cell-muted">{{ r.last_login|crm_timeago if r.last_login else 'never' }}</td>
-                </tr>
-                {% endfor %}
+            {% for r in performance %}
+            <tr>
+                <td class="t-name" style="display:flex;align-items:center;gap:10px">{{ avatar(r.name, 'crm-avatar-sm') }} {{ r.name }}{% if r.is_team_owner %} <span class="crm-tag tag-blue">Admin</span>{% endif %}</td>
+                <td class="t-num">{{ r.contacted_today }}</td><td class="t-num">{{ r.contacted_7d }}</td><td class="t-num">{{ r.visits_7d }}</td><td class="t-num">{{ r.notes_7d }}</td>
+                <td class="t-num">{{ r.followups_open }}</td>
+                <td class="t-num {{ 't-alert' if r.followups_overdue else 't-muted' }}">{{ r.followups_overdue }}</td>
+                <td class="t-num">{{ r.followups_done_7d }}</td><td class="t-num">{{ r.views_today }}</td>
+                <td class="t-muted">{{ r.last_login|crm_timeago if r.last_login else 'never' }}</td>
+            </tr>
+            {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
 
-<div class="crm-filterbar">
+<div class="crm-toolbar">
     <div class="crm-pills">
-        <a class="crm-pill {{ 'is-active' if not feed_user }}" href="/crm/team">All reps</a>
-        {% for u in roster %}
-        <a class="crm-pill {{ 'is-active' if feed_user == u.id }}" href="/crm/team?rep={{ u.id }}">{{ u.name }}</a>
-        {% endfor %}
+        <a class="crm-pill{{ ' is-active' if not feed_user }}" href="/crm/team">All reps</a>
+        {% for u in roster %}<a class="crm-pill{{ ' is-active' if feed_user == u.id }}" href="/crm/team?rep={{ u.id }}">{{ u.name }}</a>{% endfor %}
     </div>
 </div>
-
 <div class="crm-columns">
     <div class="crm-col-main">
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>Activity feed</h3><span class="panel-count">{{ feed|length }}</span></div>
-            {% for a in feed %}{{ feed_item(a) }}{% else %}
-            <div class="crm-empty"><i class="far fa-comments"></i>No activity yet.</div>
-            {% endfor %}
+        <div class="crm-group">
+            <div class="crm-group__head"><h3>Activity feed</h3><span class="count">{{ feed|length }}</span></div>
+            {% for a in feed %}{{ feed_item(a) }}{% else %}{{ empty('fa-comments', 'No activity yet', 'Touches, visits, and notes from the team land here.') }}{% endfor %}
         </div>
     </div>
     <div class="crm-col-rail">
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>View log</h3><span class="panel-count">{{ views|length }}</span></div>
+        <div class="crm-group">
+            <div class="crm-group__head"><h3>View log</h3><span class="count">{{ views|length }}</span></div>
             {% for v in views[:60] %}
-            <div class="crm-feed-item">
-                <div class="feed-text">
-                    <strong>{{ v.user_name }}</strong> viewed
-                    {% if v.entity_type == 'building' %}<a href="/crm/buildings/{{ v.entity_id }}">{{ v.label or 'a building' }}</a>
-                    {% elif v.entity_type == 'contact' %}<a href="/crm/contacts/{{ v.entity_id }}">{{ v.label or 'a contact' }}</a>
-                    {% else %}<a href="/crm/lists/{{ v.entity_id }}">{{ v.label or 'a list' }}</a>{% endif %}
+            <div class="crm-cell">
+                <span class="crm-cell__lead">{{ avatar(v.user_name, 'crm-avatar-sm') }}</span>
+                <div class="crm-cell__body">
+                    <div class="crm-cell__sub" style="font-size:13px;color:var(--c-label)"><strong>{{ v.user_name }}</strong> viewed
+                        {% if v.entity_type == 'building' %}<a href="/crm/buildings/{{ v.entity_id }}">{{ v.label or 'a building' }}</a>
+                        {% elif v.entity_type == 'contact' %}<a href="/crm/contacts/{{ v.entity_id }}">{{ v.label or 'a contact' }}</a>
+                        {% else %}<a href="/crm/lists/{{ v.entity_id }}">{{ v.label or 'a list' }}</a>{% endif %}</div>
                 </div>
-                <span class="feed-time" title="{{ v.created_at|crm_nydt }}">{{ v.created_at|crm_timeago }}</span>
+                <span class="crm-cell__trail crm-muted" style="font-size:11.5px" title="{{ v.created_at|crm_nydt }}">{{ v.created_at|crm_timeago }}</span>
             </div>
-            {% else %}
-            <div class="crm-empty"><i class="far fa-eye"></i>No views logged yet.</div>
-            {% endfor %}
+            {% else %}{{ empty('fa-eye', 'No views logged yet', 'Opening a building, person, or list records a view (once per half hour).') }}{% endfor %}
         </div>
     </div>
 </div>

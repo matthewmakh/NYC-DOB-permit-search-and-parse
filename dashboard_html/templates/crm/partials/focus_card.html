@@ -1,0 +1,80 @@
+{% from "crm/_macros.html" import avatar, bavatar, stage_dot, recency, contacted_btn, event, due_tag %}
+<div class="crm-group" style="margin-bottom:0">
+    <div class="crm-group__body">
+        {% if kind == 'building' %}
+        <div class="crm-detail-head" style="margin-bottom:12px">
+            {{ bavatar('crm-avatar-lg') }}
+            <div class="crm-detail-head__body">
+                <h1 style="font-size:24px"><a href="/crm/buildings/{{ b.id }}" style="color:inherit">{{ b.address }}</a></h1>
+                <div class="crm-detail-head__meta">
+                    {{ stage_dot(b.stage, stage_labels) }}
+                    {% if b.borough %}<span class="crm-tag">{{ b.borough }}</span>{% endif %}
+                    {% if b.unit_count %}<span class="crm-tag">{{ b.unit_count }} units</span>{% endif %}
+                    {% if b.owner_name %}<span class="crm-tag">{{ b.owner_name|truncate(36) }}</span>{% endif %}
+                    {{ recency(b.last_contacted_at, 'touched') }}
+                </div>
+            </div>
+        </div>
+        {% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
+        {% if b.follow_ups %}
+        <div class="crm-collision is-info"><i class="far fa-calendar-check"></i> Next step: <strong>{{ b.follow_ups[0].title }}</strong> · {{ b.follow_ups[0].due_date|crm_due }}</div>
+        {% endif %}
+        <div class="crm-section-title" style="margin-top:8px">People to call</div>
+        {% for c in b.contacts %}
+        <div class="crm-person" style="padding-left:0;padding-right:0">
+            <div class="crm-person__head">
+                {{ avatar(c.name) }}
+                <div class="crm-person__body">
+                    <div class="crm-person__name"><a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a>{% if c.do_not_contact %} <span class="crm-tag tag-red">DNC</span>{% endif %}</div>
+                    <div class="crm-person__role">{{ c.building_role|replace('_', ' ')|capitalize }}{% if c.title %} · {{ c.title }}{% endif %}</div>
+                </div>
+                {% if not c.do_not_contact %}{{ contacted_btn(c.name, building_id=b.id, contact_id=c.id, phone=(c.phones[0].number if c.phones else ''), small=True, label='Contacted') }}{% endif %}
+            </div>
+            {% for p in c.phones if p.status == 'good' %}
+            <div class="crm-phone">
+                <a class="tel" href="tel:+1{{ p.digits }}" style="font-size:16px">{{ p.number }}</a>
+                {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
+                <span class="src">{{ p.source_detail or p.source }}</span>
+                <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="crm-muted" style="font-size:13px">No people on file yet — <a href="/crm/buildings/{{ b.id }}">open the building</a> to add someone.</p>
+        {% endfor %}
+        {% else %}
+        <div class="crm-detail-head" style="margin-bottom:12px">
+            {{ avatar(c.name, 'crm-avatar-lg') }}
+            <div class="crm-detail-head__body">
+                <h1 style="font-size:24px"><a href="/crm/contacts/{{ c.id }}" style="color:inherit">{{ c.name }}</a></h1>
+                <div class="crm-detail-head__meta">
+                    {% if c.title %}<span class="crm-tag">{{ c.title }}</span>{% endif %}
+                    {% if c.company %}<span class="crm-tag">{{ c.company }}</span>{% endif %}
+                    {{ recency(c.last_contacted_at, 'touched') }}
+                    {% if c.do_not_contact %}<span class="crm-tag tag-red">Do not contact</span>{% endif %}
+                </div>
+            </div>
+        </div>
+        {% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
+        {% for p in c.phones if p.status == 'good' %}
+        <div class="crm-phone" style="padding-left:0">
+            <a class="tel" href="tel:+1{{ p.digits }}" style="font-size:18px">{{ p.number }}</a>
+            {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
+            <span class="src">{{ p.source_detail or p.source }}</span>
+            <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>
+        </div>
+        {% else %}<p class="crm-muted" style="font-size:13px">No good numbers on file.</p>{% endfor %}
+        {% if c.buildings %}
+        <div class="crm-section-title">Buildings</div>
+        {% for b2 in c.buildings %}<div style="font-size:13.5px;padding:4px 0"><a href="/crm/buildings/{{ b2.id }}">{{ b2.address }}</a> <span class="crm-muted">· {{ b2.building_role|replace('_', ' ') }}</span></div>{% endfor %}
+        {% endif %}
+        {% endif %}
+
+        {% if timeline %}
+        <div class="crm-section-title">Recent history</div>
+        <div style="margin:0 -18px">
+            {% for a in timeline %}{{ event(a, method_labels, outcome_labels, show_entity=(kind == 'contact')) }}{% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>

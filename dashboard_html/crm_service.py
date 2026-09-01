@@ -1995,3 +1995,557 @@ def export_activity_rows(ctx, *, days=90):
     finally:
         cur.close()
         conn.close()
+
+
+# ============================================================
+# v2: search, editing, merge, bulk, focus queue, reports
+# ============================================================
+
+def global_search(ctx, q, limit=6):
+    """⌘K search across buildings, contacts (name/company/phone digits), lists."""
+    q = (q or '').strip()
+    if len(q) < 2:
+        return {'buildings': [], 'contacts': [], 'lists': []}
+    like = f'%{q}%'
+    digits = normalize_phone_digits(q)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT id, address, borough, stage, last_contacted_at
+               FROM crm_buildings
+               WHERE (team_id = %s OR team_id IS NULL)
+                 AND (address ILIKE %s OR owner_name ILIKE %s OR bbl = %s)
+               ORDER BY last_contacted_at DESC NULLS LAST, address LIMIT %s""",
+            (ctx['team_id'], like, like, q, limit),
+        )
+        buildings = [dict(r) for r in cur.fetchall()]
+        if digits and len(digits) >= 4:
+            cur.execute(
+                """SELECT DISTINCT c.id, c.name, c.company, c.title, c.last_contacted_at
+                   FROM crm_contacts c
+                   LEFT JOIN crm_phones p ON p.contact_id = c.id
+                   WHERE (c.team_id = %s OR c.team_id IS NULL)
+                     AND (c.name ILIKE %s OR c.company ILIKE %s OR p.digits LIKE %s)
+                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %s""",
+                (ctx['team_id'], like, like, f'%{digits}%', limit),
+            )
+        else:
+            cur.execute(
+                """SELECT c.id, c.name, c.company, c.title, c.last_contacted_at
+                   FROM crm_contacts c
+                   WHERE (c.team_id = %s OR c.team_id IS NULL)
+                     AND (c.name ILIKE %s OR c.company ILIKE %s)
+                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %s""",
+                (ctx['team_id'], like, like, limit),
+            )
+        contacts = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """SELECT id, name FROM crm_lists
+               WHERE (team_id = %s OR team_id IS NULL) AND name ILIKE %s
+               ORDER BY updated_at DESC LIMIT %s""",
+            (ctx['team_id'], like, limit),
+        )
+        lists = [dict(r) for r in cur.fetchall()]
+        return {'buildings': buildings, 'contacts': contacts, 'lists': lists}
+    finally:
+        cur.close()
+        conn.close()
+
+
+BUILDING_EDITABLE = ('address', 'borough', 'zip_code', 'neighborhood', 'unit_count',
+                     'year_built', 'num_floors', 'building_class', 'owner_name')
+CONTACT_EDITABLE = ('name', 'title', 'company', 'email')
+
+
+def _run_update(table, allowed, ctx, row_id, fields, int_fields=()):
+    sets, params = [], []
+    for key in allowed:
+        if key not in fields:
+            continue
+        value = fields[key]
+        if isinstance(value, str):
+            value = value.strip() or None
+        if key in int_fields and value is not None:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = None
+        sets.append(f'{key} = %s')
+        params.append(value)
+    if not sets:
+        return False
+    sets.append('updated_at = NOW()')
+    params.extend([row_id, ctx['team_id']])
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            params,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_building(ctx, building_id, fields):
+    if 'address' in fields and not (fields.get('address') or '').strip():
+        raise ValueError('address is required')
+    return _run_update('crm_buildings', BUILDING_EDITABLE, ctx, building_id, fields,
+                       int_fields=('unit_count', 'year_built', 'num_floors'))
+
+
+def update_contact(ctx, contact_id, fields):
+    if 'name' in fields and not (fields.get('name') or '').strip():
+        raise ValueError('name is required')
+    return _run_update('crm_contacts', CONTACT_EDITABLE, ctx, contact_id, fields)
+
+
+def update_follow_up(ctx, follow_up_id, *, title=None, due_date=None, note=None,
+                     assigned_to_id='__keep__'):
+    sets, params = [], []
+    if title is not None:
+        sets.append('title = %s')
+        params.append((title.strip() or 'Follow up')[:255])
+    if due_date is not None:
+        sets.append('due_date = %s')
+        params.append(due_date)
+    if note is not None:
+        sets.append('note = %s')
+        params.append(note.strip() or None)
+    if assigned_to_id != '__keep__':
+        sets.append('assigned_to_id = %s')
+        params.append(assigned_to_id or ctx['user_id'])
+    if not sets:
+        return
+    params.extend([follow_up_id, ctx['team_id']])
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"UPDATE crm_follow_ups SET {', '.join(sets)} WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            params,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_follow_up(ctx, follow_up_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM crm_follow_ups WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            (follow_up_id, ctx['team_id']),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_phone(ctx, phone_id, *, label='__keep__', make_primary=None):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT p.id, p.contact_id FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
+               WHERE p.id = %s AND (c.team_id = %s OR c.team_id IS NULL)""",
+            (phone_id, ctx['team_id']),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        if label != '__keep__':
+            cur.execute("UPDATE crm_phones SET label = %s WHERE id = %s",
+                        ((label or '').strip() or None, phone_id))
+        if make_primary:
+            cur.execute("UPDATE crm_phones SET is_primary = FALSE WHERE contact_id = %s", (row['contact_id'],))
+            cur.execute("UPDATE crm_phones SET is_primary = TRUE WHERE id = %s", (phone_id,))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_phone(ctx, phone_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """DELETE FROM crm_phones p USING crm_contacts c
+               WHERE p.id = %s AND c.id = p.contact_id AND (c.team_id = %s OR c.team_id IS NULL)""",
+            (phone_id, ctx['team_id']),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def unlink_contact(ctx, building_id, contact_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """DELETE FROM crm_building_contacts bc USING crm_buildings b
+               WHERE bc.building_id = %s AND bc.contact_id = %s
+                 AND b.id = bc.building_id AND (b.team_id = %s OR b.team_id IS NULL)""",
+            (building_id, contact_id, ctx['team_id']),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_building_contact_role(ctx, building_id, contact_id, role):
+    role = role if role in BUILDING_CONTACT_ROLES else 'other'
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE crm_building_contacts bc SET role = %s FROM crm_buildings b
+               WHERE bc.building_id = %s AND bc.contact_id = %s
+                 AND b.id = bc.building_id AND (b.team_id = %s OR b.team_id IS NULL)""",
+            (role, building_id, contact_id, ctx['team_id']),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_contact(ctx, contact_id):
+    """Removes a person and everything hanging off them (cascade). Admin-only."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM crm_contacts WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            (contact_id, ctx['team_id']),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def merge_contacts(ctx, source_id, target_id):
+    """Fold `source` into `target`: phones, building links, activity, follow-ups,
+    stars, list items move over (deduped); empty target fields fill from the
+    source; the source is deleted and the merge is logged on the target."""
+    if source_id == target_id:
+        raise ValueError('pick two different people')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT id, name, title, company, email, last_contacted_at FROM crm_contacts
+               WHERE id IN (%s, %s) AND (team_id = %s OR team_id IS NULL)""",
+            (source_id, target_id, ctx['team_id']),
+        )
+        rows = {r['id']: dict(r) for r in cur.fetchall()}
+        if len(rows) != 2:
+            return False
+        source, target = rows[source_id], rows[target_id]
+        cur.execute(
+            """UPDATE crm_phones SET contact_id = %s, is_primary = FALSE
+               WHERE contact_id = %s AND digits NOT IN
+                     (SELECT digits FROM crm_phones WHERE contact_id = %s)""",
+            (target_id, source_id, target_id),
+        )
+        cur.execute(
+            """UPDATE crm_building_contacts SET contact_id = %s
+               WHERE contact_id = %s AND building_id NOT IN
+                     (SELECT building_id FROM crm_building_contacts WHERE contact_id = %s)""",
+            (target_id, source_id, target_id),
+        )
+        cur.execute("UPDATE crm_activity SET contact_id = %s WHERE contact_id = %s", (target_id, source_id))
+        cur.execute("UPDATE crm_follow_ups SET contact_id = %s WHERE contact_id = %s", (target_id, source_id))
+        cur.execute(
+            """UPDATE crm_stars SET contact_id = %s
+               WHERE contact_id = %s AND user_id NOT IN
+                     (SELECT user_id FROM crm_stars WHERE contact_id = %s)""",
+            (target_id, source_id, target_id),
+        )
+        cur.execute(
+            """UPDATE crm_list_items SET contact_id = %s
+               WHERE contact_id = %s AND list_id NOT IN
+                     (SELECT list_id FROM crm_list_items WHERE contact_id = %s)""",
+            (target_id, source_id, target_id),
+        )
+        cur.execute(
+            """UPDATE crm_contacts SET
+                 title = COALESCE(title, %s), company = COALESCE(company, %s),
+                 email = COALESCE(email, %s),
+                 last_contacted_at = GREATEST(COALESCE(last_contacted_at, %s), COALESCE(%s, last_contacted_at)),
+                 updated_at = NOW()
+               WHERE id = %s""",
+            (source['title'], source['company'], source['email'],
+             source['last_contacted_at'], source['last_contacted_at'], target_id),
+        )
+        # Remaining source rows (true duplicates) go with the source via cascade.
+        cur.execute("DELETE FROM crm_contacts WHERE id = %s", (source_id,))
+        cur.execute(
+            """INSERT INTO crm_activity (type, note, contact_id, user_id, team_id, meta)
+               VALUES ('system', %s, %s, %s, %s, %s)""",
+            (f"Merged in duplicate record “{source['name']}”", target_id,
+             ctx['user_id'], ctx['team_id'], Json({'merged_from': source_id})),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def find_duplicate_contacts(ctx, limit=20):
+    """Numbers shared by more than one contact on the team."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT p.digits, array_agg(DISTINCT c.id) AS ids, array_agg(DISTINCT c.name) AS names
+               FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
+               WHERE (c.team_id = %s OR c.team_id IS NULL)
+               GROUP BY p.digits HAVING COUNT(DISTINCT c.id) > 1
+               ORDER BY COUNT(DISTINCT c.id) DESC LIMIT %s""",
+            (ctx['team_id'], limit),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({'digits': r['digits'], 'number': format_phone(r['digits']),
+                        'ids': list(r['ids']), 'names': list(r['names'])})
+        return out
+    finally:
+        cur.close()
+        conn.close()
+
+
+def bulk_update_buildings(ctx, building_ids, action, value=None):
+    """Bulk stage / assign / star / list membership for a set of buildings."""
+    ids = [int(i) for i in building_ids][:500]
+    if not ids:
+        return 0
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id FROM crm_buildings WHERE id = ANY(%s) AND (team_id = %s OR team_id IS NULL)",
+            (ids, ctx['team_id']),
+        )
+        visible = {r['id'] for r in cur.fetchall()}
+        # Keep the caller's selection order — it becomes the list order.
+        ids = [i for i in ids if i in visible]
+        if not ids:
+            return 0
+        if action == 'stage':
+            if value not in STAGES:
+                raise ValueError('invalid stage')
+            cur.execute(
+                """UPDATE crm_buildings SET stage = %s, updated_at = NOW()
+                   WHERE id = ANY(%s) AND stage <> %s RETURNING id""",
+                (value, ids, value),
+            )
+            changed = [r['id'] for r in cur.fetchall()]
+            for bid in changed:
+                cur.execute(
+                    """INSERT INTO crm_activity (type, note, building_id, user_id, team_id)
+                       VALUES ('stage_change', %s, %s, %s, %s)""",
+                    (f'Stage set to {STAGE_LABELS[value]} (bulk)', bid, ctx['user_id'], ctx['team_id']),
+                )
+        elif action == 'assign':
+            cur.execute(
+                "UPDATE crm_buildings SET assigned_to_id = %s, updated_at = NOW() WHERE id = ANY(%s)",
+                (int(value) if value else None, ids),
+            )
+        elif action == 'star':
+            cur.execute(
+                """INSERT INTO crm_stars (user_id, building_id)
+                   SELECT %s, b FROM unnest(%s::int[]) AS b
+                   ON CONFLICT DO NOTHING""",
+                (ctx['user_id'], ids),
+            )
+        elif action == 'unstar':
+            cur.execute("DELETE FROM crm_stars WHERE user_id = %s AND building_id = ANY(%s)",
+                        (ctx['user_id'], ids))
+        elif action == 'list':
+            list_id = int(value)
+            cur.execute(
+                """INSERT INTO crm_list_items (list_id, building_id, added_by_id, sort_order)
+                   SELECT %s, t.b, %s,
+                          COALESCE((SELECT MAX(sort_order) FROM crm_list_items WHERE list_id = %s), 0) + t.ord
+                   FROM unnest(%s::int[]) WITH ORDINALITY AS t(b, ord)
+                   ON CONFLICT DO NOTHING""",
+                (list_id, ctx['user_id'], list_id, ids),
+            )
+            cur.execute("UPDATE crm_lists SET updated_at = NOW() WHERE id = %s", (list_id,))
+        else:
+            raise ValueError('unknown bulk action')
+        conn.commit()
+        return len(ids)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def focus_queue(ctx, source='today', list_id=None, limit=40):
+    """Ordered call queue for Focus mode.
+
+    today:     my overdue + due-today follow-ups, then needs-attention buildings
+    list:<id>: a work list in its order
+    attention: stale / never-contacted buildings
+    cold:      buildings untouched 30d+
+    """
+    items, seen = [], set()
+
+    def push(kind, ident, label, sub=None, followup_id=None, followup_title=None):
+        key = (kind, ident)
+        if key in seen or ident is None:
+            return
+        seen.add(key)
+        items.append({'type': kind, 'id': ident, 'label': label, 'sub': sub,
+                      'followup_id': followup_id, 'followup_title': followup_title})
+
+    if source == 'list' and list_id:
+        lst = get_list(ctx, list_id)
+        for it in (lst or {}).get('items', []):
+            if it['building_id']:
+                push('building', it['building_id'], it['address'], it['borough'])
+            elif it['contact_id']:
+                push('contact', it['contact_id'], it['contact_name'], it['company'])
+    elif source == 'cold':
+        for b in list_buildings(ctx, cold=True, sort='last_contacted', limit=limit):
+            push('building', b['id'], b['address'], 'Untouched 30d+')
+    elif source == 'attention':
+        for b in needs_attention(ctx, limit=limit):
+            push('building', b['id'], b['address'],
+                 'Stale' if b['reason'] == 'stale' else 'Never contacted')
+    else:
+        q = follow_up_queues(ctx)
+        for f in q['overdue'] + q['due_today']:
+            if f['b_id']:
+                push('building', f['b_id'], f['building_address'],
+                     f'Follow-up: {f["title"]}', f['id'], f['title'])
+            elif f['c_id']:
+                push('contact', f['c_id'], f['contact_name'],
+                     f'Follow-up: {f["title"]}', f['id'], f['title'])
+        for b in needs_attention(ctx, limit=limit):
+            push('building', b['id'], b['address'],
+                 'Stale' if b['reason'] == 'stale' else 'Never contacted')
+    return items[:limit]
+
+
+def due_count(ctx):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT COUNT(*) AS n FROM crm_follow_ups
+               WHERE assigned_to_id = %s AND status = 'open' AND due_date <= %s""",
+            (ctx['user_id'], ny_today()),
+        )
+        return cur.fetchone()['n']
+    finally:
+        cur.close()
+        conn.close()
+
+
+def touches_per_day(ctx, days=14, user_id=None):
+    """Contacted events per NY calendar day, zero-filled, oldest first."""
+    start = ny_day_start_utc(-(days - 1))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        where = "team_id = %s AND type = 'contacted' AND created_at >= %s"
+        params = [ctx['team_id'], start]
+        if user_id:
+            where += " AND user_id = %s"
+            params.append(user_id)
+        cur.execute(
+            f"""SELECT ((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'America/New_York')::date AS day,
+                       COUNT(*) AS n
+                FROM crm_activity WHERE {where} GROUP BY day""",
+            params,
+        )
+        counts = {r['day']: r['n'] for r in cur.fetchall()}
+        today = ny_today()
+        return [{'day': today - timedelta(days=i), 'n': counts.get(today - timedelta(days=i), 0)}
+                for i in range(days - 1, -1, -1)]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def outcome_mix(ctx, days=30):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT COALESCE(outcome, 'unspecified') AS outcome, COUNT(*) AS n
+               FROM crm_activity
+               WHERE team_id = %s AND type = 'contacted' AND created_at >= %s
+               GROUP BY outcome ORDER BY n DESC""",
+            (ctx['team_id'], datetime.utcnow() - timedelta(days=days)),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def stage_funnel(ctx):
+    counts = building_stage_counts(ctx)
+    return [{'stage': s, 'label': STAGE_LABELS[s], 'n': counts.get(s, 0)} for s in STAGES]
+
+
+def contacts_alpha_groups(contacts):
+    """Group a contact list Apple-Contacts style: letter -> rows, '#' for non-letters."""
+    groups = {}
+    for c in sorted(contacts, key=lambda c: (c['name'] or '').upper()):
+        first = (c['name'] or '#').strip()[:1].upper()
+        key = first if first.isalpha() else '#'
+        groups.setdefault(key, []).append(c)
+    ordered = sorted(k for k in groups if k != '#')
+    if '#' in groups:
+        ordered.append('#')
+    return [(k, groups[k]) for k in ordered]

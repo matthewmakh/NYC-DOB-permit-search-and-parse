@@ -1,163 +1,348 @@
-{# Shared CRM building blocks. Import with:
-   {% from "crm/_macros.html" import stage_dot, recency, star_btn, contacted_btn, followup_row, activity_event %} #}
+{# CRM v2 building blocks. Import what you need:
+   {% from "crm/_macros.html" import avatar, stage_dot, recency, star_btn, contacted_btn, ... %} #}
 
-{% macro crm_subnav(active, ctx) %}
-<nav class="crm-subnav" aria-label="CRM navigation">
-    <a href="/crm" {% if active == 'today' %}class="is-active" aria-current="page"{% endif %}>Today</a>
-    <a href="/crm/buildings" {% if active == 'buildings' %}class="is-active"{% endif %}>Buildings</a>
-    <a href="/crm/contacts" {% if active == 'contacts' %}class="is-active"{% endif %}>Contacts</a>
-    <a href="/crm/lists" {% if active == 'lists' %}class="is-active"{% endif %}>Lists</a>
-    <a href="/crm/followups" {% if active == 'followups' %}class="is-active"{% endif %}>Follow-ups</a>
-    <a href="/crm/starred" {% if active == 'starred' %}class="is-active"{% endif %}>Starred</a>
+{% macro sidebar(active, ctx, user_name, due_count) %}
+<aside class="crm-sidebar" aria-label="CRM navigation">
+    <button type="button" class="crm-sidebar__search js-open-palette">
+        <i class="fas fa-magnifying-glass"></i> Search <span class="crm-kbd">⌘K</span>
+    </button>
+    <div class="crm-sidebar__section">Work</div>
+    <a href="/crm" class="crm-sidebar__item{{ ' is-active' if active == 'today' }}">
+        <i class="fas fa-sun"></i> Today
+        {% if due_count %}<span class="crm-count is-alert">{{ due_count }}</span>{% endif %}
+    </a>
+    <a href="/crm/focus" class="crm-sidebar__item{{ ' is-active' if active == 'focus' }}"><i class="fas fa-bullseye"></i> Focus</a>
+    <a href="/crm/followups" class="crm-sidebar__item{{ ' is-active' if active == 'followups' }}"><i class="far fa-calendar-check"></i> Follow-ups</a>
+    <div class="crm-sidebar__section">Records</div>
+    <a href="/crm/buildings" class="crm-sidebar__item{{ ' is-active' if active == 'buildings' }}"><i class="fas fa-building"></i> Buildings</a>
+    <a href="/crm/contacts" class="crm-sidebar__item{{ ' is-active' if active == 'contacts' }}"><i class="fas fa-user-group"></i> Contacts</a>
+    <a href="/crm/lists" class="crm-sidebar__item{{ ' is-active' if active == 'lists' }}"><i class="fas fa-list-ul"></i> Lists</a>
+    <a href="/crm/starred" class="crm-sidebar__item{{ ' is-active' if active == 'starred' }}"><i class="fas fa-star"></i> Starred</a>
     {% if ctx.is_admin %}
-    <a href="/crm/team" {% if active == 'team' %}class="is-active"{% endif %}>Team</a>
+    <div class="crm-sidebar__section">Manage</div>
+    <a href="/crm/team" class="crm-sidebar__item{{ ' is-active' if active == 'team' }}"><i class="fas fa-chart-simple"></i> Team &amp; reports</a>
     {% endif %}
-    <span class="crm-subnav-spacer"></span>
-    <a href="/properties" title="Browse the permit database">Discover <i class="fas fa-arrow-up-right-from-square" style="font-size:10px"></i></a>
-    <a href="/crm/buildings/add" class="crm-subnav-cta"><i class="fas fa-plus" style="font-size:11px"></i> Add building</a>
+    <div class="crm-sidebar__section">Permits</div>
+    <a href="/properties" class="crm-sidebar__item"><i class="fas fa-magnifying-glass-location"></i> Discover <i class="fas fa-arrow-up-right-from-square" style="width:auto;font-size:9px;margin-left:auto"></i></a>
+    <a href="/crm/buildings/add" class="crm-sidebar__item"><i class="fas fa-plus"></i> Add building</a>
+    <div class="crm-sidebar__footer">
+        {{ avatar(user_name, 'crm-avatar-sm') }}
+        <div class="crm-sidebar__who">
+            <div class="who-name">{{ user_name }}</div>
+            <div class="who-role">{{ 'Team admin' if ctx.is_admin else 'Rep' }}</div>
+        </div>
+        <div class="crm-theme-toggle js-theme" title="Appearance">
+            <button type="button" data-theme="auto" title="Auto"><i class="fas fa-circle-half-stroke"></i></button>
+            <button type="button" data-theme="light" title="Light"><i class="fas fa-sun"></i></button>
+            <button type="button" data-theme="dark" title="Dark"><i class="fas fa-moon"></i></button>
+        </div>
+    </div>
+</aside>
+{% endmacro %}
+
+
+{% macro tabbar(active, due_count) %}
+<nav class="crm-tabbar" aria-label="CRM tabs">
+    <a href="/crm" class="crm-tabbar__item{{ ' is-active' if active == 'today' }}"><i class="fas fa-sun"></i>Today</a>
+    <a href="/crm/buildings" class="crm-tabbar__item{{ ' is-active' if active == 'buildings' }}"><i class="fas fa-building"></i>Buildings</a>
+    <a href="/crm/contacts" class="crm-tabbar__item{{ ' is-active' if active == 'contacts' }}"><i class="fas fa-user-group"></i>People</a>
+    <a href="/crm/followups" class="crm-tabbar__item{{ ' is-active' if active == 'followups' }}"><i class="far fa-calendar-check"></i>Follow-ups
+        {% if due_count %}<span class="crm-count is-alert">{{ due_count }}</span>{% endif %}</a>
+    <button type="button" class="crm-tabbar__item js-open-sheet" data-sheet="sheetMore"><i class="fas fa-ellipsis"></i>More</button>
 </nav>
 {% endmacro %}
 
 
-{% macro stage_dot(stage, labels) %}
+{% macro avatar(name, size='') -%}
+<span class="crm-avatar {{ size }}" style="--h: {{ name|crm_hue }}" aria-hidden="true">{{ name|crm_initials }}</span>
+{%- endmacro %}
+
+{% macro bavatar(size='') -%}
+<span class="crm-avatar crm-avatar--building {{ size }}" aria-hidden="true"><i class="fas fa-building"></i></span>
+{%- endmacro %}
+
+
+{% macro stage_dot(stage, labels) -%}
 <span class="crm-stage"><span class="crm-dot dot-{{ stage }}"></span>{{ labels.get(stage, stage) }}</span>
-{% endmacro %}
+{%- endmacro %}
 
 
-{% macro recency(ts, prefix='') %}
+{% macro recency(ts, prefix='') -%}
 <span class="crm-recency {{ ts|crm_recency }}" title="{{ ts|crm_nydt }}">{% if prefix %}{{ prefix }} {% endif %}{{ ts|crm_timeago }}</span>
-{% endmacro %}
+{%- endmacro %}
 
 
-{% macro star_btn(starred, building_id=None, contact_id=None) %}
+{% macro star_btn(starred, building_id=None, contact_id=None) -%}
 <button type="button" class="crm-star js-star{{ ' is-starred' if starred }}"
         data-building-id="{{ building_id or '' }}" data-contact-id="{{ contact_id or '' }}"
         title="{{ 'Unstar' if starred else 'Star' }}" aria-label="Star" aria-pressed="{{ 'true' if starred else 'false' }}">
     <i class="{{ 'fas' if starred else 'far' }} fa-star"></i>
 </button>
-{% endmacro %}
+{%- endmacro %}
 
 
-{% macro contacted_btn(entity_label, building_id=None, contact_id=None, phone='', last_touch='', small=False, label='Contacted') %}
-<button type="button" class="btn-contacted js-contacted{{ ' btn-contacted-sm' if small }}"
+{% macro contacted_btn(entity_label, building_id=None, contact_id=None, phone='', last_touch='', small=False, label='Contacted', followup_id=None) -%}
+<button type="button" class="cbtn cbtn-contacted js-contacted{{ ' cbtn-sm' if small }}"
         data-building-id="{{ building_id or '' }}" data-contact-id="{{ contact_id or '' }}"
         data-entity="{{ entity_label }}" data-phone="{{ phone or '' }}"
-        data-last-touch="{{ last_touch or '' }}">
-    <i class="fas fa-phone" style="font-size:11px"></i> {{ label }}
+        data-last-touch="{{ last_touch or '' }}" data-followup-id="{{ followup_id or '' }}">
+    <i class="fas fa-phone"></i> {{ label }}
 </button>
-{% endmacro %}
+{%- endmacro %}
 
 
-{% macro entity_link(f) %}
-{%- if f.b_id -%}
-<a href="/crm/buildings/{{ f.b_id }}">{{ f.building_address }}</a>
-{%- elif f.c_id -%}
-<a href="/crm/contacts/{{ f.c_id }}">{{ f.contact_name }}</a>
-{%- endif -%}
-{% endmacro %}
+{% macro entity_link(f) -%}
+{%- if f.b_id -%}<a href="/crm/buildings/{{ f.b_id }}">{{ f.building_address }}</a>
+{%- elif f.c_id -%}<a href="/crm/contacts/{{ f.c_id }}">{{ f.contact_name }}</a>{%- endif -%}
+{%- endmacro %}
 
 
-{% macro due_chip(due_date, today) %}
-{% if due_date < today %}
-<span class="crm-recency rec-cold">{{ due_date|crm_due }}</span>
-{% elif due_date == today %}
-<span class="crm-recency rec-warm">Today</span>
-{% else %}
-<span class="crm-recency rec-never">{{ due_date|crm_due }}</span>
-{% endif %}
-{% endmacro %}
+{% macro due_tag(due_date, today) -%}
+{% if due_date < today %}<span class="crm-recency rec-cold">{{ due_date|crm_due }}</span>
+{% elif due_date == today %}<span class="crm-recency rec-warm">Today</span>
+{% else %}<span class="crm-recency rec-never">{{ due_date|crm_due }}</span>{% endif %}
+{%- endmacro %}
 
 
-{% macro followup_row(f, today, show_assignee=False, number=None) %}
-<div class="crm-row" data-followup-row="{{ f.id }}">
-    {% if number %}<span class="row-num">{{ number }}</span>{% endif %}
-    <div class="row-main">
-        <div class="row-title">{{ f.title }}{% if f.b_id or f.c_id %} · {{ entity_link(f) }}{% endif %}</div>
-        <div class="row-sub">
+{% macro followup_cell(f, today, show_assignee=False, number=None) %}
+<div class="crm-cell" data-followup-row="{{ f.id }}">
+    {% if number %}<span class="crm-cell__lead"><span class="row-num">{{ number }}</span></span>{% endif %}
+    <div class="crm-cell__body">
+        <div class="crm-cell__title">{{ f.title }}{% if f.b_id or f.c_id %} <span class="crm-muted">·</span> {{ entity_link(f) }}{% endif %}</div>
+        <div class="crm-cell__sub">
             {% if show_assignee %}{{ f.assigned_to_name }} · {% endif %}
             {% if f.note %}{{ f.note|truncate(90) }}{% else %}Created {{ f.created_at|crm_timeago }}{% endif %}
         </div>
     </div>
-    <div class="row-side">
-        {{ due_chip(f.due_date, today) }}
+    <div class="crm-cell__trail">
+        {{ due_tag(f.due_date, today) }}
         {% if f.status == 'open' %}
-        <button type="button" class="btn btn-secondary btn-sm js-fu-done" data-id="{{ f.id }}" title="Mark done"><i class="fas fa-check"></i></button>
-        <button type="button" class="btn btn-secondary btn-sm js-fu-snooze" data-id="{{ f.id }}" title="Snooze 1 day"><i class="fas fa-clock"></i></button>
+        {% if f.b_id or f.c_id %}
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-contacted" title="Log a touch"
+                data-building-id="{{ f.b_id or '' }}" data-contact-id="{{ f.c_id or '' }}"
+                data-entity="{{ f.building_address or f.contact_name }}" data-followup-id="{{ f.id }}"><i class="fas fa-phone"></i></button>
+        {% endif %}
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-done" data-id="{{ f.id }}" title="Mark done"><i class="fas fa-check"></i></button>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-snooze" data-id="{{ f.id }}" title="Snooze to tomorrow"><i class="far fa-clock"></i></button>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-edit" title="Edit"
+                data-id="{{ f.id }}" data-title="{{ f.title }}" data-due="{{ f.due_date.isoformat() }}"
+                data-note="{{ f.note or '' }}" data-assignee="{{ f.assigned_to_id }}"><i class="fas fa-pen"></i></button>
         {% else %}
-        <span class="crm-chip{{ ' chip-good' if f.status == 'done' }}">{{ f.status|capitalize }}</span>
+        <span class="crm-tag{{ ' tag-green' if f.status == 'done' }}">{{ f.status|capitalize }}</span>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-reopen" data-id="{{ f.id }}" title="Reopen"><i class="fas fa-rotate-left"></i></button>
         {% endif %}
     </div>
 </div>
 {% endmacro %}
 
 
-{% macro activity_event(a, method_labels, outcome_labels, show_entity=False) %}
+{% macro event(a, method_labels, outcome_labels, show_entity=False) %}
 <div class="crm-event ev-{{ a.type }}" data-activity-id="{{ a.id }}">
-    <span class="crm-event-icon">
+    <span class="crm-event__icon">
         {% if a.type == 'contacted' %}<i class="fas fa-phone"></i>
         {% elif a.type == 'visit' %}<i class="fas fa-person-walking"></i>
         {% elif a.type == 'note' %}<i class="fas fa-note-sticky"></i>
         {% elif a.type == 'stage_change' %}<i class="fas fa-arrow-right-arrow-left"></i>
         {% else %}<i class="fas fa-circle-info"></i>{% endif %}
     </span>
-    <div class="crm-event-body">
-        <div class="crm-event-head">
-            <span class="ev-user">{{ a.user_name }}</span>
-            <span class="ev-what">
+    <div class="crm-event__body">
+        <div class="crm-event__head">
+            <span class="who">{{ a.user_name }}</span>
+            <span class="what">
                 {% if a.type == 'contacted' %}logged a touch
                     {%- if show_entity and a.contact_name %} with <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
                     {%- if show_entity and a.building_address %} at <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
                 {% elif a.type == 'visit' %}visited{% if show_entity and a.building_address %} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
-                {% elif a.type == 'note' %}added a note
+                {% elif a.type == 'note' %}added a note{% if show_entity and a.building_address %} on <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
                 {% else %}{{ a.note or 'update' }}{% endif %}
             </span>
-            <span class="ev-time" title="{{ a.created_at|crm_nydt }}">{{ a.created_at|crm_timeago }}</span>
+            <span class="when" title="{{ a.created_at|crm_nydt }}">{{ a.created_at|crm_nytime }}</span>
         </div>
         {% if a.type == 'contacted' %}
-        <div class="crm-event-chips">
-            {% if a.method %}<span class="crm-chip chip-accent">{{ method_labels.get(a.method, a.method) }}</span>{% endif %}
+        <div class="crm-event__tags">
+            {% if a.method %}<span class="crm-tag tag-blue">{{ method_labels.get(a.method, a.method) }}</span>{% endif %}
             {% if a.outcome %}
-            <span class="crm-chip {{ 'chip-good' if a.outcome in ('spoke','meeting_set','callback_requested') else ('chip-bad' if a.outcome in ('wrong_number','not_interested') else 'chip-warn') }}">{{ outcome_labels.get(a.outcome, a.outcome) }}</span>
+            <span class="crm-tag {{ 'tag-green' if a.outcome in ('spoke','meeting_set','callback_requested') else ('tag-red' if a.outcome in ('wrong_number','not_interested') else 'tag-orange') }}">{{ outcome_labels.get(a.outcome, a.outcome) }}</span>
             {% endif %}
-            {% if a.phone_digits %}<span class="crm-chip">{{ a.phone_digits }}</span>{% endif %}
-            {% if not show_entity and a.contact_name %}<span class="crm-chip">with <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a></span>{% endif %}
+            {% if a.phone_digits %}<span class="crm-tag tag-mono">{{ a.phone_digits }}</span>{% endif %}
+            {% if not show_entity and a.contact_name %}<span class="crm-tag">with <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a></span>{% endif %}
         </div>
         {% endif %}
         {% if a.note and a.type in ('contacted', 'visit', 'note') %}
-        <div class="crm-event-note">{{ a.note }}</div>
+        <div class="crm-event__note">{{ a.note }}</div>
         {% endif %}
     </div>
     {% if a.type in ('contacted', 'visit', 'note') %}
-    <div class="crm-event-tools">
-        <button type="button" class="js-pin{{ ' is-pinned' if a.is_pinned }}" data-id="{{ a.id }}" title="{{ 'Unpin' if a.is_pinned else 'Pin to top' }}"><i class="fas fa-thumbtack"></i></button>
-        <button type="button" class="js-ev-delete" data-id="{{ a.id }}" title="Delete"><i class="fas fa-trash-can"></i></button>
+    <div class="crm-event__tools">
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-pin{{ ' is-pinned' if a.is_pinned }}" data-id="{{ a.id }}" title="{{ 'Unpin' if a.is_pinned else 'Pin to top' }}"><i class="fas fa-thumbtack"></i></button>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-ev-delete" data-id="{{ a.id }}" title="Delete"><i class="fas fa-trash-can"></i></button>
     </div>
     {% endif %}
 </div>
 {% endmacro %}
 
 
+{% macro timeline(events, method_labels, outcome_labels, show_entity=False) %}
+{% set ns = namespace(day=None) %}
+{% for a in events %}
+    {% set label = a.created_at|crm_nyday %}
+    {% if label != ns.day %}<div class="crm-day">{{ label }}</div>{% set ns.day = label %}{% endif %}
+    {{ event(a, method_labels, outcome_labels, show_entity) }}
+{% endfor %}
+{% endmacro %}
+
+
 {% macro feed_item(a) %}
-<div class="crm-feed-item">
-    <div class="feed-text">
-        <strong>{{ a.user_name }}</strong>
-        {% if a.type == 'contacted' %}
-            contacted
-            {%- if a.contact_name %} <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
-            {%- if a.building_address %}{{ ' at' if a.contact_name else '' }} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
-            {%- if a.outcome %} <span class="crm-chip">{{ a.outcome|replace('_', ' ') }}</span>{% endif %}
-        {% elif a.type == 'visit' %}
-            visited <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>
-        {% elif a.type == 'note' %}
-            noted on
-            {%- if a.building_address %} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
-            {%- if a.contact_name %} <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
-        {% else %}
-            {{ a.note or 'updated' }}
-            {%- if a.building_address %} — <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
-        {% endif %}
-        {% if a.note and a.type in ('contacted', 'visit') %}<span style="color:var(--ink-2)"> — “{{ a.note|truncate(110) }}”</span>{% endif %}
+<div class="crm-cell" style="align-items:flex-start">
+    <span class="crm-cell__lead">{{ avatar(a.user_name, 'crm-avatar-sm') }}</span>
+    <div class="crm-cell__body" style="white-space:normal">
+        <div style="font-size:13px; line-height:1.5">
+            <strong>{{ a.user_name }}</strong>
+            {% if a.type == 'contacted' %}
+                contacted
+                {%- if a.contact_name %} <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
+                {%- if a.building_address %}{{ ' at' if a.contact_name else '' }} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
+                {%- if a.outcome %} <span class="crm-tag">{{ a.outcome|replace('_', ' ') }}</span>{% endif %}
+            {% elif a.type == 'visit' %}
+                visited <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>
+            {% elif a.type == 'note' %}
+                noted on
+                {%- if a.building_address %} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
+                {%- if a.contact_name %} <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
+            {% else %}
+                {{ a.note or 'updated' }}
+                {%- if a.building_address %} — <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
+            {% endif %}
+            {% if a.note and a.type in ('contacted', 'visit') %}<span class="crm-muted"> — “{{ a.note|truncate(110) }}”</span>{% endif %}
+        </div>
     </div>
-    <span class="feed-time" title="{{ a.created_at|crm_nydt }}">{{ a.created_at|crm_timeago }}</span>
+    <span class="crm-cell__trail crm-muted" style="font-size:11.5px" title="{{ a.created_at|crm_nydt }}">{{ a.created_at|crm_timeago }}</span>
 </div>
+{% endmacro %}
+
+
+{% macro empty(icon, title, text) %}
+<div class="crm-empty">
+    <div class="crm-empty__icon"><i class="fas {{ icon }}"></i></div>
+    <h4>{{ title }}</h4>
+    <p>{{ text }}</p>
+    {% if caller %}<div class="crm-empty__actions">{{ caller() }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+
+{% macro hbar(label, value, maxval, cls='') %}
+<div class="crm-hbar">
+    <span class="hb-label" title="{{ label }}">{{ label }}</span>
+    <span class="hb-track"><span class="hb-fill {{ cls }}" style="width: {{ (100 * value / maxval) if maxval else 0 }}%"></span></span>
+    <span class="hb-val">{{ value }}</span>
+</div>
+{% endmacro %}
+
+
+{% macro stepper(stage, stages, labels, building_id) %}
+{% set pipeline = ['prospect', 'contacted', 'interested', 'quoted', 'won'] %}
+{% set idx = pipeline.index(stage) if stage in pipeline else -1 %}
+<div class="crm-stepper" role="group" aria-label="Pipeline stage">
+    {% for s in pipeline %}
+    {% set cls = 'is-current' if s == stage else ('is-done' if idx > loop.index0 else '') %}
+    <button type="button" class="crm-stepper__step {{ cls }}{{ ' is-won' if s == 'won' and stage in ('won', 'client') }}"
+            data-stage="{{ s }}" data-building-id="{{ building_id }}" title="Move to {{ labels[s] }}">
+        <div class="crm-stepper__bar"></div>
+        <div class="crm-stepper__label">{{ labels[s] }}</div>
+    </button>
+    {% endfor %}
+    {% if stage in ('lost', 'client') %}
+    <button type="button" class="crm-stepper__step is-current {{ 'is-lost' if stage == 'lost' else 'is-client' }}" data-stage="{{ stage }}" data-building-id="{{ building_id }}">
+        <div class="crm-stepper__bar"></div>
+        <div class="crm-stepper__label">{{ labels[stage] }}</div>
+    </button>
+    {% endif %}
+</div>
+{% endmacro %}
+
+
+{% macro next_step(b, today) %}
+{% set nxt = (b.follow_ups|sort(attribute='due_date')|first) if b.follow_ups else None %}
+{% if nxt %}
+<div class="crm-next{{ ' is-overdue' if nxt.due_date < today }}" data-followup-row="{{ nxt.id }}">
+    <div class="crm-next__icon"><i class="far fa-calendar-check"></i></div>
+    <div class="crm-next__body">
+        <div class="crm-next__eyebrow">Next step</div>
+        <div class="crm-next__title">{{ nxt.title }}</div>
+        <div class="crm-next__sub">{{ nxt.due_date|crm_due }} · {{ nxt.assigned_to_name }}{% if nxt.note %} · {{ nxt.note|truncate(80) }}{% endif %}</div>
+    </div>
+    <div class="crm-next__actions">
+        <button type="button" class="cbtn cbtn-sm js-fu-done" data-id="{{ nxt.id }}"><i class="fas fa-check"></i> Done</button>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-snooze" data-id="{{ nxt.id }}" title="Snooze to tomorrow"><i class="far fa-clock"></i></button>
+        <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-edit" title="Edit" data-id="{{ nxt.id }}" data-title="{{ nxt.title }}"
+                data-due="{{ nxt.due_date.isoformat() }}" data-note="{{ nxt.note or '' }}" data-assignee="{{ nxt.assigned_to_id }}"><i class="fas fa-pen"></i></button>
+    </div>
+</div>
+{% elif b.stage not in ('won', 'lost', 'client') %}
+<div class="crm-next is-none">
+    <div class="crm-next__icon"><i class="fas fa-flag"></i></div>
+    <div class="crm-next__body">
+        <div class="crm-next__eyebrow">Next step</div>
+        <div class="crm-next__title">Nothing scheduled</div>
+        <div class="crm-next__sub">Every active building deserves a next step so it doesn't go cold.</div>
+    </div>
+    <div class="crm-next__actions">
+        <button type="button" class="cbtn cbtn-tinted cbtn-sm js-followup" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="far fa-calendar-plus"></i> Set one</button>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro building_card(b, labels, checkable=True) %}
+<div class="crm-card" data-building-card="{{ b.id }}">
+    <div class="crm-card__top">
+        {% if checkable %}<input type="checkbox" class="crm-card__check js-bulk-check" value="{{ b.id }}" aria-label="Select {{ b.address }}">{% endif %}
+        <div class="crm-card__title">
+            <a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a>
+            <div class="crm-card__sub">{{ b.borough or '' }}{% if b.unit_count %} · {{ b.unit_count }} units{% endif %}{% if b.owner_name %} · {{ b.owner_name|truncate(34) }}{% endif %}</div>
+        </div>
+        {{ star_btn(b.starred, building_id=b.id) }}
+    </div>
+    <div class="crm-card__meta">
+        {{ stage_dot(b.stage, labels) }}
+        {{ recency(b.last_contacted_at, 'touched') }}
+        {% if b.last_visited_at %}{{ recency(b.last_visited_at, 'visited') }}{% endif %}
+        {% if b.assigned_to_name %}<span class="crm-tag"><i class="far fa-user" style="font-size:9px"></i> {{ b.assigned_to_name }}</span>{% endif %}
+    </div>
+    <div class="crm-card__foot">
+        {{ contacted_btn(b.address, building_id=b.id, small=True) }}
+        <a class="cbtn cbtn-sm" href="/crm/buildings/{{ b.id }}">Open</a>
+        <span class="grow"></span>
+        {% if b.bbl %}<a class="cbtn cbtn-icon cbtn-sm" href="/property/{{ b.bbl }}" title="Full property intel"><i class="fas fa-building-columns"></i></a>{% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{% macro bcard(b, labels) %}
+<div class="crm-bcard js-bcard" draggable="true" data-building-id="{{ b.id }}" data-stage="{{ b.stage }}">
+    <div class="crm-bcard__title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
+    <div class="crm-bcard__sub">{{ b.borough or '' }}{% if b.unit_count %} · {{ b.unit_count }} units{% endif %}</div>
+    <div class="crm-bcard__foot">
+        {{ recency(b.last_contacted_at) }}
+        {% if b.assigned_to_name %}{{ avatar(b.assigned_to_name, 'crm-avatar-sm') }}{% endif %}
+        <span class="grow"></span>
+        {{ contacted_btn(b.address, building_id=b.id, small=True, label='') }}
+    </div>
+</div>
+{% endmacro %}
+
+
+{% macro sparkline(series) %}
+{% set mx = (series|map(attribute='n')|max) or 1 %}
+{% set n = series|length %}
+<svg viewBox="0 0 {{ n * 8 }} 30" preserveAspectRatio="none" aria-hidden="true">
+    {% for p in series %}
+    {% set h = (24 * p.n / mx) if mx else 0 %}
+    <rect x="{{ loop.index0 * 8 }}" y="{{ 30 - (h if p.n else 2) }}" width="6" height="{{ h if p.n else 2 }}" rx="1.5"
+          class="{{ 'is-today' if loop.last }}"><title>{{ p.day|crm_date }}: {{ p.n }}</title></rect>
+    {% endfor %}
+</svg>
 {% endmacro %}

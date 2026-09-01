@@ -1,0 +1,52 @@
+{% from "crm/_macros.html" import stage_dot, followup_cell, empty %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Numbers</h3><button type="button" class="cbtn cbtn-sm js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}"><i class="fas fa-plus"></i> Add</button></div>
+    {% for p in c.phones %}
+    <div class="crm-cell">
+        <div class="crm-cell__body">
+            <div class="crm-cell__title" style="font-variant-numeric:tabular-nums">
+                <a href="tel:+1{{ p.digits }}" {% if p.status != 'good' %}style="text-decoration:line-through;color:var(--c-label-3)"{% endif %}>{{ p.number }}</a>
+                {% if p.is_primary %}<span class="crm-tag tag-blue">Primary</span>{% endif %}
+                {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
+                {% if p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% elif p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% endif %}
+            </div>
+            <div class="crm-cell__sub">{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}</div>
+        </div>
+        <div class="crm-cell__trail">
+            <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>
+            {% if p.status == 'good' %}
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark bad"><i class="fas fa-phone-slash"></i></button>
+            {% else %}
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="good" title="Mark good again"><i class="fas fa-rotate-left"></i></button>
+            {% endif %}
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-edit-phone" data-id="{{ p.id }}" data-label="{{ p.label or '' }}" data-number="{{ p.number }}" data-primary="{{ 1 if p.is_primary else 0 }}" title="Edit"><i class="fas fa-pen"></i></button>
+        </div>
+    </div>
+    {% else %}
+    {% call empty('fa-phone-slash', 'No numbers yet', 'Found one? Add it — it stays on record with who found it and where.') %}
+        <button type="button" class="cbtn cbtn-tinted js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">Add a number</button>
+    {% endcall %}
+    {% endfor %}
+    {% if c.email %}<div class="crm-cell"><div class="crm-cell__body"><a href="mailto:{{ c.email }}">{{ c.email }}</a></div></div>{% endif %}
+</div>
+{% if c.buildings %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Buildings</h3><span class="count">{{ c.buildings|length }}</span></div>
+    {% for b in c.buildings %}
+    <div class="crm-cell">
+        <div class="crm-cell__body">
+            <div class="crm-cell__title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
+            <div class="crm-cell__sub">{{ b.building_role|replace('_', ' ')|capitalize }}{% if b.borough %} · {{ b.borough }}{% endif %}</div>
+        </div>
+        <div class="crm-cell__trail">{{ stage_dot(b.stage, stage_labels) }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% if c.follow_ups %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Open follow-ups</h3></div>
+    {% for f in c.follow_ups %}{{ followup_cell(f, today_ny, show_assignee=True) }}{% endfor %}
+</div>
+{% endif %}
+<p class="crm-provenance">Added by {{ c.added_by_name }} {{ c.created_at|crm_timeago }} · source: {{ c.source_detail or c.source }}. Rep-found info is permanent — scrapers never overwrite it.</p>

@@ -1,0 +1,298 @@
+{# CRM v2 sheets (dialogs), the command palette, and the toast stack. Driven by crm.js. #}
+
+<!-- Log a touch: method → outcome → note (nudged, never required) → follow-up offer -->
+<div class="crm-sheet" id="sheetContacted" role="dialog" aria-modal="true" aria-labelledby="sheetContactedTitle">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head">
+            <h2 id="sheetContactedTitle">Log a touch</h2>
+            <button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity">With <strong data-role="entity"></strong> <span data-role="phone-line" class="crm-muted"></span></p>
+            <div class="crm-collision" data-role="collision" hidden></div>
+
+            <div data-role="step1">
+                <span class="crm-label">How</span>
+                <div class="crm-choices" data-role="methods">
+                    <button type="button" class="crm-choice is-selected" data-value="call">Call</button>
+                    <button type="button" class="crm-choice" data-value="text">Text</button>
+                    <button type="button" class="crm-choice" data-value="email">Email</button>
+                    <button type="button" class="crm-choice" data-value="in_person">In person</button>
+                    <button type="button" class="crm-choice" data-value="other">Other</button>
+                </div>
+                <span class="crm-label">Outcome</span>
+                <div class="crm-choices" data-role="outcomes">
+                    <button type="button" class="crm-choice" data-value="spoke">Spoke</button>
+                    <button type="button" class="crm-choice" data-value="voicemail">Voicemail</button>
+                    <button type="button" class="crm-choice" data-value="no_answer">No answer</button>
+                    <button type="button" class="crm-choice" data-value="callback_requested">Callback requested</button>
+                    <button type="button" class="crm-choice" data-value="meeting_set">Meeting set</button>
+                    <button type="button" class="crm-choice" data-value="wrong_number">Wrong number</button>
+                    <button type="button" class="crm-choice" data-value="not_interested">Not interested</button>
+                </div>
+                <div class="crm-field">
+                    <span class="crm-label">Note</span>
+                    <textarea class="crm-textarea" data-role="note" placeholder="We spoke about the roof replacement, he wants a quote by Friday…"></textarea>
+                </div>
+                <div class="crm-nudge" data-role="nudge" hidden>A quick note helps the whole team — press <strong>Save without note</strong> to skip it.</div>
+                <div class="crm-sheet__foot">
+                    <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                    <button type="button" class="cbtn cbtn-contacted" data-role="save"><i class="fas fa-phone"></i> Save</button>
+                </div>
+            </div>
+
+            <div data-role="step2" hidden>
+                <div class="crm-flash" style="padding-top:8px"><i class="fas fa-circle-check"></i>Logged. Set a follow-up?</div>
+                <div class="crm-choices" data-role="fu-quick" style="justify-content:center">
+                    <button type="button" class="crm-choice" data-days="1">Tomorrow</button>
+                    <button type="button" class="crm-choice" data-days="3">In 3 days</button>
+                    <button type="button" class="crm-choice" data-days="7">Next week</button>
+                    <button type="button" class="crm-choice" data-days="14">In 2 weeks</button>
+                </div>
+                <div class="crm-field crm-field-row">
+                    <input type="date" class="crm-input" data-role="fu-date" aria-label="Follow-up date">
+                    <button type="button" class="cbtn" data-role="fu-date-save">Set date</button>
+                </div>
+                <div class="crm-sheet__foot" style="justify-content:center">
+                    <button type="button" class="cbtn cbtn-plain" data-role="fu-skip">No follow-up needed</button>
+                </div>
+            </div>
+
+            <div data-role="step3" hidden>
+                <div class="crm-flash"><i class="fas fa-circle-check"></i><span data-role="done-msg">Saved</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log a visit -->
+<div class="crm-sheet" id="sheetVisit" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2>Log a visit</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity">At <strong data-role="entity"></strong></p>
+            <div class="crm-field"><span class="crm-label">When</span><input type="date" class="crm-input" data-role="visit-date"></div>
+            <div class="crm-field"><span class="crm-label">Note (optional)</span><textarea class="crm-textarea" data-role="note" placeholder="Walked the lobby with the super, roof access is from the 6th floor…"></textarea></div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save"><i class="fas fa-person-walking"></i> Log visit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Set / edit a follow-up -->
+<div class="crm-sheet" id="sheetFollowup" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2 data-role="title-text">Set a follow-up</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity" data-role="entity-wrap">For <strong data-role="entity"></strong></p>
+            <div class="crm-field"><span class="crm-label">What</span><input type="text" class="crm-input" data-role="title" placeholder="Call back about the quote" maxlength="255"></div>
+            <span class="crm-label">When</span>
+            <div class="crm-choices" data-role="fu-quick">
+                <button type="button" class="crm-choice" data-days="1">Tomorrow</button>
+                <button type="button" class="crm-choice" data-days="3">In 3 days</button>
+                <button type="button" class="crm-choice" data-days="7">Next week</button>
+                <button type="button" class="crm-choice" data-days="14">In 2 weeks</button>
+            </div>
+            <div class="crm-field crm-field-row">
+                <div><input type="date" class="crm-input" data-role="fu-date" aria-label="Follow-up date"></div>
+                <div><select class="crm-select" data-role="assignee" aria-label="Assign to"><option value="">Me</option></select></div>
+            </div>
+            <div class="crm-field"><span class="crm-label">Note (optional)</span><textarea class="crm-textarea" data-role="note"></textarea></div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn cbtn-danger js-hidden" data-role="delete">Delete</button>
+                <span style="flex:1"></span>
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save">Set follow-up</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add to list (single or bulk) -->
+<div class="crm-sheet" id="sheetList" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2>Add to a list</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity">Add <strong data-role="entity"></strong> to</p>
+            <div class="crm-field"><select class="crm-select" data-role="list-select"><option value="">Choose a list…</option></select></div>
+            <div class="crm-field"><span class="crm-label">…or start a new list</span><input type="text" class="crm-input" data-role="new-list" placeholder="e.g. Brooklyn walk-ups — spring push" maxlength="120"></div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add / edit a person -->
+<div class="crm-sheet" id="sheetPerson" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2 data-role="title-text">Add a person</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <div class="crm-collision" data-role="dup-warning" hidden></div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Name</span><input type="text" class="crm-input" data-role="name" placeholder="Sam Rivera" maxlength="255"></div>
+                <div><span class="crm-label">Role / title</span><input type="text" class="crm-input" data-role="title-field" placeholder="Property manager" maxlength="150"></div>
+            </div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Email</span><input type="email" class="crm-input" data-role="email" placeholder="optional"></div>
+                <div><span class="crm-label">Company</span><input type="text" class="crm-input" data-role="company" placeholder="optional" maxlength="255"></div>
+            </div>
+            <div data-role="add-only">
+                <div class="crm-field crm-field-row">
+                    <div><span class="crm-label">Phone</span><input type="tel" class="crm-input" data-role="phone" placeholder="(917) 555-0142"></div>
+                    <div><span class="crm-label">Phone label</span><input type="text" class="crm-input" data-role="phone-label" placeholder="Cell" maxlength="50"></div>
+                </div>
+                <div class="crm-field" data-role="building-role-wrap">
+                    <span class="crm-label">Relationship to this building</span>
+                    <select class="crm-select" data-role="building-role">
+                        <option value="owner">Owner</option><option value="property_manager">Property manager</option>
+                        <option value="super">Super</option><option value="board">Board member</option>
+                        <option value="tenant">Tenant</option><option value="contractor">Contractor</option>
+                        <option value="other" selected>Other</option>
+                    </select>
+                </div>
+                <div class="crm-field"><span class="crm-label">Where did you find this?</span><input type="text" class="crm-input" data-role="source-detail" placeholder="TruePeopleSearch, spoke to the super, business card…" maxlength="255"></div>
+            </div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save">Add person</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add / edit a phone number -->
+<div class="crm-sheet" id="sheetPhone" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2 data-role="title-text">Add a number</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity">For <strong data-role="entity"></strong></p>
+            <div class="crm-collision" data-role="dup-warning" hidden></div>
+            <div class="crm-field crm-field-row">
+                <div data-role="number-wrap"><span class="crm-label">Phone</span><input type="tel" class="crm-input" data-role="phone" placeholder="(917) 555-0142"></div>
+                <div><span class="crm-label">Label</span><input type="text" class="crm-input" data-role="phone-label" placeholder="Cell" maxlength="50"></div>
+            </div>
+            <div class="crm-field" data-role="source-wrap"><span class="crm-label">Where did you find this?</span><input type="text" class="crm-input" data-role="source-detail" placeholder="TruePeopleSearch, voicemail callback…" maxlength="255"></div>
+            <label class="crm-check"><input type="checkbox" data-role="make-primary"> Make this the primary number</label>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn cbtn-danger js-hidden" data-role="delete">Delete</button>
+                <span style="flex:1"></span>
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save">Add number</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit building -->
+<div class="crm-sheet" id="sheetBuilding" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel is-wide">
+        <div class="crm-sheet__head"><h2>Edit building</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <div class="crm-field"><span class="crm-label">Address</span><input type="text" class="crm-input" data-field="address"></div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Borough</span><input type="text" class="crm-input" data-field="borough"></div>
+                <div><span class="crm-label">ZIP</span><input type="text" class="crm-input" data-field="zip_code"></div>
+            </div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Neighborhood</span><input type="text" class="crm-input" data-field="neighborhood"></div>
+                <div><span class="crm-label">Owner</span><input type="text" class="crm-input" data-field="owner_name"></div>
+            </div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Units</span><input type="text" inputmode="numeric" class="crm-input" data-field="unit_count"></div>
+                <div><span class="crm-label">Year built</span><input type="text" inputmode="numeric" class="crm-input" data-field="year_built"></div>
+            </div>
+            <div class="crm-field crm-field-row">
+                <div><span class="crm-label">Floors</span><input type="text" inputmode="numeric" class="crm-input" data-field="num_floors"></div>
+                <div><span class="crm-label">Building class</span><input type="text" class="crm-input" data-field="building_class"></div>
+            </div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save">Save changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Merge duplicates -->
+<div class="crm-sheet" id="sheetMerge" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2>Merge duplicates</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <p class="crm-sheet__entity">Fold <strong data-role="source-name"></strong> into another person. Their numbers, buildings, history, and follow-ups move over; the duplicate record is deleted.</p>
+            <div class="crm-field">
+                <span class="crm-label">Keep this person</span>
+                <div class="crm-search" style="max-width:none"><i class="fas fa-magnifying-glass"></i><input type="text" data-role="merge-search" placeholder="Search by name or phone…" autocomplete="off"></div>
+            </div>
+            <div data-role="merge-results" class="crm-group" style="box-shadow:none;background:var(--c-surface-2);margin-bottom:12px"></div>
+            <div class="crm-collision is-info" data-role="merge-summary" hidden></div>
+            <div class="crm-sheet__foot">
+                <button type="button" class="cbtn js-sheet-close">Cancel</button>
+                <button type="button" class="cbtn cbtn-primary" data-role="save" disabled>Merge</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Keyboard shortcuts -->
+<div class="crm-sheet" id="sheetHelp" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2>Keyboard shortcuts</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body">
+            <div class="crm-help-grid">
+                <div><span>Search anything</span><span class="crm-kbd">⌘K</span></div>
+                <div><span>Log a touch (on a record)</span><span class="crm-kbd">C</span></div>
+                <div><span>Add a note</span><span class="crm-kbd">N</span></div>
+                <div><span>Set a follow-up</span><span class="crm-kbd">F</span></div>
+                <div><span>Log a visit</span><span class="crm-kbd">V</span></div>
+                <div><span>Next / skip (Focus)</span><span class="crm-kbd">→</span></div>
+                <div><span>Go to Today</span><span class="crm-kbd">G T</span></div>
+                <div><span>Go to Buildings</span><span class="crm-kbd">G B</span></div>
+                <div><span>Go to Contacts</span><span class="crm-kbd">G C</span></div>
+                <div><span>Close</span><span class="crm-kbd">Esc</span></div>
+                <div><span>This help</span><span class="crm-kbd">?</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Mobile "More" menu -->
+<div class="crm-sheet" id="sheetMore" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel">
+        <div class="crm-sheet__head"><h2>More</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
+        <div class="crm-sheet__body crm-more-list">
+            <a href="/crm/focus"><i class="fas fa-bullseye"></i> Focus — start calling</a>
+            <a href="/crm/lists"><i class="fas fa-list-ul"></i> Lists</a>
+            <a href="/crm/starred"><i class="fas fa-star"></i> Starred</a>
+            {% if crm_ctx.is_admin %}<a href="/crm/team"><i class="fas fa-chart-simple"></i> Team &amp; reports</a>{% endif %}
+            <a href="/properties"><i class="fas fa-magnifying-glass-location"></i> Discover buildings</a>
+            <a href="/crm/buildings/add"><i class="fas fa-plus"></i> Add building</a>
+            <a href="#" class="js-open-palette"><i class="fas fa-magnifying-glass"></i> Search</a>
+        </div>
+    </div>
+</div>
+
+<!-- Command palette -->
+<div class="crm-palette" id="crmPalette" role="dialog" aria-modal="true" aria-label="Search">
+    <div class="crm-palette__panel">
+        <div class="crm-palette__input">
+            <i class="fas fa-magnifying-glass"></i>
+            <input type="text" data-role="q" placeholder="Search buildings, people, lists — or type a phone number" autocomplete="off" spellcheck="false">
+            <span class="crm-kbd">esc</span>
+        </div>
+        <div class="crm-palette__results" data-role="results">
+            <div class="crm-palette__group">Jump to</div>
+            <a class="crm-palette__item" href="/crm"><span class="p-icon"><i class="fas fa-sun"></i></span><span class="p-body"><span class="p-title">Today</span></span></a>
+            <a class="crm-palette__item" href="/crm/focus"><span class="p-icon"><i class="fas fa-bullseye"></i></span><span class="p-body"><span class="p-title">Start calling</span><span class="p-sub">Focus mode</span></span></a>
+            <a class="crm-palette__item" href="/crm/buildings/add"><span class="p-icon"><i class="fas fa-plus"></i></span><span class="p-body"><span class="p-title">Add a building</span></span></a>
+            <a class="crm-palette__item" href="/properties"><span class="p-icon"><i class="fas fa-magnifying-glass-location"></i></span><span class="p-body"><span class="p-title">Discover in the permit database</span></span></a>
+        </div>
+        <div class="crm-palette__foot"><span><span class="crm-kbd">↑↓</span> navigate</span><span><span class="crm-kbd">↵</span> open</span><span><span class="crm-kbd">?</span> shortcuts</span></div>
+    </div>
+</div>
+
+<div class="crm-toasts" id="crmToasts" aria-live="polite"></div>
+<div class="crm-tip" id="crmTip" hidden></div>

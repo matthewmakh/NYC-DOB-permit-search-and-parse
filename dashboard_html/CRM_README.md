@@ -19,9 +19,9 @@ phone number; the CRM never writes to permit tables.
 |---|---|
 | `crm_service.py` | Schema (`init_crm_tables()`, idempotent, runs at worker startup) + the whole data layer |
 | `crm_routes.py` | Flask blueprint: pages under `/crm`, JSON APIs under `/crm/api` |
-| `templates/crm/` | All screens; `_macros.html` and `_modals.html` are shared building blocks |
-| `static/css/crm.css` | CRM styles on top of the `app.css` design tokens (all classes `crm-`prefixed) |
-| `static/js/crm.js` | The Contacted dialog, stars, follow-ups, lists, people dialogs |
+| `templates/crm/` | All screens; `_layout.html` (sidebar / tab bar shell), `_macros.html`, `_sheets.html` (dialogs + ⌘K palette); `partials/` are the fragments refreshed in place |
+| `static/css/crm.css` | The CRM design system — Apple-leaning tokens (`--c-*`), light + dark, all classes `crm-`/`cbtn` prefixed |
+| `static/js/crm.js` | Sheets, in-place partial refresh, ⌘K palette, shortcuts, board drag-and-drop, bulk bar, Focus mode |
 
 Integration points elsewhere: one `register_blueprint` + `init_crm_tables()`
 call in `app.py`, a nav item in `_site_nav.html`, the **Add to CRM** button on
@@ -47,6 +47,32 @@ system is the team system:
 * Reps are created exactly like before: **Admin → Team accounts** invites.
   Give the invite a display name — it's the name shown all over the CRM.
 
+## The v2 experience
+
+* **Shell**: macOS-style translucent sidebar on desktop, iOS-style tab bar on
+  phones; large titles; grouped inset cards; tinted secondary buttons and
+  filled blue primaries; **Appearance** toggle (auto / light / dark) in the
+  sidebar footer, applied before first paint from `localStorage`.
+* **No reloads for common actions**: regions marked `data-partial` re-fetch
+  their HTML fragment from `/crm/partials/...` after a write.
+* **⌘K / `/`**: global search over buildings (address, owner, BBL), people
+  (name, company, phone digits) and lists, plus quick actions. `?` shows all
+  shortcuts (`C` touch, `N` note, `F` follow-up, `V` visit, `G` then `T/B/C`).
+* **Focus mode** (`/crm/focus`): one lead at a time from today's queue, a
+  list, cold buildings, or needs-attention. `C` logs a touch (auto-completing
+  the follow-up that put it in the queue), `→` skips.
+* **Buildings** come as Cards, a drag-and-drop **Board** by stage, or a dense
+  **Table**; select many for bulk stage / assign / list / star.
+* **Building detail**: pipeline stepper (click a stage to move), a **Next
+  step** card (or a nudge to set one), day-grouped timeline, people with
+  editable roles, unlink, Open in Maps, inline edit of every field.
+* **Contacts**: alphabetical with letter index and filter-as-you-type,
+  possible-duplicates banner (shared numbers) with one-click **Merge**;
+  contact detail has Contacts.app-style quick actions (Call / Text / Email /
+  Follow up / List), edit, merge, delete (admin).
+* **Team & reports**: touches-per-day columns, leaderboard, outcome mix,
+  pipeline funnel, plus the performance table, feed, and view log.
+
 ## Behaviors worth knowing
 
 * **Contacted** inserts one append-only `crm_activity` row and, in the same
@@ -59,6 +85,10 @@ system is the team system:
   last 24h (double-call collision guard).
 * Authors can delete their own activity for 15 minutes (fat-finger undo);
   admins always can. Deletes recompute the rollups.
+* Everything is editable after the fact: buildings, people, numbers
+  (label / primary / delete), follow-ups (title / date / assignee / delete),
+  building-person roles and links. Merging two people moves numbers, links,
+  history, follow-ups, stars, and list items onto the kept record.
 * Phones are stored with a normalized 10-digit key (`crm_phones.digits`);
   duplicate numbers warn at entry (`409` with matches, `force: true`
   overrides). Every phone and contact carries provenance (`source`,

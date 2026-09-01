@@ -1,0 +1,54 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import empty %}
+{% block title %}Focus — CRM{% endblock %}
+{% block crm_content %}
+<div class="crm-focus" id="crmFocus">
+    <div class="crm-title" style="margin-bottom:14px">
+        <div>
+            <h1 class="crm-large-title"><i class="fas fa-bullseye" style="color:var(--c-blue);font-size:22px;vertical-align:-2px"></i> {{ focus_title }}</h1>
+            <p class="crm-subtitle">One lead at a time. <span class="crm-kbd">C</span> logs a touch, <span class="crm-kbd">→</span> skips.</p>
+        </div>
+        <div class="crm-title-actions">
+            <div class="crm-seg">
+                <a class="crm-seg__opt{{ ' is-active' if source == 'today' }}" href="/crm/focus">Today</a>
+                <a class="crm-seg__opt{{ ' is-active' if source == 'attention' }}" href="/crm/focus?source=attention">Attention</a>
+                <a class="crm-seg__opt{{ ' is-active' if source == 'cold' }}" href="/crm/focus?source=cold">Cold</a>
+                {% if source == 'list' %}<a class="crm-seg__opt is-active" href="#">{{ focus_title|truncate(18) }}</a>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if queue %}
+    <div class="crm-focus__bar">
+        <div class="crm-focus__progress"><span data-role="progress" style="width:0%"></span></div>
+        <div class="crm-focus__count" data-role="count">1 of {{ queue|length }}</div>
+    </div>
+    <div data-role="why" class="crm-focus__why" hidden></div>
+    <div class="crm-focus__card" data-role="card"><div class="crm-group"><div class="crm-empty"><div class="spinner"></div></div></div></div>
+    <div class="crm-focus__nav">
+        <button type="button" class="cbtn" data-role="prev"><i class="fas fa-arrow-left"></i> Back</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <a class="cbtn" data-role="open" href="#"><i class="fas fa-arrow-up-right-from-square"></i> Open record</a>
+            <button type="button" class="cbtn" data-role="skip">Skip <i class="fas fa-arrow-right"></i></button>
+            <button type="button" class="cbtn cbtn-contacted cbtn-lg" data-role="contacted"><i class="fas fa-phone"></i> Contacted</button>
+        </div>
+    </div>
+    <div class="crm-focus__done" data-role="done" hidden>
+        <div class="big">🎉</div>
+        <h2>Queue cleared</h2>
+        <p><span data-role="done-count">0</span> touches logged this session. Nice work.</p>
+        <div class="crm-empty__actions"><a class="cbtn cbtn-primary" href="/crm">Back to Today</a><a class="cbtn" href="/crm/focus?source=cold">Work cold buildings</a></div>
+    </div>
+    {% else %}
+    <div class="crm-group">
+        {% call empty('fa-mug-hot', 'Nothing in this queue', 'No overdue or due-today follow-ups and nothing flagged for attention. Try cold buildings, or a work list.') %}
+            <a class="cbtn cbtn-primary" href="/crm/focus?source=cold">Work cold buildings</a>
+            <a class="cbtn" href="/crm/lists">Pick a list</a>
+        {% endcall %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+{% block crm_js %}
+<script>window.CRM_FOCUS = {{ {'queue': queue, 'source': source}|tojson }};</script>
+{% endblock %}

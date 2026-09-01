@@ -1,208 +1,36 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import stage_dot, recency, star_btn, contacted_btn, followup_row, activity_event %}
-
+{% from "crm/_macros.html" import contacted_btn %}
 {% block title %}{{ b.address }} — CRM{% endblock %}
-
 {% block crm_content %}
-<div class="crm-detail-head">
-    <div class="crm-detail-title">
-        <h1>{{ b.address }}</h1>
-        {{ star_btn(b.starred, building_id=b.id) }}
-        <div class="crm-detail-chips">
-            <select class="filter-select js-stage-select" data-building-id="{{ b.id }}" style="width:auto" aria-label="Stage">
-                {% for s in stages %}
-                <option value="{{ s }}" {{ 'selected' if b.stage == s }}>{{ stage_labels[s] }}</option>
-                {% endfor %}
-            </select>
-            {% if b.bbl %}<span class="crm-chip" style="font-family:var(--mono)">BBL {{ b.bbl }}</span>{% endif %}
-            {{ recency(b.last_contacted_at, 'touched') }}
-            {{ recency(b.last_visited_at, 'visited') if b.last_visited_at }}
-            {% if b.starred_by %}
-            <span class="crm-chip chip-warn" title="Starred by"><i class="fas fa-star" style="font-size:9px"></i>
-                {{ b.starred_by|map(attribute='name')|join(', ') }}</span>
-            {% endif %}
-        </div>
-    </div>
-    <div class="crm-head-actions">
-        <div class="filter-group">
-            <label for="crmAssign">Rep</label>
-            <select id="crmAssign" class="filter-select js-assign-select" data-building-id="{{ b.id }}" style="width:auto">
-                <option value="">Unassigned</option>
-                {% for u in roster %}
-                <option value="{{ u.id }}" {{ 'selected' if b.assigned_to_id == u.id }}>{{ u.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        {% if b.bbl %}
-        <a class="btn btn-secondary" href="/property/{{ b.bbl }}?return_to=/properties" target="_blank" rel="noopener">
-            <i class="fas fa-building-columns"></i> Full profile
-        </a>
-        {% endif %}
-        {% if crm_ctx.is_admin %}
-        <button type="button" class="btn btn-icon js-building-delete" data-id="{{ b.id }}" title="Remove from CRM">
-            <i class="fas fa-trash-can"></i>
-        </button>
-        {% endif %}
-    </div>
+<div id="bHeader" data-partial="/crm/partials/building/{{ b.id }}/header">
+    {% include "crm/partials/building_header.html" %}
 </div>
+{% if request.args.get('existing') %}<div class="crm-collision is-info"><i class="fas fa-circle-info"></i> This building was already in the CRM — here it is.</div>{% endif %}
 
-{% if request.args.get('existing') %}
-<div class="crm-collision"><i class="fas fa-circle-info"></i> This building was already in the CRM — here it is.</div>
-{% endif %}
-{% if last_touch %}
-<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>
-{% endif %}
-
-<div class="crm-quick-actions">
-    {{ contacted_btn(b.address, building_id=b.id, last_touch=last_touch) }}
-    <button type="button" class="btn btn-secondary js-visit" data-building-id="{{ b.id }}" data-entity="{{ b.address }}">
-        <i class="fas fa-person-walking"></i> Log visit
-    </button>
-    <button type="button" class="btn btn-secondary js-followup" data-building-id="{{ b.id }}" data-entity="{{ b.address }}">
-        <i class="far fa-calendar-plus"></i> Follow up
-    </button>
-    <button type="button" class="btn btn-secondary js-add-to-list" data-building-id="{{ b.id }}" data-entity="{{ b.address }}">
-        <i class="fas fa-list-ul"></i> Add to list
-    </button>
+<div class="crm-quick" data-shortcuts="record">
+    <button type="button" class="is-primary js-contacted" data-building-id="{{ b.id }}" data-entity="{{ b.address }}" data-last-touch="{{ last_touch }}"><i class="fas fa-phone"></i>Contacted</button>
+    <button type="button" class="js-visit" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="fas fa-person-walking"></i>Log visit</button>
+    <button type="button" class="js-followup" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="far fa-calendar-plus"></i>Follow up</button>
+    <button type="button" class="js-add-to-list" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="fas fa-list-ul"></i>Add to list</button>
+    <button type="button" class="js-add-person" data-building-id="{{ b.id }}"><i class="fas fa-user-plus"></i>Add person</button>
 </div>
 
 <div class="crm-columns">
     <div class="crm-col-main">
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>Timeline</h3><span class="panel-count">{{ timeline|length }}</span></div>
-            {% set pinned = timeline|selectattr('is_pinned')|list %}
-            {% if pinned %}
-            <div class="crm-pinned-strip">
-                <div class="pin-label"><i class="fas fa-thumbtack"></i> Pinned</div>
-                {% for p in pinned %}<p><strong>{{ p.user_name }}:</strong> {{ p.note }}</p>{% endfor %}
-            </div>
-            {% endif %}
-            <div class="crm-composer js-note-composer" data-building-id="{{ b.id }}">
-                <textarea placeholder="Add a note for the team… (⌘+Enter to save)"></textarea>
-                <button type="button" class="btn btn-primary js-note-save">Note</button>
-            </div>
-            <div class="crm-timeline">
-                {% for a in timeline %}{{ activity_event(a, method_labels, outcome_labels) }}{% else %}
-                <div class="crm-empty"><i class="far fa-clock"></i>No activity yet. Press <strong>Contacted</strong> after your first call.</div>
-                {% endfor %}
-            </div>
+        <div class="crm-group" id="bTimeline" data-partial="/crm/partials/building/{{ b.id }}/timeline">
+            {% include "crm/partials/building_timeline.html" %}
         </div>
     </div>
-
     <div class="crm-col-rail">
-        <div class="crm-panel">
-            <div class="crm-panel-head">
-                <h3>People</h3>
-                <button type="button" class="btn btn-secondary btn-sm js-add-contact" data-building-id="{{ b.id }}">
-                    <i class="fas fa-user-plus"></i> Add
-                </button>
-            </div>
-            {% for c in b.contacts %}
-            <div class="crm-person">
-                <div class="crm-person-head">
-                    <div>
-                        <div class="crm-person-name"><a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a></div>
-                        <div class="crm-person-role">
-                            {{ c.building_role|replace('_', ' ')|capitalize }}{% if c.title and c.title|lower != c.building_role %} · {{ c.title }}{% endif %}
-                        </div>
-                    </div>
-                    {{ contacted_btn(c.name, building_id=b.id, contact_id=c.id, small=True, last_touch=last_touch) }}
-                </div>
-                {% if c.do_not_contact %}
-                <div class="crm-dnc-banner"><i class="fas fa-ban"></i> Do not contact</div>
-                {% endif %}
-                {% for p in c.phones %}
-                <div class="crm-phone-row {{ 'phone-bad' if p.status != 'good' }}">
-                    <a class="tel" href="tel:+1{{ p.digits }}">{{ p.number }}</a>
-                    {% if p.label %}<span class="crm-chip">{{ p.label }}</span>{% endif %}
-                    {% if p.status == 'do_not_call' %}<span class="crm-chip chip-bad">DNC</span>
-                    {% elif p.status == 'bad' %}<span class="crm-chip chip-bad">Bad</span>{% endif %}
-                    <span class="phone-src" title="{{ p.source_detail or p.source }}{% if p.added_by_name %} — added by {{ p.added_by_name }}{% endif %}">
-                        {{ p.source_detail or p.source }}</span>
-                    {% if p.status == 'good' %}
-                    <button type="button" class="btn btn-icon btn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark number bad"><i class="fas fa-phone-slash"></i></button>
-                    {% else %}
-                    <button type="button" class="btn btn-icon btn-sm js-phone-status" data-id="{{ p.id }}" data-status="good" title="Mark number good"><i class="fas fa-rotate-left"></i></button>
-                    {% endif %}
-                </div>
-                {% endfor %}
-                {% if c.email %}
-                <div class="crm-phone-row"><a href="mailto:{{ c.email }}">{{ c.email }}</a></div>
-                {% endif %}
-                <div class="crm-phone-row">
-                    <button type="button" class="btn btn-icon btn-sm js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">
-                        <i class="fas fa-plus"></i> number
-                    </button>
-                </div>
-            </div>
-            {% else %}
-            <div class="crm-empty"><i class="far fa-user"></i>No people yet.
-                <div><button type="button" class="btn btn-secondary btn-sm js-add-contact" data-building-id="{{ b.id }}">Add the first</button></div>
-            </div>
-            {% endfor %}
+        <div class="crm-group" id="bPeople" data-partial="/crm/partials/building/{{ b.id }}/people">
+            {% include "crm/partials/building_people.html" %}
         </div>
-
-        {% if b.follow_ups %}
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>Open follow-ups</h3></div>
-            {% for f in b.follow_ups %}{{ followup_row(f, today_ny, show_assignee=True) }}{% endfor %}
+        <div id="bRail" data-partial="/crm/partials/building/{{ b.id }}/rail">
+            {% include "crm/partials/building_rail.html" %}
         </div>
-        {% endif %}
-
-        {% if b.lists %}
-        <div class="crm-panel">
-            <div class="crm-panel-head"><h3>On lists</h3></div>
-            <div class="crm-row" style="flex-wrap:wrap; gap:6px;">
-                {% for l in b.lists %}<a class="crm-chip chip-accent" href="/crm/lists/{{ l.id }}">{{ l.name }}</a>{% endfor %}
-            </div>
-        </div>
-        {% endif %}
-
-        {% if snapshot %}
-        <div class="crm-panel">
-            <div class="crm-panel-head">
-                <h3>Permit intel</h3>
-                {% if b.bbl %}<a href="/property/{{ b.bbl }}" target="_blank" rel="noopener">Open full profile</a>{% endif %}
-            </div>
-            {% if snapshot.enrichment %}
-            {% set e = snapshot.enrichment %}
-            <div class="crm-row"><div class="row-main"><div class="row-sub">Owner (PLUTO)</div><div class="row-title">{{ e.current_owner_name or '—' }}</div></div></div>
-            {% if e.owner_name_rpad and e.owner_name_rpad != e.current_owner_name %}
-            <div class="crm-row"><div class="row-main"><div class="row-sub">Taxpayer (RPAD)</div><div class="row-title">{{ e.owner_name_rpad }}</div></div></div>
-            {% endif %}
-            {% if e.estimated_value %}
-            <div class="crm-row"><div class="row-main"><div class="row-sub">Estimated value</div><div class="row-title">${{ '{:,.0f}'.format(e.estimated_value) }}</div></div></div>
-            {% endif %}
-            {% if e.purchase_date %}
-            <div class="crm-row"><div class="row-main"><div class="row-sub">Purchased</div>
-                <div class="row-title">{{ e.purchase_date.strftime('%b %Y') }}{% if e.purchase_price %} · ${{ '{:,.0f}'.format(e.purchase_price) }}{% endif %}</div></div></div>
-            {% endif %}
-            {% if e.hpd_open_violations %}
-            <div class="crm-row"><div class="row-main"><div class="row-sub">HPD open violations</div><div class="row-title" style="color:var(--amber)">{{ e.hpd_open_violations }}</div></div></div>
-            {% endif %}
-            {% endif %}
-            {% for p in snapshot.recent_permits %}
-            <div class="crm-row">
-                <div class="row-main">
-                    <div class="row-sub">{{ p.permit_type or p.work_type or 'Permit' }} · {{ (p.filing_date or p.issue_date).strftime('%b %Y') if (p.filing_date or p.issue_date) else '' }} · {{ p.permit_status or '' }}</div>
-                    <div class="row-title" style="white-space:normal; font-weight:400; font-size:12.5px;">{{ p.work_description or p.permit_no }}</div>
-                </div>
-            </div>
-            {% else %}
-            {% if not snapshot.enrichment %}<div class="crm-empty">No permit records for this BBL.</div>{% endif %}
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        <p class="crm-provenance">
-            Added by {{ b.added_by_name }} {{ b.created_at|crm_timeago }}
-            from {{ 'the permit database' if b.source == 'permit' else 'manual entry' }}.
-            Scraped data stays read-only; everything your team adds lives in the CRM and never gets overwritten.
-        </p>
     </div>
 </div>
 {% endblock %}
-
 {% block crm_js %}
-<script>window.CRM_LISTS = [{% for l in my_lists %}{"id": {{ l.id }}, "name": {{ l.name|tojson }}}{{ "," if not loop.last }}{% endfor %}];</script>
+<script>window.CRM_RECORD = { building_id: {{ b.id }}, entity: {{ b.address|tojson }} };</script>
 {% endblock %}

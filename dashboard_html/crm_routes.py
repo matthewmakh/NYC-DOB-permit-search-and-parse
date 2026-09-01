@@ -1,14 +1,13 @@
 """Sales CRM blueprint.
 
-Pages live under /crm, JSON endpoints under /crm/api. Everything requires a
-login; the Team screen requires the team's CRM admin (the sponsor account or
-a global admin). Reps — sponsored members — get the same screens scoped to
-their team.
+Pages live under /crm, JSON endpoints under /crm/api, and HTML fragments for
+in-place refresh under /crm/partials. Everything requires a login; the Team
+screen requires the team's CRM admin (the sponsor account or a global admin).
+Reps — sponsored members — get the same screens scoped to their team.
 """
 
 import csv
 import io
-import json
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 
@@ -62,13 +61,41 @@ def crm_recency(value):
     return 'rec-cold'
 
 
+def _to_ny(value):
+    return value.replace(tzinfo=timezone.utc).astimezone(crm_service.NY_TZ)
+
+
 @crm_bp.app_template_filter('crm_nydt')
 def crm_nydt(value):
     """Naive-UTC timestamp rendered in NY local time."""
     if not value:
         return ''
-    aware = value.replace(tzinfo=timezone.utc).astimezone(crm_service.NY_TZ)
-    return aware.strftime('%b %-d, %Y · %-I:%M %p')
+    return _to_ny(value).strftime('%b %-d, %Y · %-I:%M %p')
+
+
+@crm_bp.app_template_filter('crm_nytime')
+def crm_nytime(value):
+    if not value:
+        return ''
+    return _to_ny(value).strftime('%-I:%M %p')
+
+
+@crm_bp.app_template_filter('crm_nyday')
+def crm_nyday(value):
+    """Day bucket label for timeline grouping: Today / Yesterday / Mon, Aug 4."""
+    if not value:
+        return ''
+    day = _to_ny(value).date()
+    today = crm_service.ny_today()
+    if day == today:
+        return 'Today'
+    if day == today - timedelta(days=1):
+        return 'Yesterday'
+    if (today - day).days < 7:
+        return day.strftime('%A')
+    if day.year == today.year:
+        return day.strftime('%a, %b %-d')
+    return day.strftime('%b %-d, %Y')
 
 
 @crm_bp.app_template_filter('crm_date')
@@ -102,6 +129,42 @@ def crm_due(value):
 def crm_phone_digits(value):
     return crm_service.normalize_phone_digits(value)
 
+
+@crm_bp.app_template_filter('crm_initials')
+def crm_initials(value):
+    parts = [p for p in str(value or '').replace(',', ' ').split() if p]
+    if not parts:
+        return '?'
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
+@crm_bp.app_template_filter('crm_hue')
+def crm_hue(value):
+    """Deterministic hue (0-359) from a name — Contacts.app-style avatars."""
+    total = 0
+    for ch in str(value or ''):
+        total = (total * 31 + ord(ch)) % 100003
+    return total % 360
+
+
+@crm_bp.app_template_filter('crm_compact')
+def crm_compact(value):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return value
+    if n >= 1_000_000:
+        return f'{n / 1_000_000:.1f}M'
+    if n >= 10_000:
+        return f'{n / 1000:.0f}K'
+    if n >= 1000:
+        return f'{n / 1000:.1f}K'
+    return f'{int(n)}'
+
+
+# ---------- Request helpers ----------
 
 def _ctx():
     return crm_service.crm_context(g.user)
@@ -152,46 +215,122 @@ def _base_template_args(ctx, active_tab):
         'active_page': 'crm',
         'crm_tab': active_tab,
         'crm_ctx': ctx,
+        'crm_user_name': crm_service.display_name_for(ctx['user_id']) or ctx['email'],
+        'due_count': crm_service.due_count(ctx),
         'stage_labels': crm_service.STAGE_LABELS,
         'stages': crm_service.STAGES,
         'method_labels': crm_service.METHOD_LABELS,
         'outcome_labels': crm_service.OUTCOME_LABELS,
+        'building_roles': crm_service.BUILDING_CONTACT_ROLES,
+        'today_ny': crm_service.ny_today(),
+        'ny_hour': crm_service.ny_now().hour,
+    }
+
+
+def _partial_args(ctx):
+    """Minimal context for fragment renders (no shell chrome needed)."""
+    return {
+        'crm_ctx': ctx,
+        'stage_labels': crm_service.STAGE_LABELS,
+        'stages': crm_service.STAGES,
+        'method_labels': crm_service.METHOD_LABELS,
+        'outcome_labels': crm_service.OUTCOME_LABELS,
+        'building_roles': crm_service.BUILDING_CONTACT_ROLES,
         'today_ny': crm_service.ny_today(),
     }
 
 
 # ============================================================
-# Pages
+# Today
 # ============================================================
+
+def _today_context(ctx):
+    queues = crm_service.follow_up_queues(ctx)
+    upcoming_week = [f for f in queues['upcoming']
+                     if f['due_date'] <= crm_service.ny_today() + timedelta(days=7)]
+    lists = crm_service.list_lists(ctx)
+    return {
+        'counters': crm_service.today_counters(ctx),
+        'overdue': queues['overdue'],
+        'due_today': queues['due_today'],
+        'upcoming': upcoming_week[:10],
+        'attention': crm_service.needs_attention(ctx),
+        'my_lists': [l for l in lists
+                     if l['assigned_to_id'] in (None, ctx['user_id'])
+                     or l['owner_id'] == ctx['user_id']][:6],
+        'feed': crm_service.team_feed(ctx, limit=15),
+        'spark': crm_service.touches_per_day(ctx, days=14, user_id=ctx['user_id']),
+    }
+
 
 @crm_bp.route('/')
 @login_required
 def today():
     ctx = _ctx()
-    queues = crm_service.follow_up_queues(ctx)
-    upcoming_week = [f for f in queues['upcoming']
-                     if f['due_date'] <= crm_service.ny_today() + timedelta(days=7)]
-    return render_template(
-        'crm/today.html',
-        counters=crm_service.today_counters(ctx),
-        overdue=queues['overdue'],
-        due_today=queues['due_today'],
-        upcoming=upcoming_week[:10],
-        attention=crm_service.needs_attention(ctx),
-        my_lists=[l for l in crm_service.list_lists(ctx)
-                  if l['assigned_to_id'] in (None, ctx['user_id'])
-                  or l['owner_id'] == ctx['user_id']][:6],
-        feed=crm_service.team_feed(ctx, limit=15),
-        **_base_template_args(ctx, 'today'),
-    )
+    return render_template('crm/today.html', **_today_context(ctx),
+                           **_base_template_args(ctx, 'today'))
 
 
-@crm_bp.route('/buildings')
+@crm_bp.route('/partials/today')
 @login_required
-def buildings():
+def partial_today():
     ctx = _ctx()
+    return render_template('crm/partials/today_body.html', **_today_context(ctx),
+                           **_partial_args(ctx))
+
+
+# ============================================================
+# Focus mode — one lead at a time
+# ============================================================
+
+@crm_bp.route('/focus')
+@login_required
+def focus():
+    ctx = _ctx()
+    source = request.args.get('source') or 'today'
+    list_id = _int_or_none(request.args.get('list'))
+    queue = crm_service.focus_queue(ctx, source=source, list_id=list_id)
+    title = {'today': "Today's calls", 'attention': 'Needs attention',
+             'cold': 'Cold buildings'}.get(source, 'Work list')
+    if source == 'list' and list_id:
+        lst = crm_service.get_list(ctx, list_id)
+        title = lst['name'] if lst else 'Work list'
+    return render_template('crm/focus.html', queue=queue, source=source, list_id=list_id,
+                           focus_title=title, **_base_template_args(ctx, 'focus'))
+
+
+@crm_bp.route('/partials/focus/<kind>/<int:entity_id>')
+@login_required
+def partial_focus_card(kind, entity_id):
+    ctx = _ctx()
+    if kind == 'building':
+        building = crm_service.get_building(ctx, entity_id)
+        if not building:
+            return 'Not found', 404
+        crm_service.log_view(ctx, 'building', entity_id, building['address'])
+        return render_template(
+            'crm/partials/focus_card.html', kind='building', b=building, c=None,
+            timeline=crm_service.get_timeline(ctx, building_id=entity_id, limit=5),
+            last_touch=_collision_warning(building.get('last_contact')),
+            **_partial_args(ctx))
+    contact = crm_service.get_contact(ctx, entity_id)
+    if not contact:
+        return 'Not found', 404
+    crm_service.log_view(ctx, 'contact', entity_id, contact['name'])
+    return render_template(
+        'crm/partials/focus_card.html', kind='contact', b=None, c=contact,
+        timeline=crm_service.get_timeline(ctx, contact_id=entity_id, limit=5),
+        last_touch=_collision_warning(contact.get('last_contact')),
+        **_partial_args(ctx))
+
+
+# ============================================================
+# Buildings
+# ============================================================
+
+def _building_filters():
     stage = request.args.get('stage') or None
-    filters = {
+    return {
         'stage': stage if stage in crm_service.STAGES else None,
         'q': (request.args.get('q') or '').strip() or None,
         'borough': request.args.get('borough') or None,
@@ -200,15 +339,47 @@ def buildings():
         'mine': request.args.get('mine') == '1',
         'sort': request.args.get('sort') or 'recent',
     }
-    rows = crm_service.list_buildings(ctx, **filters)
+
+
+@crm_bp.route('/buildings')
+@login_required
+def buildings():
+    ctx = _ctx()
+    filters = _building_filters()
+    view = request.args.get('view') or 'cards'
+    if view not in ('cards', 'board', 'table'):
+        view = 'cards'
+    query = dict(filters)
+    if view == 'board':
+        query['stage'] = None  # the board shows every column
+    rows = crm_service.list_buildings(ctx, limit=400 if view != 'cards' else 200, **query)
+    board = None
+    if view == 'board':
+        board = {s: [] for s in crm_service.STAGES}
+        for b in rows:
+            board.setdefault(b['stage'], []).append(b)
     return render_template(
         'crm/buildings.html',
         buildings=rows,
+        board=board,
+        view=view,
         counts=crm_service.building_stage_counts(ctx),
         filters=filters,
         roster=crm_service.get_team_roster(ctx['team_id']),
+        my_lists=crm_service.list_lists(ctx),
         **_base_template_args(ctx, 'buildings'),
     )
+
+
+def _building_detail_context(ctx, building):
+    return {
+        'b': building,
+        'last_touch': _collision_warning(building.get('last_contact')),
+        'timeline': crm_service.get_timeline(ctx, building_id=building['id']),
+        'snapshot': crm_service.permit_snapshot(building.get('bbl')),
+        'my_lists': crm_service.list_lists(ctx),
+        'roster': crm_service.get_team_roster(ctx['team_id']),
+    }
 
 
 @crm_bp.route('/buildings/<int:building_id>')
@@ -219,17 +390,24 @@ def building_detail(building_id):
     if not building:
         return redirect(url_for('crm.buildings'))
     crm_service.log_view(ctx, 'building', building_id, building['address'])
-    return render_template(
-        'crm/building_detail.html',
-        b=building,
-        last_touch=_collision_warning(building.get('last_contact')),
-        timeline=crm_service.get_timeline(ctx, building_id=building_id),
-        snapshot=crm_service.permit_snapshot(building.get('bbl')),
-        my_lists=crm_service.list_lists(ctx),
-        roster=crm_service.get_team_roster(ctx['team_id']),
-        building_roles=crm_service.BUILDING_CONTACT_ROLES,
-        **_base_template_args(ctx, 'buildings'),
-    )
+    return render_template('crm/building_detail.html',
+                           **_building_detail_context(ctx, building),
+                           **_base_template_args(ctx, 'buildings'))
+
+
+@crm_bp.route('/partials/building/<int:building_id>/<section>')
+@login_required
+def partial_building(building_id, section):
+    ctx = _ctx()
+    building = crm_service.get_building(ctx, building_id)
+    if not building:
+        return 'Not found', 404
+    names = {'header': 'building_header', 'timeline': 'building_timeline',
+             'people': 'building_people', 'rail': 'building_rail'}
+    if section not in names:
+        return 'Unknown section', 404
+    return render_template(f'crm/partials/{names[section]}.html',
+                           **_building_detail_context(ctx, building), **_partial_args(ctx))
 
 
 @crm_bp.route('/buildings/add', methods=['GET'])
@@ -260,9 +438,7 @@ def building_add():
                 })
     return render_template(
         'crm/building_add.html',
-        bbl=bbl,
-        prefill=prefill,
-        permit_contacts=permit_contacts,
+        bbl=bbl, prefill=prefill, permit_contacts=permit_contacts,
         my_lists=crm_service.list_lists(ctx),
         **_base_template_args(ctx, 'buildings'),
     )
@@ -323,6 +499,10 @@ def building_add_post():
                             **({} if created else {'existing': 1})))
 
 
+# ============================================================
+# Contacts
+# ============================================================
+
 @crm_bp.route('/contacts')
 @login_required
 def contacts():
@@ -332,12 +512,25 @@ def contacts():
         'starred': request.args.get('starred') == '1',
         'cold': request.args.get('cold') == '1',
     }
+    rows = crm_service.list_contacts(ctx, limit=400, **filters)
     return render_template(
         'crm/contacts.html',
-        contacts=crm_service.list_contacts(ctx, **filters),
+        contacts=rows,
+        groups=crm_service.contacts_alpha_groups(rows),
+        duplicates=crm_service.find_duplicate_contacts(ctx, limit=8),
         filters=filters,
         **_base_template_args(ctx, 'contacts'),
     )
+
+
+def _contact_detail_context(ctx, contact):
+    return {
+        'c': contact,
+        'last_touch': _collision_warning(contact.get('last_contact')),
+        'timeline': crm_service.get_timeline(ctx, contact_id=contact['id']),
+        'my_lists': crm_service.list_lists(ctx),
+        'roster': crm_service.get_team_roster(ctx['team_id']),
+    }
 
 
 @crm_bp.route('/contacts/<int:contact_id>')
@@ -348,15 +541,28 @@ def contact_detail(contact_id):
     if not contact:
         return redirect(url_for('crm.contacts'))
     crm_service.log_view(ctx, 'contact', contact_id, contact['name'])
-    return render_template(
-        'crm/contact_detail.html',
-        c=contact,
-        last_touch=_collision_warning(contact.get('last_contact')),
-        timeline=crm_service.get_timeline(ctx, contact_id=contact_id),
-        my_lists=crm_service.list_lists(ctx),
-        **_base_template_args(ctx, 'contacts'),
-    )
+    return render_template('crm/contact_detail.html',
+                           **_contact_detail_context(ctx, contact),
+                           **_base_template_args(ctx, 'contacts'))
 
+
+@crm_bp.route('/partials/contact/<int:contact_id>/<section>')
+@login_required
+def partial_contact(contact_id, section):
+    ctx = _ctx()
+    contact = crm_service.get_contact(ctx, contact_id)
+    if not contact:
+        return 'Not found', 404
+    names = {'header': 'contact_header', 'timeline': 'contact_timeline', 'rail': 'contact_rail'}
+    if section not in names:
+        return 'Unknown section', 404
+    return render_template(f'crm/partials/{names[section]}.html',
+                           **_contact_detail_context(ctx, contact), **_partial_args(ctx))
+
+
+# ============================================================
+# Lists, follow-ups, starred, team
+# ============================================================
 
 @crm_bp.route('/lists')
 @login_required
@@ -397,6 +603,7 @@ def followups():
         'crm/followups.html',
         queues=queues,
         scope_team=scope_team,
+        roster=crm_service.get_team_roster(ctx['team_id']),
         **_base_template_args(ctx, 'followups'),
     )
 
@@ -408,14 +615,10 @@ def starred():
     roster = crm_service.get_team_roster(ctx['team_id']) if ctx['is_admin'] else []
     view_user = _int_or_none(request.args.get('user')) if ctx['is_admin'] else None
     everyone = request.args.get('user') == 'all' and ctx['is_admin']
-    rows = crm_service.starred_overview(
-        ctx, everyone=everyone, for_user_id=view_user)
+    rows = crm_service.starred_overview(ctx, everyone=everyone, for_user_id=view_user)
     return render_template(
         'crm/starred.html',
-        stars=rows,
-        roster=roster,
-        view_user=view_user,
-        everyone=everyone,
+        stars=rows, roster=roster, view_user=view_user, everyone=everyone,
         **_base_template_args(ctx, 'starred'),
     )
 
@@ -426,9 +629,14 @@ def starred():
 def team():
     ctx = _ctx()
     feed_user = _int_or_none(request.args.get('rep'))
+    performance = crm_service.rep_performance(ctx)
     return render_template(
         'crm/team.html',
-        performance=crm_service.rep_performance(ctx),
+        performance=performance,
+        leaderboard=sorted(performance, key=lambda r: -r['contacted_7d']),
+        touches=crm_service.touches_per_day(ctx, days=14),
+        outcomes=crm_service.outcome_mix(ctx, days=30),
+        funnel=crm_service.stage_funnel(ctx),
         feed=crm_service.team_feed(ctx, user_id=feed_user, limit=60),
         feed_user=feed_user,
         views=crm_service.view_log(ctx, user_id=feed_user, limit=120),
@@ -440,6 +648,27 @@ def team():
 # ============================================================
 # JSON APIs — the Contacted button and friends
 # ============================================================
+
+@crm_bp.route('/api/search')
+@login_required
+def api_search():
+    results = crm_service.global_search(_ctx(), request.args.get('q', ''))
+    for key in results:
+        for row in results[key]:
+            for k, v in list(row.items()):
+                if isinstance(v, (datetime, date)):
+                    row[k] = crm_timeago(v)
+    return jsonify({'success': True, **results})
+
+
+@crm_bp.route('/api/focus-queue')
+@login_required
+def api_focus_queue():
+    ctx = _ctx()
+    queue = crm_service.focus_queue(ctx, source=request.args.get('source') or 'today',
+                                    list_id=_int_or_none(request.args.get('list')))
+    return jsonify({'success': True, 'queue': queue})
+
 
 @crm_bp.route('/api/contacted', methods=['POST'])
 @login_required
@@ -459,7 +688,12 @@ def api_contacted():
         note=data.get('note') or None,
         phone_digits=crm_service.normalize_phone_digits(data.get('phone')) or None,
     )
-    return jsonify({'success': True, 'activity_id': activity_id})
+    completed = None
+    follow_up_id = _int_or_none(data.get('complete_followup_id'))
+    if follow_up_id:
+        crm_service.resolve_follow_up(ctx, follow_up_id, 'done')
+        completed = follow_up_id
+    return jsonify({'success': True, 'activity_id': activity_id, 'completed_followup': completed})
 
 
 @crm_bp.route('/api/visit', methods=['POST'])
@@ -504,8 +738,7 @@ def api_pin(activity_id):
 @login_required
 def api_activity_delete(activity_id):
     ok, error = crm_service.delete_activity(_ctx(), activity_id)
-    status = 200 if ok else 403
-    return jsonify({'success': ok, 'error': error}), status
+    return jsonify({'success': ok, 'error': error}), (200 if ok else 403)
 
 
 @crm_bp.route('/api/star', methods=['POST'])
@@ -533,7 +766,7 @@ def api_stage():
     if not crm_service.entity_in_team(ctx, building_id=building_id):
         return jsonify({'success': False, 'error': 'Not found'}), 404
     crm_service.update_building_stage(ctx, building_id, stage)
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'stage': stage, 'label': crm_service.STAGE_LABELS[stage]})
 
 
 @crm_bp.route('/api/assign', methods=['POST'])
@@ -546,6 +779,62 @@ def api_assign():
         return jsonify({'success': False, 'error': 'Not found'}), 404
     crm_service.assign_building(ctx, building_id, _int_or_none(data.get('user_id')))
     return jsonify({'success': True})
+
+
+@crm_bp.route('/api/building/<int:building_id>/update', methods=['POST'])
+@login_required
+def api_building_update(building_id):
+    ctx = _ctx()
+    if not crm_service.entity_in_team(ctx, building_id=building_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    try:
+        crm_service.update_building(ctx, building_id, _json())
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    return jsonify({'success': True})
+
+
+@crm_bp.route('/api/building/<int:building_id>/delete', methods=['POST'])
+@login_required
+@crm_admin_required
+def api_building_delete(building_id):
+    ctx = _ctx()
+    if not crm_service.entity_in_team(ctx, building_id=building_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    conn = crm_service.get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM crm_buildings WHERE id = %s", (building_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({'success': True})
+
+
+@crm_bp.route('/api/buildings/bulk', methods=['POST'])
+@login_required
+def api_buildings_bulk():
+    ctx = _ctx()
+    data = _json()
+    ids = [i for i in (data.get('ids') or []) if _int_or_none(i) is not None]
+    action = data.get('action')
+    if not ids or not action:
+        return jsonify({'success': False, 'error': 'Nothing selected'}), 400
+    value = data.get('value')
+    if action == 'list' and not _int_or_none(value):
+        new_name = (data.get('new_list_name') or '').strip()
+        if not new_name:
+            return jsonify({'success': False, 'error': 'Pick or name a list'}), 400
+        value = crm_service.create_list(ctx, name=new_name)
+    try:
+        n = crm_service.bulk_update_buildings(ctx, ids, action, value)
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    return jsonify({'success': True, 'updated': n})
 
 
 @crm_bp.route('/api/followup', methods=['POST'])
@@ -581,6 +870,7 @@ def api_followup():
 @login_required
 def api_followup_action(follow_up_id, action):
     ctx = _ctx()
+    data = _json()
     if action == 'done':
         crm_service.resolve_follow_up(ctx, follow_up_id, 'done')
     elif action == 'skip':
@@ -588,7 +878,17 @@ def api_followup_action(follow_up_id, action):
     elif action == 'reopen':
         crm_service.resolve_follow_up(ctx, follow_up_id, 'open')
     elif action == 'snooze':
-        crm_service.snooze_follow_up(ctx, follow_up_id, _int_or_none(_json().get('days')) or 1)
+        crm_service.snooze_follow_up(ctx, follow_up_id, _int_or_none(data.get('days')) or 1)
+    elif action == 'update':
+        crm_service.update_follow_up(
+            ctx, follow_up_id,
+            title=data.get('title') if 'title' in data else None,
+            due_date=_parse_date(data.get('due_date')) if data.get('due_date') else None,
+            note=data.get('note') if 'note' in data else None,
+            assigned_to_id=_int_or_none(data['assigned_to_id']) if 'assigned_to_id' in data else '__keep__',
+        )
+    elif action == 'delete':
+        crm_service.delete_follow_up(ctx, follow_up_id)
     else:
         return jsonify({'success': False, 'error': 'Unknown action'}), 400
     return jsonify({'success': True})
@@ -609,8 +909,7 @@ def api_contact_create():
     duplicates = crm_service.find_contacts_by_digits(ctx, digits) if digits else []
     if duplicates and not data.get('force'):
         return jsonify({
-            'success': False, 'duplicate': True,
-            'matches': duplicates,
+            'success': False, 'duplicate': True, 'matches': duplicates,
             'error': 'That number is already on ' + ', '.join(d['name'] for d in duplicates[:3]),
         }), 409
     contact_id = crm_service.create_contact(
@@ -627,6 +926,72 @@ def api_contact_create():
         phone_label=(data.get('phone_label') or '').strip() or None,
     )
     return jsonify({'success': True, 'contact_id': contact_id})
+
+
+@crm_bp.route('/api/contact/<int:contact_id>/update', methods=['POST'])
+@login_required
+def api_contact_update(contact_id):
+    ctx = _ctx()
+    if not crm_service.entity_in_team(ctx, contact_id=contact_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    try:
+        crm_service.update_contact(ctx, contact_id, _json())
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    return jsonify({'success': True})
+
+
+@crm_bp.route('/api/contact/<int:contact_id>/delete', methods=['POST'])
+@login_required
+@crm_admin_required
+def api_contact_delete(contact_id):
+    ok = crm_service.delete_contact(_ctx(), contact_id)
+    return jsonify({'success': ok}), (200 if ok else 404)
+
+
+@crm_bp.route('/api/contact/merge', methods=['POST'])
+@login_required
+def api_contact_merge():
+    ctx = _ctx()
+    data = _json()
+    source_id = _int_or_none(data.get('source_id'))
+    target_id = _int_or_none(data.get('target_id'))
+    if not source_id or not target_id:
+        return jsonify({'success': False, 'error': 'Pick both people'}), 400
+    if not crm_service.entity_in_team(ctx, contact_id=source_id) or \
+            not crm_service.entity_in_team(ctx, contact_id=target_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    try:
+        ok = crm_service.merge_contacts(ctx, source_id, target_id)
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    return jsonify({'success': ok, 'target_id': target_id})
+
+
+@crm_bp.route('/api/building-contact/unlink', methods=['POST'])
+@login_required
+def api_unlink_contact():
+    ctx = _ctx()
+    data = _json()
+    building_id = _int_or_none(data.get('building_id'))
+    contact_id = _int_or_none(data.get('contact_id'))
+    if not crm_service.entity_in_team(ctx, building_id=building_id, contact_id=contact_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    crm_service.unlink_contact(ctx, building_id, contact_id)
+    return jsonify({'success': True})
+
+
+@crm_bp.route('/api/building-contact/role', methods=['POST'])
+@login_required
+def api_building_contact_role():
+    ctx = _ctx()
+    data = _json()
+    building_id = _int_or_none(data.get('building_id'))
+    contact_id = _int_or_none(data.get('contact_id'))
+    if not crm_service.entity_in_team(ctx, building_id=building_id, contact_id=contact_id):
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    crm_service.set_building_contact_role(ctx, building_id, contact_id, data.get('role') or 'other')
+    return jsonify({'success': True})
 
 
 @crm_bp.route('/api/phone', methods=['POST'])
@@ -668,6 +1033,25 @@ def api_phone_status(phone_id):
     return jsonify({'success': True})
 
 
+@crm_bp.route('/api/phone/<int:phone_id>/update', methods=['POST'])
+@login_required
+def api_phone_update(phone_id):
+    data = _json()
+    ok = crm_service.update_phone(
+        _ctx(), phone_id,
+        label=data['label'] if 'label' in data else '__keep__',
+        make_primary=bool(data.get('make_primary')),
+    )
+    return jsonify({'success': ok}), (200 if ok else 404)
+
+
+@crm_bp.route('/api/phone/<int:phone_id>/delete', methods=['POST'])
+@login_required
+def api_phone_delete(phone_id):
+    ok = crm_service.delete_phone(_ctx(), phone_id)
+    return jsonify({'success': ok}), (200 if ok else 404)
+
+
 @crm_bp.route('/api/dnc', methods=['POST'])
 @login_required
 def api_dnc():
@@ -678,6 +1062,24 @@ def api_dnc():
         return jsonify({'success': False, 'error': 'Not found'}), 404
     crm_service.set_do_not_contact(ctx, contact_id, bool(data.get('value')))
     return jsonify({'success': True})
+
+
+@crm_bp.route('/api/roster')
+@login_required
+def api_roster():
+    """Team members for assignee pickers."""
+    roster = crm_service.get_team_roster(_ctx()['team_id'])
+    return jsonify({'success': True,
+                    'roster': [{'id': u['id'], 'name': u['name']} for u in roster]})
+
+
+@crm_bp.route('/api/lists')
+@login_required
+def api_lists():
+    """Lightweight list options for pickers."""
+    lists = crm_service.list_lists(_ctx())
+    return jsonify({'success': True,
+                    'lists': [{'id': l['id'], 'name': l['name']} for l in lists]})
 
 
 @crm_bp.route('/api/list', methods=['POST'])
@@ -765,35 +1167,9 @@ def api_saved_filter_delete(filter_id):
     return jsonify({'success': True})
 
 
-@crm_bp.route('/api/building/<int:building_id>/delete', methods=['POST'])
-@login_required
-@crm_admin_required
-def api_building_delete(building_id):
-    ctx = _ctx()
-    if not crm_service.entity_in_team(ctx, building_id=building_id):
-        return jsonify({'success': False, 'error': 'Not found'}), 404
-    conn = crm_service.get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("DELETE FROM crm_buildings WHERE id = %s", (building_id,))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
-    return jsonify({'success': True})
-
-
-@crm_bp.route('/api/lists')
-@login_required
-def api_lists():
-    """Lightweight list options for pickers on the permit-side pages."""
-    lists = crm_service.list_lists(_ctx())
-    return jsonify({'success': True,
-                    'lists': [{'id': l['id'], 'name': l['name']} for l in lists]})
-
+# ============================================================
+# Permit-side integration: bulk add & status
+# ============================================================
 
 def _import_permit_contacts(ctx, building_id, bbl, max_contacts=6):
     """Bulk-import the permit contacts that have phones for one building.
