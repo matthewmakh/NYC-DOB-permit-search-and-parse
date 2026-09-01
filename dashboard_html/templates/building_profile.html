@@ -14,7 +14,7 @@
         <div class="dossier-head-inner">
             <div class="dossier-head-row">
                 <div class="dossier-title-block">
-                    <div class="dossier-crumbs"><a href="/properties">Properties</a><span class="crumb-sep">/</span><span id="crumb-borough">&hellip;</span></div>
+                    <div class="dossier-crumbs"><a href="{{ return_to|default('/properties') }}">Properties</a><span class="crumb-sep">/</span><span id="crumb-borough">&hellip;</span></div>
                     <h1 class="building-address" id="building-address">Loading&hellip;</h1>
                     <div class="dossier-chips">
                         <span class="id-chip mono">BBL <span id="bbl-display">{{ bbl }}</span></span>

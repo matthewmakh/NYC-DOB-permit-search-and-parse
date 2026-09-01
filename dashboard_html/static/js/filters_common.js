@@ -67,6 +67,77 @@
         return out;
     }
 
+    function repeatedValues(params, name) {
+        const values = [];
+        params.getAll(name).forEach(raw => {
+            String(raw).split(',').forEach(value => {
+                const clean = value.trim();
+                if (clean && !values.includes(clean)) values.push(clean);
+            });
+        });
+        return values;
+    }
+
+    /** Rebuild shared filter state from a deep-link query string. */
+    function fromParams(params) {
+        const out = {
+            recentPermitDays: null,
+            permitActivityMode: params.get('permit_activity_mode') === 'inactive'
+                ? 'inactive'
+                : 'within',
+        };
+        Object.entries(MULTI_FILTERS).forEach(([id, param]) => {
+            out[id] = repeatedValues(params, param);
+        });
+        Object.entries(NUMBER_FILTERS).forEach(([id, param]) => {
+            const raw = params.get(param);
+            const value = raw !== null && raw !== '' ? Number(raw) : null;
+            out[id] = Number.isFinite(value) ? value : null;
+        });
+        const recent = Number(params.get('recent_permit_days'));
+        if (Number.isInteger(recent) && recent > 0 && recent <= 3650) {
+            out.recentPermitDays = recent;
+        }
+        return out;
+    }
+
+    /** Apply restored shared state to native/enhanced controls silently. */
+    function apply(filters) {
+        const restored = filters || {};
+        Object.keys(MULTI_FILTERS).forEach(id => {
+            if (el(id)) MultiSelect.set(id, restored[id] || [], { silent: true });
+        });
+        Object.keys(NUMBER_FILTERS).forEach(id => {
+            const node = el(id);
+            if (!node) return;
+            const value = restored[id];
+            node.value = value === null || value === undefined ? '' : value;
+        });
+
+        const recent = el('recentPermitDays');
+        const custom = el('recentPermitCustomDays');
+        const days = restored.recentPermitDays;
+        if (recent) {
+            const standardValues = new Set(
+                Array.from(recent.options).map(option => option.value));
+            const selected = days && standardValues.has(String(days))
+                ? String(days)
+                : (days ? 'custom' : '');
+            MultiSelect.set('recentPermitDays', [selected], { silent: true });
+            if (custom) {
+                custom.value = selected === 'custom' ? days : '';
+                custom.style.display = selected === 'custom' ? 'block' : 'none';
+            }
+        }
+        const mode = el('permitActivityMode');
+        if (mode) {
+            mode.value = restored.permitActivityMode === 'inactive'
+                ? 'inactive'
+                : 'within';
+        }
+        updateActivityHint();
+    }
+
     /** Append the shared filters to a URLSearchParams. */
     function toParams(params, filters) {
         Object.entries(MULTI_FILTERS).forEach(([id, param]) => {
@@ -246,6 +317,8 @@
         MULTI_FILTERS,
         NUMBER_FILTERS,
         read,
+        fromParams,
+        apply,
         toParams,
         toPayload,
         bind,

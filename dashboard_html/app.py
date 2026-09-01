@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests
+from urllib.parse import urlsplit
 from socrata_client import SocrataClient, normalize_pluto_record
 
 # Load environment variables
@@ -2186,11 +2187,25 @@ def search_results():
     )
 
 
+def _safe_properties_return_to(value):
+    """Allow only a local /properties path for profile breadcrumbs."""
+    parsed = urlsplit(value or '/properties')
+    if parsed.scheme or parsed.netloc or parsed.path != '/properties':
+        return '/properties'
+    target = parsed.path
+    if parsed.query:
+        target += f'?{parsed.query}'
+    return target
+
+
 @app.route('/property/<bbl>')
 @login_required
 def property_detail(bbl):
     """Comprehensive building intelligence profile page"""
-    return render_template('building_profile.html', bbl=bbl, active_page='properties')
+    return_to = _safe_properties_return_to(request.args.get('return_to'))
+    return render_template(
+        'building_profile.html', bbl=bbl, return_to=return_to,
+        active_page='properties')
 
 
 @app.route('/api/property/<bbl>/violations')

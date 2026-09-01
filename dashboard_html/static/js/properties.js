@@ -66,27 +66,210 @@ const state = {
     }
 };
 
+const PROPERTY_LIST_SNAPSHOT_KEY = 'properties:list-navigation:v1';
+const ALLOWED_SORT_KEYS = new Set([
+    'sale_date', 'value', 'sale_price', 'address', 'owner', 'permits', 'units',
+    'unused_far', 'co_date', 'recent_permits'
+]);
+let initialPlaysSettled = false;
+let initialPropertiesSettled = false;
+
+if ('scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+}
+
+function repeatedParamValues(params, name) {
+    const values = [];
+    params.getAll(name).forEach(raw => {
+        String(raw).split(',').forEach(value => {
+            const clean = value.trim();
+            if (clean && !values.includes(clean)) values.push(clean);
+        });
+    });
+    return values;
+}
+
+function finiteParam(params, name) {
+    const raw = params.get(name);
+    if (raw === null || raw === '') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+}
+
+function positiveIntParam(params, name, fallback) {
+    const value = Number(params.get(name));
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function trueParam(params, name) {
+    return ['1', 'true', 'yes'].includes(
+        String(params.get(name) || '').toLowerCase());
+}
+
+function restoreStateFromUrl(params) {
+    state.filters.search = params.get('search') || params.get('q') || '';
+    state.filters.owner = params.get('owner') || '';
+    state.filters.minSalePrice = finiteParam(params, 'min_sale_price');
+    state.filters.maxSalePrice = finiteParam(params, 'max_sale_price');
+    state.filters.saleDateFrom = params.get('sale_date_from') || null;
+    state.filters.saleDateTo = params.get('sale_date_to') || null;
+    state.filters.cashOnly = trueParam(params, 'cash_only');
+    state.filters.withPermits = trueParam(params, 'with_permits');
+    state.filters.minPermits = finiteParam(params, 'min_permits');
+    state.filters.recentSaleDays = finiteParam(params, 'recent_sale_days');
+    // Financing values stay as the percentage displayed in the controls.
+    // The server converts them to the stored 0-1 ratio exactly once.
+    state.filters.financingMin = finiteParam(params, 'financing_min');
+    state.filters.financingMax = finiteParam(params, 'financing_max');
+    state.filters.hasEnrichableOwner = trueParam(params, 'has_enrichable_owner');
+    state.filters.play = params.get('play') || null;
+    state.shared = SharedFilters.fromParams(params);
+
+    state.sort.by = repeatedParamValues(params, 'sort_by')
+        .filter(key => ALLOWED_SORT_KEYS.has(key));
+    state.sort.order = params.get('sort_order') === 'asc' ? 'asc' : 'desc';
+    state.pagination.page = positiveIntParam(params, 'page', 1);
+    const perPage = positiveIntParam(params, 'per_page', 50);
+    state.pagination.perPage = [25, 50, 100, 200].includes(perPage)
+        ? perPage
+        : 50;
+}
+
+function applyStateToControls() {
+    const setValue = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.value = value === null || value === undefined ? '' : value;
+    };
+    setValue('universalSearch', state.filters.search);
+    setValue('ownerSearch', state.filters.owner);
+    setValue('minSalePrice', state.filters.minSalePrice);
+    setValue('maxSalePrice', state.filters.maxSalePrice);
+    setValue('saleDateFrom', state.filters.saleDateFrom);
+    setValue('saleDateTo', state.filters.saleDateTo);
+    setValue('minPermits', state.filters.minPermits);
+    setValue('financingMin', state.filters.financingMin);
+    setValue('financingMax', state.filters.financingMax);
+
+    document.getElementById('cashOnly').checked = state.filters.cashOnly;
+    document.getElementById('withPermits').checked = state.filters.withPermits;
+    document.getElementById('hasEnrichableOwner').checked =
+        state.filters.hasEnrichableOwner;
+
+    state.sort.by.forEach(key => {
+        const sortSelect = document.getElementById('sortBy');
+        if (Array.from(sortSelect.options).some(option => option.value === key)) return;
+        if (!EXTRA_SORT_LABELS[key]) return;
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = EXTRA_SORT_LABELS[key];
+        sortSelect.appendChild(option);
+    });
+    MultiSelect.refresh('sortBy');
+    MultiSelect.set('sortBy', state.sort.by, { silent: true });
+    MultiSelect.set('sortOrder', [state.sort.order], { silent: true });
+    MultiSelect.set('perPage', [String(state.pagination.perPage)], { silent: true });
+}
+
+function buildPropertiesParams() {
+    const params = new URLSearchParams();
+    const f = state.filters;
+    if (f.search) params.append('search', f.search);
+    if (f.owner) params.append('owner', f.owner);
+    SharedFilters.toParams(params, state.shared);
+    if (f.minSalePrice !== null) params.append('min_sale_price', f.minSalePrice);
+    if (f.maxSalePrice !== null) params.append('max_sale_price', f.maxSalePrice);
+    if (f.saleDateFrom) params.append('sale_date_from', f.saleDateFrom);
+    if (f.saleDateTo) params.append('sale_date_to', f.saleDateTo);
+    if (f.cashOnly) params.append('cash_only', 'true');
+    if (f.withPermits) params.append('with_permits', 'true');
+    if (f.minPermits !== null) params.append('min_permits', f.minPermits);
+    if (f.recentSaleDays) params.append('recent_sale_days', f.recentSaleDays);
+    if (f.financingMin !== null) params.append('financing_min', f.financingMin);
+    if (f.financingMax !== null) params.append('financing_max', f.financingMax);
+    if (f.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
+    if (f.play) params.append('play', f.play);
+    appendMulti(params, 'sort_by', state.sort.by);
+    params.append('sort_order', state.sort.order);
+    params.append('page', state.pagination.page);
+    params.append('per_page', state.pagination.perPage);
+    return params;
+}
+
+function currentPropertiesUrl() {
+    return `${window.location.pathname}${window.location.search}`;
+}
+
+function syncPropertiesUrl(params) {
+    const query = params.toString();
+    const next = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    window.history.replaceState({ propertiesList: true }, '', next);
+}
+
+function saveListNavigationState(bbl) {
+    const card = document.querySelector(
+        `#propertiesContainer [data-property-bbl="${bbl}"]`);
+    const snapshot = {
+        url: currentPropertiesUrl(),
+        scrollY: window.scrollY,
+        cardOffset: card ? card.getBoundingClientRect().top : null,
+        bbl: String(bbl),
+        savedAt: Date.now(),
+    };
+    try {
+        window.sessionStorage.setItem(
+            PROPERTY_LIST_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    } catch (_error) {
+        // URL state still restores every filter/page if storage is disabled.
+    }
+}
+
+function restoreListPositionIfReady(force) {
+    if (!force && (!initialPlaysSettled || !initialPropertiesSettled)) return;
+    let snapshot;
+    try {
+        snapshot = JSON.parse(
+            window.sessionStorage.getItem(PROPERTY_LIST_SNAPSHOT_KEY) || 'null');
+    } catch (_error) {
+        snapshot = null;
+    }
+    if (!snapshot || snapshot.url !== currentPropertiesUrl()
+            || Date.now() - snapshot.savedAt > 4 * 60 * 60 * 1000) {
+        return;
+    }
+    try {
+        window.sessionStorage.removeItem(PROPERTY_LIST_SNAPSHOT_KEY);
+    } catch (_error) {
+        // Nothing else depends on clearing this best-effort snapshot.
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        let target = Number(snapshot.scrollY) || 0;
+        const card = document.querySelector(
+            `#propertiesContainer [data-property-bbl="${snapshot.bbl}"]`);
+        if (card && Number.isFinite(snapshot.cardOffset)) {
+            target = window.scrollY + card.getBoundingClientRect().top
+                - snapshot.cardOffset;
+        }
+        window.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+    }));
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     MultiSelect.init();
-    state.shared = SharedFilters.read();
     const initialParams = new URLSearchParams(window.location.search);
-    const initialOwner = initialParams.get('owner') || '';
-    const initialSearch = initialParams.get('q') || '';
-    if (initialOwner) {
-        state.filters.owner = initialOwner;
-        document.getElementById('ownerSearch').value = initialOwner;
-    }
-    if (initialSearch) {
-        state.filters.search = initialSearch;
-        document.getElementById('universalSearch').value = initialSearch;
-    }
-    SharedFilters.loadFacets();
+    restoreStateFromUrl(initialParams);
+    SharedFilters.apply(state.shared);
+    applyStateToControls();
+    SharedFilters.loadFacets().then(() => SharedFilters.apply(state.shared));
     initializeEventListeners();
     loadPlays();
     loadStats();
     loadProperties();
     checkResumableBulkEnrichJob();
+});
+
+window.addEventListener('pageshow', event => {
+    if (event.persisted) restoreListPositionIfReady(true);
 });
 
 // ==========================================
@@ -121,6 +304,9 @@ async function loadPlays() {
         status.className = 'plays-status plays-status-error';
         status.textContent = 'Prebuilt filters could not load. Property search is still available; retry by refreshing the page.';
         health.textContent = '';
+    } finally {
+        initialPlaysSettled = true;
+        restoreListPositionIfReady(false);
     }
 }
 
@@ -378,31 +564,11 @@ async function loadProperties() {
     showLoading(true);
     
     try {
-        // Build query string from filters
-        const params = new URLSearchParams();
-        
-        // Add all active filters
-        if (state.filters.search) params.append('search', state.filters.search);
-        if (state.filters.owner) params.append('owner', state.filters.owner);
-        SharedFilters.toParams(params, state.shared);
-        if (state.filters.minSalePrice) params.append('min_sale_price', state.filters.minSalePrice);
-        if (state.filters.maxSalePrice) params.append('max_sale_price', state.filters.maxSalePrice);
-        if (state.filters.saleDateFrom) params.append('sale_date_from', state.filters.saleDateFrom);
-        if (state.filters.saleDateTo) params.append('sale_date_to', state.filters.saleDateTo);
-        if (state.filters.cashOnly) params.append('cash_only', 'true');
-        if (state.filters.withPermits) params.append('with_permits', 'true');
-        if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
-        if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
-        if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
-        if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
-        if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
-        if (state.filters.play) params.append('play', state.filters.play);
-
-        // Add sort and pagination
-        appendMulti(params, 'sort_by', state.sort.by);
-        params.append('sort_order', state.sort.order);
-        params.append('page', state.pagination.page);
-        params.append('per_page', state.pagination.perPage);
+        const params = buildPropertiesParams();
+        // The address bar is the durable source of truth. The property-detail
+        // navigation creates the next history entry, so browser Back lands on
+        // this exact filter/sort/page URL even after a full reload.
+        syncPropertiesUrl(params);
         
         const response = await fetch(`/api/properties?${params}`);
         const data = await response.json();
@@ -421,6 +587,8 @@ async function loadProperties() {
         showError('Failed to load properties');
     } finally {
         showLoading(false);
+        initialPropertiesSettled = true;
+        restoreListPositionIfReady(false);
     }
 }
 
@@ -452,7 +620,8 @@ function renderProperties() {
         const contractorPhone = property.contractor_phone || null;
         
         return `
-            <div class="property-card" onclick="viewProperty('${property.bbl}')">
+            <div class="property-card" data-property-bbl="${property.bbl}"
+                 onclick="viewProperty('${property.bbl}')">
                 <div class="property-header">
                     <div>
                         <div class="property-address">${escapeHtml(property.address || 'Address N/A')}</div>
@@ -710,13 +879,13 @@ function initializeEventListeners() {
     
     // Financing range
     document.getElementById('financingMin').addEventListener('change', (e) => {
-        state.filters.financingMin = e.target.value ? parseFloat(e.target.value) / 100 : null;
+        state.filters.financingMin = e.target.value ? parseFloat(e.target.value) : null;
         state.pagination.page = 1;
         loadProperties();
     });
     
     document.getElementById('financingMax').addEventListener('change', (e) => {
-        state.filters.financingMax = e.target.value ? parseFloat(e.target.value) / 100 : null;
+        state.filters.financingMax = e.target.value ? parseFloat(e.target.value) : null;
         state.pagination.page = 1;
         loadProperties();
     });
@@ -876,7 +1045,9 @@ async function downloadExport() {
 // ==========================================
 
 function viewProperty(bbl) {
-    window.location.href = `/property/${bbl}`;
+    saveListNavigationState(bbl);
+    const returnTo = encodeURIComponent(currentPropertiesUrl());
+    window.location.href = `/property/${encodeURIComponent(bbl)}?return_to=${returnTo}`;
 }
 
 async function viewOwnerPortfolio(ownerName) {
@@ -904,7 +1075,8 @@ function showPortfolioModal(data) {
     
     const propertiesList = document.getElementById('portfolioProperties');
     propertiesList.innerHTML = data.properties.map(prop => `
-        <div class="property-card" onclick="viewProperty('${prop.bbl}')">
+        <div class="property-card" data-property-bbl="${prop.bbl}"
+             onclick="viewProperty('${prop.bbl}')">
             <div class="property-header">
                 <div>
                     <div class="property-address">${escapeHtml(prop.address || 'Address N/A')}</div>

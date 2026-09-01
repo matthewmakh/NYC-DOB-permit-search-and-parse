@@ -62,6 +62,18 @@ check('zero percent is valid', A._percent_filter_ratio(0), 0.0)
 check('out-of-range financing percentage is rejected',
       A._percent_filter_ratio(125), None)
 
+print('— property return navigation —')
+check('filtered property-list return URL is retained',
+      A._safe_properties_return_to(
+          '/properties?borough=3&page=4&sort_by=value'),
+      '/properties?borough=3&page=4&sort_by=value')
+check('external property return URL is rejected',
+      A._safe_properties_return_to('https://example.com/properties'),
+      '/properties')
+check('lookalike property return path is rejected',
+      A._safe_properties_return_to('/properties-evil?page=4'),
+      '/properties')
+
 print('— property type —')
 where, params = clauses(MultiDict([('property_type', 'residential'), ('property_type', 'mixed')]))
 check('two types OR together',
