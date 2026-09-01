@@ -1,0 +1,93 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import feed_item %}
+
+{% block title %}CRM — Team{% endblock %}
+
+{% block crm_content %}
+<div class="crm-head">
+    <div>
+        <h1>Team</h1>
+        <p class="crm-head-sub">Who did what, when — every touch, visit, and view, by rep.</p>
+    </div>
+    <div class="crm-head-actions">
+        <a href="/crm/api/export/activity.csv" class="btn btn-secondary btn-sm"><i class="fas fa-download"></i> Activity CSV</a>
+        <a href="/admin/team" class="btn btn-secondary btn-sm"><i class="fas fa-users-gear"></i> Manage reps</a>
+    </div>
+</div>
+
+<div class="crm-panel">
+    <div class="crm-panel-head"><h3>Performance</h3></div>
+    <div class="crm-table-wrap">
+        <table class="crm-table">
+            <thead>
+                <tr>
+                    <th>Rep</th>
+                    <th>Contacted today</th>
+                    <th>Contacted 7d</th>
+                    <th>Visits 7d</th>
+                    <th>Notes 7d</th>
+                    <th>Follow-ups open</th>
+                    <th>Overdue</th>
+                    <th>Done 7d</th>
+                    <th>Views today</th>
+                    <th>Last login</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in performance %}
+                <tr>
+                    <td class="cell-name">{{ r.name }}{% if r.is_team_owner %} <span class="crm-chip chip-accent">Admin</span>{% endif %}</td>
+                    <td>{{ r.contacted_today }}</td>
+                    <td>{{ r.contacted_7d }}</td>
+                    <td>{{ r.visits_7d }}</td>
+                    <td>{{ r.notes_7d }}</td>
+                    <td>{{ r.followups_open }}</td>
+                    <td class="{{ 'cell-danger' if r.followups_overdue else 'cell-muted' }}">{{ r.followups_overdue }}</td>
+                    <td>{{ r.followups_done_7d }}</td>
+                    <td>{{ r.views_today }}</td>
+                    <td class="cell-muted">{{ r.last_login|crm_timeago if r.last_login else 'never' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="crm-filterbar">
+    <div class="crm-pills">
+        <a class="crm-pill {{ 'is-active' if not feed_user }}" href="/crm/team">All reps</a>
+        {% for u in roster %}
+        <a class="crm-pill {{ 'is-active' if feed_user == u.id }}" href="/crm/team?rep={{ u.id }}">{{ u.name }}</a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="crm-columns">
+    <div class="crm-col-main">
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>Activity feed</h3><span class="panel-count">{{ feed|length }}</span></div>
+            {% for a in feed %}{{ feed_item(a) }}{% else %}
+            <div class="crm-empty"><i class="far fa-comments"></i>No activity yet.</div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="crm-col-rail">
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>View log</h3><span class="panel-count">{{ views|length }}</span></div>
+            {% for v in views[:60] %}
+            <div class="crm-feed-item">
+                <div class="feed-text">
+                    <strong>{{ v.user_name }}</strong> viewed
+                    {% if v.entity_type == 'building' %}<a href="/crm/buildings/{{ v.entity_id }}">{{ v.label or 'a building' }}</a>
+                    {% elif v.entity_type == 'contact' %}<a href="/crm/contacts/{{ v.entity_id }}">{{ v.label or 'a contact' }}</a>
+                    {% else %}<a href="/crm/lists/{{ v.entity_id }}">{{ v.label or 'a list' }}</a>{% endif %}
+                </div>
+                <span class="feed-time" title="{{ v.created_at|crm_nydt }}">{{ v.created_at|crm_timeago }}</span>
+            </div>
+            {% else %}
+            <div class="crm-empty"><i class="far fa-eye"></i>No views logged yet.</div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

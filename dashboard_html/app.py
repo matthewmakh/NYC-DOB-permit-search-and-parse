@@ -37,6 +37,10 @@ from auth_routes import auth_bp
 from auth_service import login_required, validate_session
 app.register_blueprint(auth_bp)
 
+# Register CRM blueprint (namespaced under /crm; crm_* tables only)
+from crm_routes import crm_bp
+app.register_blueprint(crm_bp)
+
 # Activity logging - try to import, use stubs if not available
 try:
     from activity_service import (
@@ -181,6 +185,11 @@ def init_db_pool():
             # Like the bulk-job migration, this must never prevent a worker
             # from booting while Postgres is briefly unavailable.
             print(f"⚠️  sponsored-account init skipped: {e}", flush=True)
+        try:
+            import crm_service
+            crm_service.init_crm_tables()
+        except Exception as e:
+            print(f"⚠️  CRM schema init skipped: {e}", flush=True)
     return db_pool
 
 
@@ -387,6 +396,17 @@ PAGE_NAMES = {
     'contractors_page': 'Permit Participants',
     'contractor_profile': 'Participant Profile',
     'sales_alerts_page': 'Sales Alerts',
+    'crm.today': 'CRM Today',
+    'crm.buildings': 'CRM Buildings',
+    'crm.building_detail': 'CRM Building Detail',
+    'crm.building_add': 'CRM Add Building',
+    'crm.contacts': 'CRM Contacts',
+    'crm.contact_detail': 'CRM Contact Detail',
+    'crm.lists': 'CRM Lists',
+    'crm.list_detail': 'CRM List Detail',
+    'crm.followups': 'CRM Follow-ups',
+    'crm.starred': 'CRM Starred',
+    'crm.team': 'CRM Team',
 }
 
 # Endpoints to skip logging (health checks, static files, etc.)

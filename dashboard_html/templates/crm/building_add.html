@@ -1,0 +1,120 @@
+{% extends "crm/_layout.html" %}
+
+{% block title %}Add building — CRM{% endblock %}
+
+{% block crm_content %}
+<div class="crm-head">
+    <div>
+        <h1>Add a building</h1>
+        <p class="crm-head-sub">
+            {% if bbl %}Pulling live permit data for BBL {{ bbl }} — pick what comes in with it.
+            {% else %}Add any building — it doesn't have to come from the permit database.{% endif %}
+        </p>
+    </div>
+    {% if not bbl %}
+    <div class="crm-head-actions">
+        <a class="btn btn-secondary" href="/properties"><i class="fas fa-magnifying-glass"></i> Find one in Discover instead</a>
+    </div>
+    {% endif %}
+</div>
+
+<form method="post" action="/crm/buildings/add" style="max-width: 860px;">
+    {% if bbl %}<input type="hidden" name="bbl" value="{{ bbl }}">{% endif %}
+
+    <div class="crm-panel">
+        <div class="crm-panel-head"><h3>Building</h3></div>
+        <div style="padding: 16px 18px;" class="crm-modal">
+            <div class="crm-field">
+                <span class="crm-modal-label">Address</span>
+                <input type="text" name="address" required value="{{ prefill.address if prefill else '' }}" placeholder="123 Ocean Ave, Brooklyn">
+            </div>
+            <div class="crm-form-grid">
+                <div>
+                    <span class="crm-modal-label">Borough</span>
+                    <input type="text" name="borough" value="{{ prefill.borough if prefill else '' }}">
+                </div>
+                <div>
+                    <span class="crm-modal-label">ZIP</span>
+                    <input type="text" name="zip_code" value="{{ prefill.zip_code if prefill else '' }}">
+                </div>
+                <div>
+                    <span class="crm-modal-label">Units</span>
+                    <input type="text" name="unit_count" inputmode="numeric" value="{{ prefill.unit_count if prefill and prefill.unit_count else '' }}">
+                </div>
+                <div>
+                    <span class="crm-modal-label">Year built</span>
+                    <input type="text" name="year_built" inputmode="numeric" value="{{ prefill.year_built if prefill and prefill.year_built else '' }}">
+                </div>
+                <div>
+                    <span class="crm-modal-label">Floors</span>
+                    <input type="text" name="num_floors" inputmode="numeric" value="{{ prefill.num_floors if prefill and prefill.num_floors else '' }}">
+                </div>
+                <div>
+                    <span class="crm-modal-label">Owner</span>
+                    <input type="text" name="owner_name" value="{{ prefill.owner_name if prefill and prefill.owner_name else '' }}">
+                </div>
+                {% if not bbl %}
+                <div>
+                    <span class="crm-modal-label">BBL (optional)</span>
+                    <input type="text" name="bbl" placeholder="3012345678" inputmode="numeric">
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if permit_contacts %}
+    <div class="crm-panel">
+        <div class="crm-panel-head">
+            <h3>Bring these people in?</h3>
+            <span class="panel-count">{{ permit_contacts|length }} found on permits</span>
+        </div>
+        <div style="padding: 14px 18px;">
+            {% for pc in permit_contacts %}
+            <label class="crm-import-contact">
+                <input type="checkbox" name="include_contact" value="{{ loop.index0 }}" {{ 'checked' if pc.phone }}>
+                <span class="ic-main">
+                    <span class="ic-name">{{ pc.name or 'Unknown name' }}</span>
+                    <span class="ic-meta">{{ pc.role or 'Contact' }} · {{ pc.source or 'DOB permit' }}{% if pc.is_mobile %} · mobile{% endif %}</span>
+                </span>
+                {% if pc.phone %}<span class="ic-phone">{{ pc.phone }}</span>
+                {% else %}<span class="ic-meta">no phone on file</span>{% endif %}
+                <input type="hidden" name="c_name_{{ loop.index0 }}" value="{{ pc.name or '' }}">
+                <input type="hidden" name="c_phone_{{ loop.index0 }}" value="{{ pc.phone or '' }}">
+                <input type="hidden" name="c_role_{{ loop.index0 }}" value="{{ pc.role or '' }}">
+                <input type="hidden" name="c_src_{{ loop.index0 }}" value="{{ pc.source or 'DOB permit contact' }}">
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="crm-panel">
+        <div class="crm-panel-head"><h3>First note & list</h3></div>
+        <div style="padding: 16px 18px;" class="crm-modal">
+            <div class="crm-field">
+                <span class="crm-modal-label">First note (optional)</span>
+                <textarea name="first_note" placeholder="Why this building is worth working…"></textarea>
+            </div>
+            <div class="crm-field-row crm-field">
+                <div>
+                    <span class="crm-modal-label">Add to a list</span>
+                    <select name="list_id">
+                        <option value="">No list</option>
+                        {% for l in my_lists %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <span class="crm-modal-label">…or start a new one</span>
+                    <input type="text" name="new_list_name" placeholder="New list name" maxlength="120">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="crm-modal-actions" style="justify-content:flex-start">
+        <button type="submit" class="btn-contacted"><i class="fas fa-plus" style="font-size:11px"></i> Add to CRM</button>
+        <a class="btn btn-secondary" href="/crm/buildings">Cancel</a>
+    </div>
+</form>
+{% endblock %}

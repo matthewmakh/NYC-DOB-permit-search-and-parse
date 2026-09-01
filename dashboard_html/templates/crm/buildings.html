@@ -1,0 +1,104 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import stage_dot, recency, star_btn, contacted_btn %}
+
+{% block title %}CRM — Buildings{% endblock %}
+
+{% block crm_content %}
+<div class="crm-head">
+    <div>
+        <h1>Buildings</h1>
+        <p class="crm-head-sub">{{ counts.all or 0 }} building{{ 's' if counts.all != 1 }} in your team's pipeline.</p>
+    </div>
+    <div class="crm-head-actions">
+        {% if crm_ctx.is_admin %}
+        <a href="/crm/api/export/buildings.csv" class="btn btn-secondary btn-sm"><i class="fas fa-download"></i> CSV</a>
+        {% endif %}
+        <a href="/crm/buildings/add" class="btn btn-primary"><i class="fas fa-plus"></i> Add building</a>
+    </div>
+</div>
+
+{% macro qs(overrides) -%}
+    {%- set args = {'stage': filters.stage, 'q': filters.q, 'borough': filters.borough,
+                    'starred': '1' if filters.starred else None, 'cold': '1' if filters.cold else None,
+                    'mine': '1' if filters.mine else None,
+                    'sort': filters.sort if filters.sort != 'recent' else None} -%}
+    {%- set _ = args.update(overrides) -%}
+    ?{% for k, v in args.items() if v %}{{ k }}={{ v|urlencode }}{{ '&' if not loop.last }}{% endfor %}
+{%- endmacro %}
+
+<div class="crm-filterbar">
+    <div class="crm-pills">
+        <a class="crm-pill {{ 'is-active' if not filters.stage }}" href="{{ qs({'stage': None}) }}">All <span class="pill-count">{{ counts.all or 0 }}</span></a>
+        {% for s in stages %}
+        <a class="crm-pill {{ 'is-active' if filters.stage == s }}" href="{{ qs({'stage': s}) }}">{{ stage_labels[s] }} <span class="pill-count">{{ counts.get(s, 0) }}</span></a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="crm-filterbar">
+    <form class="search-bar" method="get" action="/crm/buildings">
+        {% if filters.stage %}<input type="hidden" name="stage" value="{{ filters.stage }}">{% endif %}
+        <i class="fas fa-magnifying-glass"></i>
+        <input type="text" name="q" value="{{ filters.q or '' }}" placeholder="Address, owner, or BBL…">
+    </form>
+    <div class="crm-pills">
+        <a class="crm-pill {{ 'is-active' if filters.starred }}" href="{{ qs({'starred': None if filters.starred else '1'}) }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
+        <a class="crm-pill {{ 'is-active' if filters.cold }}" href="{{ qs({'cold': None if filters.cold else '1'}) }}">Cold 30d+</a>
+        <a class="crm-pill {{ 'is-active' if filters.mine }}" href="{{ qs({'mine': None if filters.mine else '1'}) }}">Assigned to me</a>
+    </div>
+    <div class="filter-group" style="margin-left:auto">
+        <label for="crmSort">Sort</label>
+        <select id="crmSort" class="filter-select" onchange="location.href=this.value">
+            <option value="{{ qs({'sort': None}) }}" {{ 'selected' if filters.sort == 'recent' }}>Recent activity</option>
+            <option value="{{ qs({'sort': 'last_contacted'}) }}" {{ 'selected' if filters.sort == 'last_contacted' }}>Last contacted</option>
+            <option value="{{ qs({'sort': 'last_visited'}) }}" {{ 'selected' if filters.sort == 'last_visited' }}>Last visited</option>
+            <option value="{{ qs({'sort': 'newest'}) }}" {{ 'selected' if filters.sort == 'newest' }}>Newest</option>
+            <option value="{{ qs({'sort': 'most_contacted'}) }}" {{ 'selected' if filters.sort == 'most_contacted' }}>Most contacted</option>
+            <option value="{{ qs({'sort': 'address'}) }}" {{ 'selected' if filters.sort == 'address' }}>Address A–Z</option>
+        </select>
+    </div>
+</div>
+
+{% if buildings %}
+<div class="crm-grid">
+    {% for b in buildings %}
+    <div class="crm-card">
+        <div class="crm-card-top">
+            <div>
+                <div class="crm-card-title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
+                <div class="crm-card-sub">
+                    {{ b.borough or '' }}{% if b.unit_count %} · {{ b.unit_count }} units{% endif %}{% if b.owner_name %} · {{ b.owner_name|truncate(34) }}{% endif %}
+                </div>
+            </div>
+            {{ star_btn(b.starred, building_id=b.id) }}
+        </div>
+        <div class="crm-card-meta">
+            {{ stage_dot(b.stage, stage_labels) }}
+            {{ recency(b.last_contacted_at, 'touched') }}
+            {% if b.last_visited_at %}{{ recency(b.last_visited_at, 'visited') }}{% endif %}
+            {% if b.assigned_to_name %}<span class="crm-chip">{{ b.assigned_to_name }}</span>{% endif %}
+        </div>
+        <div class="crm-card-actions">
+            {{ contacted_btn(b.address, building_id=b.id, small=True) }}
+            <a class="btn btn-secondary btn-sm" href="/crm/buildings/{{ b.id }}">Open</a>
+            {% if b.bbl %}<a class="btn btn-icon btn-sm" href="/property/{{ b.bbl }}" title="Full property intel">
+                <i class="fas fa-building-columns"></i></a>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="crm-panel">
+    <div class="crm-empty">
+        <i class="far fa-building"></i>
+        {% if filters.q or filters.stage or filters.starred or filters.cold or filters.mine %}
+        Nothing matches these filters.
+        <div><a class="btn btn-secondary btn-sm" href="/crm/buildings">Clear filters</a></div>
+        {% else %}
+        No buildings yet. Pull your first ones straight from the permit database.
+        <div><a class="btn btn-primary btn-sm" href="/properties">Discover buildings</a></div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

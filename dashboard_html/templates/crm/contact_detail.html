@@ -1,0 +1,134 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import stage_dot, recency, star_btn, contacted_btn, followup_row, activity_event %}
+
+{% block title %}{{ c.name }} — CRM{% endblock %}
+
+{% block crm_content %}
+<div class="crm-detail-head">
+    <div class="crm-detail-title">
+        <h1>{{ c.name }}</h1>
+        {{ star_btn(c.starred, contact_id=c.id) }}
+        <div class="crm-detail-chips">
+            {% if c.title %}<span class="crm-chip">{{ c.title }}</span>{% endif %}
+            {% if c.company %}<span class="crm-chip">{{ c.company }}</span>{% endif %}
+            {{ recency(c.last_contacted_at, 'touched') }}
+            <span class="crm-chip" title="Provenance">via {{ c.source_detail or c.source }}</span>
+        </div>
+    </div>
+    <div class="crm-head-actions">
+        {% if c.do_not_contact %}
+        <button type="button" class="btn btn-secondary js-dnc" data-contact-id="{{ c.id }}" data-value="0">
+            <i class="fas fa-rotate-left"></i> Clear do-not-contact
+        </button>
+        {% else %}
+        <button type="button" class="btn btn-secondary js-dnc" data-contact-id="{{ c.id }}" data-value="1">
+            <i class="fas fa-ban"></i> Do not contact
+        </button>
+        {% endif %}
+    </div>
+</div>
+
+{% if c.do_not_contact %}
+<div class="crm-dnc-banner" style="margin-bottom:14px"><i class="fas fa-ban"></i> Marked do-not-contact — no more outreach to this person.</div>
+{% endif %}
+{% if last_touch %}
+<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>
+{% endif %}
+
+<div class="crm-quick-actions">
+    {% if not c.do_not_contact %}
+    {{ contacted_btn(c.name, contact_id=c.id, phone=(c.phones[0].number if c.phones else ''), last_touch=last_touch) }}
+    {% endif %}
+    <button type="button" class="btn btn-secondary js-followup" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">
+        <i class="far fa-calendar-plus"></i> Follow up
+    </button>
+    <button type="button" class="btn btn-secondary js-add-to-list" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">
+        <i class="fas fa-list-ul"></i> Add to list
+    </button>
+    <button type="button" class="btn btn-secondary js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">
+        <i class="fas fa-plus"></i> Add number
+    </button>
+</div>
+
+<div class="crm-columns">
+    <div class="crm-col-main">
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>Timeline</h3><span class="panel-count">{{ timeline|length }}</span></div>
+            <div class="crm-composer js-note-composer" data-contact-id="{{ c.id }}">
+                <textarea placeholder="Add a note about {{ c.name }}… (⌘+Enter to save)"></textarea>
+                <button type="button" class="btn btn-primary js-note-save">Note</button>
+            </div>
+            <div class="crm-timeline">
+                {% for a in timeline %}{{ activity_event(a, method_labels, outcome_labels, show_entity=True) }}{% else %}
+                <div class="crm-empty"><i class="far fa-clock"></i>No touches yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="crm-col-rail">
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>Numbers</h3></div>
+            {% for p in c.phones %}
+            <div class="crm-row {{ 'phone-bad' if p.status != 'good' }}">
+                <div class="row-main">
+                    <div class="row-title" style="font-variant-numeric:tabular-nums">
+                        <a href="tel:+1{{ p.digits }}" {% if p.status != 'good' %}style="text-decoration:line-through;color:var(--ink-3)"{% endif %}>{{ p.number }}</a>
+                        {% if p.is_primary %}<span class="crm-chip chip-accent">Primary</span>{% endif %}
+                        {% if p.label %}<span class="crm-chip">{{ p.label }}</span>{% endif %}
+                        {% if p.status == 'bad' %}<span class="crm-chip chip-bad">Bad</span>
+                        {% elif p.status == 'do_not_call' %}<span class="crm-chip chip-bad">DNC</span>{% endif %}
+                    </div>
+                    <div class="row-sub">{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}</div>
+                </div>
+                <div class="row-side">
+                    {% if p.status == 'good' %}
+                    <button type="button" class="btn btn-icon btn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark bad"><i class="fas fa-phone-slash"></i></button>
+                    {% else %}
+                    <button type="button" class="btn btn-icon btn-sm js-phone-status" data-id="{{ p.id }}" data-status="good" title="Mark good again"><i class="fas fa-rotate-left"></i></button>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="crm-empty"><i class="fas fa-phone-slash"></i>No numbers yet.
+                <div><button type="button" class="btn btn-secondary btn-sm js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">Add one</button></div>
+            </div>
+            {% endfor %}
+            {% if c.email %}
+            <div class="crm-row"><div class="row-main"><a href="mailto:{{ c.email }}">{{ c.email }}</a></div></div>
+            {% endif %}
+        </div>
+
+        {% if c.buildings %}
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>Buildings</h3></div>
+            {% for b in c.buildings %}
+            <div class="crm-row">
+                <div class="row-main">
+                    <div class="row-title"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a></div>
+                    <div class="row-sub">{{ b.building_role|replace('_', ' ')|capitalize }}{% if b.borough %} · {{ b.borough }}{% endif %}</div>
+                </div>
+                <div class="row-side">{{ stage_dot(b.stage, stage_labels) }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if c.follow_ups %}
+        <div class="crm-panel">
+            <div class="crm-panel-head"><h3>Open follow-ups</h3></div>
+            {% for f in c.follow_ups %}{{ followup_row(f, today_ny, show_assignee=True) }}{% endfor %}
+        </div>
+        {% endif %}
+
+        <p class="crm-provenance">
+            Added by {{ c.added_by_name }} {{ c.created_at|crm_timeago }} · source: {{ c.source_detail or c.source }}.
+            Rep-found info is permanent — scrapers never overwrite it.
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block crm_js %}
+<script>window.CRM_LISTS = [{% for l in my_lists %}{"id": {{ l.id }}, "name": {{ l.name|tojson }}}{{ "," if not loop.last }}{% endfor %}];</script>
+{% endblock %}

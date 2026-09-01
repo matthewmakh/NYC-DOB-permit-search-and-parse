@@ -1,0 +1,72 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import stage_dot, recency, contacted_btn %}
+
+{% block title %}{{ l.name }} — CRM{% endblock %}
+
+{% block crm_content %}
+<div class="crm-detail-head">
+    <div class="crm-detail-title">
+        <h1>{{ l.name }}</h1>
+        <div class="crm-detail-chips">
+            <span class="crm-chip">{{ l['items']|length }} lead{{ 's' if l['items']|length != 1 }}</span>
+            <span class="crm-chip">by {{ l.owner_name }}</span>
+            {% if l.description %}<span class="crm-chip">{{ l.description|truncate(60) }}</span>{% endif %}
+        </div>
+    </div>
+    <div class="crm-head-actions">
+        <div class="filter-group">
+            <label for="listAssign">Assigned to</label>
+            <select id="listAssign" class="filter-select js-list-assign" data-list-id="{{ l.id }}" style="width:auto">
+                <option value="">Nobody</option>
+                {% for u in roster %}
+                <option value="{{ u.id }}" {{ 'selected' if l.assigned_to_id == u.id }}>{{ u.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="button" class="btn btn-icon js-list-delete" data-id="{{ l.id }}" title="Delete list">
+            <i class="fas fa-trash-can"></i>
+        </button>
+    </div>
+</div>
+
+<div class="crm-panel">
+    {% for item in l['items'] %}
+    <div class="crm-row">
+        <span class="row-num">{{ loop.index }}</span>
+        <div class="row-main">
+            <div class="row-title">
+                {% if item.building_id %}
+                <a href="/crm/buildings/{{ item.building_id }}">{{ item.address }}</a>
+                {% else %}
+                <a href="/crm/contacts/{{ item.contact_id }}">{{ item.contact_name }}</a>
+                {% endif %}
+            </div>
+            <div class="row-sub">
+                {% if item.building_id %}
+                {{ item.borough or '' }}{% if item.contact_count %} · {{ item.contact_count }} touches{% endif %}
+                {% else %}
+                {{ item.company or 'Contact' }}
+                {% endif %}
+                {% if item.item_note %} · “{{ item.item_note }}”{% endif %}
+            </div>
+        </div>
+        <div class="row-side">
+            {% if item.building_id %}
+            {{ stage_dot(item.stage, stage_labels) }}
+            {{ recency(item.b_last_contacted) }}
+            {{ contacted_btn(item.address, building_id=item.building_id, small=True) }}
+            {% else %}
+            {% if item.contact_phone %}<a class="crm-chip" href="tel:+1{{ item.contact_phone|crm_phone_digits }}">{{ item.contact_phone }}</a>{% endif %}
+            {{ recency(item.c_last_contacted) }}
+            {{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True) }}
+            {% endif %}
+            <button type="button" class="btn btn-icon btn-sm js-item-remove" data-id="{{ item.item_id }}" title="Remove from list">
+                <i class="fas fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+    {% else %}
+    <div class="crm-empty"><i class="far fa-rectangle-list"></i>Empty list. Add buildings or people from their pages, or from Discover.</div>
+    {% endfor %}
+</div>
+{% endblock %}

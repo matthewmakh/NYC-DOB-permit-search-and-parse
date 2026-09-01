@@ -693,6 +693,9 @@ function renderProperties() {
                     <button class="btn-view" onclick="event.stopPropagation(); viewProperty('${property.bbl}')">
                         View details
                     </button>
+                    <button class="btn-portfolio js-crm-btn" data-bbl="${property.bbl}" onclick="event.stopPropagation(); crmOpen('${property.bbl}')" title="Add to CRM">
+                        <i class="fas fa-address-book"></i>
+                    </button>
                     <button class="btn-portfolio" onclick="event.stopPropagation(); viewOwnerPortfolio('${escapeHtml(owner)}')" title="View owner's portfolio">
                         <i class="fas fa-building"></i>
                     </button>
@@ -700,6 +703,8 @@ function renderProperties() {
             </div>
         `;
     }).join('');
+
+    refreshCrmStatus();
 }
 
 // Badges for the signal columns (only present in API responses once the
@@ -1752,8 +1757,95 @@ async function updateEnrichmentEstimate() {
     }
 }
 
+// ==========================================
+// CRM INTEGRATION
+// ==========================================
+
+// BBL -> CRM building id for everything rendered so far this visit.
+const crmStatus = { inCrm: {} };
+
+function crmOpen(bbl) {
+    const crmId = crmStatus.inCrm[bbl];
+    window.location.href = crmId
+        ? `/crm/buildings/${crmId}`
+        : `/crm/buildings/add?bbl=${encodeURIComponent(bbl)}`;
+}
+
+async function refreshCrmStatus() {
+    const bbls = state.properties.map(p => p.bbl).filter(Boolean);
+    if (!bbls.length) return;
+    try {
+        const res = await fetch('/crm/api/bbl-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bbls })
+        });
+        const data = await res.json();
+        if (!data.success) return;
+        Object.assign(crmStatus.inCrm, data.in_crm || {});
+        document.querySelectorAll('.js-crm-btn').forEach(btn => {
+            if (crmStatus.inCrm[btn.dataset.bbl]) {
+                btn.innerHTML = '<i class="fas fa-check"></i>';
+                btn.title = 'In CRM — open it';
+                btn.classList.add('is-in-crm');
+            }
+        });
+    } catch (e) { /* the CRM chip is decoration; never break the grid */ }
+}
+
+function crmNotice(message) {
+    let stack = document.querySelector('.toast-stack');
+    if (!stack) {
+        stack = document.createElement('div');
+        stack.className = 'toast-stack';
+        document.body.appendChild(stack);
+    }
+    const el = document.createElement('div');
+    el.className = 'toast toast-success';
+    el.innerHTML = '<i class="fas fa-check-circle"></i><span></span>';
+    el.querySelector('span').textContent = message;
+    stack.appendChild(el);
+    setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 220); }, 3500);
+}
+
+async function saveLeadList() {
+    const name = prompt('Name this lead list (it re-runs these filters live from the CRM):');
+    if (!name || !name.trim()) return;
+    try {
+        const res = await fetch('/crm/api/saved-filter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: name.trim(),
+                querystring: window.location.search.replace(/^\?/, '') || 'page=1'
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            crmNotice('Lead list saved — find it under CRM → Lists.');
+        } else {
+            alert(data.error || 'Could not save the lead list');
+        }
+    } catch (e) {
+        alert('Could not save the lead list');
+    }
+}
+
+(function wireCrmButtons() {
+    const bind = () => {
+        const saveBtn = document.getElementById('saveLeadListBtn');
+        if (saveBtn) saveBtn.addEventListener('click', saveLeadList);
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bind);
+    } else {
+        bind();
+    }
+})();
+
 // Make functions globally available
 window.viewProperty = viewProperty;
+window.crmOpen = crmOpen;
 window.viewOwnerPortfolio = viewOwnerPortfolio;
 window.closePortfolioModal = closePortfolioModal;
 window.closeExportModal = closeExportModal;

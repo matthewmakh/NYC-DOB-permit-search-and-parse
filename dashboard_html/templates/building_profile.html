@@ -23,6 +23,10 @@
                     </div>
                 </div>
                 <div class="dossier-head-actions">
+                    <a class="btn btn-secondary" id="crm-add-btn" href="/crm/buildings/add?bbl={{ bbl }}"
+                       title="Track this building in the sales CRM">
+                        <i class="fas fa-address-book"></i> Add to CRM
+                    </a>
                     <div class="risk-score-card" id="risk-score-card">
                         <div class="risk-score-value" id="risk-score-value">&ndash;</div>
                         <div class="risk-score-copy">
@@ -255,6 +259,26 @@
 
 <script>
     const BBL = "{{ bbl }}";
+</script>
+<script>
+    // Swap the CRM button to "In CRM" when this BBL is already tracked.
+    (async function () {
+        try {
+            const res = await fetch('/crm/api/bbl-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bbls: ["{{ bbl }}"] })
+            });
+            const data = await res.json();
+            const btn = document.getElementById('crm-add-btn');
+            const crmId = data && data.in_crm && data.in_crm["{{ bbl }}"];
+            if (btn && crmId) {
+                btn.href = '/crm/buildings/' + crmId;
+                btn.innerHTML = '<i class="fas fa-check"></i> In CRM';
+                btn.title = 'Open this building in the CRM';
+            }
+        } catch (e) { /* button stays as Add to CRM */ }
+    })();
 </script>
 {% endblock %}
 

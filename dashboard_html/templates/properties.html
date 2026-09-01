@@ -14,6 +14,9 @@
 <body>
     {% from "_site_nav.html" import site_nav with context %}
     {% call site_nav('properties', g.user if g.user is defined else none) %}
+        <button class="btn btn-secondary" id="saveLeadListBtn" title="Save the current filters as a live lead list in the CRM">
+            <i class="fas fa-filter-circle-check" aria-hidden="true"></i> Save as lead list
+        </button>
         <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
             <i class="fas fa-phone" aria-hidden="true"></i> Bulk enrich
         </button>

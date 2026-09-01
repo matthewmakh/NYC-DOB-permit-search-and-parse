@@ -1438,6 +1438,9 @@ button { font-family: inherit; }
 }
 .btn-portfolio:hover { background: var(--surface-2); color: var(--ink); }
 
+/* Property card CRM button once the building is already tracked */
+.btn-portfolio.is-in-crm { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+
 /* Pagination (both pages) */
 .pagination {
     display: flex;

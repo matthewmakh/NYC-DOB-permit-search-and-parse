@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/crm.css') }}">
+{% endblock %}
+
+{% block content %}
+{% from "crm/_macros.html" import crm_subnav %}
+<div class="crm-shell">
+    {{ crm_subnav(crm_tab, crm_ctx) }}
+    {% block crm_content %}{% endblock %}
+</div>
+{% include "crm/_modals.html" %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/crm.js') }}"></script>
+{% block crm_js %}{% endblock %}
+{% endblock %}
