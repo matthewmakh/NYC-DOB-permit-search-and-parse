@@ -682,15 +682,128 @@
    Permits
    ------------------------------------------------------------ */
 
+.permits-summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.permits-summary div { font-size: 13.5px; color: var(--ink-2); }
+.permits-summary strong { color: var(--ink); font-size: 16px; font-variant-numeric: tabular-nums; }
+.permits-summary p { font-size: 12px; color: var(--ink-2); text-align: right; }
+
+.permits-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+}
+
+.permit-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+}
+
+.permit-control select {
+    min-height: 40px;
+    min-width: 168px;
+    padding: 7px 32px 7px 10px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    font: 500 13px/1.3 var(--font);
+}
+
+.permit-results-count {
+    margin-left: auto;
+    padding-bottom: 10px;
+    color: var(--ink-2);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
 .permit-card {
+    appearance: none;
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px;
+    gap: 20px;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 13px 16px;
+    padding: 16px 18px;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
     cursor: pointer;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
-.permit-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-1); }
+.permit-card:hover {
+    border-color: var(--line-2);
+    box-shadow: var(--shadow-2);
+}
+.permit-card:active { background: var(--accent-soft); }
+.permit-card:focus-visible { outline-offset: 3px; }
+
+.permit-card-main, .permit-card-aside,
+.permit-card-title, .permit-card-context,
+.permit-card-description, .permit-people,
+.permit-person, .permit-person-label, .permit-person-value,
+.permit-date-label, .permit-date-value, .permit-card-action {
+    display: block;
+}
+
+.permit-card-main { min-width: 0; }
+
+.permit-card-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.permit-record-kind, .permit-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    font-weight: 650;
+    line-height: 1.2;
+}
+
+.permit-record-kind { background: var(--accent-soft); color: var(--accent); }
+.permit-status-neutral { background: var(--surface-2); color: var(--ink-2); }
+.permit-status-positive { background: var(--green-soft); color: var(--green); }
+.permit-status-attention { background: var(--amber-soft); color: var(--amber); }
+.permit-status-critical { background: var(--red-soft); color: var(--red); }
+
+.permit-card-title {
+    font-size: 15.5px;
+    font-weight: 650;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+}
+
+.permit-card-context {
+    margin-top: 2px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    line-height: 1.4;
+}
 
 .permit-header, .permit-item-header {
     display: flex;
@@ -701,6 +814,7 @@
 }
 
 .permit-no, .permit-no-small { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.permit-card .permit-no { display: block; margin-top: 4px; color: var(--ink-2); }
 
 .permit-type {
     font-size: 11px;
@@ -718,6 +832,116 @@
 .permit-click-hint { font-size: 11.5px; color: var(--accent); margin-top: 6px; }
 .more-permits { font-size: 12.5px; color: var(--ink-3); text-align: center; padding: 8px; }
 .contractor-name { font-weight: 500; }
+
+.permit-card-description {
+    display: -webkit-box;
+    margin-top: 10px;
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.permit-people {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 18px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+}
+
+.permit-person { min-width: 0; }
+.permit-person-label {
+    margin-bottom: 1px;
+    color: var(--ink-2);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.035em;
+}
+.permit-person-value {
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.permit-card-aside {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    min-width: 0;
+    padding-left: 18px;
+    border-left: 1px solid var(--line);
+    text-align: right;
+}
+
+.permit-date-label {
+    color: var(--ink-2);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.permit-date-value {
+    margin-top: 2px;
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.permit-card-action {
+    margin-top: auto;
+    padding-top: 22px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+}
+.permit-card-action span { display: inline; }
+
+@media (prefers-reduced-motion: reduce) {
+    .permit-card { transition: none; }
+}
+
+@media (max-width: 640px) {
+    .permits-summary {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .permits-summary p { text-align: left; }
+    .permits-controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .permit-control select { width: 100%; min-height: 44px; }
+    .permit-results-count { margin-left: 0; padding: 0; }
+    .permit-card {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        padding: 15px;
+    }
+    .permit-people { grid-template-columns: minmax(0, 1fr); }
+    .permit-person-value { white-space: normal; }
+    .permit-card-aside {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 6px;
+        padding: 12px 0 0;
+        border-top: 1px solid var(--line);
+        border-left: 0;
+        text-align: left;
+    }
+    .permit-date-value { margin-top: 0; }
+    .permit-card-action { margin: 0; padding: 0; text-align: right; }
+}
 
 /* Work-type breakdown bars */
 .work-types-breakdown { margin-top: 14px; }

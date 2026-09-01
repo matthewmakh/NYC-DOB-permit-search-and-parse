@@ -96,6 +96,16 @@ function escapeHtml(value) {
         .replace(/'/g, '&#039;');
 }
 
+function safeHttpHref(value) {
+    if (!value) return null;
+    try {
+        const url = new URL(String(value), window.location.origin);
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+    } catch (_error) {
+        return null;
+    }
+}
+
 /**
  * Format phone number to (XXX) XXX-XXXX format
  */
@@ -1919,49 +1929,43 @@ function renderPermitsTab() {
     
     // Store permits globally for filtering
     window.permitsData = permits;
-    
-    // Get unique job types
-    const jobTypes = [...new Set(permits.map(p => p.job_type).filter(Boolean))];
+
+    // A profile can contain both issued permits and DOB NOW job filings. Keep
+    // them together for history, but label them accurately in every card.
+    const permitTypes = new Map();
+    permits.forEach(permit => {
+        permitTypes.set(getPermitTypeKey(permit), getPermitTypeLabel(permit));
+    });
+    const sortedPermitTypes = [...permitTypes.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]));
     
     let html = `
-    <div class="permits-controls">
-        <div class="filter-group">
-            <label>Job Type:</label>
+    <div class="permits-summary">
+        <div><strong>${permits.length.toLocaleString('en-US')}</strong> DOB records</div>
+        <p>Includes issued permits and filings that may still be under review.</p>
+    </div>
+    <div class="permits-controls" aria-label="Permit list controls">
+        <label class="permit-control" for="filter-job-type">
+            <span>Record type</span>
             <select id="filter-job-type" onchange="filterPermits()">
                 <option value="all">All</option>
-                ${jobTypes.map(type => `<option value="${type}">${type}</option>`).join('')}
+                ${sortedPermitTypes.map(([value, label]) =>
+                    `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('')}
             </select>
-        </div>
-        <div class="filter-group">
-            <label>Sort by:</label>
+        </label>
+        <label class="permit-control" for="sort-permits">
+            <span>Sort</span>
             <select id="sort-permits" onchange="filterPermits()">
-                <option value="date-desc">Date (Newest First)</option>
-                <option value="date-asc">Date (Oldest First)</option>
-                <option value="job-type">Job Type</option>
+                <option value="date-desc">Newest first</option>
+                <option value="date-asc">Oldest first</option>
+                <option value="job-type">Record type</option>
             </select>
-        </div>
+        </label>
+        <span class="permit-results-count" id="permit-results-count" aria-live="polite"></span>
     </div>
-    <div class="permits-list" id="permits-list-container">`;
-    
-    permits.forEach((permit, index) => {
-        html += `
-        <div class="permit-card" onclick="showPermitDetails(${index})" data-index="${index}">
-            <div class="permit-header">
-                <span class="permit-type">${permit.job_type || 'Permit'}</span>
-                <span class="permit-date">${formatPermitDate(permit)}</span>
-            </div>
-            <div class="permit-no">Permit #${permit.permit_no}</div>
-            ${permit.work_type ? `<div class="permit-work-type">${permit.work_type}</div>` : ''}
-            <div class="permit-details">
-                ${permit.applicant ? `<div class="permit-detail-row"><span>Applicant:</span><span>${permit.applicant}</span></div>` : ''}
-                ${permit.permittee_business_name ? `<div class="permit-detail-row"><span>Contractor:</span><span>${permit.permittee_business_name}</span></div>` : ''}
-            </div>
-            <div class="permit-click-hint">Click for details →</div>
-        </div>`;
-    });
-    
-    html += '</div>';
+    <div class="permits-list" id="permits-list-container"></div>`;
     container.innerHTML = html;
+    filterPermits();
 }
 
 function filterPermits() {
@@ -1972,7 +1976,7 @@ function filterPermits() {
     
     // Filter permits
     let filtered = window.permitsData.filter(permit => {
-        if (jobTypeFilter !== 'all' && permit.job_type !== jobTypeFilter) return false;
+        if (jobTypeFilter !== 'all' && getPermitTypeKey(permit) !== jobTypeFilter) return false;
         return true;
     });
     
@@ -1980,11 +1984,12 @@ function filterPermits() {
     filtered.sort((a, b) => {
         switch(sortOption) {
             case 'date-desc':
-                return new Date(b.issue_date || 0) - new Date(a.issue_date || 0);
+                return comparePermitDates(a, b, 'desc');
             case 'date-asc':
-                return new Date(a.issue_date || 0) - new Date(b.issue_date || 0);
+                return comparePermitDates(a, b, 'asc');
             case 'job-type':
-                return (a.job_type || '').localeCompare(b.job_type || '');
+                return getPermitTypeLabel(a).localeCompare(getPermitTypeLabel(b)) ||
+                    comparePermitDates(a, b, 'desc');
             default:
                 return 0;
         }
@@ -1992,47 +1997,161 @@ function filterPermits() {
     
     // Render filtered permits
     const container = document.getElementById('permits-list-container');
+    const resultCount = document.getElementById('permit-results-count');
+    if (resultCount) {
+        resultCount.textContent = filtered.length === window.permitsData.length
+            ? `${filtered.length.toLocaleString('en-US')} shown`
+            : `${filtered.length.toLocaleString('en-US')} of ${window.permitsData.length.toLocaleString('en-US')} shown`;
+    }
     if (filtered.length === 0) {
         container.innerHTML = '<div class="no-data">No permits match the selected filters</div>';
         return;
     }
     
-    let html = '';
-    filtered.forEach((permit, index) => {
+    container.innerHTML = filtered.map(permit => {
         // Find original index for showPermitDetails
         const originalIndex = window.permitsData.indexOf(permit);
-        html += `
-        <div class="permit-card" onclick="showPermitDetails(${originalIndex})" data-index="${originalIndex}">
-            <div class="permit-header">
-                <span class="permit-type">${permit.job_type || 'Permit'}</span>
-                <span class="permit-date">${formatPermitDate(permit)}</span>
-            </div>
-            <div class="permit-no">Permit #${permit.permit_no}</div>
-            ${permit.work_type ? `<div class="permit-work-type">${permit.work_type}</div>` : ''}
-            <div class="permit-details">
-                ${permit.applicant ? `<div class="permit-detail-row"><span>Applicant:</span><span>${permit.applicant}</span></div>` : ''}
-                ${permit.permittee_business_name ? `<div class="permit-detail-row"><span>Contractor:</span><span>${permit.permittee_business_name}</span></div>` : ''}
-            </div>
-            <div class="permit-click-hint">Click for details →</div>
-        </div>`;
+        return renderPermitCard(permit, originalIndex);
+    }).join('');
+
+    container.querySelectorAll('.permit-card').forEach(card => {
+        card.addEventListener('click', () => {
+            showPermitDetails(Number(card.dataset.index));
+        });
     });
-    container.innerHTML = html;
+}
+
+function getPermitTypeKey(permit) {
+    return String(permit.job_type || permit.work_type || '__other__');
+}
+
+function getPermitTypeLabel(permit) {
+    return String(
+        permit.job_type_label || permit.job_type ||
+        permit.work_type_label || permit.work_type ||
+        'Other DOB record'
+    );
+}
+
+function getPermitDateInfo(permit) {
+    const isIssued = Boolean(permit.issue_date);
+    const value = permit.effective_date || permit.issue_date || permit.filing_date || null;
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    return {
+        label: isIssued ? 'Issued' : (permit.filing_date ? 'Filed' : 'Date'),
+        value,
+        timestamp: Number.isFinite(parsed) ? parsed : null,
+    };
+}
+
+function comparePermitDates(a, b, direction) {
+    const aTime = getPermitDateInfo(a).timestamp;
+    const bTime = getPermitDateInfo(b).timestamp;
+    if (aTime === null && bTime !== null) return 1;
+    if (aTime !== null && bTime === null) return -1;
+    if (aTime !== bTime) {
+        return direction === 'asc' ? aTime - bTime : bTime - aTime;
+    }
+    return String(b.permit_no || '').localeCompare(String(a.permit_no || ''));
+}
+
+function getPermitRecordKind(permit) {
+    const kind = permit.record_kind || (permit.issue_date ? 'issued_permit' :
+        (permit.filing_date ? 'job_filing' : 'dob_record'));
+    if (kind === 'issued_permit') return 'Issued permit';
+    if (kind === 'job_filing') return 'Job filing';
+    return 'DOB record';
+}
+
+function getPermitStatus(permit) {
+    return String(
+        (permit.issue_date ? permit.permit_status : permit.filing_status) ||
+        permit.permit_status || permit.filing_status || ''
+    ).trim();
+}
+
+function getPermitStatusClass(status) {
+    const value = String(status || '').toUpperCase();
+    if (/ISSUED|APPROVED|COMPLETE|ACTIVE/.test(value)) return 'positive';
+    if (/OBJECTION|DISAPPROV|DENIED|REJECT|REVOK/.test(value)) return 'critical';
+    if (/PENDING|REVIEW|PROCESS|ASSIGN/.test(value)) return 'attention';
+    return 'neutral';
+}
+
+function getPermitDescription(permit) {
+    const description = String(permit.work_description || '').trim();
+    if (!description || /^Type:/i.test(description)) return '';
+    return description;
+}
+
+function renderPermitCard(permit, originalIndex) {
+    const date = getPermitDateInfo(permit);
+    const kind = getPermitRecordKind(permit);
+    const status = getPermitStatus(permit);
+    const workLabel = String(permit.work_type_label || permit.work_type || '').trim();
+    const jobLabel = String(permit.job_type_label || permit.job_type || '').trim();
+    const title = workLabel || jobLabel || 'Construction record';
+    const context = workLabel && jobLabel && workLabel !== jobLabel ? jobLabel : '';
+    const description = getPermitDescription(permit);
+    const applicant = String(permit.applicant || '').trim();
+    const permittee = String(permit.permittee_business_name || '').trim();
+    const sameContact = applicant && permittee && applicant.toUpperCase() === permittee.toUpperCase();
+    const contacts = [];
+    if (sameContact) {
+        contacts.push(['Applicant & permittee', applicant]);
+    } else {
+        if (applicant) contacts.push(['Applicant', applicant]);
+        if (permittee) contacts.push(['Permittee', permittee]);
+    }
+    const permitNumber = String(permit.permit_no || 'Number unavailable');
+    const dateText = date.value ? formatDate(date.value) : 'Not available';
+    const isoDate = date.value && Number.isFinite(Date.parse(date.value))
+        ? new Date(date.value).toISOString().slice(0, 10)
+        : '';
+    const ariaLabel = `Open ${kind.toLowerCase()} ${permitNumber}, ${title}`;
+
+    return `
+        <button type="button" class="permit-card" data-index="${originalIndex}"
+                aria-label="${escapeHtml(ariaLabel)}">
+            <span class="permit-card-main">
+                <span class="permit-card-eyebrow">
+                    <span class="permit-record-kind">${escapeHtml(kind)}</span>
+                    ${status ? `<span class="permit-status permit-status-${getPermitStatusClass(status)}">${escapeHtml(status)}</span>` : ''}
+                </span>
+                <span class="permit-card-title">${escapeHtml(title)}</span>
+                ${context ? `<span class="permit-card-context">${escapeHtml(context)}</span>` : ''}
+                <span class="permit-no">#${escapeHtml(permitNumber)}</span>
+                ${description ? `<span class="permit-card-description">${escapeHtml(description)}</span>` : ''}
+                ${contacts.length ? `<span class="permit-people">${contacts.map(([label, value]) => `
+                    <span class="permit-person">
+                        <span class="permit-person-label">${escapeHtml(label)}</span>
+                        <span class="permit-person-value">${escapeHtml(value)}</span>
+                    </span>`).join('')}</span>` : ''}
+            </span>
+            <span class="permit-card-aside">
+                <span class="permit-date-label">${escapeHtml(date.label)}</span>
+                <time class="permit-date-value"${isoDate ? ` datetime="${isoDate}"` : ''}>${escapeHtml(dateText)}</time>
+                <span class="permit-card-action">View details <span aria-hidden="true">→</span></span>
+            </span>
+        </button>`;
 }
 
 function showPermitDetails(index) {
     const permit = buildingData.permits[index];
+    if (!permit) return;
     
     // Helper function to add row only if value exists
     const addRow = (label, value) => {
         if (value && value !== 'N/A' && value !== null && value !== undefined) {
-            return `<div class="detail-row"><span class="detail-label">${label}:</span><span class="detail-value">${value}</span></div>`;
+            return `<div class="detail-row"><span class="detail-label">${escapeHtml(label)}:</span><span class="detail-value">${escapeHtml(value)}</span></div>`;
         }
         return '';
     };
+    const safePermitLink = safeHttpHref(permit.link);
     
     let html = `
     <div class="permit-detail-modal-content">
-        <h2>Permit #${permit.permit_no}</h2>
+        <h2>DOB record #${escapeHtml(permit.permit_no || 'Unknown')}</h2>
         <div class="permit-detail-grid">`;
     
     // Basic Information - always show
@@ -2040,11 +2159,11 @@ function showPermitDetails(index) {
             <div class="detail-section">
                 <h3>Basic Information</h3>
                 ${addRow('Permit Number', permit.permit_no)}
-                ${addRow('Job Type', permit.job_type)}
-                ${addRow('Work Type', permit.work_type)}
-                ${addRow('Issue Date', formatDate(permit.issue_date))}
-                ${addRow('Expiration Date', formatDate(permit.exp_date))}
-                ${addRow('Filing Date', formatDate(permit.filing_date))}
+                ${addRow('Job Type', permit.job_type_label || permit.job_type)}
+                ${addRow('Work Type', permit.work_type_label || permit.work_type)}
+                ${permit.issue_date ? addRow('Issue Date', formatDate(permit.issue_date)) : ''}
+                ${permit.exp_date ? addRow('Expiration Date', formatDate(permit.exp_date)) : ''}
+                ${permit.filing_date ? addRow('Filing Date', formatDate(permit.filing_date)) : ''}
                 ${addRow('Permit Status', permit.permit_status)}
                 ${addRow('Filing Status', permit.filing_status)}
                 ${addRow('Self-Certified', permit.self_cert)}
@@ -2058,7 +2177,7 @@ function showPermitDetails(index) {
             <div class="detail-section">
                 <h3>Work Details</h3>
                 ${addRow('Work Description', permit.work_description)}
-                ${addRow('Proposed Start Date', formatDate(permit.proposed_job_start))}
+                ${permit.proposed_job_start ? addRow('Proposed Start Date', formatDate(permit.proposed_job_start)) : ''}
             </div>`;
     }
     
@@ -2095,7 +2214,9 @@ function showPermitDetails(index) {
         let licenseDisplay = permit.permittee_license_number;
         if (permit.permittee_license_number) {
             const licenseType = permit.permittee_license_type || '';
-            licenseDisplay = `<a href="#" onclick="showLicenseInfo('${permit.permittee_license_number}', '${licenseType}'); return false;" class="license-link">${permit.permittee_license_number}</a>`;
+            licenseDisplay = `<a href="#" class="license-link"
+                data-license-number="${escapeHtml(permit.permittee_license_number)}"
+                data-license-type="${escapeHtml(licenseType)}">${escapeHtml(permit.permittee_license_number)}</a>`;
         }
         const permitteeEnrichBtn = buildEnrichButton(permit, permit.permittee_business_name, 'permittee', 
             permit.permittee_license_number, permit.permittee_license_type, permit.permittee_phone);
@@ -2146,13 +2267,21 @@ function showPermitDetails(index) {
         </div>
         
         <div class="permit-modal-actions">
-            ${permit.link ? `<a href="${permit.link}" target="_blank" class="btn-view-dob">View on DOB Website →</a>` : ''}
+            ${safePermitLink ? `<a href="${escapeHtml(safePermitLink)}" target="_blank" rel="noopener noreferrer" class="btn-view-dob">View on DOB Website →</a>` : ''}
             <button onclick="closePermitModal()" class="btn-close-modal">Close</button>
         </div>
     </div>`;
     
-    document.getElementById('permit-modal').innerHTML = html;
-    document.getElementById('permit-modal').style.display = 'flex';
+    const modal = document.getElementById('permit-modal');
+    modal.innerHTML = html;
+    modal.style.display = 'flex';
+    modal.querySelectorAll('.license-link').forEach(link => {
+        link.addEventListener('click', event => {
+            event.preventDefault();
+            showLicenseInfo(link.dataset.licenseNumber, link.dataset.licenseType || '');
+        });
+    });
+    bindPermitEnrichButtons(modal);
 }
 
 /**
@@ -2165,19 +2294,46 @@ function buildEnrichButton(permit, contactName, contactType, licenseNumber = nul
     const bbl = buildingData?.building?.bbl || BBL;
     const buildingId = buildingData?.building?.id;
     const permitId = permit.id;
+    if (!permitId) return '';
     
     // Create unique button ID
     const buttonId = `enrich-btn-${contactType}-${permitId}`;
     
     return `
         <div class="enrich-contact-section" id="enrich-section-${contactType}-${permitId}">
-            <button class="enrich-contact-btn" id="${buttonId}" 
-                onclick="enrichPermitContact('${bbl}', ${buildingId || 'null'}, ${permitId}, '${contactName.replace(/'/g, "\\'")}', '${contactType}', '${licenseNumber || ''}', '${licenseType || ''}', '${existingPhone || ''}', this)">
+            <button type="button" class="enrich-contact-btn" id="${escapeHtml(buttonId)}"
+                data-enrich-permit-contact
+                data-bbl="${escapeHtml(bbl)}"
+                data-building-id="${escapeHtml(buildingId || '')}"
+                data-permit-id="${escapeHtml(permitId)}"
+                data-contact-name="${escapeHtml(contactName)}"
+                data-contact-type="${escapeHtml(contactType)}"
+                data-license-number="${escapeHtml(licenseNumber || '')}"
+                data-license-type="${escapeHtml(licenseType || '')}"
+                data-existing-phone="${escapeHtml(existingPhone || '')}">
                 Get Contact Info
                 <span class="enrich-cost">$0.50</span>
             </button>
         </div>
     `;
+}
+
+function bindPermitEnrichButtons(container) {
+    container.querySelectorAll('[data-enrich-permit-contact]').forEach(button => {
+        button.addEventListener('click', () => {
+            enrichPermitContact(
+                button.dataset.bbl,
+                Number(button.dataset.buildingId) || null,
+                Number(button.dataset.permitId),
+                button.dataset.contactName,
+                button.dataset.contactType,
+                button.dataset.licenseNumber,
+                button.dataset.licenseType,
+                button.dataset.existingPhone,
+                button
+            );
+        });
+    });
 }
 
 /**
@@ -2233,7 +2389,7 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
             const section = button.closest('.enrich-contact-section');
             if (section) {
                 section.insertAdjacentHTML('beforeend', `
-                    <div class="enrich-error">${data.error || 'Enrichment failed'}</div>
+                    <div class="enrich-error">${escapeHtml(data.error || 'Enrichment failed')}</div>
                 `);
             }
         }
@@ -3285,6 +3441,7 @@ function formatDate(dateStr) {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(text)
         ? new Date(`${text}T12:00:00`)
         : new Date(text);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
     return date.toLocaleDateString('en-US', {
         year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
     });

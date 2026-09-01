@@ -795,6 +795,29 @@ LICENSE_TYPE_LABELS = {
     'GF': 'General Contractor (filing rep)',
 }
 
+
+def _decorate_profile_permit_rows(rows):
+    """Add display metadata without changing DOB's source values."""
+    permits = []
+    for row in rows:
+        permit = dict(row)
+        job_type = str(permit.get('job_type') or '').strip()
+        work_type = str(permit.get('work_type') or '').strip()
+        issue_date = permit.get('issue_date')
+        filing_date = permit.get('filing_date')
+
+        permit['job_type_label'] = (
+            JOB_TYPE_LABELS.get(job_type.upper(), job_type) if job_type else None)
+        permit['work_type_label'] = (
+            WORK_TYPE_LABELS.get(work_type.upper(), work_type) if work_type else None)
+        permit['effective_date'] = issue_date or filing_date
+        permit['record_kind'] = (
+            'issued_permit' if issue_date else
+            'job_filing' if filing_date else
+            'dob_record')
+        permits.append(permit)
+    return permits
+
 _FACET_COLUMNS = {
     'job_type': ('job_type', JOB_TYPE_LABELS),
     'work_type': ('work_type', WORK_TYPE_LABELS),
@@ -6498,7 +6521,7 @@ def api_building_profile(bbl):
             # ===== 2. PERMITS (All construction activity) =====
             cur.execute("""
             SELECT
-                permit_no, job_type, address, applicant,
+                id, permit_no, job_type, address, applicant,
                 stories, total_units, use_type, issue_date, link,
                     permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
                     permittee_first_name, permittee_last_name,
@@ -6510,9 +6533,11 @@ def api_building_profile(bbl):
                     self_cert, fee_type
                 FROM permits
                 WHERE bbl = %s
-                ORDER BY issue_date DESC
+                ORDER BY COALESCE(issue_date, filing_date) DESC NULLS LAST,
+                         issue_date DESC NULLS LAST,
+                         permit_no DESC
             """, (bbl,))
-            permits = cur.fetchall()
+            permits = _decorate_profile_permit_rows(cur.fetchall())
         
             # ===== 3. ACRIS TRANSACTIONS (Complete transaction history) =====
             cur.execute("""

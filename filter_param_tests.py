@@ -8,6 +8,7 @@ These tests need no database and no network:
 """
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard_html'))
 os.environ.setdefault('DATABASE_URL', 'postgresql://unused:unused@localhost:1/unused')
@@ -73,6 +74,35 @@ check('external property return URL is rejected',
 check('lookalike property return path is rejected',
       A._safe_properties_return_to('/properties-evil?page=4'),
       '/properties')
+
+print('— building-profile permit records —')
+profile_permits = A._decorate_profile_permit_rows([
+    {
+        'id': 42,
+        'permit_no': 'B01234567-P1',
+        'job_type': 'A2',
+        'work_type': 'PL',
+        'issue_date': None,
+        'filing_date': date(2026, 5, 8),
+    },
+    {
+        'id': 43,
+        'permit_no': '1234567',
+        'job_type': 'NB',
+        'work_type': None,
+        'issue_date': date(2026, 6, 1),
+        'filing_date': date(2026, 5, 20),
+    },
+])
+check('profile payload keeps the permit database id', profile_permits[0]['id'], 42)
+check('profile payload labels coded work types',
+      profile_permits[0]['work_type_label'], 'Plumbing')
+check('unissued records are identified as job filings',
+      profile_permits[0]['record_kind'], 'job_filing')
+check('issued records are identified as permits',
+      profile_permits[1]['record_kind'], 'issued_permit')
+check('effective date falls back to filing date',
+      profile_permits[0]['effective_date'], date(2026, 5, 8))
 
 print('— property type —')
 where, params = clauses(MultiDict([('property_type', 'residential'), ('property_type', 'mixed')]))
