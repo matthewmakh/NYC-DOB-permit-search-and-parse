@@ -786,6 +786,113 @@ def api_building_delete(building_id):
     return jsonify({'success': True})
 
 
+@crm_bp.route('/api/lists')
+@login_required
+def api_lists():
+    """Lightweight list options for pickers on the permit-side pages."""
+    lists = crm_service.list_lists(_ctx())
+    return jsonify({'success': True,
+                    'lists': [{'id': l['id'], 'name': l['name']} for l in lists]})
+
+
+def _import_permit_contacts(ctx, building_id, bbl, max_contacts=6):
+    """Bulk-import the permit contacts that have phones for one building.
+
+    A number already known to the team links the existing contact instead of
+    creating a duplicate. Phoneless rows are skipped here — the single-add
+    form is where those can be hand-picked.
+    """
+    try:
+        from app import DatabaseConnection, _fetch_contact_directory
+        with DatabaseConnection() as cur:
+            directory = _fetch_contact_directory(cur, bbl=bbl)
+    except Exception as e:
+        print(f'crm bulk-add: contact lookup failed for {bbl}: {e}', flush=True)
+        return 0
+    imported = 0
+    for pc in directory:
+        if imported >= max_contacts:
+            break
+        name = (pc.get('name') or '').strip()
+        phone = pc.get('phone')
+        if not name or not phone:
+            continue
+        digits = crm_service.normalize_phone_digits(phone)
+        if not digits:
+            continue
+        role_text = (pc.get('role') or '').strip()
+        role = 'owner' if 'owner' in role_text.lower() else 'other'
+        try:
+            matches = crm_service.find_contacts_by_digits(ctx, digits)
+            if matches:
+                crm_service.link_contact_to_building(ctx, matches[0]['id'], building_id, role)
+            else:
+                crm_service.create_contact(
+                    ctx, name=name, title=role_text or None, source='permit',
+                    source_detail=(pc.get('source') or 'DOB permit contact')[:255],
+                    building_id=building_id, building_role=role, phone=phone)
+            imported += 1
+        except Exception as e:
+            print(f'crm bulk-add: contact import failed for {bbl}/{name}: {e}', flush=True)
+    return imported
+
+
+@crm_bp.route('/api/bulk-add', methods=['POST'])
+@login_required
+def api_bulk_add():
+    """Add a batch of BBLs from the Properties grid. Already-tracked
+    buildings count as existing (and still join the chosen list)."""
+    ctx = _ctx()
+    data = _json()
+    bbls = [str(b).strip() for b in (data.get('bbls') or []) if b][:50]
+    if not bbls:
+        return jsonify({'success': False, 'error': 'No buildings selected'}), 400
+    with_contacts = bool(data.get('with_contacts', True))
+    list_id = _int_or_none(data.get('list_id'))
+    new_list_name = (data.get('new_list_name') or '').strip()
+    if new_list_name:
+        list_id = crm_service.create_list(ctx, name=new_list_name)
+    added, existing, failed = 0, 0, 0
+    in_crm = {}
+    for bbl in bbls:
+        try:
+            building_id = crm_service.find_building_by_bbl(ctx, bbl)
+            if building_id:
+                existing += 1
+            else:
+                prefill = crm_service.permit_building_prefill(bbl)
+                if not prefill:
+                    failed += 1
+                    continue
+                building_id, created = crm_service.create_building(
+                    ctx,
+                    address=prefill['address'],
+                    bbl=bbl,
+                    borough=prefill.get('borough'),
+                    zip_code=prefill.get('zip_code'),
+                    unit_count=prefill.get('unit_count'),
+                    year_built=prefill.get('year_built'),
+                    num_floors=prefill.get('num_floors'),
+                    building_class=prefill.get('building_class'),
+                    owner_name=prefill.get('owner_name'),
+                    source='permit',
+                )
+                if created:
+                    added += 1
+                    if with_contacts:
+                        _import_permit_contacts(ctx, building_id, bbl)
+                else:
+                    existing += 1
+            in_crm[bbl] = building_id
+            if list_id:
+                crm_service.add_list_item(ctx, list_id, building_id=building_id)
+        except Exception as e:
+            print(f'crm bulk-add failed for {bbl}: {e}', flush=True)
+            failed += 1
+    return jsonify({'success': True, 'added': added, 'existing': existing,
+                    'failed': failed, 'in_crm': in_crm, 'list_id': list_id})
+
+
 @crm_bp.route('/api/bbl-status', methods=['POST'])
 @login_required
 def api_bbl_status():

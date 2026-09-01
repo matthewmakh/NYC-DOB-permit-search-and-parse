@@ -623,7 +623,13 @@ function renderProperties() {
             <div class="property-card" data-property-bbl="${property.bbl}"
                  onclick="viewProperty('${property.bbl}')">
                 <div class="property-header">
-                    <div>
+                    ${property.bbl ? `
+                        <label class="property-select" onclick="event.stopPropagation()" title="Select for bulk add to CRM">
+                            <input type="checkbox" class="js-select-bbl" data-bbl="${property.bbl}"
+                                   ${crmBulk.selected.has(String(property.bbl)) ? 'checked' : ''}>
+                        </label>
+                    ` : ''}
+                    <div class="property-title-block">
                         <div class="property-address">${escapeHtml(property.address || 'Address N/A')}</div>
                         <div class="property-bbl">${formatBBL(property.bbl)}</div>
                     </div>
@@ -705,6 +711,7 @@ function renderProperties() {
     }).join('');
 
     refreshCrmStatus();
+    updateBulkBar();
 }
 
 // Badges for the signal columns (only present in API responses once the
@@ -1831,10 +1838,132 @@ async function saveLeadList() {
     }
 }
 
+// ---------- bulk multi-select add ----------
+
+// Selected BBLs survive re-renders and page changes within the visit.
+const crmBulk = { selected: new Set(), submitting: false };
+
+function updateBulkBar() {
+    const bar = document.getElementById('crmBulkBar');
+    if (!bar) return;
+    const n = crmBulk.selected.size;
+    bar.hidden = n === 0;
+    const count = document.getElementById('crmBulkCount');
+    if (count) count.textContent = `${n} selected`;
+}
+
+function clearBulkSelection() {
+    crmBulk.selected.clear();
+    document.querySelectorAll('.js-select-bbl').forEach(cb => { cb.checked = false; });
+    updateBulkBar();
+}
+
+async function openCrmBulkModal() {
+    if (!crmBulk.selected.size) return;
+    const modal = document.getElementById('crmBulkModal');
+    document.getElementById('crmBulkTitle').textContent =
+        `Add ${crmBulk.selected.size} building${crmBulk.selected.size > 1 ? 's' : ''} to CRM`;
+    document.getElementById('crmBulkProgress').hidden = true;
+    document.getElementById('crmBulkNewList').value = '';
+    const go = document.getElementById('crmBulkGo');
+    go.disabled = false;
+    go.innerHTML = 'Add buildings';
+    modal.style.display = 'block';
+    // Fill the list picker with the team's current lists.
+    try {
+        const res = await fetch('/crm/api/lists');
+        const data = await res.json();
+        if (data.success) {
+            const select = document.getElementById('crmBulkList');
+            select.innerHTML = '<option value="">No list</option>' + data.lists.map(l =>
+                `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+        }
+    } catch (e) { /* picker just stays at "No list" */ }
+}
+
+function closeCrmBulkModal() {
+    if (crmBulk.submitting) return;
+    document.getElementById('crmBulkModal').style.display = 'none';
+}
+
+async function submitCrmBulkAdd() {
+    if (crmBulk.submitting) return;
+    const bbls = Array.from(crmBulk.selected);
+    if (!bbls.length) return;
+    const withContacts = document.getElementById('crmBulkContacts').checked;
+    const listId = document.getElementById('crmBulkList').value || null;
+    const newListName = document.getElementById('crmBulkNewList').value.trim() || null;
+    const go = document.getElementById('crmBulkGo');
+    const progress = document.getElementById('crmBulkProgress');
+    crmBulk.submitting = true;
+    go.disabled = true;
+    progress.hidden = false;
+
+    // Chunked so a big selection can't hit a request timeout; the first
+    // chunk may create the new list, later chunks reuse its id.
+    const CHUNK = 25;
+    let added = 0, existing = 0, failed = 0, done = 0;
+    let effectiveListId = listId;
+    let effectiveNewList = newListName;
+    try {
+        for (let i = 0; i < bbls.length; i += CHUNK) {
+            const chunk = bbls.slice(i, i + CHUNK);
+            progress.textContent = `Adding ${Math.min(i + chunk.length, bbls.length)} of ${bbls.length}…`;
+            const res = await fetch('/crm/api/bulk-add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    bbls: chunk,
+                    with_contacts: withContacts,
+                    list_id: effectiveListId,
+                    new_list_name: effectiveNewList
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Bulk add failed');
+            added += data.added; existing += data.existing; failed += data.failed;
+            done += chunk.length;
+            Object.assign(crmStatus.inCrm, data.in_crm || {});
+            if (data.list_id) { effectiveListId = data.list_id; effectiveNewList = null; }
+        }
+        const parts = [`${added} added`];
+        if (existing) parts.push(`${existing} already in CRM`);
+        if (failed) parts.push(`${failed} failed`);
+        crmNotice(parts.join(' · '));
+        clearBulkSelection();
+        document.getElementById('crmBulkModal').style.display = 'none';
+        refreshCrmStatus();
+    } catch (e) {
+        progress.textContent = (e && e.message) || 'Something went wrong — try again.';
+        if (done) refreshCrmStatus();
+    } finally {
+        crmBulk.submitting = false;
+        go.disabled = false;
+        go.innerHTML = 'Add buildings';
+    }
+}
+
 (function wireCrmButtons() {
     const bind = () => {
         const saveBtn = document.getElementById('saveLeadListBtn');
         if (saveBtn) saveBtn.addEventListener('click', saveLeadList);
+        const addBtn = document.getElementById('crmBulkAddBtn');
+        if (addBtn) addBtn.addEventListener('click', openCrmBulkModal);
+        const clearBtn = document.getElementById('crmBulkClearBtn');
+        if (clearBtn) clearBtn.addEventListener('click', clearBulkSelection);
+        const goBtn = document.getElementById('crmBulkGo');
+        if (goBtn) goBtn.addEventListener('click', submitCrmBulkAdd);
+        const closeBtn = document.getElementById('crmBulkClose');
+        if (closeBtn) closeBtn.addEventListener('click', closeCrmBulkModal);
+        const cancelBtn = document.getElementById('crmBulkCancel');
+        if (cancelBtn) cancelBtn.addEventListener('click', closeCrmBulkModal);
+        document.addEventListener('change', (e) => {
+            if (!e.target.classList || !e.target.classList.contains('js-select-bbl')) return;
+            const bbl = String(e.target.dataset.bbl);
+            if (e.target.checked) crmBulk.selected.add(bbl);
+            else crmBulk.selected.delete(bbl);
+            updateBulkBar();
+        });
     };
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', bind);

@@ -287,6 +287,46 @@
         </div>
     </div>
 
+    <!-- Bulk add-to-CRM: selection bar + dialog (driven by properties.js) -->
+    <div class="crm-bulk-bar" id="crmBulkBar" hidden>
+        <span class="crm-bulk-count" id="crmBulkCount">0 selected</span>
+        <button class="btn btn-primary btn-sm" id="crmBulkAddBtn">
+            <i class="fas fa-address-book" aria-hidden="true"></i> Add to CRM
+        </button>
+        <button class="btn btn-secondary btn-sm" id="crmBulkClearBtn">Clear</button>
+    </div>
+
+    <div id="crmBulkModal" class="modal">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2 id="crmBulkTitle">Add to CRM</h2>
+                <button class="modal-close" id="crmBulkClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label class="checkbox-label" style="margin-bottom: 14px;">
+                    <input type="checkbox" id="crmBulkContacts" checked>
+                    <span>Bring permit contacts with phone numbers</span>
+                </label>
+                <div style="margin-bottom: 12px;">
+                    <label class="filter-label" for="crmBulkList">Add everything to a list</label>
+                    <select id="crmBulkList" class="filter-select">
+                        <option value="">No list</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 4px;">
+                    <label class="filter-label" for="crmBulkNewList">&hellip;or start a new list</label>
+                    <input type="text" id="crmBulkNewList" class="filter-input" maxlength="120"
+                           placeholder="e.g. Brooklyn walk-ups — spring push">
+                </div>
+                <div class="crm-bulk-progress" id="crmBulkProgress" hidden></div>
+                <div class="export-actions">
+                    <button class="btn btn-secondary" id="crmBulkCancel">Cancel</button>
+                    <button class="btn btn-primary" id="crmBulkGo">Add buildings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/navigation.js"></script>
     <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/filters_common.js"></script>

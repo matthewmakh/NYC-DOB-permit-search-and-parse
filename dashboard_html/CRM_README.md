@@ -25,8 +25,12 @@ phone number; the CRM never writes to permit tables.
 
 Integration points elsewhere: one `register_blueprint` + `init_crm_tables()`
 call in `app.py`, a nav item in `_site_nav.html`, the **Add to CRM** button on
-`building_profile.html`, and the per-card CRM button + **Save as lead list**
-on the Properties page.
+`building_profile.html`, and on the Properties page: the per-card CRM button,
+**Save as lead list**, and bulk multi-select (card checkboxes → floating
+"N selected" bar → **Add N to CRM** dialog with contact import and list
+placement, via `POST /crm/api/bulk-add`, chunked 25 per request client-side).
+Bulk contact import only takes permit contacts that have phones, and a number
+the team already knows links the existing contact instead of duplicating it.
 
 ## Teams, roles, and visibility
 
