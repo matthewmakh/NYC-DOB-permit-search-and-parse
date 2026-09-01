@@ -23,7 +23,9 @@ Fixes vs. the previous version:
 import os
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime, timedelta
+from threading import Lock, local
 
 import psycopg2
 import psycopg2.extras
@@ -64,15 +66,24 @@ ACRIS_RETENTION_WHERE = (
     "OR recorded_datetime IS NULL"
 )
 ACRIS_LOGIC_VERSION = 5  # v5 enforces the live-database retention boundary
+ACRIS_MAX_WORKERS = max(1, int(os.getenv('ACRIS_MAX_WORKERS', '6')))
+ACRIS_MAX_BUILDINGS = max(0, int(os.getenv('ACRIS_MAX_BUILDINGS', '0')))
+ACRIS_PROGRESS_EVERY = max(1, int(os.getenv('ACRIS_PROGRESS_EVERY', '100')))
 
 _client = None
+_thread_state = local()
+_print_lock = Lock()
 
 
 def get_client():
-    global _client
-    if _client is None:
-        _client = SocrataClient()
-    return _client
+    # Tests and targeted callers may install an explicit shared stub.
+    if _client is not None:
+        return _client
+    # requests.Session is not guaranteed to be thread-safe. The backfill runs
+    # several buildings concurrently, so each worker thread owns its client.
+    if not hasattr(_thread_state, 'client'):
+        _thread_state.client = SocrataClient()
+    return _thread_state.client
 
 
 def parse_acris_date(date_str):
@@ -562,8 +573,13 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         purchase_mortgage = find_purchase_mortgage(transactions, sale_date)
         is_cash_purchase = purchase_mortgage is None
         if sale_price and sale_price > 0:
-            financing_ratio = (0 if is_cash_purchase else
-                               purchase_mortgage['doc_amount'] / sale_price)
+            raw_ratio = (0 if is_cash_purchase else
+                         purchase_mortgage['doc_amount'] / sale_price)
+            # Nominal/partial-interest deeds can pair a tiny deed amount with
+            # a whole-property mortgage. Those are not meaningful LTVs and
+            # previously overflowed NUMERIC(5,2), causing the same building to
+            # fail forever on every retry.
+            financing_ratio = raw_ratio if 0 <= raw_ratio <= 10 else None
         if sale_date:
             days_since_sale = max((date.today() - sale_date).days, 0)
 

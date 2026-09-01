@@ -25,6 +25,16 @@ simply shows fewer plays instead of erroring.
 #   audience          'investors' | 'contractors' | 'both' (display chip)
 #   family            optional UI grouping; existing plays remain "property_intel"
 #   required_permit_columns  optional permit columns needed by the WHERE clause
+#   data_source       source family used for coverage messaging in the UI
+#   coverage_where    optional SQL fragment that proves the source data exists
+#   coverage_required_columns / coverage_required_permit_columns
+#                     columns needed to calculate coverage (not play availability)
+#   coverage_label    short, user-facing explanation of what coverage means
+#   coverage_kind     'pipeline' when every building is expected to be refreshed;
+#                     'source' when the count describes a naturally smaller feed
+#   permit_count_where / permit_coverage_where
+#                     optional predicates over permits p used only to aggregate
+#                     all permit-backed card counts in one database pass
 
 PLAYS = [
     {
@@ -34,8 +44,13 @@ PLAYS = [
                         'doesn\'t pencil on current rents — meaning the buyer has a plan. '
                         'A city-curated list of investors in motion and buildings about to see activity.'),
         'audience': 'both',
+        'data_source': 'signals',
         'where': "b.on_speculation_watch_list = TRUE",
         'required_columns': ['on_speculation_watch_list'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'sale_date', 'order': 'desc'},
         'how_to_use': [
             'Sort by sale date — the newest purchases are the hottest window.',
@@ -80,8 +95,13 @@ PLAYS = [
                         'sitting on buildable square footage that developers pay land-value premiums for. '
                         'Unused FAR × lot size = the hidden asset.'),
         'audience': 'investors',
+        'data_source': 'pluto',
         'where': "b.unused_far >= 1.0 AND b.lot_sqft > 0",
-        'required_columns': ['unused_far'],
+        'required_columns': ['unused_far', 'lot_sqft'],
+        'coverage_where': "b.property_last_enriched IS NOT NULL",
+        'coverage_required_columns': ['property_last_enriched'],
+        'coverage_label': 'Property facts refreshed',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'unused_far', 'order': 'desc'},
         'how_to_use': [
             'Sort by unused FAR; multiply by lot sqft to rank absolute buildable area.',
@@ -97,8 +117,13 @@ PLAYS = [
                         'maximum equity. These owners can transact fast, and they hear from nobody '
                         'because they never refinance.'),
         'audience': 'investors',
+        'data_source': 'acris',
         'where': "b.is_free_and_clear = TRUE AND b.acris_total_transactions > 0",
-        'required_columns': ['is_free_and_clear'],
+        'required_columns': ['is_free_and_clear', 'acris_total_transactions'],
+        'coverage_where': "b.acris_last_enriched IS NOT NULL",
+        'coverage_required_columns': ['acris_last_enriched'],
+        'coverage_label': 'ACRIS history refreshed',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'value', 'order': 'desc'},
         'how_to_use': [
             'These owners have no bank in the deal — cash offers and quick closes land well.',
@@ -113,8 +138,13 @@ PLAYS = [
                         'owner-occupants 65+, usually decades of tenure and equity. The highest-'
                         'converting seller demographic in the business.'),
         'audience': 'investors',
+        'data_source': 'signals',
         'where': "b.has_senior_exemption = TRUE",
         'required_columns': ['has_senior_exemption'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'value', 'order': 'desc'},
         'how_to_use': [
             'Lead with patience and simplicity: as-is offers, flexible timelines, no showings.',
@@ -129,9 +159,17 @@ PLAYS = [
                         'on record. Each one is the city or the courts making ownership expensive — '
                         'classic motivated-seller signals.'),
         'audience': 'investors',
+        'data_source': 'signals',
         'where': ("(b.litigation_open_count > 0 OR b.eviction_count > 0 "
                   "OR b.has_tax_delinquency = TRUE)"),
-        'required_columns': ['litigation_open_count', 'eviction_count'],
+        'required_columns': [
+            'litigation_open_count', 'eviction_count', 'has_tax_delinquency'],
+        'coverage_where': ("b.signals_enrichment_version >= 2 "
+                           "AND b.tax_lien_last_checked IS NOT NULL"),
+        'coverage_required_columns': [
+            'signals_enrichment_version', 'tax_lien_last_checked'],
+        'coverage_label': 'Court, eviction, and lien sources refreshed',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'sale_date', 'order': 'asc'},
         'how_to_use': [
             'Check which signal fired on the profile — litigation, lien notice, and evictions are different conversations.',
@@ -146,8 +184,13 @@ PLAYS = [
                         'Owners here are at the exit, refinance, or lease-up moment, and the data on '
                         'these buildings is the freshest in the system.'),
         'audience': 'both',
+        'data_source': 'signals',
         'where': "b.latest_co_date >= CURRENT_DATE - INTERVAL '180 days'",
         'required_columns': ['latest_co_date'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'co_date', 'order': 'desc'},
         'how_to_use': [
             'A TCO (temporary CO) means punch-list work remains — still a contractor opportunity.',
@@ -162,8 +205,13 @@ PLAYS = [
                         'on a legal clock, with fines for missing it. This is pre-qualified demand for '
                         'exterior work.'),
         'audience': 'contractors',
+        'data_source': 'signals',
         'where': "(b.fisp_status ILIKE 'UNSAFE%%' OR b.fisp_status ILIKE 'SWARMP%%')",
         'required_columns': ['fisp_status'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'value', 'order': 'desc'},
         'how_to_use': [
             'UNSAFE means sidewalk sheds and mandated repairs NOW; SWARMP means repairs required before the next 5-year cycle.',
@@ -178,8 +226,13 @@ PLAYS = [
                         'emissions caps with real annual fines. Every one is a candidate for energy '
                         'retrofits, electrification, and compliance work.'),
         'audience': 'contractors',
+        'data_source': 'signals',
         'where': "b.ll97_covered_estimated = TRUE",
         'required_columns': ['ll97_covered_estimated'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'value', 'order': 'desc'},
         'how_to_use': [
             'A low Energy Star score or high site EUI on the profile means bigger fines and an easier sell.',
@@ -197,12 +250,30 @@ PLAYS = [
                         'These justify a whole-building technology conversation instead of a device quote.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'permits',
         'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
                   "AND p.initial_cost >= 250000 "
                   "AND COALESCE(p.current_status_date::date, p.filing_date, p.issue_date) "
                   ">= CURRENT_DATE - INTERVAL '540 days')"),
-        'required_columns': [],
-        'required_permit_columns': ['initial_cost', 'current_status_date'],
+        'permit_count_where': (
+            "p.initial_cost >= 250000 AND "
+            "COALESCE(p.current_status_date::date, p.filing_date, p.issue_date) "
+            ">= CURRENT_DATE - INTERVAL '540 days'"),
+        'required_columns': ['bbl'],
+        'required_permit_columns': [
+            'bbl', 'initial_cost', 'current_status_date', 'filing_date',
+            'issue_date'],
+        'coverage_where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                           "AND p.initial_cost IS NOT NULL "
+                           "AND COALESCE(p.current_status_date::date, p.filing_date, p.issue_date) IS NOT NULL)"),
+        'permit_coverage_where': (
+            "p.initial_cost IS NOT NULL AND "
+            "COALESCE(p.current_status_date::date, p.filing_date, p.issue_date) IS NOT NULL"),
+        'coverage_required_permit_columns': [
+            'bbl', 'initial_cost', 'current_status_date', 'filing_date',
+            'issue_date'],
+        'coverage_label': 'Buildings with permit cost and date data',
+        'coverage_kind': 'source',
         'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
         'how_to_use': [
             'Open the latest consolidated DOB project and confirm the proposed use, units, stories, and stage.',
@@ -217,14 +288,33 @@ PLAYS = [
                         'Growth creates new pathways, doors, residents, network loads, and security scope.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'permits',
         'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND ("
                   "p.proposed_stories_count > p.existing_stories_count OR "
                   "p.proposed_dwelling_units > p.existing_dwelling_units))"),
-        'required_columns': [],
+        'permit_count_where': (
+            "p.proposed_stories_count > p.existing_stories_count OR "
+            "p.proposed_dwelling_units > p.existing_dwelling_units"),
+        'required_columns': ['bbl'],
         'required_permit_columns': [
+            'bbl',
             'existing_stories_count', 'proposed_stories_count',
             'existing_dwelling_units', 'proposed_dwelling_units',
         ],
+        'coverage_where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND ("
+                           "p.existing_stories_count IS NOT NULL OR p.proposed_stories_count IS NOT NULL OR "
+                           "p.existing_dwelling_units IS NOT NULL OR p.proposed_dwelling_units IS NOT NULL))"),
+        'permit_coverage_where': (
+            "p.existing_stories_count IS NOT NULL OR "
+            "p.proposed_stories_count IS NOT NULL OR "
+            "p.existing_dwelling_units IS NOT NULL OR "
+            "p.proposed_dwelling_units IS NOT NULL"),
+        'coverage_required_permit_columns': [
+            'bbl',
+            'existing_stories_count', 'proposed_stories_count',
+            'existing_dwelling_units', 'proposed_dwelling_units'],
+        'coverage_label': 'Buildings with proposed-condition data',
+        'coverage_kind': 'source',
         'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
         'how_to_use': [
             'Prioritize the largest unit and story deltas and projects still in filing or approval.',
@@ -239,19 +329,33 @@ PLAYS = [
                         'HVAC/boiler wiring, or new meters—strong evidence that a building project is moving.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'permits',
         'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl AND "
                   "p.api_source = 'dob_now_electrical' AND ("
                   "p.electrical_service_work OR p.electrical_general_wiring OR "
                   "p.electrical_temp_construction_service OR p.electrical_temp_light_power OR "
                   "p.electrical_hvac_wiring OR p.electrical_boiler_burner_wiring OR "
                   "COALESCE(p.electrical_new_meters, 0) > 0))"),
-        'required_columns': [],
+        'permit_count_where': (
+            "p.api_source = 'dob_now_electrical' AND ("
+            "p.electrical_service_work OR p.electrical_general_wiring OR "
+            "p.electrical_temp_construction_service OR p.electrical_temp_light_power OR "
+            "p.electrical_hvac_wiring OR p.electrical_boiler_burner_wiring OR "
+            "COALESCE(p.electrical_new_meters, 0) > 0)"),
+        'required_columns': ['bbl'],
         'required_permit_columns': [
+            'bbl', 'api_source',
             'electrical_service_work', 'electrical_general_wiring',
             'electrical_temp_construction_service', 'electrical_temp_light_power',
             'electrical_hvac_wiring', 'electrical_boiler_burner_wiring',
             'electrical_new_meters',
         ],
+        'coverage_where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                           "AND p.api_source = 'dob_now_electrical')"),
+        'permit_coverage_where': "p.api_source = 'dob_now_electrical'",
+        'coverage_required_permit_columns': ['bbl', 'api_source'],
+        'coverage_label': 'Buildings with DOB NOW Electrical filings',
+        'coverage_kind': 'source',
         'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
         'how_to_use': [
             'Use temporary power as an early construction-stage trigger and new meters as a scale signal.',
@@ -267,13 +371,26 @@ PLAYS = [
                         'camera, network, life-safety, and electrical coordination opportunities.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'permits',
         'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
                   "AND p.api_source = 'dob_now_elevator' "
                   "AND p.filing_date >= CURRENT_DATE - INTERVAL '730 days' "
                   "AND COALESCE(p.elevator_work_type, '') ~* "
                   "'(new installation|alteration|replacement|remove|dismantle)')"),
-        'required_columns': [],
-        'required_permit_columns': ['elevator_device_type', 'elevator_work_type'],
+        'permit_count_where': (
+            "p.api_source = 'dob_now_elevator' "
+            "AND p.filing_date >= CURRENT_DATE - INTERVAL '730 days' "
+            "AND COALESCE(p.elevator_work_type, '') ~* "
+            "'(new installation|alteration|replacement|remove|dismantle)'"),
+        'required_columns': ['bbl'],
+        'required_permit_columns': [
+            'bbl', 'api_source', 'filing_date', 'elevator_work_type'],
+        'coverage_where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                           "AND p.api_source = 'dob_now_elevator')"),
+        'permit_coverage_where': "p.api_source = 'dob_now_elevator'",
+        'coverage_required_permit_columns': ['bbl', 'api_source'],
+        'coverage_label': 'Buildings with DOB NOW Elevator filings',
+        'coverage_kind': 'source',
         'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
         'how_to_use': [
             'Prioritize active new installations and alteration/replacement filings over signed-off work.',
@@ -288,12 +405,25 @@ PLAYS = [
                         'data, Wi-Fi, security, or door systems. These are explicit or adjacent-fit opportunities.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'permits',
         'where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
                   "AND COALESCE(p.filing_date, p.issue_date) >= CURRENT_DATE - INTERVAL '730 days' "
                   "AND COALESCE(p.work_description, '') ~* "
                   "'(intercom|camera|cctv|access control|telecom|low[ -]?voltage|data cabl|wi[ -]?fi|security|door hardware)')"),
-        'required_columns': [],
-        'required_permit_columns': ['work_description'],
+        'permit_count_where': (
+            "COALESCE(p.filing_date, p.issue_date) >= CURRENT_DATE - INTERVAL '730 days' "
+            "AND COALESCE(p.work_description, '') ~* "
+            "'(intercom|camera|cctv|access control|telecom|low[ -]?voltage|data cabl|wi[ -]?fi|security|door hardware)'"),
+        'required_columns': ['bbl'],
+        'required_permit_columns': [
+            'bbl', 'filing_date', 'issue_date', 'work_description'],
+        'coverage_where': ("EXISTS (SELECT 1 FROM permits p WHERE p.bbl = b.bbl "
+                           "AND NULLIF(btrim(p.work_description), '') IS NOT NULL)"),
+        'permit_coverage_where': (
+            "NULLIF(btrim(p.work_description), '') IS NOT NULL"),
+        'coverage_required_permit_columns': ['bbl', 'work_description'],
+        'coverage_label': 'Buildings with searchable work descriptions',
+        'coverage_kind': 'source',
         'recommended_sort': {'by': 'recent_permits', 'order': 'desc'},
         'how_to_use': [
             'Read the description in context; a keyword is a reason to research, not proof of an open bid.',
@@ -308,8 +438,13 @@ PLAYS = [
                         'to lease-up and operations—when access, intercom, cameras, Wi-Fi, and support must work reliably.'),
         'audience': 'contractors',
         'family': 'smart_installers',
+        'data_source': 'signals',
         'where': "b.latest_co_date >= CURRENT_DATE - INTERVAL '365 days'",
         'required_columns': ['latest_co_date'],
+        'coverage_where': "b.signals_enrichment_version >= 2",
+        'coverage_required_columns': ['signals_enrichment_version'],
+        'coverage_label': 'Signal enrichment complete',
+        'coverage_kind': 'pipeline',
         'recommended_sort': {'by': 'co_date', 'order': 'desc'},
         'how_to_use': [
             'Identify the owner, operator, and property manager taking possession—not only the construction team.',
@@ -325,7 +460,11 @@ _PLAYS_BY_ID = {p['id']: p for p in PLAYS}
 def public_play(play):
     """The play as sent to the frontend (everything except the SQL)."""
     return {k: v for k, v in play.items()
-            if k not in ('where', 'required_columns', 'required_permit_columns')}
+            if k not in (
+                'where', 'required_columns', 'required_permit_columns',
+                'coverage_where', 'coverage_required_columns',
+                'coverage_required_permit_columns', 'permit_count_where',
+                'permit_coverage_where')}
 
 
 def available_plays(existing_columns, permit_columns=None):

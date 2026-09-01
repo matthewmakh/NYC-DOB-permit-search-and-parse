@@ -4,11 +4,14 @@ Master Enrichment Pipeline
 Runs all building enrichment steps in sequence with dependency checking
 
 Execution order:
+0. Apply additive schema migrations
 1. Step 1: Link permits to buildings (derive BBL)
 2. Step 2: Enrich from PLUTO + RPAD + HPD (owners, assessed values, violations)
-3. Step 3: Enrich from ACRIS (transaction history)
-4. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
-5. Geocode permits (lat/lng)
+3. Step 6: Refresh user-facing distress/compliance signals before long backfills
+4. Step 3: Enrich from ACRIS (transaction history)
+5. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
+6. Step 5: Enrich owner entities from NY Secretary of State
+7. Geocode permits and recover queued property enrichment
 
 Each step is self-contained and checks if work is needed before running.
 """
@@ -114,6 +117,14 @@ def main():
     if not results['project_migration']:
         print_error("Project intelligence migration failed - cannot safely continue")
         sys.exit(1)
+
+    results['signals_migration'] = run_script(
+        'migrate_add_intel_signals.py',
+        'Create versioned distress/compliance signal freshness and error tracking'
+    )
+    if not results['signals_migration']:
+        print_error("Signal intelligence migration failed - cannot safely continue")
+        sys.exit(1)
     
     # ===== STEP 1: Link Permits to Buildings =====
     print_step(1, "Link Permits to Buildings (BBL Generation)")
@@ -135,7 +146,20 @@ def main():
     
     if not results['step2']:
         print_warning("Step 2 failed - continuing to next steps")
-    
+
+    # Run the user-facing signal pass before ACRIS. A full ACRIS
+    # backfill can take several days, so keeping Step 6 at the end of this
+    # monolithic cron meant it could be starved indefinitely (and every signal
+    # play looked like a real zero in the dashboard).
+    print_step(6, "Enrich Distress & Compliance Signals")
+    results['step6'] = run_script(
+        'step6_enrich_signals.py',
+        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales'
+    )
+
+    if not results['step6']:
+        print_warning("Step 6 failed - continuing to transaction enrichment")
+
     # Flag every tracked property touched by a recently-recorded deed before
     # the normal ACRIS stale-row selection runs.
     print_step('2b', "Detect Recent ACRIS Activity")
@@ -176,16 +200,6 @@ def main():
     if not results['step5']:
         print_warning("Step 5 failed - continuing to geocoding")
     
-    # ===== STEP 6: Distress / compliance / freshness signals =====
-    print_step(6, "Enrich Distress & Compliance Signals")
-    results['step6'] = run_script(
-        'step6_enrich_signals.py',
-        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales'
-    )
-
-    if not results['step6']:
-        print_warning("Step 6 failed - continuing to geocoding")
-
     # ===== STEP 7: Geocode Permits =====
     print_step(7, "Geocode Permits (Latitude/Longitude)")
     results['geocode'] = run_script(
@@ -221,7 +235,14 @@ def main():
         print(f"  {step:12} {status}")
     
     # Overall status
-    critical_steps = ['migrations', 'project_migration', 'step1', 'step2']  # Must succeed
+    critical_steps = [
+        'migrations',
+        'project_migration',
+        'signals_migration',
+        'step1',
+        'step2',
+        'step6',
+    ]  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
     
     if critical_failed:

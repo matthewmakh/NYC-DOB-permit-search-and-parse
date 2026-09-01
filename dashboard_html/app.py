@@ -4078,38 +4078,43 @@ _buildings_columns_cache = {'at': 0.0, 'cols': set()}
 _permits_columns_cache = {'at': 0.0, 'cols': set()}
 
 
+def _table_columns(table_name, cache_entry):
+    """Return cached table columns without masking a failed first probe.
+
+    A previously successful value may be served stale during a transient
+    database problem. With no successful value, however, an outage must raise:
+    returning an empty set made the plays API report a healthy empty list.
+    """
+    now = time.time()
+    if cache_entry['cols'] and now - cache_entry['at'] <= 300:
+        return cache_entry['cols']
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = %s
+            """, (table_name,))
+            columns = {r['column_name'] for r in cur.fetchall()}
+        if not columns:
+            raise RuntimeError(f"required table {table_name!r} was not found")
+        cache_entry['cols'] = columns
+        cache_entry['at'] = now
+    except Exception as e:
+        if cache_entry['cols']:
+            print(f"{table_name}-columns probe failed; using cached schema: {e}")
+            return cache_entry['cols']
+        raise RuntimeError(f"could not inspect {table_name} schema: {e}") from e
+    return cache_entry['cols']
+
+
 def _buildings_columns():
     """Column names on buildings, cached for 5 minutes."""
-    now = time.time()
-    if now - _buildings_columns_cache['at'] > 300:
-        try:
-            with DatabaseConnection() as cur:
-                cur.execute("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'buildings'
-                """)
-                _buildings_columns_cache['cols'] = {r['column_name'] for r in cur.fetchall()}
-                _buildings_columns_cache['at'] = now
-        except Exception as e:
-            print(f"buildings-columns probe failed: {e}")
-    return _buildings_columns_cache['cols']
+    return _table_columns('buildings', _buildings_columns_cache)
 
 
 def _permits_columns():
     """Column names on permits, cached for 5 minutes."""
-    now = time.time()
-    if now - _permits_columns_cache['at'] > 300:
-        try:
-            with DatabaseConnection() as cur:
-                cur.execute("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'permits'
-                """)
-                _permits_columns_cache['cols'] = {r['column_name'] for r in cur.fetchall()}
-                _permits_columns_cache['at'] = now
-        except Exception as e:
-            print(f"permits-columns probe failed: {e}")
-    return _permits_columns_cache['cols']
+    return _table_columns('permits', _permits_columns_cache)
 
 
 def _resolve_play_where(play_id):
@@ -4142,29 +4147,139 @@ def _signal_select_sql():
 
 
 @app.route('/api/properties/plays')
-@cache.cached(timeout=600)
+@cache.cached(timeout=900)
 def api_property_plays():
-    """Prebuilt plays available on this database, with live match counts."""
+    """Prebuilt plays with live counts and source-coverage diagnostics."""
     from plays import available_plays, public_play
     try:
-        plays_list = available_plays(_buildings_columns(), _permits_columns())
+        building_columns = _buildings_columns()
+        permit_columns = _permits_columns()
+        plays_list = available_plays(building_columns, permit_columns)
         counts = {}
+        coverage_counts = {}
+        total_buildings = 0
+        count_error = None
         if plays_list:
-            count_exprs = ', '.join(
-                f"COUNT(*) FILTER (WHERE {p['where']}) AS c{i}"
-                for i, p in enumerate(plays_list)
-            )
-            with DatabaseConnection() as cur:
-                cur.execute(f"SELECT {count_exprs} FROM buildings b", ())
-                row = cur.fetchone()
-                counts = {p['id']: row[f'c{i}'] for i, p in enumerate(plays_list)}
+            expressions = ['COUNT(*) AS total_buildings']
+            permit_expressions = []
+            coverage_aliases = {}
+            for i, play in enumerate(plays_list):
+                if play.get('permit_count_where'):
+                    permit_expressions.append(
+                        f"COUNT(DISTINCT p.bbl) FILTER "
+                        f"(WHERE {play['permit_count_where']}) AS c{i}")
+                else:
+                    expressions.append(
+                        f"COUNT(*) FILTER (WHERE {play['where']}) AS c{i}")
+                required_building = set(
+                    play.get('coverage_required_columns', []))
+                required_permit = set(
+                    play.get('coverage_required_permit_columns', []))
+                if (play.get('coverage_where')
+                        and required_building <= building_columns
+                        and required_permit <= permit_columns):
+                    if play.get('permit_coverage_where'):
+                        permit_expressions.append(
+                            f"COUNT(DISTINCT p.bbl) FILTER "
+                            f"(WHERE {play['permit_coverage_where']}) AS v{i}")
+                    else:
+                        expressions.append(
+                            f"COUNT(*) FILTER (WHERE {play['coverage_where']}) AS v{i}")
+                    coverage_aliases[play['id']] = f'v{i}'
+            row = {}
+            try:
+                with DatabaseConnection() as cur:
+                    cur.execute(
+                        f"SELECT {', '.join(expressions)} FROM buildings b", ())
+                    row = dict(cur.fetchone() or {})
+            except Exception as building_count_exc:
+                count_error = 'Prebuilt-filter counts are temporarily unavailable.'
+                print(f"Building play count query failed: {building_count_exc}")
+            if row and permit_expressions:
+                try:
+                    # Use a separate transaction so a timeout here does not
+                    # discard the faster building-backed card counts.
+                    with DatabaseConnection() as cur:
+                        cur.execute(
+                            f"SELECT {', '.join(permit_expressions)} "
+                            "FROM permits p "
+                            "JOIN buildings b ON b.bbl = p.bbl "
+                            "WHERE p.bbl IS NOT NULL", ())
+                        row.update(dict(cur.fetchone() or {}))
+                except Exception as permit_count_exc:
+                    count_error = (
+                        'Permit-based prebuilt-filter counts are temporarily unavailable.')
+                    print(f"Permit play count query failed: {permit_count_exc}")
+            if row:
+                total_buildings = int(row.get('total_buildings') or 0)
+                counts = {
+                    p['id']: (int(row.get(f'c{i}') or 0)
+                              if f'c{i}' in row else None)
+                    for i, p in enumerate(plays_list)
+                }
+                coverage_counts = {
+                    play_id: int(row.get(alias) or 0)
+                    for play_id, alias in coverage_aliases.items()
+                    if alias in row
+                }
+
+        payload = []
+        for play in plays_list:
+            item = dict(public_play(play))
+            count = counts.get(play['id'])
+            item['count'] = count
+            item['count_status'] = 'error' if count is None else (
+                'empty' if count == 0 else 'ready')
+
+            if play['id'] in coverage_counts:
+                covered = coverage_counts[play['id']]
+                kind = play.get('coverage_kind', 'source')
+                if covered == 0:
+                    status = 'not_started'
+                elif kind == 'pipeline' and total_buildings and covered < total_buildings:
+                    status = 'partial'
+                else:
+                    status = 'ready'
+                item['coverage'] = {
+                    'status': status,
+                    'kind': kind,
+                    'count': covered,
+                    'total': total_buildings,
+                    'percent': (round(covered * 100 / total_buildings, 1)
+                                if total_buildings else 0),
+                    'label': play.get('coverage_label', 'Source data available'),
+                }
+            elif play.get('coverage_where'):
+                item['coverage'] = {
+                    'status': 'unavailable',
+                    'kind': play.get('coverage_kind', 'source'),
+                    'count': None,
+                    'total': total_buildings,
+                    'percent': None,
+                    'label': play.get('coverage_label', 'Source data available'),
+                }
+            payload.append(item)
+
+        count_health = 'ready'
+        if count_error:
+            count_health = ('partial' if any(
+                count is not None for count in counts.values()) else 'error')
         return jsonify({
             'success': True,
-            'plays': [dict(public_play(p), count=counts.get(p['id'], 0)) for p in plays_list],
+            'plays': payload,
+            'health': {
+                'total_buildings': total_buildings,
+                'counts': count_health,
+                'message': count_error,
+            },
         })
     except Exception as e:
         print(f"Plays API error: {e}")
-        return jsonify({'success': False, 'error': str(e), 'plays': []}), 500
+        return jsonify({
+            'success': False,
+            'error': 'Prebuilt filters could not reach their data source.',
+            'plays': [],
+        }), 503
 
 
 @app.route('/api/properties')
@@ -4366,6 +4481,7 @@ def api_properties():
                 'owner': ('COALESCE(b.sale_buyer_primary, b.current_owner_name, '
                           'b.owner_name_hpd, b.owner_name_rpad)'),
                 'permits': 'pc.permit_count',
+                'recent_permits': 'pc.last_permit_date',
                 'units': 'b.total_units'
             }
             # Signal-column sorts, offered only once the migration has run

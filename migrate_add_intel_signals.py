@@ -115,6 +115,12 @@ BUILDINGS_COLUMNS = [
     ("rolling_sale_ppsf", "NUMERIC(10,2)"),
 
     ("signals_last_enriched", "TIMESTAMP"),
+    # Versioned freshness prevents a code/schema fix from inheriting a stale
+    # "success" timestamp written by an older, incomplete fetcher. Step 6
+    # advances this only after every source succeeds.
+    ("signals_enrichment_version", "INTEGER NOT NULL DEFAULT 0"),
+    ("signals_last_error", "TEXT"),
+    ("signals_last_error_at", "TIMESTAMP"),
 ]
 
 INDEXES = [
@@ -126,6 +132,7 @@ INDEXES = [
     ("idx_buildings_eviction_count", "buildings", "eviction_count"),
     ("idx_buildings_latest_co", "buildings", "latest_co_date"),
     ("idx_buildings_lien_latest", "buildings", "tax_delinquency_latest_date"),
+    ("idx_buildings_signals_version", "buildings", "signals_enrichment_version"),
     ("idx_acris_references_building", "acris_references", "building_id"),
     ("idx_acris_references_doc", "acris_references", "document_id"),
 ]

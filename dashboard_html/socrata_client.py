@@ -69,6 +69,7 @@ DATASETS = {
     # DOF
     'tax_lien_sale':       '9rz4-mjek',   # Tax Lien Sale Lists (notice lists per cycle)
     'exemptions':          'muvi-b6kx',   # Property Exemption Detail
+    'exemption_codes':     'myn9-hwsy',   # Exemption Classification Codes
     'rolling_sales':       'usep-8jbt',   # NYC Citywide Rolling Calendar Sales
 
     # Other
@@ -349,7 +350,12 @@ class SocrataClient:
     def get_columns(self, dataset):
         """Column fieldNames for a dataset, from the views metadata API.
         Cached per client. Lets callers adapt to schema differences
-        (e.g. whether evictions has a bbl column) without hardcoding."""
+        (e.g. whether evictions has a bbl column) without hardcoding.
+
+        Metadata failure must not look like a real dataset with zero columns:
+        callers use these fields to build queries, and silently returning an
+        empty set previously turned an outage into months of false zeroes.
+        """
         dataset_id = DATASETS.get(dataset, dataset)
         if dataset_id in self._columns_cache:
             return self._columns_cache[dataset_id]
@@ -357,8 +363,12 @@ class SocrataClient:
             resp = self.session.get(f"{BASE_URL}/api/views/{dataset_id}.json", timeout=self.timeout)
             resp.raise_for_status()
             cols = {c['fieldName'] for c in resp.json().get('columns', []) if 'fieldName' in c}
-        except Exception:
-            cols = set()
+        except Exception as exc:
+            raise SocrataError(
+                f"Metadata request failed for {dataset} ({dataset_id}): {exc}") from exc
+        if not cols:
+            raise SocrataError(
+                f"Metadata for {dataset} ({dataset_id}) returned no columns")
         self._columns_cache[dataset_id] = cols
         return cols
 

@@ -89,10 +89,16 @@
             <!-- Prebuilt plays: goal-named filters over the signal columns.
                  Populated by JS from /api/properties/plays; hidden until
                  the signals migration has run. -->
-            <section id="playsSection" class="plays-section" style="display: none;">
+            <section id="playsSection" class="plays-section" aria-labelledby="playsTitle">
                 <div class="plays-head">
-                    <h2>Plays</h2>
-                    <p>Prebuilt filters, each named for the goal. Pick one, work the list.</p>
+                    <div>
+                        <h2 id="playsTitle">Prebuilt filters</h2>
+                        <p>Choose a goal, then refine it with the sidebar. Counts are before sidebar filters.</p>
+                    </div>
+                    <div id="playsHealth" class="plays-health" role="status" aria-live="polite"></div>
+                </div>
+                <div id="playsStatus" class="plays-status" role="status" aria-live="polite">
+                    Loading prebuilt filters&hellip;
                 </div>
                 <div id="playsRow" class="plays-row"></div>
                 <div id="playGuide" class="play-guide" style="display: none;"></div>

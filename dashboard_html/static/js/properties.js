@@ -52,6 +52,8 @@ const state = {
     // on the contractors page. See static/js/filters_common.js.
     shared: {},
     plays: [],
+    playFamily: 'property_intel',
+    playsHealth: null,
     sort: {
         by: [],          // Sort keys in pick order; empty means the API default
         order: 'desc'
@@ -92,15 +94,33 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================
 
 async function loadPlays() {
+    const status = document.getElementById('playsStatus');
+    const health = document.getElementById('playsHealth');
+    status.className = 'plays-status';
+    status.textContent = 'Loading prebuilt filters…';
+    status.style.display = 'block';
+    health.textContent = '';
     try {
         const res = await fetch('/api/properties/plays');
         const data = await res.json();
-        if (!data.success || !data.plays || !data.plays.length) return;
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || `Request failed (${res.status})`);
+        }
+        if (!data.plays || !data.plays.length) {
+            status.className = 'plays-status plays-status-warning';
+            status.textContent = 'No prebuilt filters are available. The signal migrations may not have run yet.';
+            return;
+        }
         state.plays = data.plays;
+        state.playsHealth = data.health || null;
         renderPlayCards();
-        document.getElementById('playsSection').style.display = 'block';
+        renderPlaysHealth();
+        status.style.display = 'none';
     } catch (e) {
         console.warn('Plays unavailable:', e);
+        status.className = 'plays-status plays-status-error';
+        status.textContent = 'Prebuilt filters could not load. Property search is still available; retry by refreshing the page.';
+        health.textContent = '';
     }
 }
 
@@ -110,24 +130,107 @@ function renderPlayCards() {
         {id: 'property_intel', label: 'Property intelligence', plays: state.plays.filter(p => p.family !== 'smart_installers')},
         {id: 'smart_installers', label: 'Smart Installers sales plays', plays: state.plays.filter(p => p.family === 'smart_installers')}
     ].filter(group => group.plays.length);
-    const card = play => `
-        <button class="play-card ${state.filters.play === play.id ? 'active' : ''}"
+    if (!groups.some(group => group.id === state.playFamily)) {
+        state.playFamily = groups[0]?.id || 'property_intel';
+    }
+    const activePlay = state.plays.find(play => play.id === state.filters.play);
+    if (activePlay) {
+        state.playFamily = activePlay.family === 'smart_installers'
+            ? 'smart_installers'
+            : 'property_intel';
+    }
+    const activeGroup = groups.find(group => group.id === state.playFamily) || groups[0];
+
+    const coverageText = play => {
+        const coverage = play.coverage;
+        if (!coverage) return '';
+        if (coverage.status === 'unavailable') return 'Coverage unavailable';
+        if (coverage.status === 'not_started') {
+            return coverage.kind === 'pipeline'
+                ? `${coverage.label}: refresh not run`
+                : `${coverage.label}: none loaded`;
+        }
+        if (coverage.kind === 'pipeline') {
+            return `${coverage.label}: ${coverage.percent}%`;
+        }
+        return `${coverage.label}: ${formatNumber(coverage.count)}`;
+    };
+    const card = play => {
+        const countUnavailable = play.count_status === 'error' || play.count === null;
+        const noMatches = play.count === 0;
+        const pipelineNotReady = play.coverage?.kind === 'pipeline'
+            && ['not_started', 'unavailable'].includes(play.coverage?.status)
+            && noMatches;
+        const pipelinePartial = play.coverage?.kind === 'pipeline'
+            && play.coverage?.status === 'partial';
+        const disabled = countUnavailable || pipelineNotReady || noMatches;
+        let countLabel;
+        if (countUnavailable) countLabel = 'Count unavailable';
+        else if (pipelineNotReady) countLabel = 'Not ready';
+        else if (noMatches && pipelinePartial) countLabel = 'No matches yet';
+        else if (noMatches) countLabel = 'No matches';
+        else countLabel = `${formatNumber(play.count)} match${play.count === 1 ? '' : 'es'}`;
+        const source = coverageText(play);
+        return `
+        <button type="button"
+                class="play-card ${state.filters.play === play.id ? 'active' : ''} ${disabled ? 'play-card-disabled' : ''}"
+                aria-pressed="${state.filters.play === play.id}"
+                ${disabled ? 'disabled' : ''}
                 onclick="togglePlay('${play.id}')">
             <div class="play-card-top">
                 <span class="play-name">${escapeHtml(play.name)}</span>
-                <span class="play-count">${formatNumber(play.count)}</span>
+                <span class="play-count">${escapeHtml(countLabel)}</span>
             </div>
             <div class="play-desc">${escapeHtml(play.description)}</div>
+            ${source ? `<span class="play-source ${['partial', 'not_started', 'unavailable'].includes(play.coverage?.status) ? 'play-source-warning' : ''}">${escapeHtml(source)}</span>` : ''}
             <span class="play-audience play-audience-${play.audience}">${
                 play.audience === 'both' ? 'investors + contractors' : play.audience}</span>
         </button>
     `;
-    row.innerHTML = groups.map(group => `
-        <div class="play-family play-family-${group.id}">
-            <div class="play-family-title">${escapeHtml(group.label)}</div>
-            <div class="play-family-grid">${group.plays.map(card).join('')}</div>
+    };
+    row.innerHTML = `
+        <div class="play-family-tabs" role="tablist" aria-label="Prebuilt filter groups">
+            ${groups.map(group => `
+                <button type="button" class="play-family-tab ${group.id === state.playFamily ? 'active' : ''}"
+                        role="tab" aria-selected="${group.id === state.playFamily}"
+                        onclick="setPlayFamily('${group.id}')">
+                    ${escapeHtml(group.label)}
+                    <span>${group.plays.length}</span>
+                </button>
+            `).join('')}
         </div>
-    `).join('');
+        <div class="play-family play-family-${activeGroup.id}" role="tabpanel">
+            <div class="play-family-grid">${activeGroup.plays.map(card).join('')}</div>
+        </div>
+    `;
+}
+
+function setPlayFamily(familyId) {
+    if (!['property_intel', 'smart_installers'].includes(familyId)) return;
+    state.playFamily = familyId;
+    renderPlayCards();
+}
+
+function renderPlaysHealth() {
+    const node = document.getElementById('playsHealth');
+    if (['error', 'partial'].includes(state.playsHealth?.counts)) {
+        node.className = state.playsHealth.counts === 'partial'
+            ? 'plays-health plays-health-warning'
+            : 'plays-health plays-health-error';
+        node.textContent = state.playsHealth.message || 'Counts unavailable';
+        return;
+    }
+    const incomplete = state.plays.filter(play =>
+        play.coverage?.kind === 'pipeline'
+        && ['not_started', 'partial', 'unavailable'].includes(play.coverage.status)
+    );
+    if (incomplete.length) {
+        node.className = 'plays-health plays-health-warning';
+        node.textContent = 'Some counts are incomplete while source data refreshes.';
+    } else {
+        node.className = 'plays-health plays-health-ready';
+        node.textContent = 'Counts ready';
+    }
 }
 
 function togglePlay(playId) {
@@ -148,7 +251,11 @@ function togglePlay(playId) {
 
 // Signal sorts (unused FAR, CO date) only exist once a play recommends
 // them — add the <option> on demand so the select stays clean otherwise.
-const EXTRA_SORT_LABELS = { unused_far: 'Unused FAR', co_date: 'CO date' };
+const EXTRA_SORT_LABELS = {
+    unused_far: 'Unused FAR',
+    co_date: 'CO date',
+    recent_permits: 'Recent permit activity',
+};
 
 function applyRecommendedSort(rec) {
     const sortSelect = document.getElementById('sortBy');

@@ -26,7 +26,7 @@ import os
 import sys
 import time
 from datetime import datetime, date
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Lock
 
 import psycopg2
@@ -55,6 +55,9 @@ if not DATABASE_URL:
 
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '8'))
 SIGNALS_REFRESH_DAYS = int(os.getenv('SIGNALS_REFRESH_DAYS', '30'))
+# Bump this whenever source mappings or signal semantics change. A building is
+# current only after every source succeeds under this version.
+SIGNALS_ENRICHMENT_VERSION = 2
 # LL97 broadly covers buildings over 25,000 sqft; the official covered-
 # buildings list is only published as a DOB spreadsheet, so we estimate.
 LL97_SQFT_THRESHOLD = 25000
@@ -90,12 +93,24 @@ def _first_present(columns, candidates):
 
 
 # ---------------------------------------------------------------------------
-# Fetchers — each returns a partial {column: value} dict, or {} on failure.
+# Fetchers — each returns a partial {column: value} dict. An empty dict means
+# a successful lookup with no applicable record; source failures must raise.
 # ---------------------------------------------------------------------------
 
 def fetch_litigation(bbl, bin_number):
+    columns = client.get_columns('hpd_litigation')
+    if 'bbl' in columns:
+        where = f"bbl={soql_quote(bbl)}"
+    elif 'bin' in columns and bin_number:
+        where = f"bin={soql_quote(bin_number)}"
+    elif {'boroid', 'block', 'lot'} <= columns:
+        where = where_block_lot('boroid', 'block', 'lot', bbl)
+    elif {'boro', 'block', 'lot'} <= columns:
+        where = where_block_lot('boro', 'block', 'lot', bbl)
+    else:
+        raise RuntimeError('Housing Litigations has no usable BBL/BIN fields')
     rows = client.get_all('hpd_litigation', page_size=1000, max_rows=5000, **{
-        '$where': where_block_lot('boro', 'block', 'lot', bbl),
+        '$where': where,
     })
     open_rows = [r for r in rows if 'CLOS' not in (r.get('casestatus') or '').upper()]
     last = None
@@ -118,7 +133,7 @@ def fetch_evictions(bbl, bin_number):
     elif 'bin' in columns and bin_number:
         where = f"bin={soql_quote(bin_number)}"
     else:
-        return {}
+        raise RuntimeError('Evictions has no usable BBL/BIN fields')
     rows = client.get_all('evictions', page_size=1000, max_rows=5000, **{'$where': where})
     date_col = _first_present(columns, ['executed_date', 'executeddate'])
     dates = [parse_any_date(r.get(date_col)) for r in rows] if date_col else []
@@ -136,24 +151,49 @@ def fetch_exemptions(bbl, bin_number):
     elif {'boro', 'block', 'lot'} <= columns:
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
-        return {}
+        raise RuntimeError('Property Exemption Detail has no usable parcel fields')
     rows = client.get_all('exemptions', page_size=1000, max_rows=2000, **{'$where': where})
 
     code_col = _first_present(columns, ['exmp_code', 'exemption_code', 'excode'])
-    desc_col = _first_present(columns, ['description', 'exemption_name', 'long_name'])
+    if not code_col:
+        raise RuntimeError('Property Exemption Detail has no exemption-code field')
+    if not {'year', 'period', 'pstatus'} <= columns:
+        raise RuntimeError(
+            'Property Exemption Detail lacks year/period/approval fields')
+
+    # This feed contains many fiscal years and roll periods. Only the newest
+    # snapshot describes the current property. The separate official
+    # Exemption Classification Codes dataset maps 1015 -> Senior Citizen
+    # Homeowner and 1019 -> Disabled Homeowner; `exname` is the beneficiary's
+    # name, not the program description, so keyword-matching it is unsafe.
+    def numeric(value, default=-1):
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return default
+
+    latest_year = max((numeric(r.get('year')) for r in rows), default=-1)
+    current_year_rows = [r for r in rows if numeric(r.get('year')) == latest_year]
+    latest_period = max(
+        (numeric(r.get('period')) for r in current_year_rows), default=-1)
+    current_rows = [
+        r for r in current_year_rows
+        if numeric(r.get('period')) == latest_period
+    ] if latest_period >= 0 else current_year_rows
+
     codes = set()
-    blob = []
-    for r in rows:
-        if code_col and r.get(code_col):
+    approved_codes = set()
+    for r in current_rows:
+        if r.get(code_col):
             codes.add(str(r[code_col]).strip())
-        if desc_col and r.get(desc_col):
-            blob.append(str(r[desc_col]).upper())
-    text = ' '.join(blob)
+            status = str(r.get('pstatus') or '').strip().upper()
+            if status.startswith('A'):
+                approved_codes.add(str(r[code_col]).strip())
     return {
-        'exemption_count': len(rows),
+        'exemption_count': len(current_rows),
         'exemption_codes': ','.join(sorted(codes)) or None,
-        'has_senior_exemption': 'SCHE' in text or 'SENIOR' in text,
-        'has_disabled_exemption': 'DHE' in text or 'DISABLED' in text,
+        'has_senior_exemption': '1015' in approved_codes,
+        'has_disabled_exemption': '1019' in approved_codes,
     }
 
 
@@ -166,7 +206,7 @@ def fetch_speculation(bbl, bin_number):
     elif {'boro', 'block', 'lot'} <= columns:
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
-        return {}
+        raise RuntimeError('Speculation Watch List has no usable parcel fields')
     rows = client.get('speculation_watch', **{'$where': where, '$limit': 50})
     if not rows:
         return {'on_speculation_watch_list': False, 'speculation_watch_date': None}
@@ -181,7 +221,11 @@ def fetch_speculation(bbl, bin_number):
 
 def fetch_dob_complaints(bbl, bin_number):
     if not bin_number:
-        return {}
+        return {
+            'dob_complaint_count': 0,
+            'dob_active_complaint_count': 0,
+            'dob_last_complaint_date': None,
+        }
     rows = client.get_all('dob_complaints', page_size=1000, max_rows=10000, **{
         '$where': f"bin={soql_quote(bin_number)}",
     })
@@ -203,15 +247,19 @@ def _fetch_cos_from(dataset, bin_number, bbl):
     elif {'block', 'lot'} <= columns:
         boro_col = _first_present(columns, ['borough', 'boro'])
         if not boro_col:
-            return []
+            raise RuntimeError(f'{dataset} has block/lot but no borough field')
         where = where_block_lot(boro_col, 'block', 'lot', bbl)
     else:
-        return []
+        raise RuntimeError(f'{dataset} has no usable BIN or block/lot fields')
     rows = client.get_all(dataset, page_size=1000, max_rows=2000, **{'$where': where})
     date_col = _first_present(columns, [
-        'c_of_o_issuance_date', 'c_of_o_issue_date', 'issuance_date', 'issue_date'])
-    type_col = _first_present(columns, ['filing_type', 'type_of_c_of_o', 'co_type', 'certificate_type'])
-    job_col = _first_present(columns, ['job_filing_number', 'job_number', 'job'])
+        'c_of_o_issuance_date', 'c_of_o_issue_date', 'c_o_issue_date',
+        'issuance_date', 'issue_date'])
+    type_col = _first_present(columns, [
+        'c_of_o_filing_type', 'issue_type', 'filing_type', 'type_of_c_of_o',
+        'co_type', 'certificate_type'])
+    job_col = _first_present(columns, [
+        'application_number', 'job_filing_number', 'job_number', 'job'])
     out = []
     for r in rows:
         out.append({
@@ -225,13 +273,17 @@ def _fetch_cos_from(dataset, bin_number, bbl):
 def fetch_certificates_of_occupancy(bbl, bin_number):
     cos = []
     for dataset in ('dob_co_bis', 'dob_co_now'):
-        try:
-            cos.extend(_fetch_cos_from(dataset, bin_number, bbl))
-        except Exception as e:
-            with _print_lock:
-                print(f"      ⚠️  CO fetch ({dataset}) failed: {e}")
+        # A failed feed is not the same as a feed with zero matching rows.
+        # Let the caller record/retry the source error instead of stamping the
+        # building current with an incomplete CO history.
+        cos.extend(_fetch_cos_from(dataset, bin_number, bbl))
     if not cos:
-        return {'co_count': 0}
+        return {
+            'co_count': 0,
+            'latest_co_date': None,
+            'latest_co_type': None,
+            'latest_co_job_number': None,
+        }
     dated = [c for c in cos if c['date']]
     latest = max(dated, key=lambda c: c['date']) if dated else None
     return {
@@ -243,17 +295,26 @@ def fetch_certificates_of_occupancy(bbl, bin_number):
 
 
 def fetch_fisp(bbl, bin_number):
-    if not bin_number:
-        return {}
     columns = client.get_columns('fisp_facades')
     bin_col = _first_present(columns, ['bin', 'bin_number'])
-    if not bin_col:
-        return {}
+    if bin_col and bin_number:
+        where = f"{bin_col}={soql_quote(bin_number)}"
+    elif {'block', 'lot'} <= columns:
+        boro_col = _first_present(columns, ['borough', 'boro'])
+        if not boro_col:
+            raise RuntimeError('FISP Facades has block/lot but no borough field')
+        where = where_block_lot(boro_col, 'block', 'lot', bbl)
+    else:
+        raise RuntimeError('FISP Facades has no usable BIN or block/lot fields')
     rows = client.get_all('fisp_facades', page_size=500, max_rows=1000, **{
-        '$where': f"{bin_col}={soql_quote(bin_number)}",
+        '$where': where,
     })
     if not rows:
-        return {}
+        return {
+            'fisp_status': None,
+            'fisp_cycle': None,
+            'fisp_filing_date': None,
+        }
     status_col = _first_present(columns, ['current_status', 'filing_status', 'status'])
     cycle_col = _first_present(columns, ['cycle', 'sub_cycle', 'cycle_number'])
     date_col = _first_present(columns, ['submitted_on', 'filing_date', 'submitted_date'])
@@ -269,12 +330,18 @@ def fetch_fisp(bbl, bin_number):
 
 def fetch_ll84(bbl, bin_number):
     columns = client.get_columns('ll84_energy')
-    bbl_col = _first_present(columns, ['bbl_10_digits', 'bbl', 'nyc_borough_block_and_lot_bbl'])
+    bbl_col = _first_present(columns, [
+        'bbl_10_digits', 'bbl', 'nyc_borough_block_and_lot',
+        'nyc_borough_block_and_lot_bbl'])
     if not bbl_col:
-        return {}
+        raise RuntimeError('LL84 Energy has no usable BBL field')
     rows = client.get('ll84_energy', **{'$where': f"{bbl_col}={soql_quote(bbl)}", '$limit': 200})
     if not rows:
-        return {}
+        return {
+            'energy_star_score': None,
+            'site_eui': None,
+            'll84_year': None,
+        }
     score_col = _first_present(columns, ['energy_star_score', 'energy_star_1_100_score'])
     eui_col = _first_present(columns, [
         'site_eui_kbtu_ft', 'site_eui_kbtu_ft2', 'site_eui'])
@@ -306,7 +373,7 @@ def fetch_rolling_sales(bbl, bin_number):
     columns = client.get_columns('rolling_sales')
     boro_col = _first_present(columns, ['borough', 'boro'])
     if not boro_col or 'block' not in columns or 'lot' not in columns:
-        return {}
+        raise RuntimeError('Rolling Sales has no usable borough/block/lot fields')
     rows = client.get_all('rolling_sales', page_size=500, max_rows=1000, **{
         '$where': where_block_lot(boro_col, 'block', 'lot', bbl),
     })
@@ -323,7 +390,11 @@ def fetch_rolling_sales(bbl, bin_number):
         if best is None or d > best[0]:
             best = (d, p, parse_money(r.get(sqft_col)) if sqft_col else None)
     if not best:
-        return {}
+        return {
+            'rolling_sale_date': None,
+            'rolling_sale_price': None,
+            'rolling_sale_ppsf': None,
+        }
     d, p, sqft = best
     return {
         'rolling_sale_date': d,
@@ -346,36 +417,77 @@ FETCHERS = [
 
 
 def enrich_signals_for_building(bbl, bin_number, building_sqft):
-    """Run every fetcher; a failing dataset degrades to a skipped signal."""
+    """Run every fetcher and return ``(fields, errors)``.
+
+    Successful partial fields are safe to persist, but a building is not
+    marked current while any source is unavailable. This is the distinction
+    the old pipeline lost: an API failure was stamped as a healthy zero and
+    then skipped for the next 30 days.
+    """
     fields = {}
+    errors = []
     for name, fetcher in FETCHERS:
         try:
             fields.update(fetcher(bbl, bin_number))
         except Exception as e:
+            errors.append(f'{name}: {e}')
             with _print_lock:
                 print(f"      ⚠️  {name} failed for {bbl}: {e}")
-    if building_sqft:
-        fields['ll97_covered_estimated'] = building_sqft >= LL97_SQFT_THRESHOLD
-    return fields
+    fields['ll97_covered_estimated'] = bool(
+        building_sqft and building_sqft >= LL97_SQFT_THRESHOLD)
+    return fields, errors
 
 
 def _process_building(building, position, total):
     conn = psycopg2.connect(DATABASE_URL)
     try:
-        fields = enrich_signals_for_building(
+        fields, errors = enrich_signals_for_building(
             building['bbl'], building['bin'], building['building_sqft'])
         cur = conn.cursor()
         assignments = ', '.join(f"{col} = %s" for col in fields)
         values = list(fields.values())
-        if assignments:
+        if errors:
+            error_text = ' | '.join(errors)[:4000]
+            if assignments:
+                cur.execute(
+                    f"""UPDATE buildings SET {assignments},
+                        signals_last_error = %s,
+                        signals_last_error_at = NOW()
+                        WHERE id = %s""",
+                    values + [error_text, building['id']])
+            else:
+                cur.execute(
+                    """UPDATE buildings
+                       SET signals_last_error = %s,
+                           signals_last_error_at = NOW()
+                       WHERE id = %s""",
+                    (error_text, building['id']))
+        elif assignments:
             cur.execute(
-                f"UPDATE buildings SET {assignments}, signals_last_enriched = NOW() WHERE id = %s",
-                values + [building['id']])
+                f"""UPDATE buildings SET {assignments},
+                    signals_last_enriched = NOW(),
+                    signals_enrichment_version = %s,
+                    signals_last_error = NULL,
+                    signals_last_error_at = NULL
+                    WHERE id = %s""",
+                values + [SIGNALS_ENRICHMENT_VERSION, building['id']])
         else:
-            cur.execute("UPDATE buildings SET signals_last_enriched = NOW() WHERE id = %s",
-                        (building['id'],))
+            cur.execute(
+                """UPDATE buildings
+                   SET signals_last_enriched = NOW(),
+                       signals_enrichment_version = %s,
+                       signals_last_error = NULL,
+                       signals_last_error_at = NULL
+                   WHERE id = %s""",
+                (SIGNALS_ENRICHMENT_VERSION, building['id']))
         conn.commit()
         cur.close()
+
+        if errors:
+            with _print_lock:
+                print(f"[{position}/{total}] BBL {building['bbl']}: "
+                      f"⚠️ partial ({len(errors)} source errors; will retry)")
+            return False
 
         highlights = []
         if fields.get('litigation_open_count'):
@@ -405,12 +517,16 @@ def main():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
 
-    # Hard requirement: the migration must have run.
+    # Hard requirement: the version/error columns make failure distinguishable
+    # from a healthy zero and force a one-time refresh after mapping changes.
     cur.execute("""
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'buildings' AND column_name = 'signals_last_enriched'
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'buildings'
+          AND column_name IN (
+              'signals_last_enriched', 'signals_enrichment_version',
+              'signals_last_error', 'signals_last_error_at')
     """)
-    if not cur.fetchone():
+    if len(cur.fetchall()) != 4:
         print("❌ Run migrate_add_intel_signals.py first — signal columns are missing.")
         sys.exit(1)
 
@@ -418,7 +534,8 @@ def main():
         SELECT id, bbl, bin, building_sqft
         FROM buildings
         WHERE bbl IS NOT NULL
-        AND (signals_last_enriched IS NULL
+        AND (signals_enrichment_version < {SIGNALS_ENRICHMENT_VERSION}
+             OR signals_last_enriched IS NULL
              OR signals_last_enriched < NOW() - INTERVAL '{SIGNALS_REFRESH_DAYS} days')
         ORDER BY id
     """)
@@ -435,15 +552,38 @@ def main():
     ok = failed = 0
     started = time.time()
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = [pool.submit(_process_building, b, i, len(buildings))
-                   for i, b in enumerate(buildings, 1)]
-        for f in as_completed(futures):
-            if f.result():
-                ok += 1
-            else:
-                failed += 1
+        # A first backfill can exceed 100k buildings. Submitting every future
+        # up front consumes substantial memory during a multi-day cron run, so
+        # keep only a small bounded window in flight.
+        work = iter(enumerate(buildings, 1))
+        pending = set()
+        max_in_flight = max(MAX_WORKERS * 4, MAX_WORKERS)
 
-    print(f"\n✅ Done in {(time.time()-started)/60:.1f} min — {ok} enriched, {failed} failed")
+        def fill_window():
+            while len(pending) < max_in_flight:
+                try:
+                    position, building = next(work)
+                except StopIteration:
+                    break
+                pending.add(pool.submit(
+                    _process_building, building, position, len(buildings)))
+
+        fill_window()
+        while pending:
+            completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                if future.result():
+                    ok += 1
+                else:
+                    failed += 1
+            fill_window()
+
+    duration_minutes = (time.time() - started) / 60
+    if failed:
+        print(f"\n❌ Incomplete in {duration_minutes:.1f} min — "
+              f"{ok} enriched, {failed} failed and remain eligible for retry")
+        raise SystemExit(1)
+    print(f"\n✅ Done in {duration_minutes:.1f} min — {ok} enriched, 0 failed")
 
 
 if __name__ == "__main__":
