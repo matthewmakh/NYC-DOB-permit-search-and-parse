@@ -55,6 +55,13 @@ check('unknown values rejected by allowed set',
       A._multi_param(MultiDict([('x', 'residential,bogus')]), 'x', allowed={'residential'}),
       ['residential'])
 
+print('— percentage filters —')
+check('financing percentage converts to stored ratio',
+      A._percent_filter_ratio(65), 0.65)
+check('zero percent is valid', A._percent_filter_ratio(0), 0.0)
+check('out-of-range financing percentage is rejected',
+      A._percent_filter_ratio(125), None)
+
 print('— property type —')
 where, params = clauses(MultiDict([('property_type', 'residential'), ('property_type', 'mixed')]))
 check('two types OR together',

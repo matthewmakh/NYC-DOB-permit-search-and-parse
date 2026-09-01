@@ -170,6 +170,15 @@ print("\n— step3: assembly, B3 cash logic, references —")
 
 import step3_enrich_from_acris as step3
 
+check("cash purchase persists as a zero financing ratio",
+      step3.purchase_financing_ratio(1_000_000, None) == 0)
+check("ordinary purchase financing persists as a ratio",
+      step3.purchase_financing_ratio(
+          1_000_000, {'doc_amount': 650_000}) == 0.65)
+check("nominal-deed ratios cannot poison every retry",
+      step3.purchase_financing_ratio(
+          1, {'doc_amount': 2_000_000}) is None)
+
 
 class AcrisStub:
     """Canned ACRIS: one deed (2015, $1M), purchase mortgage (2015 +20d),
@@ -498,6 +507,56 @@ check("is_mortgage exact family",
       is_mortgage('MTGE') and is_mortgage('M&CON') and not is_mortgage('AGMT')
       and not is_mortgage('DEED'))
 check("is_satisfaction family", is_satisfaction('SAT') and is_satisfaction('SATS') and not is_satisfaction('ASST'))
+
+# ---------------------------------------------------------------------------
+print("\n— SOS bounded-retry semantics —")
+from types import SimpleNamespace
+import step5_enrich_from_sos as step5
+
+check("SOS transport failures remain retryable",
+      step5.sos_result_needs_retry(
+          SimpleNamespace(error='Connection error: timed out')))
+check("SOS accurate name misses are completed lookups",
+      not step5.sos_result_needs_retry(SimpleNamespace(
+          error="No entity matching 'ABC LLC' (closest of 1: 'XYZ LLC')")))
+
+
+class SosSelectionCursor:
+    def __init__(self):
+        self.query = None
+        self.params = None
+        self.description = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, query, params):
+        self.query = query
+        self.params = params
+
+    def fetchall(self):
+        return []
+
+
+class SosSelectionConnection:
+    def __init__(self):
+        self.selection = SosSelectionCursor()
+
+    def cursor(self):
+        return self.selection
+
+
+sos_conn = SosSelectionConnection()
+step5.get_buildings_needing_sos(sos_conn, limit=5000)
+selection = sos_conn.selection
+check("SOS selection filters corporate owners before the batch limit",
+      "concat_ws(' ', sale_buyer_primary" in selection.query
+      and selection.params == [step5.CORPORATE_OWNER_SQL_REGEX, 5000])
+check("SOS completed no-match rows do not repeat nightly",
+      "sos_principal_name IS NULL" not in selection.query)
 
 # ---------------------------------------------------------------------------
 print(f"\n{'=' * 50}")

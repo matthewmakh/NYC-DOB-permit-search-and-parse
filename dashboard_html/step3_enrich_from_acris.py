@@ -359,6 +359,24 @@ def find_purchase_mortgage(transactions, sale_date):
     return min(candidates, key=lambda t: abs((_instrument_date(t) - sale_date).days)) if candidates else None
 
 
+def purchase_financing_ratio(sale_price, purchase_mortgage):
+    """Return a persistable purchase LTV ratio, or ``None`` if misleading.
+
+    ACRIS contains nominal and partial-interest deeds. Dividing a whole-lot
+    mortgage by a $1 deed can produce a ratio large enough to overflow the
+    database column and poison every future retry for that building.
+    """
+    if not sale_price or sale_price <= 0:
+        return None
+    if purchase_mortgage is None:
+        return 0
+    try:
+        ratio = purchase_mortgage['doc_amount'] / sale_price
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    return ratio if 0 <= ratio <= 10 else None
+
+
 def derive_mortgage_status(transactions, references):
     """
     Which mortgages are still open, using the References linkage between
@@ -572,14 +590,8 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         # B3: cash/LTV refer to financing at the purchase, not a later refi.
         purchase_mortgage = find_purchase_mortgage(transactions, sale_date)
         is_cash_purchase = purchase_mortgage is None
-        if sale_price and sale_price > 0:
-            raw_ratio = (0 if is_cash_purchase else
-                         purchase_mortgage['doc_amount'] / sale_price)
-            # Nominal/partial-interest deeds can pair a tiny deed amount with
-            # a whole-property mortgage. Those are not meaningful LTVs and
-            # previously overflowed NUMERIC(5,2), causing the same building to
-            # fail forever on every retry.
-            financing_ratio = raw_ratio if 0 <= raw_ratio <= 10 else None
+        financing_ratio = purchase_financing_ratio(
+            sale_price, purchase_mortgage)
         if sale_date:
             days_since_sale = max((date.today() - sale_date).days, 0)
 
@@ -678,6 +690,51 @@ def enrich_building_from_acris(conn, building_id, bbl):
 # Batch run
 # ---------------------------------------------------------------------------
 
+def _process_acris_building(building):
+    """Process one durable building checkpoint on its own DB connection."""
+    conn = None
+    building_id = building['id']
+    try:
+        conn = psycopg2.connect(
+            DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        count = enrich_building_from_acris(
+            conn, building_id, building['bbl'])
+        return {
+            'status': 'enriched' if count else 'no_data',
+            'count': count,
+            'bbl': building['bbl'],
+            'error': None,
+        }
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        # Never advance acris_last_enriched on failure. The next execution
+        # selects this row again; diagnostics explain persistent poison rows.
+        if conn is not None:
+            try:
+                cur = conn.cursor()
+                if table_has_column(cur, 'buildings', 'acris_last_attempted'):
+                    cur.execute("""
+                        UPDATE buildings
+                        SET acris_last_attempted = CURRENT_TIMESTAMP,
+                            acris_last_error = %s
+                        WHERE id = %s
+                    """, (str(exc)[:1000], building_id))
+                conn.commit()
+                cur.close()
+            except Exception:
+                conn.rollback()
+        return {
+            'status': 'failed',
+            'count': 0,
+            'bbl': building['bbl'],
+            'error': str(exc),
+        }
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def enrich_buildings_from_acris():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
@@ -690,6 +747,7 @@ def enrich_buildings_from_acris():
         if table_has_column(cur, 'buildings', 'acris_logic_version') else ""
     )
     params = (ACRIS_LOGIC_VERSION,) if logic_version_filter else ()
+    limit_sql = f"LIMIT {ACRIS_MAX_BUILDINGS}" if ACRIS_MAX_BUILDINGS else ""
     cur.execute(f"""
         SELECT id, bbl, address, current_owner_name
         FROM buildings
@@ -698,9 +756,11 @@ def enrich_buildings_from_acris():
              OR acris_last_enriched < NOW() - INTERVAL '30 days'
              {logic_version_filter})
         ORDER BY id
+        {limit_sql}
     """, params)
     buildings = cur.fetchall()
-    print(f"\n📊 Found {len(buildings)} buildings to enrich")
+    print(f"\n📊 Found {len(buildings)} buildings to enrich "
+          f"with {ACRIS_MAX_WORKERS} workers")
 
     if not buildings:
         print("   ✅ No buildings need enrichment.")
@@ -708,47 +768,62 @@ def enrich_buildings_from_acris():
         conn.close()
         return
 
-    enriched = no_data = failed = 0
+    # Release the selection connection before worker connections are opened.
+    cur.close()
+    conn.close()
 
-    for i, building in enumerate(buildings, 1):
-        bbl = building['bbl']
-        building_id = building['id']
-        print(f"\n🔍 [{i}/{len(buildings)}] BBL {bbl} — {building['address']}")
+    enriched = no_data = failed = completed = transaction_count = 0
+    started = time.time()
+    work = iter(buildings)
 
-        try:
-            count = enrich_building_from_acris(conn, building_id, bbl)
-            if count:
-                enriched += 1
-                print(f"   ✅ {count} transactions stored")
-            else:
-                no_data += 1
-                print("   ℹ️  No ACRIS data found")
+    with ThreadPoolExecutor(max_workers=ACRIS_MAX_WORKERS) as pool:
+        pending = set()
+        max_in_flight = ACRIS_MAX_WORKERS * 4
 
-        except Exception as e:
-            conn.rollback()
-            print(f"   ❌ Error: {e}")
-            failed += 1
-            # Never advance acris_last_enriched on failure. Otherwise one
-            # outage suppresses retries for 30 days. Optional diagnostic
-            # columns are populated when the freshness migration is present.
-            try:
-                if table_has_column(cur, 'buildings', 'acris_last_attempted'):
-                    cur.execute("""
-                        UPDATE buildings
-                        SET acris_last_attempted = CURRENT_TIMESTAMP,
-                            acris_last_error = %s
-                        WHERE id = %s
-                    """, (str(e)[:1000], building_id))
-                conn.commit()
-            except Exception:
-                conn.rollback()
+        def fill_window():
+            while len(pending) < max_in_flight:
+                try:
+                    building = next(work)
+                except StopIteration:
+                    break
+                pending.add(pool.submit(_process_acris_building, building))
 
-        time.sleep(0.05)
+        fill_window()
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                result = future.result()
+                completed += 1
+                transaction_count += result['count']
+                if result['status'] == 'enriched':
+                    enriched += 1
+                elif result['status'] == 'no_data':
+                    no_data += 1
+                else:
+                    failed += 1
+                    with _print_lock:
+                        print(f"   ❌ BBL {result['bbl']}: {result['error']}")
+
+                if (completed % ACRIS_PROGRESS_EVERY == 0
+                        or completed == len(buildings)):
+                    elapsed = max(time.time() - started, 0.001)
+                    rate = completed / elapsed
+                    remaining = len(buildings) - completed
+                    eta_hours = remaining / rate / 3600 if rate else 0
+                    with _print_lock:
+                        print(
+                            f"   Progress {completed:,}/{len(buildings):,} · "
+                            f"{rate:.2f} buildings/s · ETA {eta_hours:.1f}h · "
+                            f"failures {failed:,}")
+            fill_window()
 
     print("\n" + "=" * 70)
-    print("✅ ACRIS Enrichment Complete")
-    print(f"   Enriched: {enriched} · No data: {no_data} · Failed: {failed}")
+    print("✅ ACRIS Enrichment Pass Complete")
+    print(f"   Enriched: {enriched} · No data: {no_data} · "
+          f"Failed: {failed} · Transactions: {transaction_count}")
 
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor()
     cur.execute("""
         SELECT COUNT(*) AS total,
                COUNT(sale_date) AS with_sales,
@@ -760,8 +835,21 @@ def enrich_buildings_from_acris():
         print(f"\n📊 {stats['total']} enriched · {stats['with_sales']} with sales · "
               f"{stats['cash']} cash purchases")
 
+    cur.execute(f"""
+        SELECT COUNT(*) AS remaining
+        FROM buildings
+        WHERE bbl IS NOT NULL
+        AND (acris_last_enriched IS NULL
+             OR acris_last_enriched < NOW() - INTERVAL '30 days'
+             {logic_version_filter})
+    """, params)
+    remaining_backlog = cur.fetchone()['remaining']
+    print(f"   Backlog remaining after this pass: {remaining_backlog:,}")
+
     cur.close()
     conn.close()
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
+    "cronSchedule": "0 3 * * *",
     "startCommand": "python -u run_enrichment_pipeline.py",
     "restartPolicyType": "NEVER"
   }

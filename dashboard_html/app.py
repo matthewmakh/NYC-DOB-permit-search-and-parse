@@ -3897,6 +3897,17 @@ def _parse_boroughs_param(raw, multi_source=None):
     return out
 
 
+def _percent_filter_ratio(value):
+    """Convert the sidebar's 0-100 financing percentage to DB ratio units."""
+    if value is None:
+        return None
+    try:
+        percentage = float(value)
+    except (TypeError, ValueError):
+        return None
+    return percentage / 100 if 0 <= percentage <= 100 else None
+
+
 # Coarse SQL prefilter only. The paid-enrichment path always runs the stricter
 # Python classifier as its final authority. Keeping this centralized prevents
 # the property list and bulk-estimate routes from drifting apart.
@@ -3970,8 +3981,8 @@ def _resolve_filter_building_ids(args, limit=None):
     min_units = g('min_units', type=int)
     max_units = g('max_units', type=int)
     recent_sale_days = g('recent_sale_days', type=int)
-    financing_min = g('financing_min', type=float)
-    financing_max = g('financing_max', type=float)
+    financing_min = _percent_filter_ratio(g('financing_min', type=float))
+    financing_max = _percent_filter_ratio(g('financing_max', type=float))
     has_enrichable_owner = str(g('has_enrichable_owner', default='')).lower() == 'true'
 
     where_clauses = []
@@ -4331,8 +4342,10 @@ def api_properties():
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
             recent_sale_days = request.args.get('recent_sale_days', type=int)
-            financing_min = request.args.get('financing_min', type=float)
-            financing_max = request.args.get('financing_max', type=float)
+            financing_min = _percent_filter_ratio(
+                request.args.get('financing_min', type=float))
+            financing_max = _percent_filter_ratio(
+                request.args.get('financing_max', type=float))
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
             per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
@@ -4728,8 +4741,10 @@ def api_properties_export():
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
             recent_sale_days = request.args.get('recent_sale_days', type=int)
-            financing_min = request.args.get('financing_min', type=float)
-            financing_max = request.args.get('financing_max', type=float)
+            financing_min = _percent_filter_ratio(
+                request.args.get('financing_min', type=float))
+            financing_max = _percent_filter_ratio(
+                request.args.get('financing_max', type=float))
             sort_order = request.args.get('sort_order', 'desc').lower()
 
             # Prebuilt play — exporting a play exports exactly the play's set
@@ -5260,8 +5275,10 @@ def api_properties_export_with_enrichment():
             min_units = request.args.get('min_units', type=int)
             max_units = request.args.get('max_units', type=int)
             recent_sale_days = request.args.get('recent_sale_days', type=int)
-            financing_min = request.args.get('financing_min', type=float)
-            financing_max = request.args.get('financing_max', type=float)
+            financing_min = _percent_filter_ratio(
+                request.args.get('financing_min', type=float))
+            financing_max = _percent_filter_ratio(
+                request.args.get('financing_max', type=float))
 
             # Build WHERE clauses (same as regular export - simplified for brevity)
             where_clauses = []

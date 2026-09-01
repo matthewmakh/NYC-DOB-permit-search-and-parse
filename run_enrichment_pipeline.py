@@ -60,7 +60,7 @@ def print_error(msg):
 def print_warning(msg):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}", flush=True)
 
-def run_script(script_name, description):
+def run_script(script_name, description, extra_env=None):
     """Run a Python script and return success status - streams output in real-time"""
     print(f"\n🚀 Running: {script_name}", flush=True)
     print(f"   Description: {description}", flush=True)
@@ -72,7 +72,8 @@ def run_script(script_name, description):
         result = subprocess.run(
             [sys.executable, '-u', script_name],  # -u for unbuffered Python output
             text=True,
-            check=False
+            check=False,
+            env={**os.environ, **(extra_env or {})},
             # Note: No capture_output, so stdout/stderr go directly to console
         )
         
@@ -147,14 +148,17 @@ def main():
     if not results['step2']:
         print_warning("Step 2 failed - continuing to next steps")
 
-    # Run the user-facing signal pass before ACRIS. A full ACRIS
-    # backfill can take several days, so keeping Step 6 at the end of this
-    # monolithic cron meant it could be starved indefinitely (and every signal
-    # play looked like a real zero in the dashboard).
+    # Run the user-facing signal pass before ACRIS. Both long backfills use a
+    # bounded daily batch, so a deploy or source outage loses at most one
+    # partial pass and neither data family can starve the other indefinitely.
     print_step(6, "Enrich Distress & Compliance Signals")
     results['step6'] = run_script(
         'step6_enrich_signals.py',
-        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales'
+        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales',
+        extra_env={
+            'SIGNALS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_SIGNALS_BATCH_SIZE', '15000'),
+        },
     )
 
     if not results['step6']:
@@ -174,7 +178,11 @@ def main():
     print_step(3, "Enrich from ACRIS (Transaction History)")
     results['step3'] = run_script(
         'step3_enrich_from_acris.py',
-        'Add purchase dates, sale prices, mortgage amounts'
+        'Add purchase dates, sale prices, mortgage amounts',
+        extra_env={
+            'ACRIS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_ACRIS_BATCH_SIZE', '15000'),
+        },
     )
     
     if not results['step3']:
@@ -184,7 +192,11 @@ def main():
     print_step(4, "Enrich from Tax Delinquency & Liens")
     results['step4'] = run_script(
         'step4_enrich_from_tax_liens.py',
-        'Add tax delinquency status, ECB liens, DOB violations'
+        'Add tax delinquency status, ECB liens, DOB violations',
+        extra_env={
+            'BUILDING_BATCH_SIZE': os.getenv(
+                'PIPELINE_TAX_BATCH_SIZE', '15000'),
+        },
     )
     
     if not results['step4']:
@@ -194,7 +206,11 @@ def main():
     print_step(5, "Enrich from NY Secretary of State (LLC Owners)")
     results['step5'] = run_script(
         'step5_enrich_from_sos.py',
-        'Find real people (CEO, agents) behind LLC-owned properties'
+        'Find real people (CEO, agents) behind LLC-owned properties',
+        extra_env={
+            'SOS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_SOS_BATCH_SIZE', '5000'),
+        },
     )
     
     if not results['step5']:
@@ -242,14 +258,11 @@ def main():
         'step1',
         'step2',
         'step6',
+        'step3',
+        'step4',
+        'step5',
     ]  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
-    
-    if critical_failed:
-        print_error("\n⚠️  Critical steps failed - enrichment incomplete")
-        sys.exit(1)
-    else:
-        print_success("\n✅ Pipeline completed successfully!")
     
     if critical_failed:
         print_error("\n❌ PIPELINE FAILED - Critical steps did not complete")

@@ -32,7 +32,7 @@ import time
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, local
 
 from socrata_client import SocrataClient, where_block_lot
 
@@ -73,13 +73,17 @@ progress_lock = Lock()
 stats_lock = Lock()
 
 _client = None
+_thread_state = local()
 
 
 def _get_client():
-    global _client
-    if _client is None:
-        _client = SocrataClient()
-    return _client
+    # Unit tests install a deterministic shared stub. Production workers use
+    # separate Sessions because requests.Session is not thread-safe.
+    if _client is not None:
+        return _client
+    if not hasattr(_thread_state, 'client'):
+        _thread_state.client = SocrataClient()
+    return _thread_state.client
 
 
 def _parse_cycle_date(value):
@@ -423,10 +427,12 @@ def process_single_building(building, position, total):
     address = building['address']
     
     # Create own database connection for thread safety
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
+    conn = None
+    cur = None
     
     try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
         with progress_lock:
             print(f"[{position}/{total}] BBL: {bbl}")
             print(f"   📍 {address}")
@@ -476,8 +482,10 @@ def process_single_building(building, position, total):
             print()
         return {'success': False, 'data': None}
     finally:
-        cur.close()
-        conn.close()
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
 
 
 def main():
@@ -505,7 +513,13 @@ def main():
                 OR dob_safety_last_checked IS NULL
                 OR dob_safety_last_checked < NOW() - INTERVAL '1 day'
             )
-            ORDER BY id
+            -- Always rotate through the oldest/never-checked records first.
+            -- Ordering only by id let yesterday's first batch become stale
+            -- and monopolize every subsequent daily run.
+            ORDER BY LEAST(
+                COALESCE(tax_lien_last_checked, TIMESTAMP '1970-01-01'),
+                COALESCE(dob_safety_last_checked, TIMESTAMP '1970-01-01')
+            ), id
             LIMIT %s
         """, (BUILDING_BATCH_SIZE,))
         
@@ -584,6 +598,9 @@ def main():
             print("   (None found in this batch)")
         
         print()
+        if failed:
+            raise SystemExit(
+                f"Step 4 incomplete: {failed} building(s) had source errors")
         
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")

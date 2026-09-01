@@ -83,6 +83,7 @@ DB_CONFIG = {
 BATCH_SIZE = 50  # SOS API is slow, process in smaller batches
 CONCURRENCY = 5  # How many SOS lookups to run in parallel
 REFRESH_DAYS = int(os.getenv('SOS_REFRESH_DAYS', '180'))  # Re-check after 6 months
+SOS_MAX_BUILDINGS = max(0, int(os.getenv('SOS_MAX_BUILDINGS', '5000')))
 
 # LLC indicators to find owner names that should be looked up
 LLC_PATTERNS = [
@@ -91,6 +92,13 @@ LLC_PATTERNS = [
     r'\bLIMITED\b', r'\bLP\b', r'\bL\.P\.', r'\bLLP\b', r'\bL\.L\.P\.',
     r'\bCOMPANY\b', r'\bCO\b', r'\bCO\.',
 ]
+
+# Applied in SQL before LIMIT. Otherwise individual-owned rows can occupy the
+# front of every bounded batch and starve actual LLCs later in the table.
+CORPORATE_OWNER_SQL_REGEX = (
+    r'\m(LLC|L[.]L[.]C|INC(ORPORATED)?|CORP(ORATION)?|LTD|LIMITED|'
+    r'LP|L[.]P|LLP|L[.]L[.]P|COMPANY|CO)\M[.]?'
+)
 
 
 def is_llc_name(name: str) -> bool:
@@ -141,6 +149,8 @@ def run_migration(conn):
             ("sos_last_enriched", "TIMESTAMP", "When SOS data was last updated"),
             ("sos_lookup_attempted", "BOOLEAN DEFAULT FALSE", "Whether lookup was attempted"),
             ("sos_lookup_source", "VARCHAR(255)", "Which owner name was looked up"),
+            ("sos_last_error", "TEXT", "Most recent transient SOS lookup error"),
+            ("sos_last_error_at", "TIMESTAMP", "When the most recent SOS error occurred"),
         ]
         
         for col_name, col_type, comment in columns:
@@ -177,14 +187,15 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
         conditions = []
         
         if not reprocess:
-            # Include: never attempted OR stale (older than REFRESH_DAYS)
+            # A completed lookup with no matching entity is still complete.
+            # Selecting every NULL principal made healthy misses run nightly.
             stale_condition = f"""
                 (
                     -- Never attempted
                     (sos_lookup_attempted IS NULL OR sos_lookup_attempted = FALSE)
                     OR
-                    -- Never enriched (no principal found)
-                    (sos_principal_name IS NULL OR sos_principal_name = '')
+                    -- Legacy/incomplete attempt with no success checkpoint
+                    sos_last_enriched IS NULL
                     OR
                     -- A deed recorded after the last lookup: the building may
                     -- have changed hands, so the cached principal is suspect
@@ -219,7 +230,10 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 OR owner_name_rpad IS NOT NULL 
                 OR owner_name_hpd IS NOT NULL
             )
+            AND concat_ws(' ', sale_buyer_primary, current_owner_name,
+                           owner_name_hpd, owner_name_rpad) ~* %s
             ORDER BY 
+                sos_last_enriched ASC NULLS FIRST,
                 -- Prioritize buildings with ACRIS data (most recent)
                 CASE WHEN sale_buyer_primary IS NOT NULL THEN 10 ELSE 0 END +
                 CASE WHEN current_owner_name IS NOT NULL THEN 1 ELSE 0 END +
@@ -230,10 +244,12 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 id
         """
         
+        params = [CORPORATE_OWNER_SQL_REGEX]
         if limit:
-            query += f" LIMIT {limit}"
+            query += " LIMIT %s"
+            params.append(limit)
         
-        cur.execute(query)
+        cur.execute(query, params)
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
@@ -360,11 +376,34 @@ def update_buildings_with_sos(conn, updates: List[Dict]):
                     sos_formation_date = %(sos_formation_date)s,
                     sos_last_enriched = NOW(),
                     sos_lookup_attempted = TRUE,
-                    sos_lookup_source = %(lookup_source)s
+                    sos_lookup_source = %(lookup_source)s,
+                    sos_last_error = NULL,
+                    sos_last_error_at = NULL
                 WHERE id = %(building_id)s
             """, update)
         
         conn.commit()
+
+
+def sos_result_needs_retry(result: SOSBusinessResult) -> bool:
+    """Transport/service failures retry; an accurate name-miss does not."""
+    error = (getattr(result, 'error', '') or '').strip()
+    return bool(error and not error.startswith('No entity matching'))
+
+
+def record_sos_failures(conn, failures: List[Dict]):
+    """Persist diagnostics without advancing the successful-refresh clock."""
+    if not failures:
+        return
+    with conn.cursor() as cur:
+        for failure in failures:
+            cur.execute("""
+                UPDATE buildings
+                SET sos_last_error = %s,
+                    sos_last_error_at = NOW()
+                WHERE id = %s
+            """, (failure['error'][:4000], failure['building_id']))
+    conn.commit()
 
 
 def main():
@@ -376,7 +415,9 @@ def main():
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description='Enrich buildings from NY Secretary of State')
-    parser.add_argument('--limit', type=int, help='Limit number of buildings to process')
+    parser.add_argument(
+        '--limit', type=int, default=SOS_MAX_BUILDINGS or None,
+        help='Limit buildings this pass (default: SOS_MAX_BUILDINGS, 5000)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without saving')
     parser.add_argument('--reprocess', action='store_true', help='Re-process ALL buildings (ignore previous enrichment)')
     parser.add_argument('--no-refresh', action='store_true', help='Skip stale record refresh (only process new buildings)')
@@ -392,11 +433,9 @@ def main():
     print("📊 Connecting to database...")
     conn = get_db_connection()
     
-    # Check/run migration
-    if not check_sos_columns_exist(conn):
-        run_migration(conn)
-    else:
-        print("   ✅ SOS columns already exist")
+    # Additive and idempotent, including error columns introduced after the
+    # original migration.
+    run_migration(conn)
     
     # Get buildings to process
     refresh = not args.no_refresh
@@ -431,6 +470,8 @@ def main():
     print(f"   ✅ {len(llc_buildings)} have LLC/Corp names to look up")
     print(f"   ⏭️  {skipped_individual} skipped (owner is already an individual)")
     print(f"   ⏭️  {skipped_no_owner} skipped (no valid owner name)")
+    if args.limit and len(buildings) >= args.limit:
+        print(f"   ↪ Bounded pass reached {args.limit:,}; remaining LLCs resume next run")
     
     # Count unique LLCs (avoid duplicate lookups)
     unique_llcs = set(b['llc_name'].upper().strip() for b in llc_buildings)
@@ -458,6 +499,7 @@ def main():
     total_found = 0
     total_individuals = 0
     total_processed = 0
+    total_failed = 0
     start_time = time.time()
     
     for i in range(0, len(llc_buildings), BATCH_SIZE):
@@ -487,6 +529,7 @@ def main():
         
         # Process results (using cache)
         updates = []
+        failures = []
         batch_found = 0
         batch_individuals = 0
         cache_hits = 0
@@ -497,11 +540,19 @@ def main():
             result = llc_cache.get(llc_key)
             
             if result is None:
-                # Shouldn't happen, but handle gracefully
+                # A missing async result is not a healthy "not found".
                 result = SOSBusinessResult(query_name=llc_name, normalized_name=llc_name)
+                result.error = 'No lookup result returned'
             else:
                 if llc_name not in names_to_lookup:
                     cache_hits += 1
+
+            if sos_result_needs_retry(result):
+                failures.append({
+                    'building_id': building['id'],
+                    'error': result.error,
+                })
+                continue
             
             if result and result.found:
                 batch_found += 1
@@ -517,13 +568,17 @@ def main():
         
         # Save to database
         update_buildings_with_sos(conn, updates)
+        record_sos_failures(conn, failures)
         
         total_found += batch_found
         total_individuals += batch_individuals
         total_processed += len(batch)
+        total_failed += len(failures)
         
         cache_msg = f" | Cache hits: {cache_hits}" if cache_hits > 0 else ""
-        print(f"   ✅ Found: {batch_found}/{len(batch)} | Individuals: {batch_individuals} | Time: {batch_time:.1f}s{cache_msg}")
+        print(f"   ✅ Found: {batch_found}/{len(batch)} | "
+              f"Individuals: {batch_individuals} | Retryable failures: "
+              f"{len(failures)} | Time: {batch_time:.1f}s{cache_msg}")
         
         # Rate limit between batches
         if i + BATCH_SIZE < len(llc_buildings):
@@ -537,10 +592,13 @@ def main():
     print(f"   Total processed: {total_processed:,}")
     print(f"   Found in SOS:    {total_found:,} ({total_found/total_processed*100:.1f}%)")
     print(f"   With individuals: {total_individuals:,} ({total_individuals/total_processed*100:.1f}%)")
+    print(f"   Retryable failures: {total_failed:,}")
     print(f"   Total time:       {elapsed:.1f}s ({total_processed/elapsed:.1f} buildings/sec)")
     print()
     
     conn.close()
+    if total_failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

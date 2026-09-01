@@ -27,7 +27,7 @@ import sys
 import time
 from datetime import datetime, date
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from threading import Lock
+from threading import Lock, local
 
 import psycopg2
 import psycopg2.extras
@@ -55,6 +55,8 @@ if not DATABASE_URL:
 
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '8'))
 SIGNALS_REFRESH_DAYS = int(os.getenv('SIGNALS_REFRESH_DAYS', '30'))
+SIGNALS_MAX_BUILDINGS = max(0, int(os.getenv('SIGNALS_MAX_BUILDINGS', '0')))
+SIGNALS_PROGRESS_EVERY = max(1, int(os.getenv('SIGNALS_PROGRESS_EVERY', '100')))
 # Bump this whenever source mappings or signal semantics change. A building is
 # current only after every source succeeds under this version.
 SIGNALS_ENRICHMENT_VERSION = 2
@@ -63,7 +65,18 @@ SIGNALS_ENRICHMENT_VERSION = 2
 LL97_SQFT_THRESHOLD = 25000
 
 _print_lock = Lock()
-client = SocrataClient()
+_thread_state = local()
+# Tests may install a deterministic shared stub here. Production threads each
+# get their own requests.Session through _get_client().
+client = None
+
+
+def _get_client():
+    if client is not None:
+        return client
+    if not hasattr(_thread_state, 'client'):
+        _thread_state.client = SocrataClient()
+    return _thread_state.client
 
 
 def parse_any_date(value):
@@ -98,7 +111,7 @@ def _first_present(columns, candidates):
 # ---------------------------------------------------------------------------
 
 def fetch_litigation(bbl, bin_number):
-    columns = client.get_columns('hpd_litigation')
+    columns = _get_client().get_columns('hpd_litigation')
     if 'bbl' in columns:
         where = f"bbl={soql_quote(bbl)}"
     elif 'bin' in columns and bin_number:
@@ -109,7 +122,7 @@ def fetch_litigation(bbl, bin_number):
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
         raise RuntimeError('Housing Litigations has no usable BBL/BIN fields')
-    rows = client.get_all('hpd_litigation', page_size=1000, max_rows=5000, **{
+    rows = _get_client().get_all('hpd_litigation', page_size=1000, max_rows=5000, **{
         '$where': where,
     })
     open_rows = [r for r in rows if 'CLOS' not in (r.get('casestatus') or '').upper()]
@@ -127,14 +140,14 @@ def fetch_litigation(bbl, bin_number):
 
 
 def fetch_evictions(bbl, bin_number):
-    columns = client.get_columns('evictions')
+    columns = _get_client().get_columns('evictions')
     if 'bbl' in columns:
         where = f"bbl={soql_quote(bbl)}"
     elif 'bin' in columns and bin_number:
         where = f"bin={soql_quote(bin_number)}"
     else:
         raise RuntimeError('Evictions has no usable BBL/BIN fields')
-    rows = client.get_all('evictions', page_size=1000, max_rows=5000, **{'$where': where})
+    rows = _get_client().get_all('evictions', page_size=1000, max_rows=5000, **{'$where': where})
     date_col = _first_present(columns, ['executed_date', 'executeddate'])
     dates = [parse_any_date(r.get(date_col)) for r in rows] if date_col else []
     dates = [d for d in dates if d]
@@ -145,14 +158,14 @@ def fetch_evictions(bbl, bin_number):
 
 
 def fetch_exemptions(bbl, bin_number):
-    columns = client.get_columns('exemptions')
+    columns = _get_client().get_columns('exemptions')
     if 'parid' in columns:
         where = f"parid={soql_quote(bbl)}"
     elif {'boro', 'block', 'lot'} <= columns:
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
         raise RuntimeError('Property Exemption Detail has no usable parcel fields')
-    rows = client.get_all('exemptions', page_size=1000, max_rows=2000, **{'$where': where})
+    rows = _get_client().get_all('exemptions', page_size=1000, max_rows=2000, **{'$where': where})
 
     code_col = _first_present(columns, ['exmp_code', 'exemption_code', 'excode'])
     if not code_col:
@@ -198,7 +211,7 @@ def fetch_exemptions(bbl, bin_number):
 
 
 def fetch_speculation(bbl, bin_number):
-    columns = client.get_columns('speculation_watch')
+    columns = _get_client().get_columns('speculation_watch')
     if 'bbl' in columns:
         where = f"bbl={soql_quote(bbl)}"
     elif {'borough', 'block', 'lot'} <= columns:
@@ -207,7 +220,7 @@ def fetch_speculation(bbl, bin_number):
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
         raise RuntimeError('Speculation Watch List has no usable parcel fields')
-    rows = client.get('speculation_watch', **{'$where': where, '$limit': 50})
+    rows = _get_client().get('speculation_watch', **{'$where': where, '$limit': 50})
     if not rows:
         return {'on_speculation_watch_list': False, 'speculation_watch_date': None}
     date_col = _first_present(columns, ['deed_date', 'sale_date', 'as_of_date', 'date'])
@@ -226,7 +239,7 @@ def fetch_dob_complaints(bbl, bin_number):
             'dob_active_complaint_count': 0,
             'dob_last_complaint_date': None,
         }
-    rows = client.get_all('dob_complaints', page_size=1000, max_rows=10000, **{
+    rows = _get_client().get_all('dob_complaints', page_size=1000, max_rows=10000, **{
         '$where': f"bin={soql_quote(bin_number)}",
     })
     active = [r for r in rows if (r.get('status') or '').upper() == 'ACTIVE']
@@ -240,7 +253,7 @@ def fetch_dob_complaints(bbl, bin_number):
 
 
 def _fetch_cos_from(dataset, bin_number, bbl):
-    columns = client.get_columns(dataset)
+    columns = _get_client().get_columns(dataset)
     bin_col = _first_present(columns, ['bin', 'bin_number', 'bin_num'])
     if bin_col and bin_number:
         where = f"{bin_col}={soql_quote(bin_number)}"
@@ -251,7 +264,7 @@ def _fetch_cos_from(dataset, bin_number, bbl):
         where = where_block_lot(boro_col, 'block', 'lot', bbl)
     else:
         raise RuntimeError(f'{dataset} has no usable BIN or block/lot fields')
-    rows = client.get_all(dataset, page_size=1000, max_rows=2000, **{'$where': where})
+    rows = _get_client().get_all(dataset, page_size=1000, max_rows=2000, **{'$where': where})
     date_col = _first_present(columns, [
         'c_of_o_issuance_date', 'c_of_o_issue_date', 'c_o_issue_date',
         'issuance_date', 'issue_date'])
@@ -295,7 +308,7 @@ def fetch_certificates_of_occupancy(bbl, bin_number):
 
 
 def fetch_fisp(bbl, bin_number):
-    columns = client.get_columns('fisp_facades')
+    columns = _get_client().get_columns('fisp_facades')
     bin_col = _first_present(columns, ['bin', 'bin_number'])
     if bin_col and bin_number:
         where = f"{bin_col}={soql_quote(bin_number)}"
@@ -306,7 +319,7 @@ def fetch_fisp(bbl, bin_number):
         where = where_block_lot(boro_col, 'block', 'lot', bbl)
     else:
         raise RuntimeError('FISP Facades has no usable BIN or block/lot fields')
-    rows = client.get_all('fisp_facades', page_size=500, max_rows=1000, **{
+    rows = _get_client().get_all('fisp_facades', page_size=500, max_rows=1000, **{
         '$where': where,
     })
     if not rows:
@@ -329,13 +342,13 @@ def fetch_fisp(bbl, bin_number):
 
 
 def fetch_ll84(bbl, bin_number):
-    columns = client.get_columns('ll84_energy')
+    columns = _get_client().get_columns('ll84_energy')
     bbl_col = _first_present(columns, [
         'bbl_10_digits', 'bbl', 'nyc_borough_block_and_lot',
         'nyc_borough_block_and_lot_bbl'])
     if not bbl_col:
         raise RuntimeError('LL84 Energy has no usable BBL field')
-    rows = client.get('ll84_energy', **{'$where': f"{bbl_col}={soql_quote(bbl)}", '$limit': 200})
+    rows = _get_client().get('ll84_energy', **{'$where': f"{bbl_col}={soql_quote(bbl)}", '$limit': 200})
     if not rows:
         return {
             'energy_star_score': None,
@@ -370,11 +383,11 @@ def fetch_ll84(bbl, bin_number):
 
 
 def fetch_rolling_sales(bbl, bin_number):
-    columns = client.get_columns('rolling_sales')
+    columns = _get_client().get_columns('rolling_sales')
     boro_col = _first_present(columns, ['borough', 'boro'])
     if not boro_col or 'block' not in columns or 'lot' not in columns:
         raise RuntimeError('Rolling Sales has no usable borough/block/lot fields')
-    rows = client.get_all('rolling_sales', page_size=500, max_rows=1000, **{
+    rows = _get_client().get_all('rolling_sales', page_size=500, max_rows=1000, **{
         '$where': where_block_lot(boro_col, 'block', 'lot', bbl),
     })
     date_col = _first_present(columns, ['sale_date', 'saledate'])
@@ -415,6 +428,29 @@ FETCHERS = [
     ('rolling_sales', fetch_rolling_sales),
 ]
 
+SIGNAL_DATASETS = (
+    'hpd_litigation', 'evictions', 'exemptions', 'speculation_watch',
+    'dob_complaints', 'dob_co_bis', 'dob_co_now', 'fisp_facades',
+    'll84_energy', 'rolling_sales',
+)
+
+
+def preflight_signal_sources():
+    """Fail once, early, when a source is unavailable or changes schema.
+
+    Without this gate a global metadata outage becomes the same error on every
+    one of 100k buildings and the run spends days making no durable progress.
+    """
+    failures = []
+    source_client = _get_client()
+    for dataset in SIGNAL_DATASETS:
+        try:
+            source_client.get_columns(dataset)
+        except Exception as exc:
+            failures.append(f'{dataset}: {exc}')
+    if failures:
+        raise RuntimeError('Signal source preflight failed: ' + ' | '.join(failures))
+
 
 def enrich_signals_for_building(bbl, bin_number, building_sqft):
     """Run every fetcher and return ``(fields, errors)``.
@@ -439,8 +475,9 @@ def enrich_signals_for_building(bbl, bin_number, building_sqft):
 
 
 def _process_building(building, position, total):
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = None
     try:
+        conn = psycopg2.connect(DATABASE_URL)
         fields, errors = enrich_signals_for_building(
             building['bbl'], building['bin'], building['building_sqft'])
         cur = conn.cursor()
@@ -489,28 +526,16 @@ def _process_building(building, position, total):
                       f"⚠️ partial ({len(errors)} source errors; will retry)")
             return False
 
-        highlights = []
-        if fields.get('litigation_open_count'):
-            highlights.append(f"litigation:{fields['litigation_open_count']}")
-        if fields.get('eviction_count'):
-            highlights.append(f"evictions:{fields['eviction_count']}")
-        if fields.get('has_senior_exemption'):
-            highlights.append("senior-exemption")
-        if fields.get('on_speculation_watch_list'):
-            highlights.append("speculation-list")
-        if fields.get('latest_co_date'):
-            highlights.append(f"CO:{fields['latest_co_date']}")
-        with _print_lock:
-            note = ' · '.join(highlights) if highlights else 'no signals'
-            print(f"[{position}/{total}] BBL {building['bbl']}: {note}")
         return True
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         with _print_lock:
             print(f"[{position}/{total}] BBL {building['bbl']}: ❌ {e}")
         return False
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def main():
@@ -530,6 +555,15 @@ def main():
         print("❌ Run migrate_add_intel_signals.py first — signal columns are missing.")
         sys.exit(1)
 
+    try:
+        preflight_signal_sources()
+    except Exception as exc:
+        print(f"❌ {exc}")
+        cur.close()
+        conn.close()
+        raise SystemExit(1)
+
+    limit_sql = f"LIMIT {SIGNALS_MAX_BUILDINGS}" if SIGNALS_MAX_BUILDINGS else ""
     cur.execute(f"""
         SELECT id, bbl, bin, building_sqft
         FROM buildings
@@ -538,6 +572,7 @@ def main():
              OR signals_last_enriched IS NULL
              OR signals_last_enriched < NOW() - INTERVAL '{SIGNALS_REFRESH_DAYS} days')
         ORDER BY id
+        {limit_sql}
     """)
     buildings = cur.fetchall()
     cur.close()
@@ -570,15 +605,43 @@ def main():
 
         fill_window()
         while pending:
-            completed, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in completed:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
                 if future.result():
                     ok += 1
                 else:
                     failed += 1
+                # Keep Railway logs useful without emitting 100k success rows.
+                # Failures are still printed immediately by the worker.
+                completed_count = ok + failed
+                if (completed_count % SIGNALS_PROGRESS_EVERY == 0
+                        or completed_count == len(buildings)):
+                    elapsed = max(time.time() - started, 0.001)
+                    rate = completed_count / elapsed
+                    remaining = len(buildings) - completed_count
+                    eta_hours = remaining / rate / 3600 if rate else 0
+                    with _print_lock:
+                        print(
+                            f"Progress {completed_count:,}/{len(buildings):,} · "
+                            f"{rate:.2f} buildings/s · ETA {eta_hours:.1f}h · "
+                            f"failures {failed:,}")
             fill_window()
 
     duration_minutes = (time.time() - started) / 60
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT COUNT(*)
+        FROM buildings
+        WHERE bbl IS NOT NULL
+        AND (signals_enrichment_version < {SIGNALS_ENRICHMENT_VERSION}
+             OR signals_last_enriched IS NULL
+             OR signals_last_enriched < NOW() - INTERVAL '{SIGNALS_REFRESH_DAYS} days')
+    """)
+    remaining_backlog = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    print(f"   Backlog remaining after this pass: {remaining_backlog:,}")
     if failed:
         print(f"\n❌ Incomplete in {duration_minutes:.1f} min — "
               f"{ok} enriched, {failed} failed and remain eligible for retry")
