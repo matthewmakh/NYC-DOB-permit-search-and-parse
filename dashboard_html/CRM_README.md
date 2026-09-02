@@ -112,6 +112,20 @@ system is the team system:
 * `/crm/api/bbl-status` powers the "In CRM ✓" state on the permit-side
   buttons.
 
+## Street View
+
+Building pages (the permit-side `/property/<bbl>` dossier, the CRM building
+detail, and the Focus card) show Google Street View of the lot.
+
+* Set **`GOOGLE_MAPS_EMBED_KEY`** (Google Cloud → APIs & Services → enable
+  *Maps Embed API* → create an API key restricted to *HTTP referrers*
+  `permits.up.railway.app/*` and any custom domain) and the view is
+  **embedded** in the page. Google prices Maps Embed API requests at $0.
+* Without the key, the same spots show an **Open Street View** button that
+  deep-links into Google Maps (keyless Maps URLs API) — nothing breaks.
+* Coordinates come from the geocoded `permits` rows for the BBL; a lot with
+  no geocoded permit gets an address-based map/link instead of a panorama.
+
 ## Migration story
 
 Purely additive: `init_crm_tables()` is a list of `CREATE TABLE IF NOT

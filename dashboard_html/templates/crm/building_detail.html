@@ -1,5 +1,5 @@
 {% extends "crm/_layout.html" %}
-{% from "crm/_macros.html" import contacted_btn %}
+{% from "crm/_macros.html" import contacted_btn, streetview %}
 {% block title %}{{ b.address }} — CRM{% endblock %}
 {% block crm_content %}
 <div id="bHeader" data-partial="/crm/partials/building/{{ b.id }}/header">
@@ -22,6 +22,10 @@
         </div>
     </div>
     <div class="crm-col-rail">
+        <div class="crm-group" id="bStreetView">
+            <div class="crm-group__head"><h3><i class="fas fa-street-view" style="color:var(--c-blue)"></i> Street View</h3></div>
+            {{ streetview(sv, is_admin=crm_ctx.is_admin) }}
+        </div>
         <div class="crm-group" id="bPeople" data-partial="/crm/partials/building/{{ b.id }}/people">
             {% include "crm/partials/building_people.html" %}
         </div>

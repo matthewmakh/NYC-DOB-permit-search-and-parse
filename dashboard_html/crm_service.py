@@ -815,6 +815,24 @@ def permit_snapshot(bbl):
         conn.close()
 
 
+def building_streetview(bbl, address, borough=None):
+    """Street View / Maps payload for a CRM building (coords from permits)."""
+    import streetview
+    coords = None
+    if bbl:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            coords = streetview.lookup_latlng(cur, bbl)
+        except Exception:
+            coords = None
+        finally:
+            cur.close()
+            conn.close()
+    lat, lng = coords if coords else (None, None)
+    return streetview.payload(address, lat, lng, borough)
+
+
 def permit_building_prefill(bbl):
     """Best-available address/facts for one BBL from the scraper tables."""
     conn = get_db_connection()

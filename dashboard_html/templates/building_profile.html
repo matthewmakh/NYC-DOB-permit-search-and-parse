@@ -23,6 +23,10 @@
                     </div>
                 </div>
                 <div class="dossier-head-actions">
+                    <a class="btn btn-secondary" id="streetview-btn" href="#streetview-card"
+                       title="See this building in Google Street View">
+                        <i class="fas fa-street-view"></i> Street View
+                    </a>
                     <a class="btn btn-secondary" id="crm-add-btn" href="/crm/buildings/add?bbl={{ bbl }}"
                        title="Track this building in the sales CRM">
                         <i class="fas fa-address-book"></i> Add to CRM
@@ -198,6 +202,16 @@
 
             <!-- Rail -->
             <aside class="dossier-rail">
+                <div class="dossier-card rail-card streetview-card" id="streetview-card">
+                    <div class="dossier-card-head">
+                        <h3><i class="fas fa-street-view" style="color:var(--accent);margin-right:6px"></i>Street View</h3>
+                        <a class="linklike" id="streetview-open" href="#" target="_blank" rel="noopener" style="display:none">Open in Google Maps</a>
+                    </div>
+                    <div class="streetview-body" id="streetview-body">
+                        <div class="streetview-empty"><span class="spinner spinner-sm"></span></div>
+                    </div>
+                </div>
+
                 <div class="dossier-card rail-card" id="signals-card" style="display: none;">
                     <div class="dossier-card-head"><h3>Signals</h3></div>
                     <div class="dossier-card-body" id="signals-list"></div>
@@ -259,6 +273,43 @@
 
 <script>
     const BBL = "{{ bbl }}";
+</script>
+<script>
+    // Street View: embed when the server has a Maps Embed key, else offer a
+    // one-tap deep link. Either way the header button opens the full view.
+    (async function () {
+        const body = document.getElementById('streetview-body');
+        const openLink = document.getElementById('streetview-open');
+        const headBtn = document.getElementById('streetview-btn');
+        const esc = (v) => { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; };
+        try {
+            const res = await fetch('/api/property/{{ bbl }}/streetview');
+            const sv = await res.json();
+            if (!sv.success) throw new Error(sv.error || 'lookup failed');
+            if (sv.open_url) {
+                openLink.href = sv.open_url; openLink.style.display = '';
+                headBtn.href = sv.open_url; headBtn.target = '_blank'; headBtn.rel = 'noopener';
+            }
+            if (sv.embed_url) {
+                body.innerHTML = '<iframe class="streetview-frame" src="' + esc(sv.embed_url) + '" loading="lazy" ' +
+                    'referrerpolicy="no-referrer-when-downgrade" allowfullscreen title="Street View of ' + esc(sv.address || '') + '"></iframe>' +
+                    '<div class="streetview-foot">' +
+                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Full Street View</a>' +
+                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener"><i class="fas fa-map"></i> Map</a>' +
+                    (sv.embed_kind === 'map' ? '<span class="streetview-note">No geocode for this lot yet — showing the map.</span>' : '') +
+                    '</div>';
+            } else {
+                body.innerHTML = '<div class="streetview-empty">' +
+                    '<i class="fas fa-street-view"></i>' +
+                    '<p>' + (sv.has_coords ? 'See the block and the front of the building before you call.' : 'No geocode for this lot yet — search the address in Google Maps.') + '</p>' +
+                    '<a class="btn btn-primary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-street-view"></i> Open Street View</a>' +
+                    (sv.key_configured ? '' : '<span class="streetview-note">Set <code>GOOGLE_MAPS_EMBED_KEY</code> to embed it here.</span>') +
+                    '</div>';
+            }
+        } catch (e) {
+            body.innerHTML = '<div class="streetview-empty"><i class="fas fa-street-view"></i><p>Street View unavailable right now.</p></div>';
+        }
+    })();
 </script>
 <script>
     // Swap the CRM button to "In CRM" when this BBL is already tracked.

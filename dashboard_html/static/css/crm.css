@@ -1292,6 +1292,46 @@ html[data-crm-theme="dark"] .crm-hbar .hb-track { background: rgba(255, 255, 255
 .crm-alpha__index a:hover { color: var(--c-label); }
 
 /* ============================================================
+   Street View
+   ============================================================ */
+
+.crm-sv__frame {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border: 0;
+    background: var(--c-surface-2);
+}
+.crm-sv.is-compact { margin: 0 0 14px; border-radius: var(--c-radius); overflow: hidden; box-shadow: 0 0 0 1px var(--c-sep); }
+.crm-sv.is-compact .crm-sv__frame { aspect-ratio: 21 / 9; }
+.crm-sv__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 150px;
+    padding: 20px 18px;
+    text-align: center;
+    background: var(--c-surface-2);
+    color: var(--c-label-2);
+    font-size: 13px;
+}
+html[data-crm-theme="dark"] .crm-sv__empty { background: rgba(255, 255, 255, 0.04); }
+.crm-sv__empty i { font-size: 28px; color: var(--c-label-3); }
+.crm-sv__empty p { margin: 0; max-width: 32ch; line-height: 1.5; }
+.crm-sv__foot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    background: var(--c-surface);
+}
+.crm-sv__hint { flex-basis: 100%; font-size: 11.5px; color: var(--c-label-3); line-height: 1.45; }
+.crm-sv__hint code { font-family: var(--mono); font-size: 11px; }
+
+/* ============================================================
    Misc
    ============================================================ */
 

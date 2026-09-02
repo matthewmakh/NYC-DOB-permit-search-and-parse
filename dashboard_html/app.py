@@ -2251,6 +2251,35 @@ def property_detail(bbl):
         active_page='properties')
 
 
+@app.route('/api/property/<bbl>/streetview')
+@login_required
+def api_property_streetview(bbl):
+    """Street View / Maps links for a lot (embeddable when GOOGLE_MAPS_EMBED_KEY is set)."""
+    import streetview
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute(
+                "SELECT address, CAST(borough AS TEXT) AS borough FROM buildings WHERE bbl = %s",
+                (bbl,),
+            )
+            row = cur.fetchone()
+            if not row or not row.get('address'):
+                cur.execute(
+                    """SELECT address, borough FROM permits WHERE bbl = %s AND address IS NOT NULL
+                       ORDER BY COALESCE(filing_date, issue_date) DESC NULLS LAST LIMIT 1""",
+                    (bbl,),
+                )
+                row = cur.fetchone() or {}
+            coords = streetview.lookup_latlng(cur, bbl)
+        lat, lng = coords if coords else (None, None)
+        data = streetview.payload(row.get('address') or f'BBL {bbl}', lat, lng, row.get('borough'))
+        data['address'] = row.get('address')
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        print(f"Street View lookup failed for {bbl}: {e}", flush=True)
+        return jsonify({'success': False, 'error': 'lookup failed'}), 500
+
+
 @app.route('/api/property/<bbl>/violations')
 def api_property_violations(bbl):
     """Fetch HPD violations for a property from NYC Open Data"""

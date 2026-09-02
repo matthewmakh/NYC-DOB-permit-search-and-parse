@@ -1,4 +1,4 @@
-{% from "crm/_macros.html" import avatar, bavatar, stage_dot, recency, contacted_btn, event, due_tag %}
+{% from "crm/_macros.html" import avatar, bavatar, stage_dot, recency, contacted_btn, event, due_tag, streetview %}
 <div class="crm-group" style="margin-bottom:0">
     <div class="crm-group__body">
         {% if kind == 'building' %}
@@ -15,6 +15,7 @@
                 </div>
             </div>
         </div>
+        {% if sv %}{{ streetview(sv, is_admin=crm_ctx.is_admin, compact=True) }}{% endif %}
         {% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
         {% if b.follow_ups %}
         <div class="crm-collision is-info"><i class="far fa-calendar-check"></i> Next step: <strong>{{ b.follow_ups[0].title }}</strong> · {{ b.follow_ups[0].due_date|crm_due }}</div>

@@ -330,6 +330,7 @@ def partial_focus_card(kind, entity_id):
         crm_service.log_view(ctx, 'building', entity_id, building['address'])
         return render_template(
             'crm/partials/focus_card.html', kind='building', b=building, c=None,
+            sv=crm_service.building_streetview(building.get('bbl'), building['address'], building.get('borough')),
             timeline=crm_service.get_timeline(ctx, building_id=entity_id, limit=5),
             last_touch=_collision_warning(building.get('last_contact')),
             **_partial_args(ctx))
@@ -338,7 +339,7 @@ def partial_focus_card(kind, entity_id):
         return 'Not found', 404
     crm_service.log_view(ctx, 'contact', entity_id, contact['name'])
     return render_template(
-        'crm/partials/focus_card.html', kind='contact', b=None, c=contact,
+        'crm/partials/focus_card.html', kind='contact', b=None, c=contact, sv=None,
         timeline=crm_service.get_timeline(ctx, contact_id=entity_id, limit=5),
         last_touch=_collision_warning(contact.get('last_contact')),
         **_partial_args(ctx))
@@ -397,6 +398,7 @@ def _building_detail_context(ctx, building):
         'last_touch': _collision_warning(building.get('last_contact')),
         'timeline': crm_service.get_timeline(ctx, building_id=building['id']),
         'snapshot': crm_service.permit_snapshot(building.get('bbl')),
+        'sv': crm_service.building_streetview(building.get('bbl'), building['address'], building.get('borough')),
         'my_lists': crm_service.list_lists(ctx),
         'roster': crm_service.get_team_roster(ctx['team_id']),
     }

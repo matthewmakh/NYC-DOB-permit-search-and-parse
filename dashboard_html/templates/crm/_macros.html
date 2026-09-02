@@ -346,3 +346,24 @@
     {% endfor %}
 </svg>
 {% endmacro %}
+
+
+{% macro streetview(sv, is_admin=False, compact=False) %}
+<div class="crm-sv{{ ' is-compact' if compact }}">
+    {% if sv.embed_url %}
+    <iframe class="crm-sv__frame" src="{{ sv.embed_url }}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen title="Street View"></iframe>
+    {% else %}
+    <div class="crm-sv__empty">
+        <i class="fas fa-street-view"></i>
+        <p>{% if sv.has_coords %}See the block and the front door before you call.{% else %}No geocode for this lot yet — open the address in Google Maps.{% endif %}</p>
+    </div>
+    {% endif %}
+    <div class="crm-sv__foot">
+        <a class="cbtn cbtn-sm{{ ' cbtn-primary' if not sv.embed_url }}" href="{{ sv.open_url }}" target="_blank" rel="noopener"><i class="fas fa-street-view"></i> {{ 'Full Street View' if sv.embed_url else 'Open Street View' }}</a>
+        <a class="cbtn cbtn-sm" href="{{ sv.map_url }}" target="_blank" rel="noopener"><i class="fas fa-map"></i> Google Maps</a>
+        <a class="cbtn cbtn-sm" href="{{ sv.apple_url }}" target="_blank" rel="noopener"><i class="fab fa-apple"></i> Maps</a>
+        {% if sv.embed_kind == 'map' %}<span class="crm-sv__hint">No geocode yet — showing the map.</span>
+        {% elif not sv.key_configured and is_admin %}<span class="crm-sv__hint">Set <code>GOOGLE_MAPS_EMBED_KEY</code> to embed it here.</span>{% endif %}
+    </div>
+</div>
+{% endmacro %}
