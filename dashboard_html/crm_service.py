@@ -816,21 +816,23 @@ def permit_snapshot(bbl):
 
 
 def building_streetview(bbl, address, borough=None):
-    """Street View / Maps payload for a CRM building (coords from permits)."""
+    """Street View / Maps payload for a CRM building (see streetview.resolve)."""
     import streetview
-    coords = None
-    if bbl:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        try:
-            coords = streetview.lookup_latlng(cur, bbl)
-        except Exception:
-            coords = None
-        finally:
-            cur.close()
-            conn.close()
-    lat, lng = coords if coords else (None, None)
-    return streetview.payload(address, lat, lng, borough)
+    loc = None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        loc = streetview.resolve(cur, bbl, address, borough)
+        conn.commit()  # keeps the geocode cache
+    except Exception as e:
+        conn.rollback()
+        print(f"[crm] streetview lookup failed for {address!r}: {e}", flush=True)
+        loc = None
+    finally:
+        cur.close()
+        conn.close()
+    loc = loc or {}
+    return streetview.payload(address, loc.get('lat'), loc.get('lng'), borough, loc.get('source'))
 
 
 def permit_building_prefill(bbl):

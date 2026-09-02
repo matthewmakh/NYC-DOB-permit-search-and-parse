@@ -286,23 +286,25 @@
             const res = await fetch('/api/property/{{ bbl }}/streetview');
             const sv = await res.json();
             if (!sv.success) throw new Error(sv.error || 'lookup failed');
+            const pinned = sv.open_kind === 'streetview';
             if (sv.open_url) {
                 openLink.href = sv.open_url; openLink.style.display = '';
                 headBtn.href = sv.open_url; headBtn.target = '_blank'; headBtn.rel = 'noopener';
+                if (!pinned) headBtn.innerHTML = '<i class="fas fa-map"></i> Map';
             }
             if (sv.embed_url) {
                 body.innerHTML = '<iframe class="streetview-frame" src="' + esc(sv.embed_url) + '" loading="lazy" ' +
                     'referrerpolicy="no-referrer-when-downgrade" allowfullscreen title="Street View of ' + esc(sv.address || '') + '"></iframe>' +
                     '<div class="streetview-foot">' +
-                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Full Street View</a>' +
-                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener"><i class="fas fa-map"></i> Map</a>' +
-                    (sv.embed_kind === 'map' ? '<span class="streetview-note">No geocode for this lot yet — showing the map.</span>' : '') +
+                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> ' + (pinned ? 'Full Street View' : 'Open in Google Maps') + '</a>' +
+                    (pinned ? '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener"><i class="fas fa-map"></i> Map</a>' : '') +
+                    (sv.embed_kind === 'map' ? '<span class="streetview-note">Couldn\'t pinpoint this lot yet — showing the address on the map.</span>' : '') +
                     '</div>';
             } else {
                 body.innerHTML = '<div class="streetview-empty">' +
                     '<i class="fas fa-street-view"></i>' +
-                    '<p>' + (sv.has_coords ? 'See the block and the front of the building before you call.' : 'No geocode for this lot yet — search the address in Google Maps.') + '</p>' +
-                    '<a class="btn btn-primary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-street-view"></i> Open Street View</a>' +
+                    '<p>' + (pinned ? 'See the block and the front of the building before you call.' : 'Couldn\'t pinpoint this lot yet — search the address in Google Maps instead.') + '</p>' +
+                    '<a class="btn btn-primary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-' + (pinned ? 'street-view' : 'map') + '"></i> ' + (pinned ? 'Open Street View' : 'Open in Google Maps') + '</a>' +
                     (sv.key_configured ? '' : '<span class="streetview-note">Set <code>GOOGLE_MAPS_EMBED_KEY</code> to embed it here.</span>') +
                     '</div>';
             }

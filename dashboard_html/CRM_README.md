@@ -123,8 +123,20 @@ detail, and the Focus card) show Google Street View of the lot.
   **embedded** in the page. Google prices Maps Embed API requests at $0.
 * Without the key, the same spots show an **Open Street View** button that
   deep-links into Google Maps (keyless Maps URLs API) — nothing breaks.
-* Coordinates come from the geocoded `permits` rows for the BBL; a lot with
-  no geocoded permit gets an address-based map/link instead of a panorama.
+* **Where the pin goes** (`streetview.resolve`): first NYC Planning's free
+  GeoSearch API — the official address point for the house number, accepted
+  only when it comes back with the lot's own BBL (or an exact same-house,
+  same-borough match). Answers, including misses, are cached in
+  `building_geocodes` so each lot is looked up once. Second, the geocode on
+  the lot's permits, taking the newest permit that agrees with the others on
+  the lot and sits inside its borough; rounded placeholders, borough
+  centroids, and lone outliers are ignored. If neither works the button
+  becomes **Open in Google Maps** (an address search) rather than a Street
+  View link that opens on a black screen.
+* The keyless link uses the classic `layer=c&cbll=` form, which snaps to the
+  nearest panorama. The Maps URLs API `map_action=pano&viewpoint=` form was
+  dropped: it shows "No Street View imagery available here" whenever nothing
+  was photographed within 50 m of the point.
 
 ## Migration story
 

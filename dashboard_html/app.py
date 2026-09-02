@@ -190,6 +190,11 @@ def init_db_pool():
             crm_service.init_crm_tables()
         except Exception as e:
             print(f"⚠️  CRM schema init skipped: {e}", flush=True)
+        try:
+            import streetview
+            streetview.init_geocode_table()
+        except Exception as e:
+            print(f"⚠️  geocode cache init skipped: {e}", flush=True)
     return db_pool
 
 
@@ -2270,9 +2275,9 @@ def api_property_streetview(bbl):
                     (bbl,),
                 )
                 row = cur.fetchone() or {}
-            coords = streetview.lookup_latlng(cur, bbl)
-        lat, lng = coords if coords else (None, None)
-        data = streetview.payload(row.get('address') or f'BBL {bbl}', lat, lng, row.get('borough'))
+            loc = streetview.resolve(cur, bbl, row.get('address'), row.get('borough')) or {}
+        data = streetview.payload(row.get('address') or f'BBL {bbl}', loc.get('lat'), loc.get('lng'),
+                                  row.get('borough'), loc.get('source'))
         data['address'] = row.get('address')
         return jsonify({'success': True, **data})
     except Exception as e:
