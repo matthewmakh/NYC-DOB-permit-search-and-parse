@@ -589,6 +589,9 @@ async function loadProperties() {
         showLoading(false);
         initialPropertiesSettled = true;
         restoreListPositionIfReady(false);
+        // Whatever moved the filters — a control, a play, Back — the toolbar
+        // says which saved search this is, or that it has drifted from one.
+        if (typeof ssSyncLabel === 'function') ssSyncLabel();
     }
 }
 
@@ -1169,6 +1172,7 @@ function resetFilters() {
 
 function clearFilters() {
     resetFilters();
+    savedSearch.openedId = null;
     renderPlayCards();
     renderPlayGuide();
     
@@ -1800,7 +1804,7 @@ async function refreshCrmStatus() {
     } catch (e) { /* the CRM chip is decoration; never break the grid */ }
 }
 
-function crmNotice(message) {
+function crmNotice(message, kind) {
     let stack = document.querySelector('.toast-stack');
     if (!stack) {
         stack = document.createElement('div');
@@ -1808,34 +1812,556 @@ function crmNotice(message) {
         document.body.appendChild(stack);
     }
     const el = document.createElement('div');
-    el.className = 'toast toast-success';
-    el.innerHTML = '<i class="fas fa-check-circle"></i><span></span>';
+    el.className = `toast toast-${kind === 'error' ? 'error' : 'success'}`;
+    el.innerHTML = kind === 'error'
+        ? '<i class="fas fa-circle-exclamation"></i><span></span>'
+        : '<i class="fas fa-check-circle"></i><span></span>';
     el.querySelector('span').textContent = message;
     stack.appendChild(el);
     setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 220); }, 3500);
 }
 
-async function saveLeadList() {
-    const name = prompt('Name this lead list (it re-runs these filters live from the CRM):');
-    if (!name || !name.trim()) return;
+// ==========================================
+// SAVED SEARCHES
+// ------------------------------------------
+// A saved search is this page's whole view — every sidebar filter, the play,
+// the sort and the page size — under a name. Saving stores the querystring,
+// so a search re-runs live: the filters are evaluated again on every open and
+// pick up permits and sales that landed since. Team searches double as the
+// CRM's live lead lists, which is why they share one store.
+// ==========================================
+
+const savedSearch = {
+    items: [],
+    loaded: false,
+    activeId: null,     // the saved search the current filters match
+    openedId: null,     // the one the person opened, even after they tweak it
+    editingId: null,    // row being renamed/updated in the dialog
+    repoint: false,     // dialog: replace the stored filters with what's on screen
+    find: '',
+};
+
+// param -> the control whose <option> labels name its values. Read from the
+// DOM so codes filled in from /api/permits/facets describe themselves too.
+const SS_OPTION_SOURCES = {
+    borough: 'boroughFilter',
+    property_type: 'propertyType',
+    building_class: 'buildingClass',
+    work_type: 'workType',
+    job_type: 'jobType',
+    permit_type: 'permitType',
+    license_type: 'licenseType',
+    has_violations: 'violationsFilter',
+};
+
+const SS_FLAGS = {
+    cash_only: 'Cash purchases',
+    with_permits: 'Has permits',
+    has_enrichable_owner: 'Enrichable owner',
+};
+
+// `unit` trails the whole range ("5-20 units"); a unit with no leading space
+// binds to each number instead ("10-50%").
+const SS_RANGES = [
+    { min: 'min_units', max: 'max_units', unit: ' units' },
+    { min: 'min_value', max: 'max_value', label: 'Assessed', money: true },
+    { min: 'min_sale_price', max: 'max_sale_price', label: 'Sale', money: true },
+    { min: 'sale_date_from', max: 'sale_date_to', label: 'Sold', date: true },
+    { min: 'financing_min', max: 'financing_max', label: 'Financed', unit: '%' },
+];
+
+const SS_SORT_LABELS = {
+    sale_date: 'sale date', value: 'assessed value', sale_price: 'sale price',
+    address: 'address', owner: 'owner', permits: 'permit count', units: 'units',
+    unused_far: 'unused FAR', co_date: 'CO date', recent_permits: 'recent permits',
+};
+
+function ssMoney(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return String(value);
+    if (n >= 1e9) return `$${(n / 1e9).toFixed(n % 1e9 ? 1 : 0)}B`;
+    if (n >= 1e6) return `$${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M`;
+    if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
+    return `$${n}`;
+}
+
+function ssOptionLabel(param, value) {
+    const select = document.getElementById(SS_OPTION_SOURCES[param] || '');
+    const option = select && Array.from(select.options)
+        .find(o => o.value === String(value));
+    // Facet options carry their own counts — "Plumbing (1,204)" — which are
+    // noise in a one-line summary of what a search asks for.
+    return option ? option.textContent.replace(/\s*\(\d[\d,]*\)\s*$/, '').trim() : String(value);
+}
+
+function ssRangeChip(params, range) {
+    const lo = params.get(range.min);
+    const hi = params.get(range.max);
+    if (!lo && !hi) return null;
+    const unit = range.unit || '';
+    const trails = unit.startsWith(' ');   // " units" reads after the range
+    const one = v => {
+        if (range.money) return ssMoney(v);
+        if (range.date) return formatDate(v);
+        return trails ? String(v) : `${v}${unit}`;
+    };
+    const tail = trails ? unit : '';
+    let body;
+    if (lo && hi) body = `${one(lo)}–${one(hi)}${tail}`;
+    else if (lo) body = range.date ? `since ${one(lo)}` : (trails ? `${one(lo)}+${tail}` : `${one(lo)}+`);
+    else body = range.date ? `before ${one(hi)}` : `up to ${one(hi)}${tail}`;
+    return range.label ? `${range.label} ${body}` : body;
+}
+
+/** The current filters in plain English, one chip per idea. */
+function describeSearch(querystring) {
+    const params = new URLSearchParams(querystring || '');
+    const chips = [];
+    const add = text => { if (text) chips.push(text); };
+
+    if (params.get('search')) add(`“${params.get('search')}”`);
+    if (params.get('owner')) add(`Owner “${params.get('owner')}”`);
+
+    Object.keys(SS_OPTION_SOURCES).forEach(param => {
+        const values = repeatedParamValues(params, param);
+        if (!values.length) return;
+        const labels = values.map(v => ssOptionLabel(param, v));
+        add(labels.length > 3 ? `${labels.slice(0, 2).join(', ')} +${labels.length - 2}` : labels.join(', '));
+    });
+
+    SS_RANGES.forEach(range => add(ssRangeChip(params, range)));
+    Object.entries(SS_FLAGS).forEach(([param, label]) => {
+        if (trueParam(params, param)) add(label);
+    });
+
+    if (params.get('min_permits')) add(`${params.get('min_permits')}+ permits`);
+    if (params.get('recent_sale_days')) add(`Sold in ${params.get('recent_sale_days')}d`);
+    const permitDays = params.get('recent_permit_days');
+    if (permitDays) {
+        add(params.get('permit_activity_mode') === 'inactive'
+            ? `No permit in ${permitDays}d`
+            : `Permit in ${permitDays}d`);
+    }
+    const play = state.plays.find(p => p.id === params.get('play'));
+    if (play) add(`Play: ${play.name}`);
+    else if (params.get('play')) add(`Play: ${params.get('play')}`);
+
+    const sortKeys = repeatedParamValues(params, 'sort_by')
+        .map(key => SS_SORT_LABELS[key] || key);
+    if (sortKeys.length) {
+        add(`Sorted by ${sortKeys.join(', ')}` +
+            (params.get('sort_order') === 'asc' ? ' (low to high)' : ''));
+    }
+    return chips;
+}
+
+/**
+ * A comparable form of a querystring.
+ *
+ * Page number is dropped (where someone was scrolled to is not part of what
+ * they saved) and the rest is sorted, so filters picked in a different order
+ * still recognise their saved search.
+ */
+function ssNormalize(querystring) {
+    const params = new URLSearchParams(querystring || '');
+    params.delete('page');
+    const pairs = [];
+    params.forEach((value, key) => { if (value !== '') pairs.push(`${key}=${value}`); });
+    return pairs.sort().join('&');
+}
+
+function ssCurrentQuery() {
+    const params = buildPropertiesParams();
+    params.delete('page');
+    return params.toString();
+}
+
+function ssTimeAgo(iso) {
+    if (!iso) return '';
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) return '';
+    const mins = Math.round((Date.now() - then.getTime()) / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days < 30) return `${days}d ago`;
+    return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+async function ssLoad(force) {
+    if (savedSearch.loaded && !force) return;
     try {
-        const res = await fetch('/crm/api/saved-filter', {
+        const res = await fetch('/crm/api/saved-filters?page=properties');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'load failed');
+        savedSearch.items = data.searches || [];
+        savedSearch.loaded = true;
+    } catch (e) {
+        savedSearch.items = [];
+        savedSearch.loaded = false;
+    }
+    ssRender();
+    ssSyncLabel();
+}
+
+/** Reflect on the toolbar which saved search (if any) is on screen. */
+function ssSyncLabel() {
+    const current = ssNormalize(ssCurrentQuery());
+    const match = savedSearch.items.find(item => ssNormalize(item.querystring) === current);
+    savedSearch.activeId = match ? match.id : null;
+    if (match) savedSearch.openedId = match.id;
+
+    const label = document.getElementById('savedSearchLabel');
+    const dirty = document.getElementById('savedSearchDirty');
+    const button = document.getElementById('savedSearchBtn');
+    if (!label || !button) return;
+    label.textContent = match ? match.name : 'Saved searches';
+    button.classList.toggle('is-active', Boolean(match));
+    // A dot marks filters that have moved on from the search that was opened.
+    const opened = savedSearch.items.find(item => item.id === savedSearch.openedId);
+    if (dirty) dirty.hidden = !(opened && !match);
+    if (!match && opened) label.textContent = `${opened.name} (edited)`;
+    ssRenderFoot();
+    document.querySelectorAll('#savedSearchList .ss-row').forEach(row => {
+        row.classList.toggle('is-active', Number(row.dataset.id) === savedSearch.activeId);
+    });
+}
+
+function ssRender() {
+    const list = document.getElementById('savedSearchList');
+    const count = document.getElementById('savedSearchCount');
+    const findWrap = document.getElementById('savedSearchFindWrap');
+    if (!list) return;
+
+    if (count) count.textContent = savedSearch.items.length
+        ? `${savedSearch.items.length}` : '';
+    if (findWrap) findWrap.hidden = savedSearch.items.length < 6;
+
+    const needle = savedSearch.find.trim().toLowerCase();
+    const items = needle
+        ? savedSearch.items.filter(item => item.name.toLowerCase().includes(needle))
+        : savedSearch.items;
+
+    if (!savedSearch.items.length) {
+        list.innerHTML = `
+            <div class="saved-search__empty">
+                <i class="fas fa-bookmark" aria-hidden="true"></i>
+                <p>No saved searches yet.</p>
+                <span>Set up the filters you use every week, then save them here to run them in one click.</span>
+            </div>`;
+        ssRenderFoot();
+        return;
+    }
+    if (!items.length) {
+        list.innerHTML = '<div class="saved-search__empty"><p>Nothing matches that.</p></div>';
+        return;
+    }
+
+    list.innerHTML = items.map(item => {
+        const chips = describeSearch(item.querystring);
+        const summary = chips.length ? chips.join(' · ') : 'No filters — every property';
+        const meta = [
+            item.is_mine ? null : escapeHtml(item.owner_name || 'a teammate'),
+            item.last_used_at
+                ? `run ${ssTimeAgo(item.last_used_at)}${item.use_count > 1 ? ` · ${item.use_count}×` : ''}`
+                : `saved ${ssTimeAgo(item.created_at)}`,
+        ].filter(Boolean).join(' · ');
+        return `
+        <div class="ss-row${item.id === savedSearch.activeId ? ' is-active' : ''}" data-id="${item.id}" role="listitem">
+            <button type="button" class="ss-row__main" data-act="apply" title="Run this search">
+                <span class="ss-row__name">
+                    ${item.is_pinned ? '<i class="fas fa-thumbtack ss-row__pin" aria-hidden="true"></i>' : ''}
+                    ${escapeHtml(item.name)}
+                    ${item.visibility === 'private' ? '<i class="fas fa-lock ss-row__lock" title="Only you can see this"></i>' : ''}
+                </span>
+                <span class="ss-row__summary">${escapeHtml(summary)}</span>
+                <span class="ss-row__meta">${meta}</span>
+            </button>
+            <div class="ss-row__acts">${item.can_edit ? `
+                <button type="button" data-act="pin" title="${item.is_pinned ? 'Unpin' : 'Pin to the top'}"
+                        class="${item.is_pinned ? 'is-on' : ''}"><i class="fas fa-thumbtack"></i></button>
+                <button type="button" data-act="edit" title="Rename or re-save"><i class="fas fa-pen"></i></button>
+                <button type="button" data-act="delete" title="Delete"><i class="fas fa-trash-can"></i></button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+
+    document.querySelectorAll('#savedSearchList .ss-row').forEach(row => {
+        const id = Number(row.dataset.id);
+        row.querySelectorAll('[data-act]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                ssAction(btn.dataset.act, id);
+            });
+        });
+    });
+}
+
+/** The menu's footer: save what is on screen, or push it onto the open search. */
+function ssRenderFoot() {
+    const foot = document.getElementById('savedSearchFoot');
+    if (!foot) return;
+    const opened = savedSearch.items.find(item => item.id === savedSearch.openedId);
+    const drifted = opened && savedSearch.activeId !== opened.id && opened.can_edit;
+    foot.innerHTML = `
+        ${drifted ? `<button type="button" class="btn btn-secondary btn-sm" data-foot="update">
+            <i class="fas fa-arrows-rotate"></i> Update “${escapeHtml(opened.name)}”
+        </button>` : ''}
+        <button type="button" class="btn btn-primary btn-sm" data-foot="new">
+            <i class="fas fa-plus"></i> Save current search
+        </button>`;
+    foot.querySelectorAll('[data-foot]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.foot === 'update') ssUpdateQuery(savedSearch.openedId);
+            else ssOpenDialog(null);
+        });
+    });
+}
+
+function ssAction(action, id) {
+    const item = savedSearch.items.find(s => s.id === id);
+    if (!item) return;
+    if (action === 'apply') return ssApply(item);
+    if (action === 'edit') return ssOpenDialog(item);
+    if (action === 'pin') return ssPatch(id, { is_pinned: !item.is_pinned });
+    if (action === 'delete') return ssDelete(item);
+}
+
+/**
+ * Run a saved search without a reload: rebuild state from its querystring,
+ * push it back into every control, and refetch. loadProperties() rewrites the
+ * address bar, so the view stays linkable and Back still works.
+ */
+function ssApply(item) {
+    const params = new URLSearchParams(item.querystring || '');
+    restoreStateFromUrl(params);
+    state.pagination.page = 1;
+    SharedFilters.apply(state.shared);
+    applyStateToControls();
+    renderPlayCards();
+    renderPlayGuide();
+    clearBulkSelection();
+    savedSearch.openedId = item.id;
+    ssCloseMenu();
+    loadProperties();
+    ssSyncLabel();
+    fetch(`/crm/api/saved-filter/${item.id}/used`, { method: 'POST' }).catch(() => {});
+    item.last_used_at = new Date().toISOString();
+}
+
+async function ssPatch(id, body, quiet) {
+    try {
+        const res = await fetch(`/crm/api/saved-filter/${id}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: name.trim(),
-                querystring: window.location.search.replace(/^\?/, '') || 'page=1'
-            })
+            body: JSON.stringify(body),
         });
         const data = await res.json();
-        if (data.success) {
-            crmNotice('Lead list saved — find it under CRM → Lists.');
-        } else {
-            alert(data.error || 'Could not save the lead list');
+        if (!data.success) throw new Error(data.error || 'Could not save that change');
+        if (data.search) {
+            const index = savedSearch.items.findIndex(item => item.id === id);
+            if (index >= 0) savedSearch.items[index] = data.search;
         }
+        await ssLoad(true);
+        if (!quiet) crmNotice('Saved search updated.');
+        return true;
     } catch (e) {
-        alert('Could not save the lead list');
+        crmNotice(e.message || 'Could not save that change', 'error');
+        return false;
     }
+}
+
+function ssUpdateQuery(id) {
+    ssPatch(id, { querystring: ssCurrentQuery() }, true).then(ok => {
+        if (ok) crmNotice('Saved search now points at these filters.');
+    });
+}
+
+async function ssDelete(item) {
+    if (!confirm(`Delete the saved search “${item.name}”?`)) return;
+    try {
+        await fetch(`/crm/api/saved-filter/${item.id}/delete`, { method: 'POST' });
+        if (savedSearch.openedId === item.id) savedSearch.openedId = null;
+        await ssLoad(true);
+        crmNotice('Saved search deleted.');
+    } catch (e) {
+        crmNotice('Could not delete that search', 'error');
+    }
+}
+
+// ---------- the save / rename dialog ----------
+
+function ssVisibility() {
+    const on = document.querySelector('#savedSearchVisibility .seg__btn.is-on');
+    return on ? on.dataset.value : 'team';
+}
+
+function ssSetVisibility(value) {
+    document.querySelectorAll('#savedSearchVisibility .seg__btn').forEach(btn => {
+        const on = btn.dataset.value === value;
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+}
+
+function ssOpenDialog(item) {
+    savedSearch.editingId = item ? item.id : null;
+    const modal = document.getElementById('savedSearchModal');
+    const name = document.getElementById('savedSearchName');
+    const chips = document.getElementById('savedSearchChips');
+    const submit = document.getElementById('savedSearchSubmit');
+    document.getElementById('savedSearchModalTitle').textContent =
+        item ? 'Edit saved search' : 'Save this search';
+    submit.textContent = item ? 'Save changes' : 'Save search';
+    name.value = item ? item.name : '';
+    ssSetVisibility(item ? item.visibility : 'team');
+
+    // Editing keeps the search's own filters unless the button below is used,
+    // so the summary has to show the filters that will actually be stored.
+    const query = item ? item.querystring : ssCurrentQuery();
+    const parts = describeSearch(query);
+    chips.innerHTML = parts.length
+        ? parts.map(part => `<span class="ss-chip">${escapeHtml(part)}</span>`).join('')
+        : '<span class="ss-chip is-empty">No filters — every property</span>';
+
+    const drifted = item && ssNormalize(query) !== ssNormalize(ssCurrentQuery());
+    let repoint = document.getElementById('savedSearchRepoint');
+    if (repoint) repoint.remove();
+    if (drifted) {
+        repoint = document.createElement('button');
+        repoint.id = 'savedSearchRepoint';
+        repoint.type = 'button';
+        repoint.className = 'btn-clear ss-repoint';
+        repoint.textContent = 'Replace with the filters on screen';
+        repoint.addEventListener('click', () => {
+            savedSearch.repoint = true;
+            const now = describeSearch(ssCurrentQuery());
+            chips.innerHTML = now.length
+                ? now.map(part => `<span class="ss-chip">${escapeHtml(part)}</span>`).join('')
+                : '<span class="ss-chip is-empty">No filters — every property</span>';
+            repoint.remove();
+        });
+        chips.parentElement.appendChild(repoint);
+    }
+    savedSearch.repoint = !item;
+
+    ssCloseMenu();
+    modal.style.display = 'block';
+    name.focus();
+    name.select();
+}
+
+function ssCloseDialog() {
+    document.getElementById('savedSearchModal').style.display = 'none';
+    savedSearch.editingId = null;
+    savedSearch.repoint = false;
+}
+
+async function ssSubmitDialog() {
+    const nameNode = document.getElementById('savedSearchName');
+    const submit = document.getElementById('savedSearchSubmit');
+    const name = nameNode.value.trim();
+    if (!name) {
+        nameNode.focus();
+        crmNotice('Give the search a name first', 'error');
+        return;
+    }
+    submit.disabled = true;
+    try {
+        if (savedSearch.editingId) {
+            const body = { name, visibility: ssVisibility() };
+            if (savedSearch.repoint) body.querystring = ssCurrentQuery();
+            const ok = await ssPatch(savedSearch.editingId, body, true);
+            if (!ok) return;
+            crmNotice('Saved search updated.');
+        } else {
+            const res = await fetch('/crm/api/saved-filter', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    querystring: ssCurrentQuery(),
+                    page: 'properties',
+                    visibility: ssVisibility(),
+                }),
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Could not save the search');
+            savedSearch.openedId = data.filter_id;
+            await ssLoad(true);
+            crmNotice('Search saved — open it any time from Saved searches.');
+        }
+        ssCloseDialog();
+        ssSyncLabel();
+    } catch (e) {
+        crmNotice(e.message || 'Could not save the search', 'error');
+    } finally {
+        submit.disabled = false;
+    }
+}
+
+// ---------- menu open/close ----------
+
+function ssOpenMenu() {
+    const menu = document.getElementById('savedSearchMenu');
+    const button = document.getElementById('savedSearchBtn');
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    ssLoad(true);
+    const find = document.getElementById('savedSearchFind');
+    if (find && !document.getElementById('savedSearchFindWrap').hidden) find.focus();
+}
+
+function ssCloseMenu() {
+    const menu = document.getElementById('savedSearchMenu');
+    const button = document.getElementById('savedSearchBtn');
+    if (!menu) return;
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+}
+
+function ssToggleMenu() {
+    const menu = document.getElementById('savedSearchMenu');
+    if (menu.hidden) ssOpenMenu(); else ssCloseMenu();
+}
+
+function initSavedSearches() {
+    const button = document.getElementById('savedSearchBtn');
+    if (!button) return;
+    button.addEventListener('click', (e) => { e.stopPropagation(); ssToggleMenu(); });
+
+    const find = document.getElementById('savedSearchFind');
+    if (find) find.addEventListener('input', () => {
+        savedSearch.find = find.value;
+        ssRender();
+    });
+
+    document.addEventListener('click', (e) => {
+        const wrap = document.getElementById('savedSearch');
+        if (wrap && !wrap.contains(e.target)) ssCloseMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (document.getElementById('savedSearchModal').style.display === 'block') ssCloseDialog();
+        else ssCloseMenu();
+    });
+
+    document.getElementById('savedSearchModalClose').addEventListener('click', ssCloseDialog);
+    document.getElementById('savedSearchCancel').addEventListener('click', ssCloseDialog);
+    document.getElementById('savedSearchSubmit').addEventListener('click', ssSubmitDialog);
+    document.getElementById('savedSearchName').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') ssSubmitDialog();
+    });
+    document.querySelectorAll('#savedSearchVisibility .seg__btn').forEach(btn => {
+        btn.addEventListener('click', () => ssSetVisibility(btn.dataset.value));
+    });
+    document.getElementById('savedSearchModal').addEventListener('click', (e) => {
+        if (e.target.id === 'savedSearchModal') ssCloseDialog();
+    });
+
+    ssLoad(true);
 }
 
 // ---------- bulk multi-select add ----------
@@ -1945,8 +2471,7 @@ async function submitCrmBulkAdd() {
 
 (function wireCrmButtons() {
     const bind = () => {
-        const saveBtn = document.getElementById('saveLeadListBtn');
-        if (saveBtn) saveBtn.addEventListener('click', saveLeadList);
+        initSavedSearches();
         const addBtn = document.getElementById('crmBulkAddBtn');
         if (addBtn) addBtn.addEventListener('click', openCrmBulkModal);
         const clearBtn = document.getElementById('crmBulkClearBtn');

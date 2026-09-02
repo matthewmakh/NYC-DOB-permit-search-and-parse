@@ -18,7 +18,7 @@ phone number; the CRM never writes to permit tables.
 | File | Role |
 |---|---|
 | `crm_service.py` | Schema (`init_crm_tables()`, idempotent, runs at worker startup) + the whole data layer |
-| `crm_routes.py` | Flask blueprint: pages under `/crm`, JSON APIs under `/crm/api` |
+| `crm_routes.py` | Flask blueprint: pages under `/crm`, JSON APIs under `/crm/api` (including the saved-search API the Properties page calls) |
 | `templates/crm/` | All screens; `_layout.html` (sidebar / tab bar shell), `_macros.html`, `_sheets.html` (dialogs + ⌘K palette); `partials/` are the fragments refreshed in place |
 | `static/css/crm.css` | The CRM design system — Apple-leaning tokens (`--c-*`), light + dark, all classes `crm-`/`cbtn` prefixed |
 | `static/js/crm.js` | Sheets, in-place partial refresh, ⌘K palette, shortcuts, board drag-and-drop, bulk bar, Focus mode |
@@ -26,7 +26,7 @@ phone number; the CRM never writes to permit tables.
 Integration points elsewhere: one `register_blueprint` + `init_crm_tables()`
 call in `app.py`, a nav item in `_site_nav.html`, the **Add to CRM** button on
 `building_profile.html`, and on the Properties page: the per-card CRM button,
-**Save as lead list**, and bulk multi-select (card checkboxes → floating
+the **Saved searches** menu, and bulk multi-select (card checkboxes → floating
 "N selected" bar → **Add N to CRM** dialog with contact import and list
 placement, via `POST /crm/api/bulk-add`, chunked 25 per request client-side).
 Bulk contact import only takes permit contacts that have phones, and a number
@@ -108,9 +108,38 @@ system is the team system:
 * Entity page views log to `crm_view_events`, debounced to one per
   user+entity per 30 minutes; view logging can never break a page.
 * Saved lead lists are the Properties page's querystring saved verbatim
-  (`crm_saved_filters`) — they re-run live as new permits arrive.
+  (`crm_saved_filters`) — they re-run live as new permits arrive. See
+  **Saved searches** below.
 * `/crm/api/bbl-status` powers the "In CRM ✓" state on the permit-side
   buttons.
+
+## Saved searches
+
+The Properties page's whole view — every sidebar filter, the play, the sort
+and the page size — saves under a name from the **Saved searches** button in
+the toolbar, and one click puts it back.
+
+* The button names the search on screen. Change a filter and it reads
+  *“Name” (edited)* with an amber dot; the menu then offers **Update “Name”**
+  next to **Save current search**. Clear all filters and it goes neutral.
+* Each row in the menu describes itself in plain English — *Queens · 5–20
+  units · Assessed $1.5M+ · Cash purchases* — built from the querystring, so
+  a teammate can tell the searches apart without running them. Rows can be
+  pinned to the top, renamed, re-pointed at the filters on screen, or
+  deleted; the pencil, pin and bin only appear on searches you may change.
+* **My team** searches are shared and also show up in the CRM under Lists as
+  live lead lists. **Only me** searches stay private to their owner — team
+  admins cannot see them either. Everything is team-scoped as usual.
+* Running a search applies it in place (no reload) and rewrites the address
+  bar, so the view stays linkable and Back still works. A link that happens
+  to match a saved search is recognised as that search.
+* Ordering is pinned first, then most recently run, so the searches the team
+  actually works rise to the top. `last_used_at`/`use_count` track that.
+* The page number is stripped on save: where someone was scrolled to is not
+  part of what they meant to save. Sort and page size are kept.
+* Rows carry a `page` column (`properties` today), so the contractors page
+  can adopt the same menu without a second table:
+  `GET /crm/api/saved-filters?page=<page>`.
 
 ## Street View
 

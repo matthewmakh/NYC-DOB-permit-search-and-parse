@@ -35,8 +35,8 @@
     <div class="crm-cell">
         <span class="crm-cell__lead"><span class="crm-avatar crm-avatar--building"><i class="fas fa-filter"></i></span></span>
         <div class="crm-cell__body">
-            <div class="crm-cell__title"><a href="/properties?{{ sf.querystring }}">{{ sf.name }}</a></div>
-            <div class="crm-cell__sub">Re-runs live · by {{ sf.owner_name }} {{ sf.created_at|crm_timeago }}</div>
+            <div class="crm-cell__title"><a href="/properties?{{ sf.querystring }}">{{ sf.name }}</a>{% if sf.visibility == 'private' %} <i class="fas fa-lock" title="Only you can see this one" style="font-size:10px;color:var(--c-ink-3)"></i>{% endif %}</div>
+            <div class="crm-cell__sub">Re-runs live · by {{ sf.owner_name }} {{ sf.created_at|crm_timeago }}{% if sf.use_count %} · run {{ sf.use_count }}×{% endif %}</div>
         </div>
         <div class="crm-cell__trail">
             <a class="cbtn cbtn-sm" href="/properties?{{ sf.querystring }}">Run</a>
@@ -44,7 +44,7 @@
         </div>
     </div>
     {% else %}
-    {{ empty('fa-filter', 'No saved lead lists', 'Set filters on the Properties page and press Save as lead list — it stays live as new permits come in.') }}
+    {{ empty('fa-filter', 'No saved lead lists', 'Set filters on the Properties page and save the search — it stays live as new permits come in.') }}
     {% endfor %}
 </div>
 {% endblock %}

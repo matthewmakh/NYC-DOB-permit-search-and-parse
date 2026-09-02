@@ -282,6 +282,19 @@ CRM_SCHEMA_STATEMENTS = [
        ON crm_view_events (entity_type, entity_id, created_at DESC)""",
     """CREATE INDEX IF NOT EXISTS idx_crm_views_team
        ON crm_view_events (team_id, created_at DESC)""",
+
+    # Saved searches. The v1 table only stored a name and a querystring; a
+    # saved search now also knows which page it belongs to, who may see it,
+    # and how often it gets used, so the Properties page can list, rank and
+    # manage them without a second table.
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS page VARCHAR(32) NOT NULL DEFAULT 'properties'""",
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS visibility VARCHAR(10) NOT NULL DEFAULT 'team'""",
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE""",
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP""",
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS use_count INTEGER NOT NULL DEFAULT 0""",
+    """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_saved_filters_scope
+       ON crm_saved_filters (team_id, page, is_pinned DESC)""",
 ]
 
 
@@ -1805,16 +1818,49 @@ def remove_list_item(ctx, item_id):
         conn.close()
 
 
-def list_saved_filters(ctx):
+# A saved search is private to its owner or shared with the whole team.
+SAVED_FILTER_VISIBILITIES = ('team', 'private')
+
+
+def _visibility(value, default='team'):
+    value = (value or '').strip().lower()
+    return value if value in SAVED_FILTER_VISIBILITIES else default
+
+
+def _clean_querystring(raw):
+    """Store the filters, not the reader's place in them.
+
+    `page` is where the person happened to be scrolled to when they saved,
+    never part of what they meant to save — keeping it would drop everyone
+    who opens the search onto page 7 of a list they have not seen yet.
+    """
+    from urllib.parse import parse_qsl, urlencode
+    pairs = [(k, v) for k, v in parse_qsl(str(raw or '').strip().lstrip('?'), keep_blank_values=False)
+             if k != 'page']
+    return urlencode(pairs)
+
+
+def list_saved_filters(ctx, page=None):
+    """Saved searches this user may see, most useful first.
+
+    Pinned ones lead, then whatever was run most recently; a brand new
+    search sorts by when it was created, so it lands at the top of the list
+    the moment it is saved.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            f"""SELECT sf.*, {_user_name_sql('ou')} AS owner_name
+            f"""SELECT sf.*, {_user_name_sql('ou')} AS owner_name,
+                       (sf.owner_id = %s) AS is_mine
                 FROM crm_saved_filters sf JOIN users ou ON ou.id = sf.owner_id
                 WHERE (sf.team_id = %s OR sf.team_id IS NULL)
-                ORDER BY sf.created_at DESC""",
-            (ctx['team_id'],),
+                  AND (sf.visibility = 'team' OR sf.owner_id = %s)
+                  AND (%s::text IS NULL OR sf.page = %s)
+                ORDER BY sf.is_pinned DESC,
+                         COALESCE(sf.last_used_at, sf.created_at) DESC,
+                         sf.id DESC""",
+            (ctx['user_id'], ctx['team_id'], ctx['user_id'], page, page),
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
@@ -1822,15 +1868,17 @@ def list_saved_filters(ctx):
         conn.close()
 
 
-def save_filter(ctx, *, name, querystring):
+def save_filter(ctx, *, name, querystring, page='properties', visibility='team'):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            """INSERT INTO crm_saved_filters (name, querystring, owner_id, team_id)
-               VALUES (%s,%s,%s,%s) RETURNING id""",
-            (name.strip()[:120], querystring.strip().lstrip('?'),
-             ctx['user_id'], ctx['team_id']),
+            """INSERT INTO crm_saved_filters
+                   (name, querystring, owner_id, team_id, page, visibility)
+               VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (name.strip()[:120], _clean_querystring(querystring),
+             ctx['user_id'], ctx['team_id'], (page or 'properties')[:32],
+             _visibility(visibility)),
         )
         filter_id = cur.fetchone()['id']
         conn.commit()
@@ -1841,6 +1889,69 @@ def save_filter(ctx, *, name, querystring):
     finally:
         cur.close()
         conn.close()
+
+
+def update_saved_filter(ctx, filter_id, *, name='__keep__', querystring='__keep__',
+                        visibility='__keep__', is_pinned='__keep__'):
+    """Rename a saved search, point it at the current filters, share it, or
+    pin it. Owners edit their own; a team admin can edit any of the team's.
+    Returns False when the row is not theirs to touch."""
+    sets, params = [], []
+    if name != '__keep__' and str(name).strip():
+        sets.append('name = %s')
+        params.append(str(name).strip()[:120])
+    if querystring != '__keep__':
+        sets.append('querystring = %s')
+        params.append(_clean_querystring(querystring))
+    if visibility != '__keep__':
+        sets.append('visibility = %s')
+        params.append(_visibility(visibility))
+    if is_pinned != '__keep__':
+        sets.append('is_pinned = %s')
+        params.append(bool(is_pinned))
+    if not sets:
+        return True
+    sets.append('updated_at = NOW()')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""UPDATE crm_saved_filters SET {', '.join(sets)}
+                WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+                  AND (owner_id = %s OR %s)""",
+            (*params, filter_id, ctx['team_id'], ctx['user_id'], ctx['is_admin']),
+        )
+        changed = cur.rowcount > 0
+        conn.commit()
+        return changed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def touch_saved_filter(ctx, filter_id):
+    """Record that someone ran this search, so the list stays ordered by what
+    the team actually uses. Decoration only — never breaks the page."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """UPDATE crm_saved_filters
+                   SET last_used_at = NOW(), use_count = use_count + 1
+                   WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+                     AND (visibility = 'team' OR owner_id = %s)""",
+                (filter_id, ctx['team_id'], ctx['user_id']),
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+    except Exception as e:
+        print(f"[crm] saved-search touch skipped: {e}", flush=True)
 
 
 def delete_saved_filter(ctx, filter_id):

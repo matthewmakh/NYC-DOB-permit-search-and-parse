@@ -1176,6 +1176,40 @@ def api_list_item_remove(item_id):
     return jsonify({'success': True})
 
 
+def _iso(value):
+    """Timestamps go to the browser as ISO strings; None stays None."""
+    return value.isoformat() if hasattr(value, 'isoformat') else value
+
+
+def _saved_filter_json(row, ctx):
+    """One saved search, shaped for the page that renders the menu."""
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'querystring': row['querystring'],
+        'page': row.get('page') or 'properties',
+        'visibility': row.get('visibility') or 'team',
+        'is_pinned': bool(row.get('is_pinned')),
+        'is_mine': bool(row.get('is_mine')),
+        # The menu only offers pin/rename/delete where the write will land.
+        'can_edit': bool(row.get('is_mine')) or bool(ctx['is_admin']),
+        'owner_name': row.get('owner_name'),
+        'use_count': row.get('use_count') or 0,
+        'last_used_at': _iso(row.get('last_used_at')),
+        'created_at': _iso(row.get('created_at')),
+    }
+
+
+@crm_bp.route('/api/saved-filters')
+@login_required
+def api_saved_filters():
+    """Saved searches for one page (default the Properties grid)."""
+    page = (request.args.get('page') or 'properties').strip()[:32]
+    ctx = _ctx()
+    rows = crm_service.list_saved_filters(ctx, page=page)
+    return jsonify({'success': True, 'searches': [_saved_filter_json(r, ctx) for r in rows]})
+
+
 @crm_bp.route('/api/saved-filter', methods=['POST'])
 @login_required
 def api_saved_filter():
@@ -1183,10 +1217,47 @@ def api_saved_filter():
     data = _json()
     name = (data.get('name') or '').strip()
     querystring = (data.get('querystring') or '').strip()
-    if not name or not querystring:
-        return jsonify({'success': False, 'error': 'Name and filters are required'}), 400
-    filter_id = crm_service.save_filter(ctx, name=name, querystring=querystring)
-    return jsonify({'success': True, 'filter_id': filter_id})
+    if not name:
+        return jsonify({'success': False, 'error': 'Give the search a name'}), 400
+    filter_id = crm_service.save_filter(
+        ctx,
+        name=name,
+        querystring=querystring,
+        page=(data.get('page') or 'properties'),
+        visibility=data.get('visibility') or 'team',
+    )
+    rows = [r for r in crm_service.list_saved_filters(ctx) if r['id'] == filter_id]
+    return jsonify({
+        'success': True,
+        'filter_id': filter_id,
+        'search': _saved_filter_json(rows[0], ctx) if rows else None,
+    })
+
+
+@crm_bp.route('/api/saved-filter/<int:filter_id>', methods=['POST'])
+@login_required
+def api_saved_filter_update(filter_id):
+    """Rename, re-point at the current filters, share, or pin a saved search."""
+    ctx = _ctx()
+    data = _json()
+    changed = crm_service.update_saved_filter(
+        ctx, filter_id,
+        name=data['name'] if 'name' in data else '__keep__',
+        querystring=data['querystring'] if 'querystring' in data else '__keep__',
+        visibility=data['visibility'] if 'visibility' in data else '__keep__',
+        is_pinned=data['is_pinned'] if 'is_pinned' in data else '__keep__',
+    )
+    if not changed:
+        return jsonify({'success': False, 'error': "That search belongs to someone else"}), 403
+    rows = [r for r in crm_service.list_saved_filters(ctx) if r['id'] == filter_id]
+    return jsonify({'success': True, 'search': _saved_filter_json(rows[0], ctx) if rows else None})
+
+
+@crm_bp.route('/api/saved-filter/<int:filter_id>/used', methods=['POST'])
+@login_required
+def api_saved_filter_used(filter_id):
+    crm_service.touch_saved_filter(_ctx(), filter_id)
+    return jsonify({'success': True})
 
 
 @crm_bp.route('/api/saved-filter/<int:filter_id>/delete', methods=['POST'])

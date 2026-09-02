@@ -14,9 +14,29 @@
 <body>
     {% from "_site_nav.html" import site_nav with context %}
     {% call site_nav('properties', g.user if g.user is defined else none) %}
-        <button class="btn btn-secondary" id="saveLeadListBtn" title="Save the current filters as a live lead list in the CRM">
-            <i class="fas fa-filter-circle-check" aria-hidden="true"></i> Save as lead list
-        </button>
+        <div class="saved-search" id="savedSearch">
+            <button class="btn btn-secondary saved-search__btn" id="savedSearchBtn" type="button"
+                    aria-haspopup="true" aria-expanded="false" aria-controls="savedSearchMenu"
+                    title="Saved searches">
+                <i class="fas fa-bookmark" aria-hidden="true"></i>
+                <span class="saved-search__label" id="savedSearchLabel">Saved searches</span>
+                <span class="saved-search__dirty" id="savedSearchDirty" hidden title="Changed since it was saved">&bull;</span>
+                <i class="fas fa-chevron-down saved-search__caret" aria-hidden="true"></i>
+            </button>
+            <div class="saved-search__menu" id="savedSearchMenu" hidden>
+                <div class="saved-search__head">
+                    <h3>Saved searches</h3>
+                    <span class="saved-search__count" id="savedSearchCount"></span>
+                </div>
+                <div class="saved-search__find" id="savedSearchFindWrap" hidden>
+                    <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+                    <input type="search" id="savedSearchFind" placeholder="Find a saved search"
+                           autocomplete="off" aria-label="Find a saved search">
+                </div>
+                <div class="saved-search__list" id="savedSearchList" role="list"></div>
+                <div class="saved-search__foot" id="savedSearchFoot"></div>
+            </div>
+        </div>
         <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
             <i class="fas fa-phone" aria-hidden="true"></i> Bulk enrich
         </button>
@@ -282,6 +302,46 @@
                     <button class="btn btn-primary" id="exportDownloadBtn" onclick="downloadExport()">
                         <i class="fas fa-download"></i> Download CSV
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save / rename a search (driven by properties.js) -->
+    <div id="savedSearchModal" class="modal">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2 id="savedSearchModalTitle">Save this search</h2>
+                <button class="modal-close" id="savedSearchModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="margin-bottom: 14px;">
+                    <label class="filter-label" for="savedSearchName">Name</label>
+                    <input type="text" id="savedSearchName" class="filter-input" maxlength="120"
+                           placeholder="e.g. Brooklyn walk-ups, cash buyers">
+                </div>
+                <div style="margin-bottom: 14px;">
+                    <span class="filter-label">Who can see it</span>
+                    <div class="seg" id="savedSearchVisibility" role="radiogroup" aria-label="Who can see it">
+                        <button type="button" class="seg__btn is-on" data-value="team" role="radio" aria-checked="true">
+                            <i class="fas fa-users" aria-hidden="true"></i> My team
+                        </button>
+                        <button type="button" class="seg__btn" data-value="private" role="radio" aria-checked="false">
+                            <i class="fas fa-lock" aria-hidden="true"></i> Only me
+                        </button>
+                    </div>
+                </div>
+                <div class="saved-search__preview">
+                    <span class="filter-label">Filters saved</span>
+                    <div class="saved-search__chips" id="savedSearchChips"></div>
+                </div>
+                <p class="saved-search__note">
+                    Saved searches re-run live, so new permits and sales show up on their own.
+                    Team searches also appear in the CRM under Lists.
+                </p>
+                <div class="export-actions">
+                    <button class="btn btn-secondary" id="savedSearchCancel">Cancel</button>
+                    <button class="btn btn-primary" id="savedSearchSubmit">Save search</button>
                 </div>
             </div>
         </div>
