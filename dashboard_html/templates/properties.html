@@ -307,6 +307,31 @@
         </div>
     </div>
 
+    <!-- Quick Look: a slide-over for one building, driven by properties.js.
+         The address and Open links are real anchors, so ⌘-click still opens
+         the full profile in a new tab. -->
+    <div class="peek-scrim" id="peekScrim" hidden></div>
+    <aside class="peek" id="peek" role="dialog" aria-modal="true" aria-labelledby="peekTitle" tabindex="-1" hidden>
+        <header class="peek__bar">
+            <div class="peek__nav" role="group" aria-label="Move between buildings">
+                <button type="button" class="peek__navbtn" data-peek="prev" title="Previous building (←)" aria-label="Previous building">
+                    <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                </button>
+                <span class="peek__pos" id="peekPos"></span>
+                <button type="button" class="peek__navbtn" data-peek="next" title="Next building (→)" aria-label="Next building">
+                    <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="peek__bar-actions">
+                <a class="btn btn-primary btn-sm" id="peekOpen" href="#" data-nav>
+                    Open full profile <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i>
+                </a>
+                <button type="button" class="modal-close" data-peek="close" aria-label="Close quick look" title="Close (Esc)">&times;</button>
+            </div>
+        </header>
+        <div class="peek__body" id="peekBody"></div>
+    </aside>
+
     <!-- Save / rename a search (driven by properties.js) -->
     <div id="savedSearchModal" class="modal">
         <div class="modal-content" style="max-width: 480px;">

@@ -2255,3 +2255,8 @@
 }
 .streetview-empty i { font-size: 28px; color: var(--ink-3); }
 .streetview-empty p { margin: 0; max-width: 30ch; line-height: 1.5; }
+
+/* The disclosure toggles the `hidden` attribute, but an author `display: grid`
+   outranks the browser's `[hidden] { display: none }`, so without this the
+   "Hide full record" button changed its label and nothing else. */
+.building-facts-groups[hidden] { display: none; }

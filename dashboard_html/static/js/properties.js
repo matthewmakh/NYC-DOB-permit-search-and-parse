@@ -576,6 +576,7 @@ async function loadProperties() {
         if (data.success) {
             state.properties = data.properties;
             state.pagination = normalizePagination(data.pagination);
+            if (peek.open && peekIndex(peek.bbl) < 0) closePeek();
             renderProperties();
             renderPagination();
             updateResultsCount();
@@ -599,6 +600,63 @@ async function loadProperties() {
 // RENDERING
 // ==========================================
 
+function escapeAttr(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function profileHref(bbl) {
+    const returnTo = encodeURIComponent(currentPropertiesUrl());
+    return `/property/${encodeURIComponent(bbl)}?return_to=${returnTo}`;
+}
+
+// How long the current owner has held the lot, as a rep reads it: a fresh
+// buyer is a different conversation from someone twenty years in.
+function heldFor(saleDate) {
+    if (!saleDate) return null;
+    const then = new Date(saleDate);
+    if (Number.isNaN(then.getTime())) return null;
+    const months = Math.max(0, Math.round((Date.now() - then.getTime()) / (30.44 * 86400000)));
+    if (months < 1) return 'New';
+    if (months < 12) return `${months} mo`;
+    const years = Math.round(months / 12);
+    return `${years} yr${years === 1 ? '' : 's'}`;
+}
+
+const OWNER_KIND_CLASS = { Person: 'is-person', Public: 'is-public', Lender: 'is-lender' };
+
+// The owner block: who owns it, what kind of owner that is, and the one
+// human worth calling if the record names one. Everything else about the
+// owner waits for Quick Look so the card stays scannable.
+function ownerBlockHtml(p) {
+    const owner = p.owner_display || 'Owner unknown';
+    const kind = p.owner_kind;
+    const reach = p.owner_reach;
+    const kindTag = kind
+        ? `<span class="owner-kind ${OWNER_KIND_CLASS[kind] || ''}">${escapeHtml(kind)}</span>` : '';
+    let reachLine = '';
+    if (reach) {
+        reachLine = `
+            <div class="owner-reach" title="${escapeAttr(reach.source)}">
+                <i class="fas fa-user" aria-hidden="true"></i>
+                <span class="owner-reach__name">${escapeHtml(reach.name)}</span>
+                <span class="owner-reach__title">${escapeHtml(reach.title)}</span>
+            </div>`;
+    } else if (p.owner_is_person) {
+        reachLine = '<div class="owner-hint">Individual owner — contacts can be unlocked</div>';
+    }
+    return `
+        <div class="owner-block">
+            <div class="owner-head"><span class="owner-label">Owner</span>${kindTag}</div>
+            <button type="button" class="owner-name-btn" data-act="portfolio" data-owner="${escapeAttr(owner)}"
+                    title="See everything this owner holds">${escapeHtml(owner)}</button>
+            ${reachLine}
+            <span class="owner-unlocked js-unlocked" data-bbl="${escapeAttr(p.bbl)}" hidden>
+                <i class="fas fa-phone" aria-hidden="true"></i> Contacts unlocked
+            </span>
+        </div>`;
+}
+
 function renderProperties() {
     const container = document.getElementById('propertiesContainer');
     const noResults = document.getElementById('noResults');
@@ -612,28 +670,28 @@ function renderProperties() {
     noResults.style.display = 'none';
     
     container.innerHTML = state.properties.map(property => {
-        const owner = property.sale_buyer_primary || property.current_owner_name ||
-            property.owner_name_hpd || property.owner_name_rpad || 'Unknown';
         const assessedValue = property.assessed_total_value || 0;
         const salePrice = property.sale_price || 0;
         const permitCount = property.permit_count || 0;
         const totalUnits = property.total_units ?? property.units ?? property.residential_units;
-        const violationCount = property.hpd_violations_count || 0;
-        const contractorName = property.contractor_name || null;
-        const contractorPhone = property.contractor_phone || null;
+        const violationCount = property.hpd_violations_count || property.hpd_open_violations || 0;
+        const held = heldFor(property.sale_date);
+        const href = profileHref(property.bbl);
         
         return `
-            <div class="property-card" data-property-bbl="${property.bbl}"
-                 onclick="viewProperty('${property.bbl}')">
+            <article class="property-card" data-property-bbl="${escapeAttr(property.bbl)}" tabindex="0"
+                     aria-label="${escapeAttr(property.address || 'Property')} — press Enter for a quick look">
                 <div class="property-header">
                     ${property.bbl ? `
-                        <label class="property-select" onclick="event.stopPropagation()" title="Select for bulk add to CRM">
-                            <input type="checkbox" class="js-select-bbl" data-bbl="${property.bbl}"
+                        <label class="property-select" title="Select for bulk add to CRM">
+                            <input type="checkbox" class="js-select-bbl" data-bbl="${escapeAttr(property.bbl)}"
                                    ${crmBulk.selected.has(String(property.bbl)) ? 'checked' : ''}>
                         </label>
                     ` : ''}
                     <div class="property-title-block">
-                        <div class="property-address">${escapeHtml(property.address || 'Address N/A')}</div>
+                        <div class="property-address">
+                            <a href="${href}" data-nav title="Open the full profile (⌘-click for a new tab)">${escapeHtml(property.address || 'Address N/A')}</a>
+                        </div>
                         <div class="property-bbl">${formatBBL(property.bbl)}</div>
                     </div>
                     ${assessedValue > 0 ? `
@@ -644,18 +702,7 @@ function renderProperties() {
                     ` : ''}
                 </div>
 
-                <div class="property-owner" onclick="event.stopPropagation(); viewOwnerPortfolio('${escapeHtml(owner)}')">
-                    <div class="owner-label">Owner</div>
-                    <div class="owner-name">${escapeHtml(owner)}</div>
-                </div>
-
-                ${contractorName || contractorPhone ? `
-                    <div class="property-contractor">
-                        <div class="contractor-label">Permit contact</div>
-                        ${contractorName ? `<div class="contractor-name">${escapeHtml(contractorName)}</div>` : ''}
-                        ${contractorPhone ? `<a href="tel:${contractorPhone}" class="contractor-phone" onclick="event.stopPropagation();">${contractorPhone}</a>` : ''}
-                    </div>
-                ` : ''}
+                ${ownerBlockHtml(property)}
 
                 <div class="property-details">
                     ${totalUnits !== null && totalUnits !== undefined ? `
@@ -676,10 +723,10 @@ function renderProperties() {
                             <div class="detail-value">$${formatNumber(salePrice)}</div>
                         </div>
                     ` : ''}
-                    ${property.sale_date ? `
-                        <div class="detail-item">
-                            <div class="detail-label">Sale date</div>
-                            <div class="detail-value">${formatDate(property.sale_date)}</div>
+                    ${held ? `
+                        <div class="detail-item" title="Sold ${escapeAttr(formatDate(property.sale_date))}">
+                            <div class="detail-label">Held</div>
+                            <div class="detail-value">${held}</div>
                         </div>
                     ` : ''}
                     <div class="detail-item">
@@ -694,27 +741,355 @@ function renderProperties() {
                     ${property.is_cash_purchase ? '<span class="badge badge-cash">Cash purchase</span>' : ''}
                     ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">ACRIS</span>' : ''}
                     ${permitCount > 0 ? `<span class="badge badge-permits">${permitCount} permit${permitCount > 1 ? 's' : ''}</span>` : ''}
-                    ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} violation${violationCount > 1 ? 's' : ''}</span>` : ''}
+                    ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} open violation${violationCount > 1 ? 's' : ''}</span>` : ''}
                     ${signalBadges(property)}
                 </div>
 
                 <div class="property-actions">
-                    <button class="btn-view" onclick="event.stopPropagation(); viewProperty('${property.bbl}')">
-                        View details
+                    <button type="button" class="btn-view" data-act="peek" title="Quick look (Enter)">
+                        Quick look
                     </button>
-                    <button class="btn-portfolio js-crm-btn" data-bbl="${property.bbl}" onclick="event.stopPropagation(); crmOpen('${property.bbl}')" title="Add to CRM">
+                    <a class="btn-view is-link" href="${href}" data-nav title="Open the full profile (⌘-click for a new tab)">
+                        <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i> Open
+                    </a>
+                    <button type="button" class="btn-portfolio js-crm-btn" data-bbl="${escapeAttr(property.bbl)}" data-act="crm" title="Add to CRM">
                         <i class="fas fa-address-book"></i>
                     </button>
-                    <button class="btn-portfolio" onclick="event.stopPropagation(); viewOwnerPortfolio('${escapeHtml(owner)}')" title="View owner's portfolio">
-                        <i class="fas fa-building"></i>
-                    </button>
                 </div>
-            </div>
+            </article>
         `;
     }).join('');
 
     refreshCrmStatus();
+    refreshUnlockedStatus();
     updateBulkBar();
+}
+
+// Green "Contacts unlocked" chip on cards whose owner this user already paid
+// to look up. Asked separately from /api/properties, which is cached across
+// users and so cannot carry anything personal.
+async function refreshUnlockedStatus() {
+    const bbls = state.properties.map(p => p.bbl).filter(Boolean);
+    if (!bbls.length) return;
+    try {
+        const res = await fetch(`/api/enrichment/unlocked-status?bbls=${encodeURIComponent(bbls.join(','))}`);
+        const data = await res.json();
+        const unlocked = (data && data.unlocked) || {};
+        document.querySelectorAll('#propertiesContainer .js-unlocked').forEach(chip => {
+            const isUnlocked = Boolean(unlocked[chip.dataset.bbl]);
+            chip.hidden = !isUnlocked;
+            // "contacts can be unlocked" is moot once they are.
+            const hint = chip.parentElement.querySelector('.owner-hint');
+            if (hint) hint.hidden = isUnlocked;
+        });
+    } catch (e) { /* decoration only */ }
+}
+
+// One listener for the whole grid. Links stay links (⌘-click, middle-click
+// and "open in new tab" all just work); everything else on the card body is
+// a Quick Look, and ⌘-clicking the body opens the profile in a new tab too.
+function wireGridInteractions() {
+    const container = document.getElementById('propertiesContainer');
+    if (!container) return;
+
+    container.addEventListener('click', (e) => {
+        const card = e.target.closest('.property-card');
+        if (!card) return;
+        const bbl = card.dataset.propertyBbl;
+        if (e.target.closest('a[data-nav]')) {
+            saveListNavigationState(bbl);
+            return;                       // the browser handles the navigation
+        }
+        if (e.target.closest('.property-select')) return;
+        const act = e.target.closest('[data-act]');
+        if (act) {
+            e.preventDefault();
+            if (act.dataset.act === 'peek') openPeek(bbl, card);
+            else if (act.dataset.act === 'crm') crmOpen(bbl);
+            else if (act.dataset.act === 'portfolio') viewOwnerPortfolio(act.dataset.owner);
+            return;
+        }
+        if (e.metaKey || e.ctrlKey) {
+            saveListNavigationState(bbl);
+            window.open(profileHref(bbl), '_blank', 'noopener');
+            return;
+        }
+        openPeek(bbl, card);
+    });
+
+    container.addEventListener('keydown', (e) => {
+        if (!e.target.classList || !e.target.classList.contains('property-card')) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openPeek(e.target.dataset.propertyBbl, e.target);
+        }
+    });
+
+    // Warm the Quick Look while the pointer rests on a card.
+    let hoverTimer = null;
+    container.addEventListener('mouseover', (e) => {
+        const card = e.target.closest('.property-card');
+        if (!card) return;
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(() => fetchPeek(card.dataset.propertyBbl).catch(() => {}), 220);
+    });
+    container.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
+}
+
+// ==========================================
+// QUICK LOOK
+// ------------------------------------------
+// A slide-over for one building: enough to decide whether to call, add to
+// the CRM, or open the full profile — without leaving the grid or losing
+// the scroll position. ←/→ walk the current page of results.
+// ==========================================
+
+const peek = { open: false, bbl: null, cache: new Map(), returnFocus: null, seq: 0 };
+
+async function fetchPeek(bbl) {
+    if (peek.cache.has(bbl)) return peek.cache.get(bbl);
+    const res = await fetch(`/api/property/${encodeURIComponent(bbl)}/peek`);
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || 'Could not load this building');
+    peek.cache.set(bbl, data);
+    if (peek.cache.size > 40) peek.cache.delete(peek.cache.keys().next().value);
+    return data;
+}
+
+function peekIndex(bbl) {
+    return state.properties.findIndex(p => String(p.bbl) === String(bbl));
+}
+
+function openPeek(bbl, fromCard) {
+    if (!bbl) return;
+    const panel = document.getElementById('peek');
+    const scrim = document.getElementById('peekScrim');
+    const body = document.getElementById('peekBody');
+    if (!panel || !body) return;
+    if (!peek.open) peek.returnFocus = fromCard || document.activeElement;
+    peek.open = true;
+    peek.bbl = String(bbl);
+    panel.hidden = false;
+    scrim.hidden = false;
+
+    const idx = peekIndex(bbl);
+    const total = state.properties.length;
+    document.getElementById('peekPos').textContent = idx >= 0 ? `${idx + 1} of ${total}` : '';
+    panel.querySelector('[data-peek="prev"]').disabled = idx <= 0;
+    panel.querySelector('[data-peek="next"]').disabled = idx < 0 || idx >= total - 1;
+    document.getElementById('peekOpen').href = profileHref(bbl);
+
+    body.innerHTML = `<div class="peek__loading">
+        <div class="skeleton-line" style="width:60%;height:22px"></div>
+        <div class="skeleton-line" style="width:40%"></div>
+        <div class="skeleton-line" style="width:100%;height:64px;margin-top:8px"></div>
+        <div class="skeleton-line" style="width:90%"></div>
+        <div class="skeleton-line" style="width:70%"></div>
+    </div>`;
+    body.scrollTop = 0;
+    const seq = ++peek.seq;
+    fetchPeek(bbl).then(data => {
+        if (seq !== peek.seq || !peek.open) return;
+        renderPeek(data);
+    }).catch(err => {
+        if (seq !== peek.seq || !peek.open) return;
+        body.innerHTML = `<div class="peek__error"><i class="fas fa-triangle-exclamation"></i><p>${escapeHtml(err.message || 'Could not load this building')}</p></div>`;
+    });
+    if (!fromCard || document.activeElement !== panel) panel.focus({ preventScroll: true });
+}
+
+function closePeek() {
+    if (!peek.open) return;
+    peek.open = false;
+    document.getElementById('peek').hidden = true;
+    document.getElementById('peekScrim').hidden = true;
+    const target = peek.returnFocus;
+    peek.returnFocus = null;
+    if (target && typeof target.focus === 'function' && document.contains(target)) {
+        target.focus({ preventScroll: true });
+    }
+}
+
+function peekStep(delta) {
+    const idx = peekIndex(peek.bbl);
+    const next = state.properties[idx + delta];
+    if (!next) return;
+    const card = document.querySelector(`#propertiesContainer [data-property-bbl="${next.bbl}"]`);
+    if (card) card.scrollIntoView({ block: 'nearest' });
+    openPeek(next.bbl, card);
+}
+
+function peekMoney(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? `$${formatNumber(Math.round(n))}` : null;
+}
+
+function peekStat(label, value, cls) {
+    return `<div class="peek-stat">
+        <div class="peek-stat__label">${label}</div>
+        <div class="peek-stat__value ${value == null ? 'is-muted' : (cls || '')}">${value == null ? '—' : value}</div>
+    </div>`;
+}
+
+function renderPeek(data) {
+    const b = data.building || {};
+    const owner = data.owner || {};
+    const permits = data.permits || { total: 0, recent: [] };
+    const unlocked = (data.contacts && data.contacts.unlocked) || [];
+    const bbl = b.bbl;
+    const href = profileHref(bbl);
+    const inCrm = crmStatus.inCrm[String(bbl)];
+    const violations = Number(b.hpd_open_violations) || 0;
+    const kindTag = owner.kind
+        ? `<span class="owner-kind ${OWNER_KIND_CLASS[owner.kind] || ''}">${escapeHtml(owner.kind)}</span>` : '';
+    const held = heldFor(b.sale_date);
+    const portfolioCount = data.portfolio && data.portfolio.count;
+
+    const ownerMeta = [
+        portfolioCount > 1 ? `Owns <b>${formatNumber(portfolioCount)} properties</b>` : null,
+        held ? `Held <b>${held}</b>${b.sale_date ? ` (since ${formatDate(b.sale_date)})` : ''}` : null,
+        b.sos_entity_name ? `Registered as <b>${escapeHtml(b.sos_entity_name)}</b>${b.sos_entity_status ? ` · ${escapeHtml(b.sos_entity_status)}` : ''}` : null,
+    ].filter(Boolean).join(' · ');
+
+    const reach = owner.reach ? `
+        <div class="peek-reach">
+            <i class="fas fa-user-check" aria-hidden="true"></i>
+            <div>
+                <div class="peek-reach__name">${escapeHtml(owner.reach.name)}</div>
+                <div class="peek-reach__title">${escapeHtml(owner.reach.title)} · ${escapeHtml(owner.reach.source)}</div>
+            </div>
+        </div>` : '';
+
+    const people = [];
+    (owner.others || []).forEach(o => people.push(
+        `<div class="peek-person"><span class="peek-person__name">${escapeHtml(o.name)}</span><span class="peek-person__src">${escapeHtml(o.kind || '')} · ${escapeHtml(o.source)}</span></div>`));
+    if (b.hpd_agent_name && !(owner.reach && owner.reach.name === b.hpd_agent_name)) {
+        people.push(`<div class="peek-person"><span class="peek-person__name">${escapeHtml(b.hpd_agent_name)}</span><span class="peek-person__src">Managing agent · HPD</span></div>`);
+    }
+    if (b.hpd_site_manager_name && !(owner.reach && owner.reach.name === b.hpd_site_manager_name)) {
+        people.push(`<div class="peek-person"><span class="peek-person__name">${escapeHtml(b.hpd_site_manager_name)}</span><span class="peek-person__src">Site manager · HPD</span></div>`);
+    }
+
+    const contacts = unlocked.length ? `
+        <div class="peek-contacts">
+            ${unlocked.map(c => `
+                <div class="peek-contact">
+                    <div class="peek-contact__who"><i class="fas fa-lock-open"></i> ${escapeHtml(c.owner_name || 'Owner')} · unlocked</div>
+                    <div class="peek-contact__line">
+                        ${(c.phones || []).slice(0, 3).map(ph => `<a href="tel:${escapeAttr(String(ph).replace(/[^\d+]/g, ''))}"><i class="fas fa-phone"></i> ${escapeHtml(ph)}</a>`).join('')}
+                        ${(c.emails || []).slice(0, 2).map(em => `<a href="mailto:${escapeAttr(em)}"><i class="fas fa-envelope"></i> ${escapeHtml(em)}</a>`).join('')}
+                    </div>
+                </div>`).join('')}
+        </div>` : ((owner.is_person || (owner.reach && owner.reach.role === 'principal')) ? `
+        <div class="peek-unlock">Phone and email for this owner aren't unlocked yet — <a href="${href}" data-nav>unlock them on the full profile</a>.</div>` : '');
+
+    const sale = [
+        ['Last sale', peekMoney(b.sale_price)],
+        ['Sold', b.sale_date ? formatDate(b.sale_date) : null],
+        ['Buyer', b.sale_buyer_primary || null],
+        ['Seller', b.sale_seller_primary || null],
+        ['Mortgage', b.mortgage_amount ? `${peekMoney(b.mortgage_amount)}${b.mortgage_lender_primary ? ` · ${escapeHtml(b.mortgage_lender_primary)}` : ''}` : (b.is_cash_purchase ? 'None — cash purchase' : null)],
+        ['Financing', b.financing_ratio != null && b.financing_ratio !== '' ? `${Math.round(Number(b.financing_ratio) * 100)}% financed` : null],
+    ].filter(([, v]) => v);
+
+    const permitRows = (permits.recent || []).map(pm => {
+        const type = [pm.job_type, pm.work_type, pm.permit_type].filter(Boolean).join(' · ') || 'Permit';
+        return `<div class="peek-permit">
+            <div class="peek-permit__date">${pm.date ? formatDate(pm.date) : '—'}</div>
+            <div class="peek-permit__what">
+                <span class="peek-permit__type">${escapeHtml(type)}</span>
+                ${pm.permit_status ? `<span class="peek-permit__status">${escapeHtml(pm.permit_status)}</span>` : ''}
+                ${pm.work_description ? `<div class="peek-permit__desc" title="${escapeAttr(pm.work_description)}">${escapeHtml(pm.work_description)}</div>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+
+    const sv = data.streetview || {};
+    document.getElementById('peekBody').innerHTML = `
+        <div class="peek__title">
+            <h2 id="peekTitle"><a href="${href}" data-nav>${escapeHtml(b.address || 'Address N/A')}</a></h2>
+            <div class="peek__sub">
+                ${b.borough ? `<span>${escapeHtml(b.borough)}${b.zip_code ? ` ${escapeHtml(b.zip_code)}` : ''}</span>` : ''}
+                <span class="mono">BBL ${formatBBL(bbl)}</span>
+                ${b.bin ? `<span class="mono">BIN ${escapeHtml(b.bin)}</span>` : ''}
+                ${b.building_class ? `<span>Class ${escapeHtml(b.building_class)}</span>` : ''}
+            </div>
+        </div>
+
+        <div class="peek__stats">
+            ${peekStat('Assessed', peekMoney(b.assessed_total_value))}
+            ${peekStat('Units', b.total_units != null ? formatNumber(b.total_units) : null)}
+            ${peekStat('Built', b.year_built || null)}
+            ${peekStat('Floors', b.num_floors || null)}
+            ${peekStat('Last sale', peekMoney(b.sale_price))}
+            ${peekStat('Open violations', violations > 0 ? formatNumber(violations) : (b.hpd_open_violations === 0 ? '0' : null), violations > 0 ? 'is-warn' : '')}
+        </div>
+
+        <section class="peek__section">
+            <div class="peek__section-head"><h3>Owner</h3>${kindTag}</div>
+            <div class="peek-owner__primary">
+                <div>
+                    <div class="peek-owner__name">${escapeHtml(owner.display || 'Owner unknown')}</div>
+                    ${ownerMeta ? `<div class="peek-owner__meta">${ownerMeta}</div>` : ''}
+                </div>
+            </div>
+            ${reach}
+            ${people.length ? `<div class="peek-people">${people.join('')}</div>` : ''}
+            ${contacts}
+        </section>
+
+        ${sale.length ? `
+        <section class="peek__section">
+            <div class="peek__section-head"><h3>Sale &amp; financing</h3>${b.is_cash_purchase ? '<span class="badge badge-cash">Cash purchase</span>' : ''}</div>
+            <dl class="peek-kv">${sale.map(([k, v]) => `<div><dt>${k}</dt><dd title="${escapeAttr(String(v).replace(/<[^>]+>/g, ''))}">${v}</dd></div>`).join('')}</dl>
+        </section>` : ''}
+
+        <section class="peek__section">
+            <div class="peek__section-head">
+                <h3>Permits${permits.total ? ` <span>${formatNumber(permits.total)}</span>` : ''}</h3>
+                ${permits.total > (permits.recent || []).length ? `<a href="${href}" data-nav>All ${formatNumber(permits.total)} →</a>` : ''}
+            </div>
+            ${permitRows ? `<div class="peek-permits">${permitRows}</div>` : '<div class="peek__empty">No permits on file for this lot.</div>'}
+        </section>
+
+        <div class="peek__actions">
+            <button type="button" class="btn btn-secondary btn-sm js-peek-crm ${inCrm ? 'is-in-crm' : ''}" data-bbl="${escapeAttr(bbl)}">
+                <i class="fas ${inCrm ? 'fa-check' : 'fa-address-book'}"></i> ${inCrm ? 'In CRM — open' : 'Add to CRM'}
+            </button>
+            ${sv.open_url ? `<a class="btn btn-secondary btn-sm" href="${escapeAttr(sv.open_url)}" target="_blank" rel="noopener"><i class="fas fa-${sv.open_kind === 'streetview' ? 'street-view' : 'map'}"></i> ${sv.open_kind === 'streetview' ? 'Street View' : 'Map'}</a>` : ''}
+            <button type="button" class="btn btn-secondary btn-sm js-peek-portfolio" data-owner="${escapeAttr(owner.display || '')}" ${owner.display ? '' : 'disabled'}>
+                <i class="fas fa-building"></i> Portfolio${portfolioCount > 1 ? ` (${formatNumber(portfolioCount)})` : ''}
+            </button>
+        </div>`;
+}
+
+function initQuickLook() {
+    const panel = document.getElementById('peek');
+    const scrim = document.getElementById('peekScrim');
+    if (!panel) return;
+    scrim.addEventListener('click', closePeek);
+    panel.addEventListener('click', (e) => {
+        const ctl = e.target.closest('[data-peek]');
+        if (ctl) {
+            if (ctl.dataset.peek === 'close') closePeek();
+            if (ctl.dataset.peek === 'prev') peekStep(-1);
+            if (ctl.dataset.peek === 'next') peekStep(1);
+            return;
+        }
+        if (e.target.closest('a[data-nav]')) { saveListNavigationState(peek.bbl); return; }
+        const crm = e.target.closest('.js-peek-crm');
+        if (crm) { crmOpen(crm.dataset.bbl); return; }
+        const pf = e.target.closest('.js-peek-portfolio');
+        if (pf && pf.dataset.owner) { closePeek(); viewOwnerPortfolio(pf.dataset.owner); }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (!peek.open) return;
+        const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || '').toUpperCase());
+        if (e.key === 'Escape') { e.preventDefault(); closePeek(); return; }
+        if (typing) return;
+        if (e.key === 'ArrowRight') { e.preventDefault(); peekStep(1); }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); peekStep(-1); }
+    });
 }
 
 // Badges for the signal columns (only present in API responses once the
@@ -2472,6 +2847,8 @@ async function submitCrmBulkAdd() {
 (function wireCrmButtons() {
     const bind = () => {
         initSavedSearches();
+        wireGridInteractions();
+        initQuickLook();
         const addBtn = document.getElementById('crmBulkAddBtn');
         if (addBtn) addBtn.addEventListener('click', openCrmBulkModal);
         const clearBtn = document.getElementById('crmBulkClearBtn');
@@ -2499,6 +2876,8 @@ async function submitCrmBulkAdd() {
 
 // Make functions globally available
 window.viewProperty = viewProperty;
+window.openPeek = openPeek;
+window.closePeek = closePeek;
 window.crmOpen = crmOpen;
 window.viewOwnerPortfolio = viewOwnerPortfolio;
 window.closePortfolioModal = closePortfolioModal;

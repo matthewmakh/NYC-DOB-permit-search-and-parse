@@ -2642,3 +2642,336 @@ button { font-family: inherit; }
     }
     .saved-search__list { max-height: 50vh; }
 }
+
+/* ==========================================
+   Property card v2
+   The card answers three questions in order: where is it, who owns it and
+   who to call, is it worth the call. Everything else waits for Quick Look.
+   ========================================== */
+
+.property-card { position: relative; }
+
+.property-address a {
+    color: inherit;
+    text-decoration: none;
+}
+.property-address a:hover { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+.owner-block {
+    border-top: 1px solid var(--line);
+    padding-top: 11px;
+}
+
+.owner-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 3px;
+}
+
+.owner-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    white-space: nowrap;
+}
+.owner-kind.is-person { background: var(--green-soft); color: var(--green); }
+.owner-kind.is-public,
+.owner-kind.is-lender { background: var(--surface-3); color: var(--ink-3); }
+
+.owner-name-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0;
+    background: none;
+    border: 0;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    cursor: pointer;
+    line-height: 1.35;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.owner-name-btn:hover { color: var(--accent); }
+
+.owner-reach {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 5px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+    min-width: 0;
+}
+.owner-reach i { font-size: 11px; color: var(--ink-3); position: relative; top: 1px; flex-shrink: 0; }
+.owner-reach__name { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.owner-reach__title { color: var(--ink-3); white-space: nowrap; }
+
+.owner-unlocked {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--green);
+}
+.owner-unlocked i { font-size: 10.5px; }
+.owner-unlocked[hidden] { display: none; }
+
+.owner-hint {
+    margin-top: 5px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+
+.btn-view.is-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-decoration: none;
+}
+.btn-view.is-link i { font-size: 10.5px; color: var(--ink-3); }
+
+/* ==========================================
+   Quick Look
+   A right-hand slide-over: everything a rep wants to know before deciding
+   whether the full profile is worth opening. ←/→ walk the grid, Esc closes.
+   ========================================== */
+
+.peek-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(26, 26, 23, 0.28);
+    z-index: 1200;
+    animation: peek-fade 160ms ease;
+}
+.peek-scrim[hidden] { display: none; }
+
+.peek {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 600px;
+    max-width: 100vw;
+    background: var(--surface);
+    border-left: 1px solid var(--line);
+    box-shadow: -24px 0 48px -24px rgba(26, 26, 23, 0.3);
+    z-index: 1210;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+    animation: peek-slide 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.peek[hidden] { display: none; }
+
+@keyframes peek-slide { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes peek-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.peek__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px 12px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+}
+
+.peek__nav { display: flex; align-items: center; gap: 2px; }
+.peek__navbtn {
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+    font-size: 12px;
+}
+.peek__navbtn:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
+.peek__navbtn:disabled { opacity: 0.3; cursor: default; }
+.peek__pos { font-size: 12px; color: var(--ink-3); min-width: 56px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.peek__bar-actions { display: flex; align-items: center; gap: 6px; }
+.peek__bar-actions .btn { text-decoration: none; }
+.peek__bar-actions .btn i { font-size: 10.5px; margin-left: 2px; }
+
+.peek__body { flex: 1; overflow-y: auto; padding: 20px 22px 28px; }
+
+.peek__loading {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 8px;
+}
+.peek__loading .skeleton-line {
+    height: 14px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+    background-size: 200% 100%;
+    animation: peek-shimmer 1.2s linear infinite;
+}
+@keyframes peek-shimmer { to { background-position: -200% 0; } }
+
+.peek__title h2 {
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+.peek__title h2 a { color: inherit; text-decoration: none; }
+.peek__title h2 a:hover { color: var(--accent); }
+.peek__sub {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.peek__sub .mono { font-family: var(--mono); font-size: 11.5px; }
+
+.peek__stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 16px 0 18px;
+}
+.peek-stat {
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    min-width: 0;
+}
+.peek-stat__label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.peek-stat__value { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.peek-stat__value.is-warn { color: var(--amber); }
+.peek-stat__value.is-muted { color: var(--ink-3); font-weight: 500; }
+
+.peek__section { padding: 14px 0; border-top: 1px solid var(--line); }
+.peek__section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.peek__section-head h3 { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; }
+.peek__section-head span, .peek__section-head a { font-size: 12px; color: var(--ink-3); }
+.peek__section-head a:hover { color: var(--accent); }
+
+.peek-owner__primary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+.peek-owner__name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+.peek-owner__meta { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+.peek-owner__meta b { color: var(--ink-2); font-weight: 500; }
+
+.peek-reach {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--accent-soft);
+    border-radius: var(--radius-sm);
+}
+.peek-reach i { color: var(--accent); }
+.peek-reach__name { font-weight: 600; font-size: 13.5px; }
+.peek-reach__title { font-size: 12px; color: var(--ink-2); }
+
+.peek-people { margin-top: 12px; display: grid; gap: 6px; }
+.peek-person {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+}
+.peek-person__name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peek-person__src { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+
+.peek-contacts { margin-top: 12px; display: grid; gap: 8px; }
+.peek-contact {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--green-soft);
+    border-color: transparent;
+}
+.peek-contact__who { font-size: 12px; color: var(--green); font-weight: 600; margin-bottom: 4px; }
+.peek-contact__line { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+.peek-contact__line a { color: var(--ink); text-decoration: none; font-variant-numeric: tabular-nums; }
+.peek-contact__line a:hover { color: var(--accent); }
+
+.peek-unlock {
+    margin-top: 12px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+.peek-unlock a { color: var(--accent); }
+
+.peek-kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.peek-kv div { min-width: 0; }
+.peek-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.peek-kv dd { font-size: 13.5px; font-weight: 500; margin-top: 1px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.peek-permits { display: grid; gap: 2px; }
+.peek-permit {
+    display: grid;
+    grid-template-columns: 86px 1fr;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+}
+.peek-permit:last-child { border-bottom: 0; }
+.peek-permit__date { color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.peek-permit__what { min-width: 0; }
+.peek-permit__type { font-weight: 500; }
+.peek-permit__desc { color: var(--ink-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.peek-permit__status { font-size: 11px; color: var(--ink-3); margin-left: 6px; }
+
+.peek__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.peek__actions .btn { text-decoration: none; }
+.peek__actions .btn i { margin-right: 4px; font-size: 11px; }
+.peek__actions .btn.is-in-crm { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+
+.peek__empty { color: var(--ink-3); font-size: 13px; }
+
+.peek__error {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--ink-3);
+}
+
+@media (max-width: 700px) {
+    .peek { width: 100vw; }
+    .peek__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

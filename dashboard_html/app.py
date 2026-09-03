@@ -2285,6 +2285,158 @@ def api_property_streetview(bbl):
         return jsonify({'success': False, 'error': 'lookup failed'}), 500
 
 
+@app.route('/api/property/<bbl>/peek')
+@login_required
+def api_property_peek(bbl):
+    """Everything the Properties grid's Quick Look shows, in one round-trip.
+
+    Deliberately not response-cached: it carries this user's unlocked owner
+    contacts, and a shared cache would hand one rep's paid data to the next.
+    Every optional section is best-effort so a slow portfolio count or a
+    missing table never blanks the panel.
+    """
+    from enrichment_service import classify_party_name, split_candidate_names
+    import streetview
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("SET statement_timeout = 8000")
+            cur.execute("""
+                SELECT id, bbl, bin, address, CAST(borough AS TEXT) AS borough, zip_code,
+                       building_class, total_units, residential_units, num_floors,
+                       year_built, year_altered, building_sqft, lot_sqft,
+                       assessed_total_value, current_owner_name, owner_name_rpad,
+                       owner_name_hpd, sale_buyer_primary, sale_seller_primary,
+                       sale_price, sale_date, mortgage_amount, mortgage_date,
+                       mortgage_lender_primary, is_cash_purchase, financing_ratio,
+                       hpd_open_violations, hpd_open_complaints, hpd_total_violations,
+                       acris_total_transactions, sos_principal_name, sos_principal_title,
+                       sos_entity_name, sos_entity_status, hpd_agent_name,
+                       hpd_site_manager_name
+                FROM buildings WHERE bbl = %s
+            """, (bbl,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'success': False, 'error': 'Property not found'}), 404
+            b = _decorate_owner(dict(row))
+
+            # Every owner name on record, by source, without repeating the headline.
+            others, seen = [], {(b.get('owner_display') or '').upper()}
+            for field, source in (('sale_buyer_primary', 'Latest deed (ACRIS)'),
+                                  ('current_owner_name', 'PLUTO'),
+                                  ('owner_name_hpd', 'HPD registration'),
+                                  ('owner_name_rpad', 'Tax roll (RPAD)')):
+                for name in split_candidate_names(b.get(field)):
+                    key = name.upper()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    others.append({'name': name, 'source': source,
+                                   'kind': _owner_kind(name, classify_party_name(name))})
+
+            cur.execute("""
+                SELECT permit_no, job_type, work_type, permit_type, permit_status,
+                       COALESCE(issue_date, filing_date) AS date, work_description
+                FROM permits WHERE bbl = %s
+                ORDER BY COALESCE(issue_date, filing_date) DESC NULLS LAST, id DESC
+                LIMIT 5
+            """, (bbl,))
+            recent = [dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT COUNT(*) AS n FROM permits WHERE bbl = %s", (bbl,))
+            permit_total = (cur.fetchone() or {}).get('n', 0)
+
+            unlocked = []
+            try:
+                cur.execute("SAVEPOINT peek_unlocked")
+                cur.execute("""
+                    SELECT owner_name_searched, enriched_phones, enriched_emails
+                    FROM user_enrichments WHERE user_id = %s AND building_id = %s
+                """, (g.user['id'], b['id']))
+                for r in cur.fetchall():
+                    if r['enriched_phones'] or r['enriched_emails']:
+                        unlocked.append({'owner_name': r['owner_name_searched'],
+                                         'phones': r['enriched_phones'] or [],
+                                         'emails': r['enriched_emails'] or []})
+                cur.execute("RELEASE SAVEPOINT peek_unlocked")
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT peek_unlocked")
+                print(f"peek: unlocked contacts skipped: {e}", flush=True)
+
+            portfolio = None
+            owner = b.get('owner_display')
+            if owner:
+                try:
+                    cur.execute("SAVEPOINT peek_portfolio")
+                    cur.execute("SET LOCAL statement_timeout = 2500")
+                    cur.execute("""
+                        SELECT COUNT(*) AS n FROM buildings
+                        WHERE current_owner_name ILIKE %s OR owner_name_rpad ILIKE %s
+                           OR owner_name_hpd ILIKE %s OR sale_buyer_primary ILIKE %s
+                    """, (owner, owner, owner, owner))
+                    portfolio = {'count': (cur.fetchone() or {}).get('n', 0)}
+                    cur.execute("RELEASE SAVEPOINT peek_portfolio")
+                except Exception as e:
+                    cur.execute("ROLLBACK TO SAVEPOINT peek_portfolio")
+                    print(f"peek: portfolio count skipped: {e}", flush=True)
+
+            # Links only — no GeoSearch round-trip inside a "quick" look.
+            coords = streetview.lookup_latlng(cur, bbl)
+            lat, lng = coords if coords else (None, None)
+            sv = streetview.payload(b.get('address') or f'BBL {bbl}', lat, lng, b.get('borough'), 'permit')
+
+        return jsonify({
+            'success': True,
+            'building': {k: v for k, v in b.items()
+                         if k not in ('owner_display', 'owner_kind', 'owner_is_person', 'owner_reach')},
+            'owner': {
+                'display': b.get('owner_display'),
+                'kind': b.get('owner_kind'),
+                'is_person': b.get('owner_is_person'),
+                'reach': b.get('owner_reach'),
+                'others': others,
+            },
+            'contacts': {'unlocked': unlocked},
+            'permits': {'total': permit_total, 'recent': recent},
+            'portfolio': portfolio,
+            'streetview': {'open_url': sv['open_url'], 'open_kind': sv['open_kind'],
+                           'map_url': sv['map_url']},
+            'profile_url': f'/property/{bbl}',
+        })
+    except Exception as e:
+        print(f"Property peek failed for {bbl}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'lookup failed'}), 500
+
+
+@app.route('/api/enrichment/unlocked-status')
+@login_required
+def api_enrichment_unlocked_status():
+    """Which of these BBLs already have owner contacts this user paid for.
+
+    Lives outside /api/properties on purpose: that response is cached across
+    users, and this answer is different for every one of them.
+    """
+    raw = request.args.get('bbls', '')
+    bbls = [v.strip() for v in raw.split(',') if v.strip()][:200]
+    if not bbls:
+        return jsonify({'success': True, 'unlocked': {}})
+    try:
+        with DatabaseConnection() as cur:
+            cur.execute("""
+                SELECT b.bbl, ue.enriched_phones, ue.enriched_emails
+                FROM user_enrichments ue JOIN buildings b ON b.id = ue.building_id
+                WHERE ue.user_id = %s AND b.bbl = ANY(%s)
+            """, (g.user['id'], bbls))
+            unlocked = {}
+            for r in cur.fetchall():
+                if r['enriched_phones'] or r['enriched_emails']:
+                    unlocked[r['bbl']] = True
+        return jsonify({'success': True, 'unlocked': unlocked})
+    except Exception as e:
+        print(f"unlocked-status failed: {e}", flush=True)
+        return jsonify({'success': True, 'unlocked': {}})
+
+
 @app.route('/api/property/<bbl>/violations')
 def api_property_violations(bbl):
     """Fetch HPD violations for a property from NYC Open Data"""
@@ -4036,6 +4188,93 @@ def _enrichable_owner_sql():
     return '(\n' + '\nOR '.join(candidates) + '\n)'
 
 
+# Card-level owner reading. classify_party_name() decides person vs. not;
+# these labels only split the "not" into the kinds a rep treats differently
+# (an LLC has a principal to find, a lender or the City usually does not).
+# Order matters: the first pattern that fits wins.
+_OWNER_KIND_RULES = (
+    ('Public', r'\b(CITY OF|NYC|NEW YORK CITY|HOUSING AUTHORITY|STATE OF|COUNTY OF|UNITED STATES|DEPT OF|DEPARTMENT|AUTHORITY)\b'),
+    ('Co-op / condo', r'\b(CONDOMINIUM|CONDO|COOPERATIVE|CO-OP|OWNERS CORP|TENANTS CORP|APARTMENT CORP|APTS CORP|HDFC)\b'),
+    ('Lender', r'\b(BANK|BANC|BANCORP|MORTGAGE|LENDING|FINANCE|FINANCIAL|FUNDING|SERVICING|FANNIE MAE|FREDDIE MAC|MERS|CREDIT UNION|NATIONAL ASSOCIATION|N\.?A\.?)\b'),
+    ('Trust / estate', r'\b(TRUST|TRUSTEE|TRUSTEES|ESTATE OF|HEIRS OF|LIVING TRUST|REVOCABLE)\b'),
+    ('Nonprofit / religious', r'\b(CHURCH|SYNAGOGUE|TEMPLE|CONGREGATION|MINISTRIES|MINISTRY|FOUNDATION|SOCIETY|INSTITUTE|MISSION|PARISH|DIOCESE|YESHIVA|MOSQUE)\b'),
+    ('LLC', r'\bL\.?L\.?C\.?\b'),
+    ('Partnership', r'\b(L\.?P\.?|LLP|PARTNERS|PARTNERSHIP)\b'),
+    ('Corporation', r'\b(INC|INCORPORATED|CORP|CORPORATION|LTD|LIMITED|CO)\b'),
+)
+
+
+def _owner_kind(name, classification):
+    kind = classification.get('entity_kind')
+    if kind == 'person':
+        return 'Person'
+    if kind == 'multiple':
+        return 'Multiple owners'
+    text = re.sub(r'[^A-Z0-9.&\'\- ]+', ' ', (name or '').upper())
+    for label, pattern in _OWNER_KIND_RULES:
+        if re.search(pattern, text):
+            return label
+    return 'Entity'
+
+
+def _owner_display_name(row):
+    for field in ('sale_buyer_primary', 'current_owner_name', 'owner_name_hpd', 'owner_name_rpad'):
+        value = (row.get(field) or '').strip()
+        if value:
+            return value
+    return None
+
+
+def _owner_reach(row, owner_name):
+    """The one human worth a call, if the record names one.
+
+    A Secretary of State principal counts only when the title says they run
+    the company (not a registered agent) and the registered entity is the
+    owner named on this lot. Otherwise HPD's managing agent, then its site
+    manager — the people who actually pick up for a multifamily building.
+    """
+    from enrichment_service import (classify_party_name, entity_match_quality,
+                                    is_sos_agent_title)
+    principal = (row.get('sos_principal_name') or '').strip()
+    if principal and classify_party_name(principal).get('is_person'):
+        title = (row.get('sos_principal_title') or '').strip()
+        match, _ = entity_match_quality(
+            row.get('sos_entity_name'),
+            [row.get('current_owner_name'), row.get('owner_name_rpad'),
+             row.get('owner_name_hpd'), row.get('sale_buyer_primary')],
+        )
+        if not is_sos_agent_title(title) and match != 'mismatch':
+            return {'name': principal, 'title': title or 'Principal',
+                    'source': 'NY Dept. of State', 'role': 'principal'}
+    agent = (row.get('hpd_agent_name') or '').strip()
+    if agent and agent.upper() != (owner_name or '').upper():
+        return {'name': agent, 'title': 'Managing agent', 'source': 'HPD', 'role': 'agent'}
+    manager = (row.get('hpd_site_manager_name') or '').strip()
+    if manager and manager.upper() != (owner_name or '').upper():
+        return {'name': manager, 'title': 'Site manager', 'source': 'HPD', 'role': 'manager'}
+    return None
+
+
+def _decorate_owner(row):
+    """Add the owner reading the Properties card shows: display name, kind,
+    and the best person to reach. Never lets a bad name break the list."""
+    try:
+        from enrichment_service import classify_party_name
+        name = _owner_display_name(row)
+        classification = classify_party_name(name) if name else {'entity_kind': 'unknown'}
+        row['owner_display'] = name
+        row['owner_kind'] = _owner_kind(name, classification) if name else None
+        row['owner_is_person'] = bool(classification.get('is_person'))
+        row['owner_reach'] = _owner_reach(row, name)
+    except Exception as e:
+        print(f"owner decoration skipped for {row.get('bbl')}: {e}", flush=True)
+        row.setdefault('owner_display', _owner_display_name(row))
+        row.setdefault('owner_kind', None)
+        row.setdefault('owner_is_person', False)
+        row.setdefault('owner_reach', None)
+    return row
+
+
 def _resolve_filter_building_ids(args, limit=None):
     """Return the list of building IDs matching the same filters as /api/properties,
     ignoring pagination. Used by the bulk-enrich endpoints so that 'enrich filtered'
@@ -4650,21 +4889,14 @@ def api_properties():
                     b.lot_sqft{_signal_select_sql()},
                     COALESCE(pc.permit_count, 0) as permit_count,
                     pc.last_permit_date,
-                    pcon.contractor_name,
-                    pcon.contractor_phone,
+                    b.sos_principal_name,
+                    b.sos_principal_title,
+                    b.sos_entity_name,
+                    b.hpd_agent_name,
+                    b.hpd_site_manager_name,
                     b.last_updated
                 FROM buildings b
                 {permit_count_sql}
-                LEFT JOIN LATERAL (
-                    SELECT 
-                        COALESCE(p.permittee_business_name, p.applicant) as contractor_name,
-                        p.permittee_phone as contractor_phone
-                    FROM permits p
-                    WHERE p.bbl = b.bbl 
-                      AND (p.permittee_phone IS NOT NULL OR p.permittee_business_name IS NOT NULL OR p.applicant IS NOT NULL)
-                    ORDER BY p.issue_date DESC NULLS LAST
-                    LIMIT 1
-                ) pcon ON true
                 {where_sql}
                 ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
@@ -4675,7 +4907,7 @@ def api_properties():
         
         return jsonify({
             'success': True,
-            'properties': [dict(p) for p in properties],
+            'properties': [_decorate_owner(dict(p)) for p in properties],
             'pagination': {
                 'page': page,
                 'per_page': per_page,
@@ -5725,71 +5957,8 @@ def api_sales_alerts():
 
 
 # ============================================================================
-# LEAD DISCOVERY: EXTERNAL SIGNALS AND REPEAT BUYERS
+# LEAD DISCOVERY: REPEAT BUYERS
 # ============================================================================
-
-@app.route('/signals')
-@login_required
-def external_signals_page():
-    return render_template('external_signals.html', active_page='signals')
-
-
-@app.route('/api/external-signals')
-@login_required
-def api_external_signals():
-    """Ranked City Record opportunities kept separate from DOB projects."""
-    days = min(3650, max(1, request.args.get('days', 90, type=int)))
-    min_score = min(100, max(0, request.args.get('min_score', 10, type=int)))
-    status = request.args.get('status', 'all').strip().lower()
-    search = request.args.get('q', '').strip()
-    limit = min(500, max(1, request.args.get('limit', 100, type=int)))
-    clauses = [
-        "source = 'city_record'",
-        "notice_date >= CURRENT_DATE - (%s || ' days')::interval",
-        "relevance_score >= %s",
-    ]
-    params = [days, min_score]
-    if status in ('new', 'reviewed', 'dismissed'):
-        clauses.append('review_status = %s')
-        params.append(status)
-    if search:
-        clauses.append("""(
-            title ILIKE %s OR description ILIKE %s OR agency_name ILIKE %s OR
-            vendor_name ILIKE %s OR contact_name ILIKE %s OR
-            street_address_1 ILIKE %s OR building_name ILIKE %s OR pin ILIKE %s
-        )""")
-        term = f'%{search}%'
-        params.extend([term] * 8)
-    try:
-        with DatabaseConnection() as cur:
-            cur.execute(f"""
-                SELECT id, source_record_id, signal_type, title, description,
-                       agency_name, category, selection_method, section_name, pin,
-                       notice_date, end_date, due_date, event_date, contact_name,
-                       contact_phone, contact_email, vendor_name, vendor_address,
-                       contract_amount, building_name, street_address_1,
-                       street_address_2, city, state, zip_code, source_url,
-                       relevance_score, relevance_reasons, review_status
-                FROM external_project_signals
-                WHERE {' AND '.join(clauses)}
-                ORDER BY relevance_score DESC,
-                         due_date ASC NULLS LAST, notice_date DESC, id DESC
-                LIMIT %s
-            """, params + [limit])
-            signals = [dict(row) for row in cur.fetchall()]
-        return jsonify({
-            'success': True,
-            'signals': signals,
-            'filters': {'days': days, 'min_score': min_score, 'status': status},
-            'separation_note': (
-                'City Record notices are pre-permit evidence. They are not linked to a DOB '
-                'project until the participant-graph phase can support that relationship.'
-            ),
-        })
-    except Exception as e:
-        print(f"External signals API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 
 _BUYER_KEY_SQL = "UPPER(REGEXP_REPLACE(COALESCE(pr.owner_business_name, ''), '[^A-Za-z0-9]+', '', 'g'))"
 

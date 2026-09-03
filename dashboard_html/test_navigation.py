@@ -16,7 +16,6 @@ PUBLIC_TEMPLATES = {
     "contractors.html",
     "repeat_buyers.html",
     "sales_alerts.html",
-    "external_signals.html",
     "search_results.html",
     "permit_detail.html",
     "building_profile.html",
@@ -31,7 +30,6 @@ PRIMARY_DESTINATIONS = {
     "/contractors",
     "/buyers",
     "/alerts",
-    "/signals",
 }
 
 
