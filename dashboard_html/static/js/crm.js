@@ -99,21 +99,28 @@
 
     // ---------- theme ----------
 
+    function readThemePref() {
+        try { return localStorage.getItem('theme') || localStorage.getItem('crm-theme') || 'auto'; }
+        catch (e) { return 'auto'; }
+    }
     function applyTheme(pref) {
         const dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        document.documentElement.toggleAttribute('data-crm-theme', dark);
-        if (dark) document.documentElement.setAttribute('data-crm-theme', 'dark');
-        document.documentElement.setAttribute('data-crm-pref', pref);
+        const root = document.documentElement;
+        root.toggleAttribute('data-crm-theme', dark);
+        if (dark) root.setAttribute('data-crm-theme', 'dark');
+        root.setAttribute('data-theme', dark ? 'dark' : 'light');   // the site nav + app.css key off this
+        root.setAttribute('data-crm-pref', pref);
         $all('.js-theme button').forEach(b => b.classList.toggle('is-active', b.dataset.theme === pref));
     }
     (function initTheme() {
-        let pref = 'auto';
-        try { pref = localStorage.getItem('crm-theme') || 'auto'; } catch (e) { /* no storage */ }
-        applyTheme(pref);
+        applyTheme(readThemePref());
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            let p = 'auto';
-            try { p = localStorage.getItem('crm-theme') || 'auto'; } catch (e) { /* */ }
-            if (p === 'auto') applyTheme('auto');
+            if (readThemePref() === 'auto') applyTheme('auto');
+        });
+        // The nav switcher (navigation.js) changed it: mirror the CRM's own toggle.
+        document.addEventListener('themechange', e => {
+            $all('.js-theme button').forEach(b => b.classList.toggle('is-active', b.dataset.theme === e.detail.pref));
+            document.documentElement.setAttribute('data-crm-pref', e.detail.pref);
         });
     })();
 
@@ -684,7 +691,11 @@
         if (openPal) { e.preventDefault(); closeAllSheets(); openPalette(); return; }
 
         const themeBtn = t.closest('.js-theme button');
-        if (themeBtn) { try { localStorage.setItem('crm-theme', themeBtn.dataset.theme); } catch (err) { /* */ } applyTheme(themeBtn.dataset.theme); return; }
+        if (themeBtn) {
+            try { localStorage.setItem('theme', themeBtn.dataset.theme); localStorage.setItem('crm-theme', themeBtn.dataset.theme); } catch (err) { /* */ }
+            if (window.AppTheme) window.AppTheme.apply(themeBtn.dataset.theme); else applyTheme(themeBtn.dataset.theme);
+            return;
+        }
 
         const contacted = t.closest('.js-contacted');
         if (contacted) { openContacted(contacted); return; }

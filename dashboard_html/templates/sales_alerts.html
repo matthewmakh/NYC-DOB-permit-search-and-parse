@@ -7,21 +7,21 @@
     .alerts-shell { max-width: 1180px; margin: 0 auto; padding: 36px 24px 64px; }
     .alerts-head { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }
     .alerts-head h1 { margin: 0 0 8px; }
-    .alerts-head p { margin: 0; color: #667085; max-width: 720px; }
+    .alerts-head p { margin: 0; color: var(--ink-3); max-width: 720px; }
     .alert-tools { display: flex; gap: 10px; flex-wrap: wrap; }
-    .alert-tools input, .alert-tools select { min-height: 44px; border: 1px solid #d0d5dd; background: #fff; border-radius: 8px; padding: 9px 12px; }
+    .alert-tools input, .alert-tools select { min-height: 44px; border: 1px solid var(--line-2); background: var(--surface); border-radius: 8px; padding: 9px 12px; color: var(--ink); font: inherit; }
     .alert-tools input { min-width: 260px; }
     .alert-list { display: grid; gap: 12px; }
-    .alert-card { background: #fff; border: 1px solid #e4e7ec; border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+    .alert-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-1); }
     .alert-card-head { display: flex; justify-content: space-between; gap: 16px; }
     .alert-card h3 { margin: 0 0 7px; font-size: 17px; }
-    .alert-card p { margin: 0; color: #475467; line-height: 1.5; }
-    .alert-badge { white-space: nowrap; align-self: flex-start; color: #175cd3; background: #eff8ff; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 650; }
-    .alert-details { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #eaecf0; color: #667085; font-size: 13px; }
+    .alert-card p { margin: 0; color: var(--ink-2); line-height: 1.5; }
+    .alert-badge { white-space: nowrap; align-self: flex-start; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 650; }
+    .alert-details { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13px; }
     .alert-actions { display: flex; gap: 8px; margin-top: 16px; }
-    .alert-actions a { min-height: 40px; display: inline-flex; align-items: center; border: 1px solid #d0d5dd; border-radius: 7px; background: #fff; color: #344054; padding: 8px 11px; text-decoration: none; }
-    .alert-actions .primary { background: #0369a1; border-color: #0369a1; color: #fff; }
-    .alerts-empty { text-align: center; color: #667085; padding: 60px 20px; background: #fff; border: 1px dashed #d0d5dd; border-radius: 12px; }
+    .alert-actions a { min-height: 40px; display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); padding: 8px 11px; text-decoration: none; }
+    .alert-actions .primary { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+    .alerts-empty { text-align: center; color: var(--ink-3); padding: 60px 20px; background: var(--surface); border: 1px dashed var(--line-2); border-radius: 12px; }
     @media (max-width: 720px) { .alerts-head { align-items: start; flex-direction: column; } }
 </style>
 {% endblock %}

@@ -5,9 +5,12 @@
     // Appearance: 'auto' | 'light' | 'dark', applied before first paint.
     (function () {
         try {
-            var pref = localStorage.getItem('crm-theme') || 'auto';
+            // One preference for the whole app: the site nav's switcher and this
+            // toggle read and write the same key.
+            var pref = localStorage.getItem('theme') || localStorage.getItem('crm-theme') || 'auto';
             var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
             if (dark) document.documentElement.setAttribute('data-crm-theme', 'dark');
+            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
             document.documentElement.setAttribute('data-crm-pref', pref);
         } catch (e) { /* no storage: stay light */ }
     })();

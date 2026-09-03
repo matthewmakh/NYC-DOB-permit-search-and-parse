@@ -55,7 +55,10 @@ system is the team system:
 * **Shell**: macOS-style translucent sidebar on desktop, iOS-style tab bar on
   phones; large titles; grouped inset cards; tinted secondary buttons and
   filled blue primaries; **Appearance** toggle (auto / light / dark) in the
-  sidebar footer, applied before first paint from `localStorage`.
+  sidebar footer, applied before first paint from `localStorage`. It is the
+  same setting as the moon/sun switcher in the site nav: one key (`theme`),
+  so the CRM and the permit pages are always in the same mode, and Auto
+  follows the system live.
 * **No reloads for common actions**: regions marked `data-partial` re-fetch
   their HTML fragment from `/crm/partials/...` after a write.
 * **⌘K / `/`**: global search over buildings (address, owner, BBL), people
