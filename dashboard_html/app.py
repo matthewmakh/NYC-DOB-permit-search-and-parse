@@ -2300,7 +2300,7 @@ def api_property_peek(bbl):
     try:
         with DatabaseConnection() as cur:
             cur.execute("SET statement_timeout = 8000")
-            cur.execute("""
+            cur.execute(f"""
                 SELECT id, bbl, bin, address, CAST(borough AS TEXT) AS borough, zip_code,
                        building_class, total_units, residential_units, num_floors,
                        year_built, year_altered, building_sqft, lot_sqft,
@@ -2311,8 +2311,9 @@ def api_property_peek(bbl):
                        hpd_open_violations, hpd_open_complaints, hpd_total_violations,
                        acris_total_transactions, sos_principal_name, sos_principal_title,
                        sos_entity_name, sos_entity_status, hpd_agent_name,
-                       hpd_site_manager_name
-                FROM buildings WHERE bbl = %s
+                       hpd_site_manager_name,
+                       {_owner_kind_sql()} AS owner_kind
+                FROM buildings b WHERE bbl = %s
             """, (bbl,))
             row = cur.fetchone()
             if not row:
@@ -4204,6 +4205,62 @@ _OWNER_KIND_RULES = (
 )
 
 
+_OWNER_DISPLAY_SQL = """COALESCE(
+    NULLIF(BTRIM(b.sale_buyer_primary), ''), NULLIF(BTRIM(b.current_owner_name), ''),
+    NULLIF(BTRIM(b.owner_name_hpd), ''), NULLIF(BTRIM(b.owner_name_rpad), ''))"""
+
+# Sidebar "Owner type" values (slug -> label), in the order the sidebar lists them.
+OWNER_KIND_SLUGS = {
+    'person': 'Person', 'llc': 'LLC', 'corporation': 'Corporation',
+    'partnership': 'Partnership', 'trust': 'Trust / estate', 'coop': 'Co-op / condo',
+    'nonprofit': 'Nonprofit / religious', 'lender': 'Lender', 'public': 'Public',
+    'multiple': 'Multiple owners', 'other': 'Entity',
+}
+
+
+def _owner_kind_sql(owner_sql=None):
+    """CASE expression naming the owner kind in SQL.
+
+    Mirrors _owner_kind() rule for rule (Postgres ARE spells the word boundary
+    \\y), so filtering the grid by kind and the tag printed on the card can
+    never disagree. Evaluated per row; on the whole table only when the
+    filter is on, like the enrichable-owner prefilter it replaces.
+    """
+    name = owner_sql or _OWNER_DISPLAY_SQL
+    norm = f"regexp_replace(upper({name}), '[^A-Z0-9.&'' -]+', ' ', 'g')"
+    whens = [
+        f"WHEN {norm} ~ '[;&]' OR {norm} ~* '\\y(AND|ET AL|ET UX|ET VIR)\\y' THEN 'Multiple owners'",
+    ]
+    for label, pattern in _OWNER_KIND_RULES:
+        whens.append(f"WHEN {norm} ~* '{pattern.replace(chr(92) + 'b', chr(92) + 'y')}' THEN '{label}'")
+    whens.append(
+        f"WHEN {norm} ~* '[[:alpha:]][[:alpha:]''.-]+[[:space:],]+[[:alpha:]]' "
+        f"AND {norm} !~* '{_NONPERSON_SQL_PATTERN}' AND {norm} !~ '[0-9]' THEN 'Person'"
+    )
+    return f"CASE WHEN {name} IS NULL THEN NULL {' '.join(whens)} ELSE 'Entity' END"
+
+
+def _owner_kind_labels(args):
+    """Owner kinds a request asks for. The retired "enrichable owner" checkbox
+    lives on in saved searches and old links as `has_enrichable_owner=true`;
+    it meant people, so it still does."""
+    slugs = _multi_param(args, 'owner_kind', allowed=set(OWNER_KIND_SLUGS))
+    labels = [OWNER_KIND_SLUGS[s] for s in slugs]
+    legacy = args.get('has_enrichable_owner', '') if hasattr(args, 'get') else ''
+    if str(legacy or '').lower() == 'true' and 'Person' not in labels:
+        labels.append('Person')
+    return labels
+
+
+def _append_owner_kind_filter(args, where_clauses, params):
+    labels = _owner_kind_labels(args)
+    if not labels:
+        return
+    placeholders = ', '.join(['%s'] * len(labels))
+    where_clauses.append(f"({_owner_kind_sql()}) IN ({placeholders})")
+    params.extend(labels)
+
+
 def _owner_kind(name, classification):
     kind = classification.get('entity_kind')
     if kind == 'person':
@@ -4263,8 +4320,9 @@ def _decorate_owner(row):
         name = _owner_display_name(row)
         classification = classify_party_name(name) if name else {'entity_kind': 'unknown'}
         row['owner_display'] = name
-        row['owner_kind'] = _owner_kind(name, classification) if name else None
-        row['owner_is_person'] = bool(classification.get('is_person'))
+        if not row.get('owner_kind'):
+            row['owner_kind'] = _owner_kind(name, classification) if name else None
+        row['owner_is_person'] = row['owner_kind'] == 'Person'
         row['owner_reach'] = _owner_reach(row, name)
     except Exception as e:
         print(f"owner decoration skipped for {row.get('bbl')}: {e}", flush=True)
@@ -4314,7 +4372,6 @@ def _resolve_filter_building_ids(args, limit=None):
     recent_sale_days = g('recent_sale_days', type=int)
     financing_min = _percent_filter_ratio(g('financing_min', type=float))
     financing_max = _percent_filter_ratio(g('financing_max', type=float))
-    has_enrichable_owner = str(g('has_enrichable_owner', default='')).lower() == 'true'
 
     where_clauses = []
     params = []
@@ -4392,8 +4449,7 @@ def _resolve_filter_building_ids(args, limit=None):
     if min_permits is not None:
         where_clauses.append("(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
         params.append(min_permits)
-    if has_enrichable_owner:
-        where_clauses.append(_enrichable_owner_sql())
+    _append_owner_kind_filter(args, where_clauses, params)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
@@ -4792,10 +4848,8 @@ def api_properties():
                 where_clauses.append("b.total_units <= %s")
                 params.append(max_units)
         
-            # Enrichable owner filter - has a person name (not LLC/INC/CORP) with first+last
-            has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
-            if has_enrichable_owner:
-                where_clauses.append(_enrichable_owner_sql())
+            # Owner type (Person / LLC / Lender / Public ...), any number, OR'd.
+            _append_owner_kind_filter(request.args, where_clauses, params)
 
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -4894,6 +4948,7 @@ def api_properties():
                     b.sos_entity_name,
                     b.hpd_agent_name,
                     b.hpd_site_manager_name,
+                    {_owner_kind_sql()} AS owner_kind,
                     b.last_updated
                 FROM buildings b
                 {permit_count_sql}
@@ -5166,10 +5221,7 @@ def api_properties_export():
             if min_permits:
                 where_clauses.append("""(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s""")
                 params.append(min_permits)
-            # Enrichable owner filter
-            has_enrichable_owner = request.args.get('has_enrichable_owner', '').lower() == 'true'
-            if has_enrichable_owner:
-                where_clauses.append(_enrichable_owner_sql())
+            _append_owner_kind_filter(request.args, where_clauses, params)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             

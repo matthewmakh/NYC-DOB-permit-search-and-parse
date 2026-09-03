@@ -44,7 +44,7 @@ const state = {
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false,
+        ownerKinds: [],      // sidebar "Owner type": person / llc / lender ... (OR'd)
         play: null
     },
     // Borough, property type, building class, units, value, kind of work,
@@ -121,7 +121,12 @@ function restoreStateFromUrl(params) {
     // The server converts them to the stored 0-1 ratio exactly once.
     state.filters.financingMin = finiteParam(params, 'financing_min');
     state.filters.financingMax = finiteParam(params, 'financing_max');
-    state.filters.hasEnrichableOwner = trueParam(params, 'has_enrichable_owner');
+    state.filters.ownerKinds = repeatedParamValues(params, 'owner_kind')
+        .filter(kind => OWNER_KIND_SLUGS.has(kind));
+    // The retired "Has enrichable owner" checkbox meant people; honour old links.
+    if (trueParam(params, 'has_enrichable_owner') && !state.filters.ownerKinds.includes('person')) {
+        state.filters.ownerKinds.push('person');
+    }
     state.filters.play = params.get('play') || null;
     state.shared = SharedFilters.fromParams(params);
 
@@ -152,8 +157,7 @@ function applyStateToControls() {
 
     document.getElementById('cashOnly').checked = state.filters.cashOnly;
     document.getElementById('withPermits').checked = state.filters.withPermits;
-    document.getElementById('hasEnrichableOwner').checked =
-        state.filters.hasEnrichableOwner;
+    MultiSelect.set('ownerKind', state.filters.ownerKinds, { silent: true });
 
     state.sort.by.forEach(key => {
         const sortSelect = document.getElementById('sortBy');
@@ -186,7 +190,7 @@ function buildPropertiesParams() {
     if (f.recentSaleDays) params.append('recent_sale_days', f.recentSaleDays);
     if (f.financingMin !== null) params.append('financing_min', f.financingMin);
     if (f.financingMax !== null) params.append('financing_max', f.financingMax);
-    if (f.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
+    appendMulti(params, 'owner_kind', f.ownerKinds);
     if (f.play) params.append('play', f.play);
     appendMulti(params, 'sort_by', state.sort.by);
     params.append('sort_order', state.sort.order);
@@ -1052,15 +1056,145 @@ function renderPeek(data) {
             ${permitRows ? `<div class="peek-permits">${permitRows}</div>` : '<div class="peek__empty">No permits on file for this lot.</div>'}
         </section>
 
+        <section class="peek__section peek-crm" data-bbl="${escapeAttr(bbl)}">
+            <div class="peek__section-head"><h3>CRM</h3><span class="peek-crm__status js-peek-crm-status"></span></div>
+            <div class="peek-crm__row">
+                <button type="button" class="btn btn-primary btn-sm js-peek-log"><i class="fas fa-phone"></i> Log a contact</button>
+                <button type="button" class="btn btn-secondary btn-sm js-peek-crm ${inCrm ? 'is-in-crm' : ''}" data-bbl="${escapeAttr(bbl)}">
+                    <i class="fas ${inCrm ? 'fa-check' : 'fa-address-book'}"></i> ${inCrm ? 'Open in CRM' : 'Add to CRM'}
+                </button>
+            </div>
+            ${peekLogFormHtml()}
+        </section>
+
         <div class="peek__actions">
-            <button type="button" class="btn btn-secondary btn-sm js-peek-crm ${inCrm ? 'is-in-crm' : ''}" data-bbl="${escapeAttr(bbl)}">
-                <i class="fas ${inCrm ? 'fa-check' : 'fa-address-book'}"></i> ${inCrm ? 'In CRM — open' : 'Add to CRM'}
-            </button>
             ${sv.open_url ? `<a class="btn btn-secondary btn-sm" href="${escapeAttr(sv.open_url)}" target="_blank" rel="noopener"><i class="fas fa-${sv.open_kind === 'streetview' ? 'street-view' : 'map'}"></i> ${sv.open_kind === 'streetview' ? 'Street View' : 'Map'}</a>` : ''}
             <button type="button" class="btn btn-secondary btn-sm js-peek-portfolio" data-owner="${escapeAttr(owner.display || '')}" ${owner.display ? '' : 'disabled'}>
                 <i class="fas fa-building"></i> Portfolio${portfolioCount > 1 ? ` (${formatNumber(portfolioCount)})` : ''}
             </button>
         </div>`;
+    renderPeekCrmStatus(bbl);
+}
+
+// ---------- Quick Look → CRM logging ----------
+// A rep can log the call right here and move to the next card. The building
+// is added to the CRM on first use; the CRM's own /api/contacted does the
+// rest (append-only activity, rollups, the prospect -> contacted stage bump).
+
+const PEEK_METHODS = [['call', 'Call'], ['text', 'Text'], ['email', 'Email'], ['in_person', 'In person'], ['other', 'Other']];
+const PEEK_OUTCOMES = [
+    ['spoke', 'Spoke'], ['voicemail', 'Voicemail'], ['no_answer', 'No answer'],
+    ['callback_requested', 'Callback requested'], ['meeting_set', 'Meeting set'],
+    ['wrong_number', 'Wrong number'], ['not_interested', 'Not interested'],
+];
+const PEEK_FOLLOWUPS = [['', 'None'], ['1', 'Tomorrow'], ['3', '3 days'], ['7', 'Next week'], ['14', '2 weeks']];
+
+function peekChips(role, options, selected) {
+    return `<div class="peek-chips" data-role="${role}">${options.map(([value, label]) =>
+        `<button type="button" class="peek-chip${value === selected ? ' is-on' : ''}" data-value="${escapeAttr(value)}">${label}</button>`
+    ).join('')}</div>`;
+}
+
+function peekLogFormHtml() {
+    return `
+        <div class="peek-log" hidden>
+            <div class="peek-log__label">How</div>
+            ${peekChips('method', PEEK_METHODS, 'call')}
+            <div class="peek-log__label">Outcome</div>
+            ${peekChips('outcome', PEEK_OUTCOMES, null)}
+            <textarea class="peek-log__note" data-role="note" rows="2" placeholder="What happened? Optional, but the team reads it."></textarea>
+            <div class="peek-log__label">Follow up</div>
+            ${peekChips('followup', PEEK_FOLLOWUPS, '')}
+            <div class="peek-log__actions">
+                <button type="button" class="btn btn-secondary btn-sm" data-role="cancel">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" data-role="save"><i class="fas fa-check"></i> Save contact</button>
+            </div>
+        </div>`;
+}
+
+function renderPeekCrmStatus(bbl) {
+    const node = document.querySelector('#peekBody .js-peek-crm-status');
+    if (!node || String(bbl) !== String(peek.bbl)) return;
+    const st = crmStatus.status && crmStatus.status[String(bbl)];
+    if (!st) { node.textContent = 'Not in the CRM yet'; return; }
+    const stage = st.stage ? st.stage.charAt(0).toUpperCase() + st.stage.slice(1) : 'In CRM';
+    const touched = st.last_contacted_at
+        ? `contacted ${ssTimeAgo(st.last_contacted_at)}${st.contact_count > 1 ? ` · ${st.contact_count}×` : ''}`
+        : 'no contact yet';
+    node.textContent = `${stage} · ${touched}`;
+    const crmBtn = document.querySelector('#peekBody .js-peek-crm');
+    if (crmBtn) {
+        crmBtn.classList.add('is-in-crm');
+        crmBtn.innerHTML = '<i class="fas fa-check"></i> Open in CRM';
+    }
+}
+
+function peekChipValue(form, role) {
+    const on = form.querySelector(`[data-role="${role}"] .peek-chip.is-on`);
+    return on ? on.dataset.value : null;
+}
+
+async function ensureCrmBuilding(bbl) {
+    const known = crmStatus.inCrm[String(bbl)];
+    if (known) return known;
+    const res = await fetch('/crm/api/bulk-add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bbls: [String(bbl)], with_contacts: true }),
+    });
+    const data = await res.json();
+    const id = data && data.in_crm && data.in_crm[String(bbl)];
+    if (!id) throw new Error(data.error || 'Could not add this building to the CRM');
+    crmStatus.inCrm[String(bbl)] = id;
+    return id;
+}
+
+async function submitPeekLog(section) {
+    const bbl = section.dataset.bbl;
+    const form = section.querySelector('.peek-log');
+    const save = form.querySelector('[data-role="save"]');
+    const outcome = peekChipValue(form, 'outcome');
+    if (!outcome) {
+        crmNotice('Pick an outcome first', 'error');
+        form.querySelector('[data-role="outcome"]').classList.add('is-missing');
+        return;
+    }
+    const method = peekChipValue(form, 'method') || 'call';
+    const note = form.querySelector('[data-role="note"]').value.trim();
+    const followDays = peekChipValue(form, 'followup');
+    save.disabled = true;
+    save.innerHTML = 'Saving…';
+    try {
+        const buildingId = await ensureCrmBuilding(bbl);
+        const res = await fetch('/crm/api/contacted', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ building_id: buildingId, method, outcome, note: note || null }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Could not log the contact');
+        let followText = '';
+        if (followDays) {
+            const fu = await fetch('/crm/api/followup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ building_id: buildingId, days: Number(followDays), title: 'Follow up' }),
+            });
+            const fud = await fu.json();
+            if (fud.success) followText = ` · follow-up in ${followDays} day${followDays === '1' ? '' : 's'}`;
+        }
+        form.hidden = true;
+        form.querySelector('[data-role="note"]').value = '';
+        form.querySelectorAll('[data-role="outcome"] .peek-chip').forEach(c => c.classList.remove('is-on'));
+        form.querySelectorAll('[data-role="followup"] .peek-chip').forEach(c => c.classList.toggle('is-on', c.dataset.value === ''));
+        crmNotice(`Logged ${PEEK_OUTCOMES.find(([v]) => v === outcome)[1].toLowerCase()}${followText}.`);
+        await refreshCrmStatus();
+    } catch (e) {
+        crmNotice(e.message || 'Could not log the contact', 'error');
+    } finally {
+        save.disabled = false;
+        save.innerHTML = '<i class="fas fa-check"></i> Save contact';
+    }
 }
 
 function initQuickLook() {
@@ -1079,6 +1213,23 @@ function initQuickLook() {
         if (e.target.closest('a[data-nav]')) { saveListNavigationState(peek.bbl); return; }
         const crm = e.target.closest('.js-peek-crm');
         if (crm) { crmOpen(crm.dataset.bbl); return; }
+        const logBtn = e.target.closest('.js-peek-log');
+        if (logBtn) {
+            const form = logBtn.closest('.peek-crm').querySelector('.peek-log');
+            form.hidden = !form.hidden;
+            if (!form.hidden) form.querySelector('[data-role="note"]').focus({ preventScroll: true });
+            return;
+        }
+        const chip = e.target.closest('.peek-chip');
+        if (chip) {
+            const group = chip.parentElement;
+            group.classList.remove('is-missing');
+            group.querySelectorAll('.peek-chip').forEach(c => c.classList.toggle('is-on', c === chip));
+            return;
+        }
+        const role = e.target.closest('.peek-log [data-role]');
+        if (role && role.dataset.role === 'cancel') { role.closest('.peek-log').hidden = true; return; }
+        if (role && role.dataset.role === 'save') { submitPeekLog(role.closest('.peek-crm')); return; }
         const pf = e.target.closest('.js-peek-portfolio');
         if (pf && pf.dataset.owner) { closePeek(); viewOwnerPortfolio(pf.dataset.owner); }
     });
@@ -1287,9 +1438,9 @@ function initializeEventListeners() {
         loadProperties();
     });
     
-    // Enrichable owner checkbox
-    document.getElementById('hasEnrichableOwner').addEventListener('change', (e) => {
-        state.filters.hasEnrichableOwner = e.target.checked;
+    // Owner type (multi-select, OR'd)
+    document.getElementById('ownerKind').addEventListener('change', () => {
+        state.filters.ownerKinds = MultiSelect.values('ownerKind');
         state.pagination.page = 1;
         loadProperties();
     });
@@ -1365,7 +1516,7 @@ async function downloadExport() {
     if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
-    if (state.filters.hasEnrichableOwner) params.append('has_enrichable_owner', 'true');
+    appendMulti(params, 'owner_kind', state.filters.ownerKinds);
     if (state.filters.play) params.append('play', state.filters.play);
 
     // Add sort
@@ -1540,7 +1691,7 @@ function resetFilters() {
         financingMin: null,
         financingMax: null,
         smartFilter: null,
-        hasEnrichableOwner: false,
+        ownerKinds: [],
         play: null
     };
 }
@@ -1567,7 +1718,6 @@ function clearFilters() {
     document.getElementById('financingMax').value = '';
     document.getElementById('cashOnly').checked = false;
     document.getElementById('withPermits').checked = false;
-    document.getElementById('hasEnrichableOwner').checked = false;
     
     state.pagination.page = 1;
     loadProperties();
@@ -1638,7 +1788,7 @@ function buildBulkEnrichFiltersPayload() {
     if (f.recentSaleDays) payload.recent_sale_days = f.recentSaleDays;
     if (f.financingMin) payload.financing_min = f.financingMin;
     if (f.financingMax) payload.financing_max = f.financingMax;
-    if (f.hasEnrichableOwner) payload.has_enrichable_owner = true;
+    if (f.ownerKinds.length) payload.owner_kind = f.ownerKinds;
     if (f.play) payload.play = f.play;
     return payload;
 }
@@ -2148,7 +2298,7 @@ async function updateEnrichmentEstimate() {
 // ==========================================
 
 // BBL -> CRM building id for everything rendered so far this visit.
-const crmStatus = { inCrm: {} };
+const crmStatus = { inCrm: {}, status: {} };
 
 function crmOpen(bbl) {
     const crmId = crmStatus.inCrm[bbl];
@@ -2169,6 +2319,8 @@ async function refreshCrmStatus() {
         const data = await res.json();
         if (!data.success) return;
         Object.assign(crmStatus.inCrm, data.in_crm || {});
+        Object.assign(crmStatus.status, data.status || {});
+        if (peek.open) renderPeekCrmStatus(peek.bbl);
         document.querySelectorAll('.js-crm-btn').forEach(btn => {
             if (crmStatus.inCrm[btn.dataset.bbl]) {
                 btn.innerHTML = '<i class="fas fa-check"></i>';
@@ -2218,7 +2370,13 @@ const savedSearch = {
 
 // param -> the control whose <option> labels name its values. Read from the
 // DOM so codes filled in from /api/permits/facets describe themselves too.
+const OWNER_KIND_SLUGS = new Set([
+    'person', 'llc', 'corporation', 'partnership', 'trust', 'coop',
+    'nonprofit', 'lender', 'public', 'multiple', 'other',
+]);
+
 const SS_OPTION_SOURCES = {
+    owner_kind: 'ownerKind',
     borough: 'boroughFilter',
     property_type: 'propertyType',
     building_class: 'buildingClass',
@@ -2232,7 +2390,6 @@ const SS_OPTION_SOURCES = {
 const SS_FLAGS = {
     cash_only: 'Cash purchases',
     with_permits: 'Has permits',
-    has_enrichable_owner: 'Enrichable owner',
 };
 
 // `unit` trails the whole range ("5-20 units"); a unit with no leading space
@@ -2308,6 +2465,7 @@ function describeSearch(querystring) {
     Object.entries(SS_FLAGS).forEach(([param, label]) => {
         if (trueParam(params, param)) add(label);
     });
+    if (trueParam(params, 'has_enrichable_owner') && !params.getAll('owner_kind').length) add('Person');
 
     if (params.get('min_permits')) add(`${params.get('min_permits')}+ permits`);
     if (params.get('recent_sale_days')) add(`Sold in ${params.get('recent_sale_days')}d`);

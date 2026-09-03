@@ -25,9 +25,11 @@ phone number; the CRM never writes to permit tables.
 
 Integration points elsewhere: one `register_blueprint` + `init_crm_tables()`
 call in `app.py`, a nav item in `_site_nav.html`, the **Add to CRM** button on
-`building_profile.html`, and on the Properties page: the per-card CRM button
-(also inside the card's **Quick look** panel), the **Saved searches** menu,
-and bulk multi-select (card checkboxes → floating
+`building_profile.html`, and on the Properties page: the per-card CRM button,
+the **Quick look** panel's CRM section (stage and last touch from
+`POST /crm/api/bbl-status`, plus **Log a contact**, which adds the building on
+first use and then posts to `/crm/api/contacted` and `/crm/api/followup`), the
+**Saved searches** menu, and bulk multi-select (card checkboxes → floating
 "N selected" bar → **Add N to CRM** dialog with contact import and list
 placement, via `POST /crm/api/bulk-add`, chunked 25 per request client-side).
 Bulk contact import only takes permit contacts that have phones, and a number

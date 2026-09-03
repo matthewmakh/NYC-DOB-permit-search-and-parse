@@ -95,15 +95,29 @@
             </div>
 
             <div class="filter-section">
+                <h3>Owner type</h3>
+                <select id="ownerKind" class="filter-select" multiple
+                    data-multiselect data-placeholder="All owner types">
+                    <option value="person">Person</option>
+                    <option value="llc">LLC</option>
+                    <option value="corporation">Corporation</option>
+                    <option value="partnership">Partnership</option>
+                    <option value="trust">Trust / estate</option>
+                    <option value="coop">Co-op / condo</option>
+                    <option value="nonprofit">Nonprofit / religious</option>
+                    <option value="lender">Lender</option>
+                    <option value="public">Public</option>
+                    <option value="multiple">Multiple owners</option>
+                    <option value="other">Other entity</option>
+                </select>
+                <small class="filter-hint">Who holds title, read from the deed and tax roll. Pick any number &mdash; they are combined with OR. People are the owners you can look up directly.</small>
+            </div>
+
+            <div class="filter-section">
                 <label class="checkbox-label">
                     <input type="checkbox" id="cashOnly">
                     Cash purchases only
                 </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="hasEnrichableOwner">
-                    Has enrichable owner
-                </label>
-                <small class="filter-hint">Enrichable owners are person names (not LLCs) that can be looked up.</small>
             </div>
         </aside>
 

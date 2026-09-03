@@ -1372,24 +1372,36 @@ def api_bulk_add():
 @crm_bp.route('/api/bbl-status', methods=['POST'])
 @login_required
 def api_bbl_status():
-    """For the permit dashboard: which of these BBLs are already in the CRM."""
+    """For the permit dashboard: which of these BBLs are already in the CRM,
+    and how far along each one is. `in_crm` (bbl -> id) is the original
+    shape; `status` adds the stage and touch rollups the Quick Look shows."""
     ctx = _ctx()
     bbls = [str(b) for b in (_json().get('bbls') or []) if b][:500]
     if not bbls:
-        return jsonify({'success': True, 'in_crm': {}})
+        return jsonify({'success': True, 'in_crm': {}, 'status': {}})
     conn = crm_service.get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT bbl, id FROM crm_buildings
+            """SELECT bbl, id, stage, last_contacted_at, contact_count
+               FROM crm_buildings
                WHERE bbl = ANY(%s) AND (team_id = %s OR team_id IS NULL)""",
             (bbls, ctx['team_id']),
         )
-        mapping = {r['bbl']: r['id'] for r in cur.fetchall()}
+        rows = cur.fetchall()
     finally:
         cur.close()
         conn.close()
-    return jsonify({'success': True, 'in_crm': mapping})
+    mapping = {r['bbl']: r['id'] for r in rows}
+    status = {
+        r['bbl']: {
+            'id': r['id'],
+            'stage': r['stage'],
+            'last_contacted_at': _iso(r['last_contacted_at']),
+            'contact_count': r['contact_count'] or 0,
+        } for r in rows
+    }
+    return jsonify({'success': True, 'in_crm': mapping, 'status': status})
 
 
 # ============================================================
