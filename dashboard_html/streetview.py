@@ -19,11 +19,16 @@ Two link modes, decided by one optional env var:
   (Maps Embed API, referrer-restricted key; Google bills Embed API requests
   at $0). Street View needs a lat/lng, so the embed falls back to a map of
   the address when the lot could not be located.
-* not set -> no iframe; the UI shows an "Open Street View" button. The link
-  uses the classic ``layer=c&cbll=`` form, which snaps to the nearest
-  panorama. The Maps URLs API ``map_action=pano&viewpoint=`` form was tried
-  first and rejected: it gives up with "No Street View imagery available
-  here" when nothing was photographed within 50 m of the point.
+* not set -> no iframe; the UI shows an "Open Street View" button.
+
+The Street View *link* (keyed or not) is built from the address —
+``maps?q=<address>&layer=c`` — so Google geocodes it, picks the nearest
+panorama and aims the camera at the building. Two coordinate forms were
+tried before this and rejected: the Maps URLs API ``map_action=pano&viewpoint``
+gives up with "No Street View imagery available here" when nothing was
+photographed within 50 m, and the classic ``cbll=`` snap opens facing along
+the street rather than at the door. Coordinates are still resolved for the
+embedded panorama, which the Maps Embed API can only place by lat/lng.
 """
 
 import math
@@ -287,9 +292,19 @@ def resolve(cur, bbl=None, address=None, borough=None):
     return None
 
 
-def payload(address, lat=None, lng=None, borough=None, source=None):
-    """Everything a template needs: embed URL (if possible) + open links."""
+def payload(address, lat=None, lng=None, borough=None, source=None, bbl=None):
+    """Everything a template needs: embed URL (if possible) + open links.
+
+    The Street View link is built from the *address*, not coordinates. Given
+    an address, Google Maps geocodes it itself, picks the nearest panorama and
+    points the camera at the building; a dropped coordinate only faces down
+    the street, and any error in our geocode becomes the wrong house.
+    Coordinates are still what the Maps Embed API needs for an embedded
+    panorama, so they stay in the payload for that.
+    """
     coords = _valid(lat, lng)
+    borough = borough or BOROUGH_NAME.get(str(bbl or '')[:1])
+    real_address = bool(address) and not str(address).upper().startswith('BBL ')
     place = ', '.join(p for p in (address, borough, 'NY') if p)
     key = embed_key()
     map_url = 'https://www.google.com/maps/search/?api=1&query=' + quote_plus(place)
@@ -301,19 +316,28 @@ def payload(address, lat=None, lng=None, borough=None, source=None):
         'embed_url': None,
         'embed_kind': None,
         'open_url': map_url,      # what the Street View button opens
-        'open_kind': 'map',       # 'streetview' when we could pinpoint the lot
+        'open_kind': 'map',       # 'streetview' when the button really opens a panorama
+        'open_basis': 'none',     # 'address' | 'coords' | 'none' — what the link was built from
         'map_url': map_url,
         'apple_url': 'https://maps.apple.com/?q=' + quote_plus(place),
         'key_configured': bool(key),
     }
-    if coords:
-        lat, lng = coords
-        at = f'{lat:.6f},{lng:.6f}'
+    if real_address:
+        # layer=c opens Street View; q= lets Google place and aim it.
+        out['open_url'] = 'https://www.google.com/maps?' + urlencode({'q': place, 'layer': 'c'})
+        out['open_kind'] = 'streetview'
+        out['open_basis'] = 'address'
+    elif coords:
+        # No usable address (a bare BBL): fall back to the classic snap-to-nearest form.
+        at = f'{coords[0]:.6f},{coords[1]:.6f}'
         out['open_url'] = f'https://www.google.com/maps?q={at}&layer=c&cbll={at}'
         out['open_kind'] = 'streetview'
+        out['open_basis'] = 'coords'
+    if coords:
+        lat, lng = coords
         if key:
             out['embed_url'] = 'https://www.google.com/maps/embed/v1/streetview?' + urlencode({
-                'key': key, 'location': at, 'fov': 90, 'pitch': 5,
+                'key': key, 'location': f'{lat:.6f},{lng:.6f}', 'fov': 90, 'pitch': 5,
             })
             out['embed_kind'] = 'streetview'
     elif key:

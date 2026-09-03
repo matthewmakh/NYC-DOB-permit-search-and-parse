@@ -2277,7 +2277,7 @@ def api_property_streetview(bbl):
                 row = cur.fetchone() or {}
             loc = streetview.resolve(cur, bbl, row.get('address'), row.get('borough')) or {}
         data = streetview.payload(row.get('address') or f'BBL {bbl}', loc.get('lat'), loc.get('lng'),
-                                  row.get('borough'), loc.get('source'))
+                                  row.get('borough'), loc.get('source'), bbl=bbl)
         data['address'] = row.get('address')
         return jsonify({'success': True, **data})
     except Exception as e:
@@ -2382,7 +2382,7 @@ def api_property_peek(bbl):
             # Links only — no GeoSearch round-trip inside a "quick" look.
             coords = streetview.lookup_latlng(cur, bbl)
             lat, lng = coords if coords else (None, None)
-            sv = streetview.payload(b.get('address') or f'BBL {bbl}', lat, lng, b.get('borough'), 'permit')
+            sv = streetview.payload(b.get('address') or f'BBL {bbl}', lat, lng, b.get('borough'), 'permit', bbl=bbl)
 
         return jsonify({
             'success': True,

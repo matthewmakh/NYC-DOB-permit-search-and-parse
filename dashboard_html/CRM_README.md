@@ -168,10 +168,15 @@ detail, and the Focus card) show Google Street View of the lot.
   centroids, and lone outliers are ignored. If neither works the button
   becomes **Open in Google Maps** (an address search) rather than a Street
   View link that opens on a black screen.
-* The keyless link uses the classic `layer=c&cbll=` form, which snaps to the
-  nearest panorama. The Maps URLs API `map_action=pano&viewpoint=` form was
-  dropped: it shows "No Street View imagery available here" whenever nothing
-  was photographed within 50 m of the point.
+* The **Open / Full Street View** link is built from the *address*
+  (`maps?q=<address, borough, NY>&layer=c`), not from coordinates: Google
+  geocodes it, picks the nearest panorama and aims the camera at the
+  building. Coordinate links were dropped after trying two forms: the Maps
+  URLs API `viewpoint` gives up with "No Street View imagery available here"
+  when nothing was photographed within 50 m, and a coordinate snap opens
+  facing along the street instead of at the door. The pinpointing above is
+  still used for the *embedded* panorama, which the Maps Embed API can only
+  place by lat/lng.
 
 ## Migration story
 

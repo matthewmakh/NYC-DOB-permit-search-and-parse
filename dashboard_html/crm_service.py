@@ -845,7 +845,7 @@ def building_streetview(bbl, address, borough=None):
         cur.close()
         conn.close()
     loc = loc or {}
-    return streetview.payload(address, loc.get('lat'), loc.get('lng'), borough, loc.get('source'))
+    return streetview.payload(address, loc.get('lat'), loc.get('lng'), borough, loc.get('source'), bbl=bbl)
 
 
 def permit_building_prefill(bbl):
