@@ -5,7 +5,7 @@
 <div class="crm-title">
     <div>
         <h1 class="crm-large-title">Contacts <small>{{ contacts|length }}</small></h1>
-        <p class="crm-subtitle">Every person your team works — imported from permits, found by reps, or added by hand.</p>
+        <p class="crm-subtitle">{{ "Every rep’s contacts, with assigned and added-by attribution." if crm_ctx.is_admin else "Your private contacts—only people assigned to or added by you." }}</p>
     </div>
     <div class="crm-title-actions"><button type="button" class="cbtn cbtn-primary js-add-person"><i class="fas fa-user-plus"></i> Add person</button></div>
 </div>
@@ -47,10 +47,10 @@
         <span class="crm-cell__lead">{{ avatar(c.name) }}</span>
         <div class="crm-cell__body">
             <div class="crm-cell__title"><a href="/crm/contacts/{{ c.id }}">{{ c.name }}</a>{% if c.do_not_contact %} <span class="crm-tag tag-red">DNC</span>{% endif %}{% if c.starred %} <i class="fas fa-star" style="color:var(--c-orange);font-size:10px"></i>{% endif %}</div>
-            <div class="crm-cell__sub">{% if c.title %}{{ c.title }} · {% endif %}{% if c.company %}{{ c.company }} · {% endif %}{{ c.building_count }} building{{ 's' if c.building_count != 1 }} · via {{ c.source_detail or c.source }}</div>
+            <div class="crm-cell__sub">{% if c.title %}{{ c.title }} · {% endif %}{% if c.company %}{{ c.company }} · {% endif %}{{ c.building_count }} building{{ 's' if c.building_count != 1 }} · via {{ c.source_detail or c.source }}{% if crm_ctx.is_admin %} · assigned to {{ c.assigned_to_name or 'nobody' }} · added by {{ c.added_by_name }}{% endif %}</div>
         </div>
         <div class="crm-cell__trail">
-            {% if c.primary_phone %}<a class="crm-tag tag-mono" href="{{ c.primary_phone|crm_tel }}">{{ c.primary_phone }}</a>{% endif %}
+            {% if c.primary_phone and not c.do_not_contact %}<a class="crm-tag tag-mono js-call-link" href="{{ c.primary_phone|crm_tel }}" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ c.primary_phone }}">{{ c.primary_phone }}</a>{% endif %}
             {{ recency(c.last_contacted_at) }}
             {% if not c.do_not_contact %}{{ contacted_btn(c.name, contact_id=c.id, phone=c.primary_phone, small=True, label='') }}{% endif %}
         </div>

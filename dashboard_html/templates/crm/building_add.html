@@ -1,6 +1,7 @@
 {% extends "crm/_layout.html" %}
 {% block title %}Add building — CRM{% endblock %}
 {% block crm_content %}
+{% if form_error %}<div class="crm-collision"><i class="fas fa-shield-halved"></i> {{ form_error }}</div>{% endif %}
 <div class="crm-title">
     <div>
         <h1 class="crm-large-title">Add a building</h1>

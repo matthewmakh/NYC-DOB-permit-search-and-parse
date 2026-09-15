@@ -567,6 +567,7 @@ html[data-crm-theme="dark"] .crm-avatar--building { background: var(--c-surface-
 .dot-contacted { background: var(--c-blue); }
 .dot-interested { background: var(--c-purple); }
 .dot-quoted { background: var(--c-orange); }
+.dot-nurture { background: var(--c-indigo); }
 .dot-won { background: var(--c-green); }
 .dot-lost { background: var(--c-red); }
 .dot-client { background: var(--c-teal); }
@@ -1421,3 +1422,44 @@ html[data-crm-theme="dark"] .crm-sv__empty { background: rgba(255, 255, 255, 0.0
 }
 .crm-more-list a:last-child { border-bottom: 0; }
 .crm-more-list a i { width: 24px; text-align: center; color: var(--c-blue-ink); }
+
+/* CRM v3: deals, notification controls, audit log, and responsive forms. */
+.crm-record-form { padding: 18px; }
+.crm-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 16px;
+}
+.crm-form-grid .span-2 { grid-column: span 2; }
+.crm-record-form .crm-section-title { margin: 22px 0 10px; }
+.crm-deals-table .t-name { min-width: 230px; }
+.crm-deals-table td:nth-child(4) { min-width: 190px; white-space: normal; }
+.crm-deal-stepper { overflow-x: auto; scrollbar-width: thin; }
+.crm-deal-stepper .crm-stepper__step { min-width: 88px; }
+.crm-kpi-row--admin .k-value { font-size: clamp(24px, 3vw, 34px); }
+
+.crm-notification { color: var(--c-label); }
+.crm-notification.is-unread { background: var(--c-blue-tint); }
+.crm-notification.is-unread .crm-cell__title::after {
+    content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 7px;
+    border-radius: 50%; background: var(--c-blue); vertical-align: 1px;
+}
+.crm-setting {
+    min-height: 54px; padding: 10px 14px; display: flex; align-items: center;
+    justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--c-sep);
+}
+.crm-setting span { display: flex; flex-direction: column; gap: 2px; }
+.crm-setting strong { font-size: 13px; }
+.crm-setting small { color: var(--c-label-2); font-size: 11.5px; }
+.crm-setting input { width: 20px; height: 20px; accent-color: var(--c-blue); }
+.crm-notification-settings > .crm-field { padding: 14px; }
+.crm-history-row .crm-cell__body { white-space: normal; }
+.crm-history-row .crm-cell__sub { overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+    .crm-form-grid { grid-template-columns: 1fr; }
+    .crm-form-grid .span-2 { grid-column: span 1; }
+    .crm-record-form { padding: 14px; }
+    .crm-deals-table th:nth-child(5), .crm-deals-table td:nth-child(5) { display: none; }
+    .crm-kpi-row--admin { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

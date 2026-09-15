@@ -7,6 +7,7 @@ selenium-wire
 fake-useragent==2.2.0
 python-dotenv
 requests
+pywebpush==2.5.0
 streamlit
 python-dateutil
 plotly

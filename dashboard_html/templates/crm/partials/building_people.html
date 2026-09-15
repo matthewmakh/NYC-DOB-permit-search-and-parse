@@ -24,11 +24,11 @@
     {% if c.do_not_contact %}<div class="crm-dnc"><i class="fas fa-ban"></i> Do not contact</div>{% endif %}
     {% for p in c.phones %}
     <div class="crm-phone{{ ' is-bad' if p.status != 'good' }}">
-        <a class="tel" href="{{ p|crm_tel }}">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
+        {% if not c.do_not_contact and p.status == 'good' %}<a class="tel js-call-link" href="{{ p|crm_tel }}" data-building-id="{{ b.id }}" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ p.number }}">{{ p.number }}</a>{% else %}<span class="tel">{{ p.number }}</span>{% endif %}{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
         {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
         {% if p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% elif p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% endif %}
-        <span class="src" title="{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}">{{ p.source_detail or p.source }}</span>
-        <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>
+        <span class="src" title="{{ p.source_detail or p.source }}{% if crm_ctx.is_admin and p.added_by_name %} — {{ p.added_by_name }}{% endif %}">{{ p.source_detail or p.source }}</span>
+        {% if not c.do_not_contact and p.status == 'good' %}<a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>{% endif %}
         {% if p.status == 'good' %}
         <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark number bad"><i class="fas fa-phone-slash"></i></button>
         {% else %}
@@ -36,7 +36,7 @@
         {% endif %}
     </div>
     {% endfor %}
-    {% if c.email %}<div class="crm-phone"><a class="tel" href="mailto:{{ c.email }}">{{ c.email }}</a></div>{% endif %}
+    {% if c.email %}<div class="crm-phone">{% if c.do_not_contact %}<span class="tel">{{ c.email }}</span>{% else %}<a class="tel" href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}</div>{% endif %}
     <div class="crm-phone"><button type="button" class="cbtn cbtn-plain cbtn-sm js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}"><i class="fas fa-plus"></i> Add number</button></div>
 </div>
 {% else %}

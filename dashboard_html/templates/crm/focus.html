@@ -13,6 +13,8 @@
                 <a class="crm-seg__opt{{ ' is-active' if source == 'today' }}" href="/crm/focus">Today</a>
                 <a class="crm-seg__opt{{ ' is-active' if source == 'attention' }}" href="/crm/focus?source=attention">Attention</a>
                 <a class="crm-seg__opt{{ ' is-active' if source == 'cold' }}" href="/crm/focus?source=cold">Cold</a>
+                <a class="crm-seg__opt{{ ' is-active' if source == 'nurture' }}" href="/crm/focus?source=nurture">Nurture</a>
+                <a class="crm-seg__opt{{ ' is-active' if source == 'next_steps' }}" href="/crm/focus?source=next_steps">No next step</a>
                 {% if source == 'list' %}<a class="crm-seg__opt is-active" href="#">{{ focus_title|truncate(18) }}</a>{% endif %}
             </div>
         </div>

@@ -5,15 +5,15 @@
     <div class="crm-cell">
         <div class="crm-cell__body">
             <div class="crm-cell__title" style="font-variant-numeric:tabular-nums">
-                <a href="{{ p|crm_tel }}" {% if p.status != 'good' %}style="text-decoration:line-through;color:var(--c-label-3)"{% endif %}>{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
+                {% if not c.do_not_contact and p.status == 'good' %}<a class="js-call-link" href="{{ p|crm_tel }}" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ p.number }}">{{ p.number }}</a>{% else %}<span style="text-decoration:line-through;color:var(--c-label-3)">{{ p.number }}</span>{% endif %}{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
                 {% if p.is_primary %}<span class="crm-tag tag-blue">Primary</span>{% endif %}
                 {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
                 {% if p.status == 'bad' %}<span class="crm-tag tag-red">Bad</span>{% elif p.status == 'do_not_call' %}<span class="crm-tag tag-red">DNC</span>{% endif %}
             </div>
-            <div class="crm-cell__sub">{{ p.source_detail or p.source }}{% if p.added_by_name %} — {{ p.added_by_name }}{% endif %}</div>
+            <div class="crm-cell__sub">{{ p.source_detail or p.source }}{% if crm_ctx.is_admin and p.added_by_name %} — {{ p.added_by_name }}{% endif %}</div>
         </div>
         <div class="crm-cell__trail">
-            <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>
+            {% if not c.do_not_contact and p.status == 'good' %}<a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text"><i class="fas fa-comment"></i></a>{% endif %}
             {% if p.status == 'good' %}
             <button type="button" class="cbtn cbtn-icon cbtn-sm js-phone-status" data-id="{{ p.id }}" data-status="bad" title="Mark bad"><i class="fas fa-phone-slash"></i></button>
             {% else %}
@@ -27,7 +27,7 @@
         <button type="button" class="cbtn cbtn-tinted js-add-phone" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}">Add a number</button>
     {% endcall %}
     {% endfor %}
-    {% if c.email %}<div class="crm-cell"><div class="crm-cell__body"><a href="mailto:{{ c.email }}">{{ c.email }}</a></div></div>{% endif %}
+    {% if c.email %}<div class="crm-cell"><div class="crm-cell__body">{% if c.do_not_contact %}<span class="crm-muted">{{ c.email }}</span>{% else %}<a href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}</div></div>{% endif %}
 </div>
 {% if c.buildings %}
 <div class="crm-group">
@@ -43,10 +43,14 @@
     {% endfor %}
 </div>
 {% endif %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Deals</h3><a href="/crm/deals/add?contact={{ c.id }}"><i class="fas fa-plus"></i> New</a></div>
+    {% for d in deals %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__title"><a href="/crm/deals/{{ d.id }}">{{ d.name }}</a></div><div class="crm-cell__sub">{{ d.service_type or 'Service not set' }}{% if d.estimated_value is not none %} · ${{ d.estimated_value|crm_compact }}{% endif %}</div></div><div class="crm-cell__trail">{{ stage_dot(d.stage, stage_labels) }}</div></div>{% else %}<div class="crm-cell crm-muted">No deals linked to this contact.</div>{% endfor %}
+</div>
 {% if c.follow_ups %}
 <div class="crm-group">
     <div class="crm-group__head"><h3>Open follow-ups</h3></div>
     {% for f in c.follow_ups %}{{ followup_cell(f, today_ny, show_assignee=True) }}{% endfor %}
 </div>
 {% endif %}
-<p class="crm-provenance">Added by {{ c.added_by_name }} {{ c.created_at|crm_timeago }} · source: {{ c.source_detail or c.source }}. Rep-found info is permanent — scrapers never overwrite it.</p>
+<p class="crm-provenance">{% if crm_ctx.is_admin %}Added by {{ c.added_by_name }} {{ c.created_at|crm_timeago }} · {% endif %}Source: {{ c.source_detail or c.source }}. Rep-found info is permanent — scrapers never overwrite it.</p>

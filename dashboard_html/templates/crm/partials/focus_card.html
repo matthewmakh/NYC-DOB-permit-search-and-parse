@@ -33,10 +33,10 @@
             </div>
             {% for p in c.phones if p.status == 'good' %}
             <div class="crm-phone">
-                <a class="tel" href="{{ p|crm_tel }}" style="font-size:16px">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
+                {% if not c.do_not_contact %}<a class="tel js-call-link" href="{{ p|crm_tel }}" data-building-id="{{ b.id }}" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ p.number }}" style="font-size:16px">{{ p.number }}</a>{% else %}<span class="tel">{{ p.number }}</span>{% endif %}{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
                 {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
                 <span class="src">{{ p.source_detail or p.source }}</span>
-                <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>
+                {% if not c.do_not_contact %}<a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>{% endif %}
             </div>
             {% endfor %}
         </div>
@@ -59,10 +59,10 @@
         {% if last_touch %}<div class="crm-collision"><i class="fas fa-circle-exclamation"></i> {{ last_touch }}.</div>{% endif %}
         {% for p in c.phones if p.status == 'good' %}
         <div class="crm-phone" style="padding-left:0">
-            <a class="tel" href="{{ p|crm_tel }}" style="font-size:18px">{{ p.number }}</a>{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
+            {% if not c.do_not_contact %}<a class="tel js-call-link" href="{{ p|crm_tel }}" data-contact-id="{{ c.id }}" data-entity="{{ c.name }}" data-phone="{{ p.number }}" style="font-size:18px">{{ p.number }}</a>{% else %}<span class="tel">{{ p.number }}</span>{% endif %}{% if p.extension %}<span class="crm-tag" title="Extension">ext. {{ p.extension }}</span>{% endif %}
             {% if p.label %}<span class="crm-tag">{{ p.label }}</span>{% endif %}
             <span class="src">{{ p.source_detail or p.source }}</span>
-            <a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>
+            {% if not c.do_not_contact %}<a class="cbtn cbtn-icon cbtn-sm" href="sms:+1{{ p.digits }}" title="Text" style="opacity:1"><i class="fas fa-comment"></i></a>{% endif %}
         </div>
         {% else %}<p class="crm-muted" style="font-size:13px">No good numbers on file.</p>{% endfor %}
         {% if c.buildings %}

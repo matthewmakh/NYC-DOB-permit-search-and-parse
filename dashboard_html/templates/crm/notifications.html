@@ -1,0 +1,16 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import empty %}
+{% block title %}CRM — Notifications{% endblock %}
+{% block crm_content %}
+<div class="crm-title"><div><h1 class="crm-large-title">Notifications</h1><p class="crm-subtitle">Follow-up reminders and assignments in the CRM, on desktop, and on an installed iPhone app.</p></div><div class="crm-title-actions"><button class="cbtn js-notifications-read"><i class="fas fa-check-double"></i> Mark all read</button></div></div>
+<div class="crm-columns"><div class="crm-col-main"><div class="crm-group"><div class="crm-group__head"><h3>Inbox</h3><span class="count">{{ notifications|rejectattr('read_at')|list|length }} unread</span></div>
+{% for n in notifications %}<a class="crm-cell crm-notification{{ '' if n.read_at else ' is-unread' }}" href="{{ n.url or '/crm' }}" data-notification-id="{{ n.id }}"><span class="crm-cell__lead"><span class="crm-avatar crm-avatar-sm"><i class="fas {{ 'fa-calendar-check' if n.kind == 'followup' else 'fa-user-check' }}"></i></span></span><div class="crm-cell__body"><div class="crm-cell__title">{{ n.title }}</div><div class="crm-cell__sub">{{ n.body or '' }}</div></div><span class="crm-cell__trail crm-muted">{{ n.created_at|crm_timeago }}</span></a>{% else %}{{ empty('fa-bell-slash', 'No notifications yet', 'Assignments and due follow-ups will appear here.') }}{% endfor %}</div></div>
+<div class="crm-col-rail"><div class="crm-group crm-notification-settings"><div class="crm-group__head"><h3>Delivery</h3></div>
+    <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__title">Browser &amp; iPhone push</div><div class="crm-cell__sub">On iPhone, add this CRM to your Home Screen first, then enable.</div></div><button class="cbtn cbtn-primary js-enable-push" {{ 'disabled' if not push_public_key }}>{{ 'Enable push' if push_public_key else 'Server setup needed' }}</button></div>
+    <label class="crm-setting"><span><strong>All notifications</strong><small>Master delivery switch for this account</small></span><input type="checkbox" data-pref="enabled" {{ 'checked' if preferences.enabled }}></label>
+    <label class="crm-setting"><span><strong>Follow-up reminders</strong><small>At the chosen reminder time</small></span><input type="checkbox" data-pref="followups" {{ 'checked' if preferences.followups }}></label>
+    <label class="crm-setting"><span><strong>Assignments</strong><small>When admin assigns work to you</small></span><input type="checkbox" data-pref="assignments" {{ 'checked' if preferences.assignments }}></label>
+    <label class="crm-setting"><span><strong>Deal changes</strong><small>Important pipeline changes</small></span><input type="checkbox" data-pref="deal_changes" {{ 'checked' if preferences.deal_changes }}></label>
+    <label class="crm-field"><span class="crm-label">Default reminder</span><select class="crm-select" data-pref="reminder_minutes"><option value="0">At due time</option><option value="15" {{ 'selected' if preferences.reminder_minutes == 15 }}>15 minutes before</option><option value="60" {{ 'selected' if preferences.reminder_minutes == 60 }}>1 hour before</option><option value="1440" {{ 'selected' if preferences.reminder_minutes == 1440 }}>1 day before</option></select></label>
+</div></div></div>
+{% endblock %}

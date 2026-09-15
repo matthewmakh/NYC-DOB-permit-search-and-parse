@@ -1,4 +1,8 @@
-{% from "crm/_macros.html" import followup_cell %}
+{% from "crm/_macros.html" import followup_cell, stage_dot %}
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Deals</h3><a href="/crm/deals/add?building={{ b.id }}"><i class="fas fa-plus"></i> New</a></div>
+    {% for d in deals %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__title"><a href="/crm/deals/{{ d.id }}">{{ d.name }}</a></div><div class="crm-cell__sub">{{ d.service_type or 'Service not set' }}{% if d.estimated_value is not none %} · ${{ d.estimated_value|crm_compact }}{% endif %}</div></div><div class="crm-cell__trail">{{ stage_dot(d.stage, stage_labels) }}</div></div>{% else %}<div class="crm-cell crm-muted">No deals yet. Create one when this becomes an opportunity.</div>{% endfor %}
+</div>
 {% if b.follow_ups %}
 <div class="crm-group">
     <div class="crm-group__head"><h3>Open follow-ups</h3><span class="count">{{ b.follow_ups|length }}</span></div>
@@ -32,4 +36,4 @@
     {% else %}{% if not snapshot.enrichment %}<div class="crm-cell crm-muted" style="font-size:12.5px">No permit records for this BBL.</div>{% endif %}{% endfor %}
 </div>
 {% endif %}
-<p class="crm-provenance">Added by {{ b.added_by_name }} {{ b.created_at|crm_timeago }} from {{ 'the permit database' if b.source == 'permit' else 'manual entry' }}. Scraped data stays read-only; everything your team adds lives in the CRM and never gets overwritten.</p>
+<p class="crm-provenance">{% if crm_ctx.is_admin %}Added by {{ b.added_by_name }} {{ b.created_at|crm_timeago }} · {% endif %}Source: {{ 'permit database' if b.source == 'permit' else 'manual entry' }}. Scraped data stays read-only; everything your team adds lives in the CRM and never gets overwritten.</p>

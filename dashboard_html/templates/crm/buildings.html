@@ -15,7 +15,7 @@
 <div class="crm-title">
     <div>
         <h1 class="crm-large-title">Buildings <small>{{ counts.all or 0 }}</small></h1>
-        <p class="crm-subtitle">Your team's pipeline — every building you're working, by stage.</p>
+        <p class="crm-subtitle">{{ "Every rep’s building pipeline, with clear ownership and attribution." if crm_ctx.is_admin else "Your private building pipeline—only records assigned to or added by you." }}</p>
     </div>
     <div class="crm-title-actions">
         <div class="crm-seg" role="tablist" aria-label="View">
@@ -38,7 +38,7 @@
     <div class="crm-pills">
         <a class="crm-pill{{ ' is-active' if filters.starred }}" href="{{ qs({'starred': None if filters.starred else '1'}) }}"><i class="fas fa-star" style="font-size:10px"></i> Starred</a>
         <a class="crm-pill{{ ' is-active' if filters.cold }}" href="{{ qs({'cold': None if filters.cold else '1'}) }}">Cold 30d+</a>
-        <a class="crm-pill{{ ' is-active' if filters.mine }}" href="{{ qs({'mine': None if filters.mine else '1'}) }}">Mine</a>
+        {% if crm_ctx.is_admin %}<a class="crm-pill{{ ' is-active' if filters.mine }}" href="{{ qs({'mine': None if filters.mine else '1'}) }}">Mine</a>{% endif %}
     </div>
     <span class="spacer"></span>
     <select class="crm-native-select" aria-label="Sort" onchange="location.href=this.value">
@@ -82,7 +82,7 @@
     <table class="crm-table">
         <thead><tr>
             <th><input type="checkbox" class="js-bulk-all" aria-label="Select all"></th>
-            <th><a href="{{ qs({'sort': 'address'}) }}">Address</a></th><th>Stage</th><th>Rep</th>
+            <th><a href="{{ qs({'sort': 'address'}) }}">Address</a></th><th>Stage</th><th>Assigned to</th>{% if crm_ctx.is_admin %}<th>Added by</th>{% endif %}
             <th><a href="{{ qs({'sort': 'last_contacted'}) }}">Last touched</a></th>
             <th><a href="{{ qs({'sort': 'last_visited'}) }}">Visited</a></th>
             <th class="t-num"><a href="{{ qs({'sort': 'most_contacted'}) }}">Touches</a></th>
@@ -95,6 +95,7 @@
             <td class="t-name"><a href="/crm/buildings/{{ b.id }}">{{ b.address }}</a>{% if b.starred %} <i class="fas fa-star" style="color:var(--c-orange);font-size:10px"></i>{% endif %}</td>
             <td>{{ stage_dot(b.stage, stage_labels) }}</td>
             <td>{% if b.assigned_to_name %}{{ b.assigned_to_name }}{% else %}<span class="t-muted">—</span>{% endif %}</td>
+            {% if crm_ctx.is_admin %}<td>{{ b.added_by_name }}</td>{% endif %}
             <td>{{ recency(b.last_contacted_at) }}</td>
             <td>{% if b.last_visited_at %}{{ recency(b.last_visited_at) }}{% else %}<span class="t-muted">—</span>{% endif %}</td>
             <td class="t-num">{{ b.contact_count }}</td>
@@ -114,7 +115,7 @@
 
 {% else %}
 {% if buildings %}
-<div class="crm-grid">{% for b in buildings %}{{ building_card(b, stage_labels) }}{% endfor %}</div>
+<div class="crm-grid">{% for b in buildings %}{{ building_card(b, stage_labels, show_attribution=crm_ctx.is_admin) }}{% endfor %}</div>
 {% else %}
 <div class="crm-group">{% call empty('fa-building', 'Nothing here yet', 'No buildings match these filters.' if has_filters else 'Pull your first buildings straight from the permit database — every card there has an Add to CRM button.') %}
     {% if has_filters %}<a class="cbtn" href="/crm/buildings">Clear filters</a>{% else %}<a class="cbtn cbtn-primary" href="/properties"><i class="fas fa-magnifying-glass-location"></i> Discover buildings</a><a class="cbtn" href="/crm/buildings/add">Add by hand</a>{% endif %}
@@ -126,7 +127,7 @@
 <div class="crm-bulkbar" id="crmBulkBar" hidden>
     <span class="bulk-count" data-role="count">0 selected</span>
     <select class="crm-native-select js-bulk-stage" aria-label="Set stage"><option value="">Stage…</option>{% for s in stages %}<option value="{{ s }}">{{ stage_labels[s] }}</option>{% endfor %}</select>
-    <select class="crm-native-select js-bulk-assign" aria-label="Assign"><option value="">Assign…</option><option value="__none">Unassign</option>{% for u in roster %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}</select>
+    {% if crm_ctx.is_admin %}<select class="crm-native-select js-bulk-assign" aria-label="Assign"><option value="">Assign…</option><option value="__none">Unassign</option>{% for u in roster %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}</select>{% endif %}
     <button type="button" class="cbtn cbtn-sm js-bulk-list"><i class="fas fa-list-ul"></i> List</button>
     <button type="button" class="cbtn cbtn-sm js-bulk-star"><i class="fas fa-star"></i></button>
     <button type="button" class="cbtn cbtn-sm js-bulk-clear">Clear</button>

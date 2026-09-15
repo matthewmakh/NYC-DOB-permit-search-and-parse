@@ -1,0 +1,14 @@
+{
+  "name": "NYC Permit Leads CRM",
+  "short_name": "Permit CRM",
+  "description": "Private sales pipeline, calls, deals, and follow-up reminders.",
+  "start_url": "/crm/",
+  "scope": "/crm/",
+  "display": "standalone",
+  "background_color": "#f5f5f7",
+  "theme_color": "#0a7aff",
+  "icons": [
+    {"src": "/static/crm/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/static/crm/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

@@ -5,12 +5,21 @@
 <div class="crm-title">
     <div>
         <h1 class="crm-large-title">Team &amp; reports</h1>
-        <p class="crm-subtitle">Who did what, when — every touch, visit, and view, by rep.</p>
+        <p class="crm-subtitle">Activity, conversations, pipeline value, conversion, follow-up hygiene, and attribution by rep.</p>
     </div>
     <div class="crm-title-actions">
         <a href="/crm/api/export/activity.csv" class="cbtn"><i class="fas fa-download"></i> Activity CSV</a>
+        <a href="/crm/api/export/deals.csv" class="cbtn"><i class="fas fa-download"></i> Deals CSV</a>
         <a href="/admin/team" class="cbtn"><i class="fas fa-users-gear"></i> Manage reps</a>
+        <div class="crm-seg"><a class="crm-seg__opt{{ ' is-active' if days == 7 }}" href="/crm/team?days=7">7d</a><a class="crm-seg__opt{{ ' is-active' if days == 30 }}" href="/crm/team?days=30">30d</a><a class="crm-seg__opt{{ ' is-active' if days == 90 }}" href="/crm/team?days=90">90d</a></div>
     </div>
+</div>
+
+<div class="crm-kpi-row crm-kpi-row--admin">
+    <div class="crm-kpi"><div class="k-label">Touches</div><div class="k-value">{{ report.touches }}</div><div class="k-sub">{{ report.conversation_rate }}% became conversations</div></div>
+    <div class="crm-kpi"><div class="k-label">Meetings set</div><div class="k-value">{{ report.meetings }}</div><div class="k-sub">{{ report.conversations }} conversations</div></div>
+    <div class="crm-kpi is-good"><div class="k-label">Won value</div><div class="k-value">${{ report.won_value|crm_compact }}</div><div class="k-sub">{{ report.won }} won · {{ report.win_rate }}% close rate</div></div>
+    <div class="crm-kpi{{ ' is-alert' if report.no_next_step or report.overdue }}"><div class="k-label">Pipeline hygiene</div><div class="k-value">{{ report.no_next_step + report.overdue }}</div><div class="k-sub">{{ report.no_next_step }} no next step · {{ report.overdue }} overdue</div></div>
 </div>
 
 {% set total14 = touches|sum(attribute='n') %}
@@ -42,24 +51,24 @@
     </div>
     <div class="crm-group crm-chart" style="margin-bottom:0">
         <h4>Leaderboard</h4>
-        <div class="c-sub">Touches logged, last 7 days</div>
-        {% set lmx = (leaderboard|map(attribute='contacted_7d')|max) or 1 %}
-        {% for r in leaderboard %}{{ hbar(r.name, r.contacted_7d, lmx) }}{% endfor %}
+        <div class="c-sub">Touches logged, selected {{ days }} days</div>
+        {% set lmx = (leaderboard|map(attribute='contacted_period')|max) or 1 %}
+        {% for r in leaderboard %}{{ hbar(r.name, r.contacted_period, lmx) }}{% endfor %}
     </div>
     <div class="crm-group crm-chart" style="margin-bottom:0">
         <h4>Outcomes</h4>
-        <div class="c-sub">Last 30 days · {{ outcomes|sum(attribute='n') }} touches</div>
+        <div class="c-sub">Last {{ days }} days · {{ outcomes|sum(attribute='n') }} touches</div>
         {% set omx = (outcomes|map(attribute='n')|max) or 1 %}
         {% for o in outcomes %}
         {{ hbar(outcome_labels.get(o.outcome, o.outcome|replace('_', ' ')|capitalize), o.n, omx,
                 'is-good' if o.outcome in ('spoke', 'meeting_set', 'callback_requested') else ('is-bad' if o.outcome in ('wrong_number', 'not_interested') else '')) }}
-        {% else %}<p class="crm-muted" style="font-size:13px">No touches logged in the last 30 days.</p>{% endfor %}
+        {% else %}<p class="crm-muted" style="font-size:13px">No touches logged in the last {{ days }} days.</p>{% endfor %}
     </div>
     <div class="crm-group crm-chart" style="margin-bottom:0">
         <h4>Pipeline</h4>
-        <div class="c-sub">Buildings by stage</div>
-        {% set fmx = (funnel|map(attribute='n')|max) or 1 %}
-        {% for s in funnel %}{{ hbar(s.label, s.n, fmx, 'is-good' if s.stage in ('won', 'client') else ('is-bad' if s.stage == 'lost' else '')) }}{% endfor %}
+        <div class="c-sub">Deals and estimated value by stage</div>
+        {% set scale = namespace(max=1) %}{% for s in stages %}{% set row = deal_funnel.get(s, {'n': 0}) %}{% if row.n > scale.max %}{% set scale.max = row.n %}{% endif %}{% endfor %}
+        {% for s in stages %}{% set row = deal_funnel.get(s, {'n': 0, 'value': 0}) %}{{ hbar(stage_labels[s] ~ ' · $' ~ (row.value|crm_compact), row.n, scale.max, 'is-good' if s in ('won', 'client') else ('is-bad' if s == 'lost' else '')) }}{% endfor %}
     </div>
 </div>
 
@@ -67,16 +76,16 @@
     <div class="crm-group__head"><h3>Performance</h3><span class="count">{{ performance|length }} on the team</span></div>
     <div class="crm-table-wrap" style="box-shadow:none;border-radius:0">
         <table class="crm-table">
-            <thead><tr><th>Rep</th><th class="t-num">Today</th><th class="t-num">7 days</th><th class="t-num">Visits 7d</th><th class="t-num">Notes 7d</th><th class="t-num">Open</th><th class="t-num">Overdue</th><th class="t-num">Done 7d</th><th class="t-num">Views today</th><th>Last login</th></tr></thead>
+            <thead><tr><th>Rep</th><th class="t-num">Touches</th><th class="t-num">Conversation</th><th class="t-num">Meetings</th><th class="t-num">Added</th><th class="t-num">Open deals</th><th class="t-num">Pipeline</th><th class="t-num">Wins</th><th class="t-num">Won value</th><th class="t-num">Win rate</th><th class="t-num">Nurture</th><th class="t-num">No next step</th><th class="t-num">Overdue</th><th>Last login</th><th></th></tr></thead>
             <tbody>
             {% for r in performance %}
             <tr>
                 <td class="t-name" style="display:flex;align-items:center;gap:10px">{{ avatar(r.name, 'crm-avatar-sm') }} {{ r.name }}{% if r.is_team_owner %} <span class="crm-tag tag-blue">Admin</span>{% endif %}</td>
-                <td class="t-num">{{ r.contacted_today }}</td><td class="t-num">{{ r.contacted_7d }}</td><td class="t-num">{{ r.visits_7d }}</td><td class="t-num">{{ r.notes_7d }}</td>
-                <td class="t-num">{{ r.followups_open }}</td>
+                <td class="t-num">{{ r.contacted_period }}</td><td class="t-num">{{ r.conversation_rate }}%</td><td class="t-num">{{ r.meetings }}</td><td class="t-num">{{ r.records_added }}</td>
+                <td class="t-num">{{ r.open_deals }}</td><td class="t-num">${{ r.open_value|crm_compact }}</td><td class="t-num">{{ r.wins }}</td><td class="t-num">${{ r.won_value|crm_compact }}</td><td class="t-num">{{ r.win_rate }}%</td><td class="t-num">{{ r.nurture_deals }}</td><td class="t-num {{ 't-alert' if r.no_next_step else 't-muted' }}">{{ r.no_next_step }}</td>
                 <td class="t-num {{ 't-alert' if r.followups_overdue else 't-muted' }}">{{ r.followups_overdue }}</td>
-                <td class="t-num">{{ r.followups_done_7d }}</td><td class="t-num">{{ r.views_today }}</td>
                 <td class="t-muted">{{ r.last_login|crm_timeago if r.last_login else 'never' }}</td>
+                <td>{% if not r.is_team_owner %}<button type="button" class="cbtn cbtn-sm js-offboard" data-id="{{ r.id }}" data-name="{{ r.name }}"><i class="fas fa-user-slash"></i> Offboard</button>{% endif %}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -86,8 +95,8 @@
 
 <div class="crm-toolbar">
     <div class="crm-pills">
-        <a class="crm-pill{{ ' is-active' if not feed_user }}" href="/crm/team">All reps</a>
-        {% for u in roster %}<a class="crm-pill{{ ' is-active' if feed_user == u.id }}" href="/crm/team?rep={{ u.id }}">{{ u.name }}</a>{% endfor %}
+        <a class="crm-pill{{ ' is-active' if not feed_user }}" href="/crm/team?days={{ days }}">All reps</a>
+        {% for u in roster %}<a class="crm-pill{{ ' is-active' if feed_user == u.id }}" href="/crm/team?days={{ days }}&amp;rep={{ u.id }}">{{ u.name }}</a>{% endfor %}
     </div>
 </div>
 <div class="crm-columns">
@@ -107,6 +116,7 @@
                     <div class="crm-cell__sub" style="font-size:13px;color:var(--c-label)"><strong>{{ v.user_name }}</strong> viewed
                         {% if v.entity_type == 'building' %}<a href="/crm/buildings/{{ v.entity_id }}">{{ v.label or 'a building' }}</a>
                         {% elif v.entity_type == 'contact' %}<a href="/crm/contacts/{{ v.entity_id }}">{{ v.label or 'a contact' }}</a>
+                        {% elif v.entity_type == 'deal' %}<a href="/crm/deals/{{ v.entity_id }}">{{ v.label or 'a deal' }}</a>
                         {% else %}<a href="/crm/lists/{{ v.entity_id }}">{{ v.label or 'a list' }}</a>{% endif %}</div>
                 </div>
                 <span class="crm-cell__trail crm-muted" style="font-size:11.5px" title="{{ v.created_at|crm_nydt }}">{{ v.created_at|crm_timeago }}</span>
@@ -114,5 +124,19 @@
             {% else %}{{ empty('fa-eye', 'No views logged yet', 'Opening a building, person, or list records a view (once per half hour).') }}{% endfor %}
         </div>
     </div>
+</div>
+
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Nurture health</h3><a href="/crm/focus?source=nurture"><i class="fas fa-bullseye"></i> Work nurture queue</a></div>
+    {% for n in nurture %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__title">{{ n.rep_name or 'Unassigned' }}</div><div class="crm-cell__sub">{{ n.deals }} nurture deal{{ 's' if n.deals != 1 }} · ${{ n.value|crm_compact }} value</div></div><div class="crm-cell__trail"><span class="crm-tag{{ ' tag-red' if n.missing_next_step }}">{{ n.missing_next_step }} missing next step</span></div></div>{% else %}<div class="crm-cell crm-muted">No deals are in Nurture.</div>{% endfor %}
+</div>
+
+<div class="crm-sheet" id="sheetOffboard" role="dialog" aria-modal="true">
+    <div class="crm-sheet__panel"><div class="crm-sheet__head"><h2>Offboard <span data-role="rep-name"></span></h2><button type="button" class="crm-sheet__close js-sheet-close"><i class="fas fa-xmark"></i></button></div><div class="crm-sheet__body">
+        <div class="crm-collision is-info"><i class="fas fa-shield-halved"></i> Their buildings, contacts, deals, follow-ups, and lists will be reassigned in one transaction. “Added by” history stays intact.</div>
+        <label class="crm-field"><span class="crm-label">Transfer all active work to</span><select class="crm-select" data-role="transfer-to"><option value="">Choose an active teammate…</option>{% for u in roster %}<option value="{{ u.id }}">{{ u.name }}{{ ' (Admin)' if u.is_team_owner }}</option>{% endfor %}</select></label>
+        <label class="crm-check"><input type="checkbox" data-role="revoke" checked> Revoke CRM access and sign out this rep</label>
+        <div class="crm-sheet__foot"><button class="cbtn js-sheet-close">Cancel</button><button class="cbtn cbtn-danger" data-role="confirm"><i class="fas fa-user-slash"></i> Transfer &amp; offboard</button></div>
+    </div></div>
 </div>
 {% endblock %}

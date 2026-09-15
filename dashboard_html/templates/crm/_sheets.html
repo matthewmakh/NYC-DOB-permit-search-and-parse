@@ -20,7 +20,7 @@
                     <button type="button" class="crm-choice" data-value="in_person">In person</button>
                     <button type="button" class="crm-choice" data-value="other">Other</button>
                 </div>
-                <span class="crm-label">Outcome</span>
+                <span class="crm-label">Outcome <strong aria-hidden="true">*</strong></span>
                 <div class="crm-choices" data-role="outcomes">
                     <button type="button" class="crm-choice" data-value="spoke">Spoke</button>
                     <button type="button" class="crm-choice" data-value="voicemail">Voicemail</button>
@@ -51,6 +51,7 @@
                 </div>
                 <div class="crm-field crm-field-row">
                     <input type="date" class="crm-input" data-role="fu-date" aria-label="Follow-up date">
+                    <input type="time" class="crm-input" data-role="fu-time" aria-label="Follow-up time" value="09:00">
                     <button type="button" class="cbtn" data-role="fu-date-save">Set date</button>
                 </div>
                 <div class="crm-sheet__foot" style="justify-content:center">
@@ -97,8 +98,10 @@
             </div>
             <div class="crm-field crm-field-row">
                 <div><input type="date" class="crm-input" data-role="fu-date" aria-label="Follow-up date"></div>
+                <div><input type="time" class="crm-input" data-role="fu-time" aria-label="Follow-up time" value="09:00"></div>
                 <div><select class="crm-select" data-role="assignee" aria-label="Assign to"><option value="">Me</option></select></div>
             </div>
+            <div class="crm-field"><span class="crm-label">Reminder</span><select class="crm-select" data-role="reminder"><option value="0">At due time</option><option value="15" selected>15 minutes before</option><option value="60">1 hour before</option><option value="1440">1 day before</option></select></div>
             <div class="crm-field"><span class="crm-label">Note (optional)</span><textarea class="crm-textarea" data-role="note"></textarea></div>
             <div class="crm-sheet__foot">
                 <button type="button" class="cbtn cbtn-danger js-hidden" data-role="delete">Delete</button>
@@ -268,9 +271,13 @@
         <div class="crm-sheet__head"><h2>More</h2><button type="button" class="crm-sheet__close js-sheet-close" aria-label="Close"><i class="fas fa-xmark"></i></button></div>
         <div class="crm-sheet__body crm-more-list">
             <a href="/crm/focus"><i class="fas fa-bullseye"></i> Focus — start calling</a>
+            <a href="/crm/buildings"><i class="fas fa-building"></i> Buildings</a>
+            <a href="/crm/contacts"><i class="fas fa-user-group"></i> Contacts</a>
+            <a href="/crm/deals"><i class="fas fa-handshake"></i> Deals</a>
+            <a href="/crm/notifications"><i class="far fa-bell"></i> Notifications{% if notification_count %} · {{ notification_count }} unread{% endif %}</a>
             <a href="/crm/lists"><i class="fas fa-list-ul"></i> Lists</a>
             <a href="/crm/starred"><i class="fas fa-star"></i> Starred</a>
-            {% if crm_ctx.is_admin %}<a href="/crm/team"><i class="fas fa-chart-simple"></i> Team &amp; reports</a>{% endif %}
+            {% if crm_ctx.is_admin %}<a href="/crm/team"><i class="fas fa-chart-simple"></i> Team &amp; reports</a><a href="/crm/history"><i class="fas fa-clock-rotate-left"></i> Change history</a>{% endif %}
             <a href="/properties"><i class="fas fa-magnifying-glass-location"></i> Discover buildings</a>
             <a href="/crm/buildings/add"><i class="fas fa-plus"></i> Add building</a>
             <a href="#" class="js-open-palette"><i class="fas fa-magnifying-glass"></i> Search</a>
@@ -290,6 +297,7 @@
             <div class="crm-palette__group">Jump to</div>
             <a class="crm-palette__item" href="/crm"><span class="p-icon"><i class="fas fa-sun"></i></span><span class="p-body"><span class="p-title">Today</span></span></a>
             <a class="crm-palette__item" href="/crm/focus"><span class="p-icon"><i class="fas fa-bullseye"></i></span><span class="p-body"><span class="p-title">Start calling</span><span class="p-sub">Focus mode</span></span></a>
+            <a class="crm-palette__item" href="/crm/deals"><span class="p-icon"><i class="fas fa-handshake"></i></span><span class="p-body"><span class="p-title">Deals</span><span class="p-sub">Pipeline and next steps</span></span></a>
             <a class="crm-palette__item" href="/crm/buildings/add"><span class="p-icon"><i class="fas fa-plus"></i></span><span class="p-body"><span class="p-title">Add a building</span></span></a>
             <a class="crm-palette__item" href="/properties"><span class="p-icon"><i class="fas fa-magnifying-glass-location"></i></span><span class="p-body"><span class="p-title">Discover in the permit database</span></span></a>
         </div>

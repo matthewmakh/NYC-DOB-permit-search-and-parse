@@ -16,12 +16,18 @@
     })();
 </script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/crm.css') }}">
+<link rel="manifest" href="{{ url_for('static', filename='crm/manifest.webmanifest') }}">
+<link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='crm/apple-touch-icon.png') }}">
+<meta name="theme-color" content="#f7f8fa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Permit CRM">
 {% endblock %}
 
 {% block content %}
 {% from "crm/_macros.html" import sidebar, tabbar %}
 <div class="crm-app">
-    {{ sidebar(crm_tab, crm_ctx, crm_user_name, due_count) }}
+    {{ sidebar(crm_tab, crm_ctx, crm_user_name, due_count, notification_count) }}
     <main class="crm-main" id="crm-main">
         {% block crm_content %}{% endblock %}
     </main>
@@ -34,4 +40,6 @@
 {# Page config (window.CRM_RECORD / window.CRM_FOCUS) must exist before crm.js boots. #}
 {% block crm_js %}{% endblock %}
 <script src="{{ url_for('static', filename='js/crm.js') }}"></script>
+<script>window.CRM_PUSH_KEY = {{ push_public_key|tojson }}; window.CRM_DEFAULT_REMINDER = {{ default_reminder_minutes if default_reminder_minutes is not none else 15 }};</script>
+<script src="{{ url_for('static', filename='js/crm-push.js') }}"></script>
 {% endblock %}

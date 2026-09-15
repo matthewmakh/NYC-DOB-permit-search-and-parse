@@ -1,7 +1,7 @@
 {# CRM v2 building blocks. Import what you need:
    {% from "crm/_macros.html" import avatar, stage_dot, recency, star_btn, contacted_btn, ... %} #}
 
-{% macro sidebar(active, ctx, user_name, due_count) %}
+{% macro sidebar(active, ctx, user_name, due_count, notification_count=0) %}
 <aside class="crm-sidebar" aria-label="CRM navigation">
     <button type="button" class="crm-sidebar__search js-open-palette">
         <i class="fas fa-magnifying-glass"></i> Search <span class="crm-kbd">⌘K</span>
@@ -13,14 +13,17 @@
     </a>
     <a href="/crm/focus" class="crm-sidebar__item{{ ' is-active' if active == 'focus' }}"><i class="fas fa-bullseye"></i> Focus</a>
     <a href="/crm/followups" class="crm-sidebar__item{{ ' is-active' if active == 'followups' }}"><i class="far fa-calendar-check"></i> Follow-ups</a>
+    <a href="/crm/notifications" class="crm-sidebar__item{{ ' is-active' if active == 'notifications' }}"><i class="far fa-bell"></i> Notifications<span class="crm-count is-alert" data-notification-count {{ 'hidden' if not notification_count }}>{{ notification_count or 0 }}</span></a>
     <div class="crm-sidebar__section">Records</div>
     <a href="/crm/buildings" class="crm-sidebar__item{{ ' is-active' if active == 'buildings' }}"><i class="fas fa-building"></i> Buildings</a>
     <a href="/crm/contacts" class="crm-sidebar__item{{ ' is-active' if active == 'contacts' }}"><i class="fas fa-user-group"></i> Contacts</a>
+    <a href="/crm/deals" class="crm-sidebar__item{{ ' is-active' if active == 'deals' }}"><i class="fas fa-handshake"></i> Deals</a>
     <a href="/crm/lists" class="crm-sidebar__item{{ ' is-active' if active == 'lists' }}"><i class="fas fa-list-ul"></i> Lists</a>
     <a href="/crm/starred" class="crm-sidebar__item{{ ' is-active' if active == 'starred' }}"><i class="fas fa-star"></i> Starred</a>
     {% if ctx.is_admin %}
     <div class="crm-sidebar__section">Manage</div>
     <a href="/crm/team" class="crm-sidebar__item{{ ' is-active' if active == 'team' }}"><i class="fas fa-chart-simple"></i> Team &amp; reports</a>
+    <a href="/crm/history" class="crm-sidebar__item{{ ' is-active' if active == 'history' }}"><i class="fas fa-clock-rotate-left"></i> Change history</a>
     {% endif %}
     <div class="crm-sidebar__section">Permits</div>
     <a href="/properties" class="crm-sidebar__item"><i class="fas fa-magnifying-glass-location"></i> Discover <i class="fas fa-arrow-up-right-from-square" style="width:auto;font-size:9px;margin-left:auto"></i></a>
@@ -44,8 +47,8 @@
 {% macro tabbar(active, due_count) %}
 <nav class="crm-tabbar" aria-label="CRM tabs">
     <a href="/crm" class="crm-tabbar__item{{ ' is-active' if active == 'today' }}"><i class="fas fa-sun"></i>Today</a>
-    <a href="/crm/buildings" class="crm-tabbar__item{{ ' is-active' if active == 'buildings' }}"><i class="fas fa-building"></i>Buildings</a>
-    <a href="/crm/contacts" class="crm-tabbar__item{{ ' is-active' if active == 'contacts' }}"><i class="fas fa-user-group"></i>People</a>
+    <a href="/crm/focus" class="crm-tabbar__item{{ ' is-active' if active == 'focus' }}"><i class="fas fa-bullseye"></i>Call</a>
+    <a href="/crm/deals" class="crm-tabbar__item{{ ' is-active' if active == 'deals' }}"><i class="fas fa-handshake"></i>Deals</a>
     <a href="/crm/followups" class="crm-tabbar__item{{ ' is-active' if active == 'followups' }}"><i class="far fa-calendar-check"></i>Follow-ups
         {% if due_count %}<span class="crm-count is-alert">{{ due_count }}</span>{% endif %}</a>
     <button type="button" class="crm-tabbar__item js-open-sheet" data-sheet="sheetMore"><i class="fas fa-ellipsis"></i>More</button>
@@ -93,7 +96,8 @@
 
 {% macro entity_link(f) -%}
 {%- if f.b_id -%}<a href="/crm/buildings/{{ f.b_id }}">{{ f.building_address }}</a>
-{%- elif f.c_id -%}<a href="/crm/contacts/{{ f.c_id }}">{{ f.contact_name }}</a>{%- endif -%}
+{%- elif f.c_id -%}<a href="/crm/contacts/{{ f.c_id }}">{{ f.contact_name }}</a>
+{%- elif f.d_id -%}<a href="/crm/deals/{{ f.d_id }}">{{ f.deal_name }}</a>{%- endif -%}
 {%- endmacro %}
 
 
@@ -108,24 +112,26 @@
 <div class="crm-cell" data-followup-row="{{ f.id }}">
     {% if number %}<span class="crm-cell__lead"><span class="row-num">{{ number }}</span></span>{% endif %}
     <div class="crm-cell__body">
-        <div class="crm-cell__title">{{ f.title }}{% if f.b_id or f.c_id %} <span class="crm-muted">·</span> {{ entity_link(f) }}{% endif %}</div>
+        <div class="crm-cell__title">{{ f.title }}{% if f.b_id or f.c_id or f.d_id %} <span class="crm-muted">·</span> {{ entity_link(f) }}{% endif %}</div>
         <div class="crm-cell__sub">
             {% if show_assignee %}{{ f.assigned_to_name }} · {% endif %}
-            {% if f.note %}{{ f.note|truncate(90) }}{% else %}Created {{ f.created_at|crm_timeago }}{% endif %}
+            {% if f.due_at %}{{ f.due_at|crm_nytime }} · {% endif %}{% if f.note %}{{ f.note|truncate(90) }}{% else %}Created {{ f.created_at|crm_timeago }}{% endif %}
         </div>
     </div>
     <div class="crm-cell__trail">
         {{ due_tag(f.due_date, today) }}
         {% if f.status == 'open' %}
-        {% if f.b_id or f.c_id %}
+        {% if f.b_id or f.c_id or f.d_id %}
         <button type="button" class="cbtn cbtn-icon cbtn-sm js-contacted" title="Log a touch"
                 data-building-id="{{ f.b_id or '' }}" data-contact-id="{{ f.c_id or '' }}"
-                data-entity="{{ f.building_address or f.contact_name }}" data-followup-id="{{ f.id }}"><i class="fas fa-phone"></i></button>
+                data-deal-id="{{ f.d_id or '' }}"
+                data-entity="{{ f.building_address or f.contact_name or f.deal_name }}" data-followup-id="{{ f.id }}"><i class="fas fa-phone"></i></button>
         {% endif %}
         <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-done" data-id="{{ f.id }}" title="Mark done"><i class="fas fa-check"></i></button>
         <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-snooze" data-id="{{ f.id }}" title="Snooze to tomorrow"><i class="far fa-clock"></i></button>
         <button type="button" class="cbtn cbtn-icon cbtn-sm js-fu-edit" title="Edit"
                 data-id="{{ f.id }}" data-title="{{ f.title }}" data-due="{{ f.due_date.isoformat() }}"
+                data-time="{{ f.due_at|crm_input_time if f.due_at else '09:00' }}" data-reminder="{{ f.reminder_minutes or 15 }}"
                 data-note="{{ f.note or '' }}" data-assignee="{{ f.assigned_to_id }}"><i class="fas fa-pen"></i></button>
         {% else %}
         <span class="crm-tag{{ ' tag-green' if f.status == 'done' }}">{{ f.status|capitalize }}</span>
@@ -202,6 +208,7 @@
                 contacted
                 {%- if a.contact_name %} <a href="/crm/contacts/{{ a.contact_id }}">{{ a.contact_name }}</a>{% endif %}
                 {%- if a.building_address %}{{ ' at' if a.contact_name else '' }} <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>{% endif %}
+                {%- if a.deal_name and not a.contact_name and not a.building_address %} <a href="/crm/deals/{{ a.deal_id }}">{{ a.deal_name }}</a>{% endif %}
                 {%- if a.outcome %} <span class="crm-tag">{{ a.outcome|replace('_', ' ') }}</span>{% endif %}
             {% elif a.type == 'visit' %}
                 visited <a href="/crm/buildings/{{ a.building_id }}">{{ a.building_address }}</a>
@@ -241,7 +248,7 @@
 
 
 {% macro stepper(stage, stages, labels, building_id) %}
-{% set pipeline = ['prospect', 'contacted', 'interested', 'quoted', 'won'] %}
+{% set pipeline = ['prospect', 'contacted', 'interested', 'quoted', 'nurture', 'won'] %}
 {% set idx = pipeline.index(stage) if stage in pipeline else -1 %}
 <div class="crm-stepper" role="group" aria-label="Pipeline stage">
     {% for s in pipeline %}
@@ -295,7 +302,7 @@
 {% endmacro %}
 
 
-{% macro building_card(b, labels, checkable=True) %}
+{% macro building_card(b, labels, checkable=True, show_attribution=False) %}
 <div class="crm-card" data-building-card="{{ b.id }}">
     <div class="crm-card__top">
         {% if checkable %}<input type="checkbox" class="crm-card__check js-bulk-check" value="{{ b.id }}" aria-label="Select {{ b.address }}">{% endif %}
@@ -310,6 +317,7 @@
         {{ recency(b.last_contacted_at, 'touched') }}
         {% if b.last_visited_at %}{{ recency(b.last_visited_at, 'visited') }}{% endif %}
         {% if b.assigned_to_name %}<span class="crm-tag"><i class="far fa-user" style="font-size:9px"></i> {{ b.assigned_to_name }}</span>{% endif %}
+        {% if show_attribution and b.added_by_name %}<span class="crm-tag"><i class="fas fa-user-plus" style="font-size:9px"></i> Added by {{ b.added_by_name }}</span>{% endif %}
     </div>
     <div class="crm-card__foot">
         {{ contacted_btn(b.address, building_id=b.id, small=True) }}

@@ -31,9 +31,9 @@
             {{ stage_dot(item.stage, stage_labels) }}{{ recency(item.b_last_contacted) }}
             {{ contacted_btn(item.address, building_id=item.building_id, small=True, label='') }}
             {% else %}
-            {% if item.contact_phone %}<a class="crm-tag tag-mono" href="{{ item.contact_phone|crm_tel }}">{{ item.contact_phone }}</a>{% endif %}
+            {% if item.do_not_contact %}<span class="crm-tag tag-red"><i class="fas fa-ban"></i> Do not contact</span>{% elif item.contact_phone %}<a class="crm-tag tag-mono js-call-link" href="{{ item.contact_phone|crm_tel }}" data-contact-id="{{ item.contact_id }}" data-entity="{{ item.contact_name }}" data-phone="{{ item.contact_phone }}">{{ item.contact_phone }}</a>{% endif %}
             {{ recency(item.c_last_contacted) }}
-            {{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True, label='') }}
+            {% if not item.do_not_contact %}{{ contacted_btn(item.contact_name, contact_id=item.contact_id, phone=item.contact_phone, small=True, label='') }}{% endif %}
             {% endif %}
             <button type="button" class="cbtn cbtn-icon cbtn-sm js-item-remove" data-id="{{ item.item_id }}" title="Remove from list"><i class="fas fa-xmark"></i></button>
         </div>

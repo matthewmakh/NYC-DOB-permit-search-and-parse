@@ -165,6 +165,7 @@
         const d = trigger.dataset;
         touch = {
             buildingId: d.buildingId || null, contactId: d.contactId || null,
+            dealId: d.dealId || null,
             entity: d.entity || 'this lead', phone: d.phone || null,
             followupId: d.followupId || null, lastTouch: d.lastTouch || '',
         };
@@ -185,6 +186,7 @@
         $('[data-role="step2"]', sContacted).hidden = true;
         $('[data-role="step3"]', sContacted).hidden = true;
         $('[data-role="fu-date"]', sContacted).value = localISODate(1);
+        $('[data-role="fu-time"]', sContacted).value = '09:00';
         openSheet('sheetContacted');
         $('[data-role="note"]', sContacted).focus();
     }
@@ -200,6 +202,8 @@
         $('[data-role="save"]', sContacted).addEventListener('click', async (e) => {
             const btn = e.currentTarget;
             const note = $('[data-role="note"]', sContacted).value.trim();
+            const outcome = chipValue($('[data-role="outcomes"]', sContacted));
+            if (!outcome) { toast('Choose an outcome first', 'warning'); return; }
             if (!note && !nudged) {
                 nudged = true;
                 $('[data-role="nudge"]', sContacted).hidden = false;
@@ -209,8 +213,9 @@
             busy(btn, true);
             const data = await post('/crm/api/contacted', {
                 building_id: touch.buildingId, contact_id: touch.contactId,
+                deal_id: touch.dealId,
                 method: chipValue($('[data-role="methods"]', sContacted)) || 'call',
-                outcome: chipValue($('[data-role="outcomes"]', sContacted)),
+                outcome,
                 note, phone: touch.phone, complete_followup_id: touch.followupId,
             });
             busy(btn, false);
@@ -220,7 +225,10 @@
             $('[data-role="step2"]', sContacted).hidden = false;
         });
         async function followupThenFinish(days, dueDate) {
-            const payload = { building_id: touch.buildingId, contact_id: touch.contactId, title: 'Follow up with ' + touch.entity };
+            const payload = { building_id: touch.buildingId, contact_id: touch.contactId,
+                deal_id: touch.dealId, title: 'Follow up with ' + touch.entity,
+                due_time: $('[data-role="fu-time"]', sContacted).value || '09:00',
+                reminder_minutes: window.CRM_DEFAULT_REMINDER == null ? 15 : window.CRM_DEFAULT_REMINDER };
             if (dueDate) payload.due_date = dueDate; else payload.days = days;
             const data = await post('/crm/api/followup', payload);
             finish(data.success ? 'Touch logged, follow-up set.' : 'Touch logged (follow-up failed).');
@@ -280,13 +288,17 @@
     function openFollowup(trigger, editData) {
         if (!sFollowup) return;
         const d = trigger ? trigger.dataset : {};
-        fu = editData ? { id: editData.id } : { buildingId: d.buildingId || null, contactId: d.contactId || null };
+        fu = editData ? { id: editData.id } : { buildingId: d.buildingId || null, contactId: d.contactId || null, dealId: d.dealId || null };
         $('[data-role="title-text"]', sFollowup).textContent = editData ? 'Edit follow-up' : 'Set a follow-up';
         $('[data-role="entity-wrap"]', sFollowup).style.display = editData ? 'none' : '';
         $('[data-role="entity"]', sFollowup).textContent = d.entity || (window.CRM_RECORD && window.CRM_RECORD.entity) || 'this';
         $('[data-role="title"]', sFollowup).value = editData ? editData.title : '';
         $('[data-role="note"]', sFollowup).value = editData ? editData.note : '';
         $('[data-role="fu-date"]', sFollowup).value = editData ? editData.due : localISODate(1);
+        $('[data-role="fu-time"]', sFollowup).value = editData ? (editData.time || '09:00') : '09:00';
+        $('[data-role="reminder"]', sFollowup).value = editData
+            ? (editData.reminder == null ? '15' : String(editData.reminder))
+            : String(window.CRM_DEFAULT_REMINDER == null ? 15 : window.CRM_DEFAULT_REMINDER);
         $('[data-role="save"]', sFollowup).textContent = editData ? 'Save changes' : 'Set follow-up';
         $('[data-role="delete"]', sFollowup).classList.toggle('js-hidden', !editData);
         selectChip($('[data-role="fu-quick"]', sFollowup), editData ? null : $('[data-role="fu-quick"] .crm-choice', sFollowup));
@@ -307,11 +319,13 @@
                 title: $('[data-role="title"]', sFollowup).value.trim() || 'Follow up',
                 note: $('[data-role="note"]', sFollowup).value.trim(),
                 due_date: due,
+                due_time: $('[data-role="fu-time"]', sFollowup).value || '09:00',
+                reminder_minutes: parseInt($('[data-role="reminder"]', sFollowup).value, 10),
                 assigned_to_id: $('[data-role="assignee"]', sFollowup).value || null,
             };
             let data;
             if (fu.id) data = await post('/crm/api/followup/' + fu.id + '/update', body);
-            else data = await post('/crm/api/followup', Object.assign(body, { building_id: fu.buildingId, contact_id: fu.contactId }));
+            else data = await post('/crm/api/followup', Object.assign(body, { building_id: fu.buildingId, contact_id: fu.contactId, deal_id: fu.dealId }));
             busy(btn, false);
             if (!data.success) { toast(data.error || 'Could not save', 'error'); return; }
             closeSheet(sFollowup); toast(fu.id ? 'Follow-up updated' : 'Follow-up set', 'success'); changed();
@@ -611,6 +625,7 @@
             `<a class="crm-palette__item" href="${href}"><span class="p-icon"><i class="fas ${icon}"></i></span><span class="p-body"><span class="p-title">${esc(title)}</span>${sub ? `<span class="p-sub">${esc(sub)}</span>` : ''}</span>${trail ? `<span class="p-trail">${esc(trail)}</span>` : ''}</a>`;
         if (data.buildings && data.buildings.length) groups.push('<div class="crm-palette__group">Buildings</div>' + data.buildings.map(b => item('/crm/buildings/' + b.id, 'fa-building', b.address, b.borough || '', b.last_contacted_at ? 'touched ' + b.last_contacted_at : '')).join(''));
         if (data.contacts && data.contacts.length) groups.push('<div class="crm-palette__group">People</div>' + data.contacts.map(c => item('/crm/contacts/' + c.id, 'fa-user', c.name, [c.title, c.company].filter(Boolean).join(' · '), c.last_contacted_at ? 'touched ' + c.last_contacted_at : '')).join(''));
+        if (data.deals && data.deals.length) groups.push('<div class="crm-palette__group">Deals</div>' + data.deals.map(d => item('/crm/deals/' + d.id, 'fa-handshake', d.name, d.service_type || '', d.stage || '')).join(''));
         if (data.lists && data.lists.length) groups.push('<div class="crm-palette__group">Lists</div>' + data.lists.map(l => item('/crm/lists/' + l.id, 'fa-list-ul', l.name, '', '')).join(''));
         groups.push('<div class="crm-palette__group">Actions</div>' +
             item('/crm/buildings?q=' + encodeURIComponent(q), 'fa-magnifying-glass', 'Search buildings for “' + q + '”', '', '') +
@@ -704,7 +719,7 @@
         const followup = t.closest('.js-followup');
         if (followup) { openFollowup(followup); return; }
         const fuEdit = t.closest('.js-fu-edit');
-        if (fuEdit) { openFollowup(null, { id: fuEdit.dataset.id, title: fuEdit.dataset.title, due: fuEdit.dataset.due, note: fuEdit.dataset.note, assignee: fuEdit.dataset.assignee }); return; }
+        if (fuEdit) { openFollowup(null, { id: fuEdit.dataset.id, title: fuEdit.dataset.title, due: fuEdit.dataset.due, time: fuEdit.dataset.time, reminder: fuEdit.dataset.reminder, note: fuEdit.dataset.note, assignee: fuEdit.dataset.assignee }); return; }
         const addToList = t.closest('.js-add-to-list');
         if (addToList) { openListSheet({ buildingId: addToList.dataset.buildingId || null, contactId: addToList.dataset.contactId || null }, addToList.dataset.entity || 'this'); return; }
         const addPerson = t.closest('.js-add-person');
@@ -731,6 +746,19 @@
             return;
         }
 
+        const dealStage = t.closest('.js-deal-stage');
+        if (dealStage && !dealStage.classList.contains('is-current')) {
+            const payload = { stage: dealStage.dataset.stage };
+            if (dealStage.dataset.stage === 'lost') {
+                const lostReason = prompt('Why was this deal lost?');
+                if (!lostReason || !lostReason.trim()) return;
+                payload.lost_reason = lostReason.trim();
+            }
+            const data = await post('/crm/api/deal/' + dealStage.dataset.id + '/stage', payload);
+            if (data.success) { toast('Deal moved to ' + data.label, 'success'); location.reload(); }
+            else toast(data.error || 'Could not move deal', 'error');
+            return;
+        }
         const stepperStep = t.closest('.crm-stepper__step');
         if (stepperStep && !stepperStep.classList.contains('is-current')) {
             const data = await post('/crm/api/stage', { building_id: stepperStep.dataset.buildingId, stage: stepperStep.dataset.stage });
@@ -812,6 +840,36 @@
             if (data.success) window.location.href = '/crm/contacts'; else toast(data.error || 'Failed', 'error');
             return;
         }
+        const dealDelete = t.closest('.js-deal-delete');
+        if (dealDelete) {
+            if (!confirm('Delete this deal and its follow-ups? This cannot be undone.')) return;
+            const data = await post('/crm/api/deal/' + dealDelete.dataset.id + '/delete');
+            if (data.success) window.location.href = '/crm/deals'; else toast(data.error || 'Failed', 'error');
+            return;
+        }
+        const offboard = t.closest('.js-offboard');
+        if (offboard) {
+            const sheet = openSheet('sheetOffboard');
+            sheet.dataset.repId = offboard.dataset.id;
+            $('[data-role="rep-name"]', sheet).textContent = offboard.dataset.name;
+            const transfer = $('[data-role="transfer-to"]', sheet);
+            $all('option', transfer).forEach(opt => { opt.hidden = opt.value === offboard.dataset.id; });
+            transfer.value = '';
+            return;
+        }
+        const offboardConfirm = t.closest('#sheetOffboard [data-role="confirm"]');
+        if (offboardConfirm) {
+            const sheet = offboardConfirm.closest('.crm-sheet');
+            const transfer = $('[data-role="transfer-to"]', sheet).value;
+            if (!transfer) { toast('Choose who receives the work', 'warning'); return; }
+            if (!confirm('Transfer all active CRM work and offboard this rep?')) return;
+            busy(offboardConfirm, true);
+            const data = await post('/crm/api/team/offboard', { rep_id: sheet.dataset.repId, transfer_to_id: transfer, revoke_access: $('[data-role="revoke"]', sheet).checked });
+            busy(offboardConfirm, false);
+            if (data.success) { toast('Work transferred and rep offboarded', 'success'); location.reload(); }
+            else toast(data.error || 'Could not offboard rep', 'error');
+            return;
+        }
         const newList = t.closest('.js-new-list');
         if (newList) {
             const name = prompt('Name the new list:');
@@ -828,6 +886,8 @@
         const t = e.target;
         const assign = t.closest('.js-assign-select');
         if (assign) { const data = await post('/crm/api/assign', { building_id: assign.dataset.buildingId, user_id: assign.value || null }); toast(data.success ? 'Assignment saved' : (data.error || 'Failed'), data.success ? 'success' : 'error'); return; }
+        const contactAssign = t.closest('.js-contact-assign');
+        if (contactAssign) { const data = await post('/crm/api/contact/' + contactAssign.dataset.contactId + '/assign', { user_id: contactAssign.value || null }); toast(data.success ? 'Assignment saved' : (data.error || 'Failed'), data.success ? 'success' : 'error'); return; }
         const role = t.closest('.js-role-select');
         if (role) { const data = await post('/crm/api/building-contact/role', { building_id: role.dataset.buildingId, contact_id: role.dataset.contactId, role: role.value }); if (!data.success) toast(data.error || 'Failed', 'error'); return; }
         const listAssign = t.closest('.js-list-assign');
@@ -994,12 +1054,16 @@
             const btn = $('[data-role="contacted"]', root);
             btn.dataset.buildingId = item.type === 'building' ? item.id : '';
             btn.dataset.contactId = item.type === 'contact' ? item.id : '';
+            btn.dataset.dealId = item.deal_id || '';
             btn.dataset.entity = item.label;
             btn.dataset.followupId = item.followup_id || '';
             card.style.opacity = '0.5';
             try {
                 const res = await fetch('/crm/partials/focus/' + item.type + '/' + item.id);
                 card.innerHTML = res.ok ? await res.text() : '<div class="crm-group"><div class="crm-empty">Could not load this lead.</div></div>';
+                if (res.ok && item.deal_id) {
+                    $all('.js-call-link', card).forEach(link => { link.dataset.dealId = item.deal_id; });
+                }
             } catch (e) { card.innerHTML = '<div class="crm-group"><div class="crm-empty">Could not load this lead.</div></div>'; }
             card.style.opacity = '1';
             card.classList.remove('crm-focus__card'); void card.offsetWidth; card.classList.add('crm-focus__card');
@@ -1021,6 +1085,41 @@
         document.addEventListener('crm:focus-changed', () => { if (doneSet.has(index)) next(); else show(); });
         show();
     })();
+
+    // ---------- return-from-call prompt ----------
+
+    let callLeftAt = 0;
+    document.addEventListener('click', (event) => {
+        const link = event.target.closest('.js-call-link');
+        if (!link) return;
+        callLeftAt = Date.now();
+        try {
+            sessionStorage.setItem('crm-pending-call', JSON.stringify({
+                buildingId: link.dataset.buildingId || null,
+                contactId: link.dataset.contactId || null,
+                dealId: link.dataset.dealId || null,
+                entity: link.dataset.entity || link.textContent.trim() || 'this lead',
+                phone: link.dataset.phone || link.textContent.trim(),
+                startedAt: callLeftAt,
+            }));
+        } catch (e) { /* storage unavailable */ }
+    });
+    function promptForReturnedCall() {
+        let pending = null;
+        try { pending = JSON.parse(sessionStorage.getItem('crm-pending-call') || 'null'); } catch (e) { /* ignored */ }
+        if (!pending || Date.now() - pending.startedAt < 750 || Date.now() - pending.startedAt > 2 * 60 * 60 * 1000) return;
+        try { sessionStorage.removeItem('crm-pending-call'); } catch (e) { /* ignored */ }
+        const trigger = document.createElement('button');
+        Object.entries(pending).forEach(([key, value]) => {
+            if (value !== null && value !== undefined) trigger.dataset[key] = String(value);
+        });
+        openContacted(trigger);
+        toast('Call finished? Log the outcome while it’s fresh.', 'info');
+    }
+    window.addEventListener('focus', () => setTimeout(promptForReturnedCall, 250));
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') setTimeout(promptForReturnedCall, 250);
+    });
 
     window.crmToast = toast;
     window.crmRefresh = refreshPartials;

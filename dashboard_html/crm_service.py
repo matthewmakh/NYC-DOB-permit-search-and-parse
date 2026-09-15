@@ -22,7 +22,7 @@ America/New_York so a rep's evening does not roll into tomorrow at 8pm.
 
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import psycopg2
@@ -31,11 +31,13 @@ from psycopg2.extras import RealDictCursor, Json
 
 NY_TZ = ZoneInfo('America/New_York')
 
-STAGES = ['prospect', 'contacted', 'interested', 'quoted', 'won', 'lost', 'client']
+STAGES = ['prospect', 'contacted', 'interested', 'quoted', 'nurture', 'won', 'lost', 'client']
 STAGE_LABELS = {
     'prospect': 'Prospect', 'contacted': 'Contacted', 'interested': 'Interested',
-    'quoted': 'Quoted', 'won': 'Won', 'lost': 'Lost', 'client': 'Client',
+    'quoted': 'Quoted', 'nurture': 'Nurture', 'won': 'Won', 'lost': 'Lost',
+    'client': 'Client',
 }
+DEAL_STAGES = list(STAGES)
 CONTACT_METHODS = ['call', 'text', 'email', 'in_person', 'other']
 CONTACT_OUTCOMES = [
     'spoke', 'voicemail', 'no_answer', 'callback_requested',
@@ -138,6 +140,17 @@ CRM_SCHEMA_STATEMENTS = [
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
     """CREATE INDEX IF NOT EXISTS idx_crm_contacts_team ON crm_contacts (team_id, name)""",
+    """DO $$ BEGIN
+         IF NOT EXISTS (
+             SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'crm_contacts'
+               AND column_name = 'assigned_to_id'
+         ) THEN
+             ALTER TABLE crm_contacts ADD COLUMN assigned_to_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+             UPDATE crm_contacts SET assigned_to_id = added_by_id WHERE assigned_to_id IS NULL;
+         END IF;
+       END $$""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_contacts_assignee ON crm_contacts (team_id, assigned_to_id)""",
 
     """CREATE TABLE IF NOT EXISTS crm_phones (
         id SERIAL PRIMARY KEY,
@@ -283,6 +296,114 @@ CRM_SCHEMA_STATEMENTS = [
     """CREATE INDEX IF NOT EXISTS idx_crm_views_team
        ON crm_view_events (team_id, created_at DESC)""",
 
+    # A deal is intentionally separate from a building. A building can produce
+    # several opportunities over time, each with its own value, service, owner,
+    # close target, next step, and loss reason.
+    """CREATE TABLE IF NOT EXISTS crm_deals (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        service_type VARCHAR(120),
+        stage VARCHAR(20) NOT NULL DEFAULT 'prospect'
+            CHECK (stage IN ('prospect','contacted','interested','quoted','nurture','won','lost','client')),
+        estimated_value NUMERIC(14,2),
+        expected_close_date DATE,
+        next_step VARCHAR(255),
+        next_step_at TIMESTAMP,
+        next_step_notified_at TIMESTAMP,
+        lost_reason TEXT,
+        source VARCHAR(40) NOT NULL DEFAULT 'manual',
+        building_id INTEGER REFERENCES crm_buildings(id) ON DELETE SET NULL,
+        contact_id INTEGER REFERENCES crm_contacts(id) ON DELETE SET NULL,
+        assigned_to_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        added_by_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        team_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        won_at TIMESTAMP,
+        lost_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_deals_team_stage ON crm_deals (team_id, stage)""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_deals_assignee ON crm_deals (team_id, assigned_to_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_deals_next_step ON crm_deals (assigned_to_id, next_step_at)""",
+    """ALTER TABLE crm_deals ADD COLUMN IF NOT EXISTS next_step_notified_at TIMESTAMP""",
+
+    """ALTER TABLE crm_activity ADD COLUMN IF NOT EXISTS deal_id INTEGER REFERENCES crm_deals(id) ON DELETE SET NULL""",
+    """ALTER TABLE crm_activity DROP CONSTRAINT IF EXISTS crm_activity_deal_id_fkey""",
+    """ALTER TABLE crm_activity ADD CONSTRAINT crm_activity_deal_id_fkey
+       FOREIGN KEY (deal_id) REFERENCES crm_deals(id) ON DELETE SET NULL""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_activity_deal ON crm_activity (deal_id, created_at DESC)""",
+    """ALTER TABLE crm_follow_ups ADD COLUMN IF NOT EXISTS deal_id INTEGER REFERENCES crm_deals(id) ON DELETE CASCADE""",
+    """ALTER TABLE crm_follow_ups ADD COLUMN IF NOT EXISTS due_at TIMESTAMP""",
+    """ALTER TABLE crm_follow_ups ADD COLUMN IF NOT EXISTS reminder_minutes INTEGER NOT NULL DEFAULT 15""",
+    """ALTER TABLE crm_follow_ups ADD COLUMN IF NOT EXISTS notified_at TIMESTAMP""",
+    """UPDATE crm_follow_ups SET due_at = (due_date + TIME '09:00')
+       AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC' WHERE due_at IS NULL""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_followups_due_at
+       ON crm_follow_ups (assigned_to_id, status, due_at)""",
+
+    # Admin-only, append-only change history. Old/new values are structured so
+    # reporting and future integrations do not have to parse prose.
+    """CREATE TABLE IF NOT EXISTS crm_change_history (
+        id BIGSERIAL PRIMARY KEY,
+        entity_type VARCHAR(30) NOT NULL,
+        entity_id INTEGER,
+        entity_label VARCHAR(255),
+        action VARCHAR(40) NOT NULL,
+        field_name VARCHAR(80),
+        old_value JSONB,
+        new_value JSONB,
+        actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        team_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_history_team
+       ON crm_change_history (team_id, created_at DESC)""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_history_entity
+       ON crm_change_history (entity_type, entity_id, created_at DESC)""",
+
+    # Notifications work in-app everywhere. Push subscriptions add desktop and
+    # installed iPhone delivery when VAPID is configured on the server.
+    """CREATE TABLE IF NOT EXISTS crm_notifications (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        team_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        kind VARCHAR(40) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        body TEXT,
+        url TEXT,
+        dedupe_key VARCHAR(255),
+        read_at TIMESTAMP,
+        pushed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_notifications_dedupe
+       ON crm_notifications (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL""",
+    """CREATE INDEX IF NOT EXISTS idx_crm_notifications_inbox
+       ON crm_notifications (user_id, read_at, created_at DESC)""",
+    """CREATE TABLE IF NOT EXISTS crm_notification_preferences (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        followups BOOLEAN NOT NULL DEFAULT TRUE,
+        assignments BOOLEAN NOT NULL DEFAULT TRUE,
+        deal_changes BOOLEAN NOT NULL DEFAULT TRUE,
+        admin_activity BOOLEAN NOT NULL DEFAULT FALSE,
+        quiet_start TIME,
+        quiet_end TIME,
+        timezone VARCHAR(80) NOT NULL DEFAULT 'America/New_York',
+        reminder_minutes INTEGER NOT NULL DEFAULT 15,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS crm_push_subscriptions (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        user_agent TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+
     # Saved searches. The v1 table only stored a name and a querystring; a
     # saved search now also knows which page it belongs to, who may see it,
     # and how often it gets used, so the Properties page can list, rank and
@@ -295,6 +416,15 @@ CRM_SCHEMA_STATEMENTS = [
     """ALTER TABLE crm_saved_filters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()""",
     """CREATE INDEX IF NOT EXISTS idx_crm_saved_filters_scope
        ON crm_saved_filters (team_id, page, is_pinned DESC)""",
+
+    # Safely widen legacy checks installed by v1. PostgreSQL generated these
+    # names from the table and column, so the migration is idempotent.
+    """ALTER TABLE crm_buildings DROP CONSTRAINT IF EXISTS crm_buildings_stage_check""",
+    """ALTER TABLE crm_buildings ADD CONSTRAINT crm_buildings_stage_check
+       CHECK (stage IN ('prospect','contacted','interested','quoted','nurture','won','lost','client'))""",
+    """ALTER TABLE crm_view_events DROP CONSTRAINT IF EXISTS crm_view_events_entity_type_check""",
+    """ALTER TABLE crm_view_events ADD CONSTRAINT crm_view_events_entity_type_check
+       CHECK (entity_type IN ('building','contact','list','deal'))""",
 ]
 
 
@@ -303,6 +433,8 @@ def init_crm_tables():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # Multiple Railway workers may boot together; serialize additive DDL.
+        cur.execute("SELECT pg_advisory_xact_lock(86753091)")
         for statement in CRM_SCHEMA_STATEMENTS:
             cur.execute(statement)
         conn.commit()
@@ -398,6 +530,20 @@ def ny_day_start_utc(offset_days=0):
     return _utc_naive(datetime(d.year, d.month, d.day, tzinfo=NY_TZ))
 
 
+def local_due_at(due_date, due_time=None):
+    """Turn an NY-local date/time into the app's naive-UTC storage format."""
+    if not due_date:
+        return None
+    if isinstance(due_time, str):
+        try:
+            hour, minute = [int(v) for v in due_time.split(':')[:2]]
+            due_time = time(hour, minute)
+        except (TypeError, ValueError):
+            due_time = None
+    due_time = due_time if isinstance(due_time, time) else time(9, 0)
+    return _utc_naive(datetime.combine(due_date, due_time, tzinfo=NY_TZ))
+
+
 def crm_context(user):
     """Team identity for one request, derived from the access context.
 
@@ -475,27 +621,76 @@ def display_name_for(user_id):
 _TEAM_SCOPE_SQL = "(team_id = %s OR team_id IS NULL)"
 
 
-def entity_in_team(ctx, *, building_id=None, contact_id=None):
-    """True when every named entity is visible to this team. Guards the
-    write APIs against cross-team ids arriving in a request body."""
+class RecordClaimedError(ValueError):
+    """Raised when a rep tries to add a team record owned by another rep."""
+
+
+def record_scope_sql(ctx, alias, *, assignee='assigned_to_id', creator='added_by_id'):
+    """Named-parameter SQL enforcing the CRM's record privacy boundary.
+
+    Admins can see the team. Reps can only see records currently assigned to
+    them. `added_by_id` remains immutable attribution for admins; it is not an
+    access grant. This helper is deliberately reused by list, detail, search,
+    bulk, and write queries so privacy does not depend on the UI.
+    """
+    team = f"({alias}.team_id = %(team_id)s OR {alias}.team_id IS NULL)"
+    if ctx['is_admin']:
+        return team
+    return f"{team} AND {alias}.{assignee} = %(user_id)s"
+
+
+def list_scope_sql(ctx, alias='l'):
+    team = f"({alias}.team_id = %(team_id)s OR {alias}.team_id IS NULL)"
+    if ctx['is_admin']:
+        return team
+    return f"{team} AND {alias}.assigned_to_id = %(user_id)s"
+
+
+def scoped_roster(ctx):
+    """Assignee choices the current user is allowed to make."""
+    if ctx['is_admin']:
+        return get_team_roster(ctx['team_id'])
+    return [u for u in get_team_roster(ctx['team_id']) if u['id'] == ctx['user_id']]
+
+
+def assignee_allowed(ctx, user_id):
+    if user_id in (None, ctx['user_id']):
+        return True
+    return bool(ctx['is_admin'] and any(u['id'] == user_id for u in get_team_roster(ctx['team_id'])))
+
+
+def row_visible(ctx, row):
+    return bool(ctx['is_admin'] or row.get('assigned_to_id') == ctx['user_id'])
+
+
+def entity_in_team(ctx, *, building_id=None, contact_id=None, deal_id=None):
+    """True when every named entity is visible to this user. Guards every
+    write API against cross-team and other-rep ids arriving in a request."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         if building_id:
             cur.execute(
-                f"SELECT 1 FROM crm_buildings WHERE id = %s AND {_TEAM_SCOPE_SQL}",
-                (building_id, ctx['team_id']),
+                f"SELECT 1 FROM crm_buildings b WHERE b.id = %(id)s AND {record_scope_sql(ctx, 'b')}",
+                {'id': building_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
             )
             if not cur.fetchone():
                 return False
         if contact_id:
             cur.execute(
-                f"SELECT 1 FROM crm_contacts WHERE id = %s AND {_TEAM_SCOPE_SQL}",
-                (contact_id, ctx['team_id']),
+                f"SELECT 1 FROM crm_contacts c WHERE c.id = %(id)s AND {record_scope_sql(ctx, 'c')}",
+                {'id': contact_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
             )
             if not cur.fetchone():
                 return False
-        return bool(building_id or contact_id)
+        if deal_id:
+            cur.execute(
+                f"SELECT 1 FROM crm_deals d WHERE d.id = %(id)s AND {record_scope_sql(ctx, 'd')}",
+                {'id': deal_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+            )
+            if not cur.fetchone():
+                return False
+        return bool(building_id or contact_id or deal_id)
     finally:
         cur.close()
         conn.close()
@@ -510,8 +705,8 @@ def find_building_by_bbl(ctx, bbl):
     cur = conn.cursor()
     try:
         cur.execute(
-            f"SELECT id FROM crm_buildings WHERE bbl = %s AND {_TEAM_SCOPE_SQL}",
-            (str(bbl), ctx['team_id']),
+            f"SELECT b.id FROM crm_buildings b WHERE b.bbl = %(bbl)s AND {record_scope_sql(ctx, 'b')}",
+            {'bbl': str(bbl), 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         row = cur.fetchone()
         return row['id'] if row else None
@@ -530,22 +725,25 @@ def create_building(ctx, *, address, bbl=None, borough=None, zip_code=None,
     try:
         if bbl:
             cur.execute(
-                f"SELECT id FROM crm_buildings WHERE bbl = %s AND {_TEAM_SCOPE_SQL}",
+                """SELECT id, assigned_to_id, added_by_id FROM crm_buildings
+                   WHERE bbl = %s AND (team_id = %s OR team_id IS NULL)""",
                 (str(bbl), ctx['team_id']),
             )
             existing = cur.fetchone()
             if existing:
+                if not row_visible(ctx, existing):
+                    raise RecordClaimedError('This building is already claimed by another rep. Ask an admin to transfer it.')
                 return existing['id'], False
         cur.execute(
             """INSERT INTO crm_buildings
                (bbl, address, borough, zip_code, neighborhood, unit_count,
                 year_built, num_floors, building_class, owner_name, source,
-                added_by_id, team_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                assigned_to_id, added_by_id, team_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (str(bbl) if bbl else None, address.strip(), borough, zip_code,
              neighborhood, unit_count, year_built, num_floors, building_class,
-             owner_name, source, ctx['user_id'], ctx['team_id']),
+             owner_name, source, ctx['user_id'], ctx['user_id'], ctx['team_id']),
         )
         building_id = cur.fetchone()['id']
         cur.execute(
@@ -554,17 +752,22 @@ def create_building(ctx, *, address, bbl=None, borough=None, zip_code=None,
             ('Added to CRM' + (' from the permit database' if source == 'permit' else ''),
              building_id, ctx['user_id'], ctx['team_id']),
         )
+        audit_change(cur, ctx, 'building', building_id, address, 'created',
+                     new_value={'source': source, 'assigned_to_id': ctx['user_id']})
         conn.commit()
         return building_id, True
     except psycopg2.errors.UniqueViolation:
         # Two reps importing the same BBL at once: fall back to the winner.
         conn.rollback()
         cur.execute(
-            f"SELECT id FROM crm_buildings WHERE bbl = %s AND {_TEAM_SCOPE_SQL}",
+            """SELECT id, assigned_to_id, added_by_id FROM crm_buildings
+               WHERE bbl = %s AND (team_id = %s OR team_id IS NULL)""",
             (str(bbl), ctx['team_id']),
         )
         row = cur.fetchone()
         if row:
+            if not row_visible(ctx, row):
+                raise RecordClaimedError('This building was claimed by another rep while you were adding it.')
             return row['id'], False
         raise
     except Exception:
@@ -590,7 +793,7 @@ def list_buildings(ctx, *, stage=None, q=None, borough=None, starred=False,
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        where = ["(b.team_id = %(team_id)s OR b.team_id IS NULL)"]
+        where = [record_scope_sql(ctx, 'b')]
         params = {
             'team_id': ctx['team_id'], 'user_id': ctx['user_id'],
             'epoch': datetime(1970, 1, 1), 'limit': limit,
@@ -616,11 +819,13 @@ def list_buildings(ctx, *, stage=None, q=None, borough=None, starred=False,
         cur.execute(
             f"""
             SELECT b.*, (s.id IS NOT NULL) AS starred,
-                   {_user_name_sql('au')} AS assigned_to_name
+                   {_user_name_sql('au')} AS assigned_to_name,
+                   {_user_name_sql('ab')} AS added_by_name
             FROM crm_buildings b
             LEFT JOIN crm_stars s
                    ON s.building_id = b.id AND s.user_id = %(user_id)s
             LEFT JOIN users au ON au.id = b.assigned_to_id
+            JOIN users ab ON ab.id = b.added_by_id
             WHERE {' AND '.join(where)}
             ORDER BY {order_sql}
             LIMIT %(limit)s
@@ -639,8 +844,8 @@ def building_stage_counts(ctx):
     try:
         cur.execute(
             f"""SELECT stage, COUNT(*) AS n FROM crm_buildings b
-                WHERE (b.team_id = %s OR b.team_id IS NULL) GROUP BY stage""",
-            (ctx['team_id'],),
+                WHERE {record_scope_sql(ctx, 'b')} GROUP BY stage""",
+            {'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         counts = {r['stage']: r['n'] for r in cur.fetchall()}
         counts['all'] = sum(counts.values())
@@ -661,12 +866,12 @@ def get_building(ctx, building_id):
                    {_user_name_sql('au')} AS assigned_to_name,
                    {_user_name_sql('ab')} AS added_by_name
             FROM crm_buildings b
-            LEFT JOIN crm_stars s ON s.building_id = b.id AND s.user_id = %s
+            LEFT JOIN crm_stars s ON s.building_id = b.id AND s.user_id = %(user_id)s
             LEFT JOIN users au ON au.id = b.assigned_to_id
             JOIN users ab ON ab.id = b.added_by_id
-            WHERE b.id = %s AND (b.team_id = %s OR b.team_id IS NULL)
+            WHERE b.id = %(building_id)s AND {record_scope_sql(ctx, 'b')}
             """,
-            (ctx['user_id'], building_id, ctx['team_id']),
+            {'user_id': ctx['user_id'], 'building_id': building_id, 'team_id': ctx['team_id']},
         )
         building = cur.fetchone()
         if not building:
@@ -677,9 +882,12 @@ def get_building(ctx, building_id):
             f"""
             SELECT su.id AS user_id, {_user_name_sql('su')} AS name
             FROM crm_stars st JOIN users su ON su.id = st.user_id
-            WHERE st.building_id = %s ORDER BY st.created_at
+            WHERE st.building_id = %(building_id)s
+              AND (%(is_admin)s OR st.user_id = %(user_id)s)
+            ORDER BY st.created_at
             """,
-            (building_id,),
+            {'building_id': building_id, 'is_admin': ctx['is_admin'],
+             'user_id': ctx['user_id']},
         )
         building['starred_by'] = [dict(r) for r in cur.fetchall()]
 
@@ -689,12 +897,12 @@ def get_building(ctx, building_id):
                    (st.id IS NOT NULL) AS starred
             FROM crm_building_contacts bc
             JOIN crm_contacts c ON c.id = bc.contact_id
-            LEFT JOIN crm_stars st ON st.contact_id = c.id AND st.user_id = %s
-            WHERE bc.building_id = %s
+            LEFT JOIN crm_stars st ON st.contact_id = c.id AND st.user_id = %(user_id)s
+            WHERE bc.building_id = %(building_id)s AND {record_scope_sql(ctx, 'c')}
             ORDER BY CASE bc.role WHEN 'owner' THEN 0 WHEN 'property_manager' THEN 1
                      WHEN 'super' THEN 2 ELSE 3 END, c.name
             """,
-            (ctx['user_id'], building_id),
+            {'user_id': ctx['user_id'], 'building_id': building_id, 'team_id': ctx['team_id']},
         )
         contacts = [dict(r) for r in cur.fetchall()]
         if contacts:
@@ -716,17 +924,19 @@ def get_building(ctx, building_id):
         cur.execute(
             f"""SELECT f.*, {_user_name_sql('fu')} AS assigned_to_name
                 FROM crm_follow_ups f JOIN users fu ON fu.id = f.assigned_to_id
-                WHERE f.building_id = %s AND f.status = 'open'
-                ORDER BY f.due_date""",
-            (building_id,),
+                WHERE f.building_id = %(building_id)s AND f.status = 'open'
+                  AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s)
+                ORDER BY COALESCE(f.due_at, f.due_date::timestamp), f.id""",
+            {'building_id': building_id, 'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
         )
         building['follow_ups'] = [dict(r) for r in cur.fetchall()]
 
         cur.execute(
-            """SELECT l.id, l.name, l.color FROM crm_list_items li
+            f"""SELECT l.id, l.name, l.color FROM crm_list_items li
                JOIN crm_lists l ON l.id = li.list_id
-               WHERE li.building_id = %s ORDER BY l.name""",
-            (building_id,),
+               WHERE li.building_id = %(building_id)s AND {list_scope_sql(ctx, 'l')}
+               ORDER BY l.name""",
+            {'building_id': building_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         building['lists'] = [dict(r) for r in cur.fetchall()]
 
@@ -751,19 +961,26 @@ def update_building_stage(ctx, building_id, stage):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_buildings SET stage = %s, updated_at = NOW()
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)
-                 AND stage <> %s
-               RETURNING id""",
-            (stage, building_id, ctx['team_id'], stage),
+            f"""SELECT b.address, b.stage FROM crm_buildings b
+                WHERE b.id = %(id)s AND {record_scope_sql(ctx, 'b')} FOR UPDATE""",
+            {'id': building_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
-        if cur.fetchone():
+        before = cur.fetchone()
+        if not before:
+            return False
+        if before['stage'] != stage:
+            cur.execute(
+                "UPDATE crm_buildings SET stage = %s, updated_at = NOW() WHERE id = %s",
+                (stage, building_id),
+            )
             cur.execute(
                 """INSERT INTO crm_activity (type, note, building_id, user_id, team_id)
                    VALUES ('stage_change', %s, %s, %s, %s)""",
                 (f'Stage set to {STAGE_LABELS[stage]}', building_id,
                  ctx['user_id'], ctx['team_id']),
             )
+            audit_change(cur, ctx, 'building', building_id, before['address'],
+                         'stage_changed', 'stage', before['stage'], stage)
         conn.commit()
         return True
     except Exception:
@@ -775,15 +992,49 @@ def update_building_stage(ctx, building_id, stage):
 
 
 def assign_building(ctx, building_id, assignee_id):
+    if not ctx['is_admin'] and assignee_id != ctx['user_id']:
+        raise PermissionError('Only an admin can transfer records between reps')
+    if not assignee_allowed(ctx, assignee_id):
+        raise ValueError('That assignee is not on this team')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_buildings SET assigned_to_id = %s, updated_at = NOW()
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)""",
-            (assignee_id or None, building_id, ctx['team_id']),
+            f"""SELECT b.address, b.assigned_to_id FROM crm_buildings b
+                WHERE b.id = %(id)s AND {record_scope_sql(ctx, 'b')} FOR UPDATE""",
+            {'id': building_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if before:
+            cur.execute(
+                "UPDATE crm_buildings SET assigned_to_id = %s, updated_at = NOW() WHERE id = %s",
+                (assignee_id or None, building_id),
+            )
+            # Unassigned linked people follow the building so the new rep can
+            # work the complete account without seeing unrelated contacts.
+            if assignee_id:
+                cur.execute(
+                    """UPDATE crm_contacts c SET assigned_to_id = %s, updated_at = NOW()
+                       FROM crm_building_contacts bc
+                       WHERE bc.contact_id = c.id AND bc.building_id = %s
+                         AND c.assigned_to_id IS NULL""",
+                    (assignee_id, building_id),
+                )
+            if before['assigned_to_id'] != assignee_id:
+                if before['assigned_to_id']:
+                    cur.execute(
+                        "DELETE FROM crm_notifications WHERE user_id = %s AND url = %s",
+                        (before['assigned_to_id'], f'/crm/buildings/{building_id}'),
+                    )
+                if assignee_id:
+                    create_notification(cur, ctx, assignee_id, 'assignment',
+                                        'A building was assigned to you', before['address'],
+                                        f'/crm/buildings/{building_id}',
+                                        f'building-assigned:{building_id}:{assignee_id}')
+                audit_change(cur, ctx, 'building', building_id, before['address'],
+                             'assigned', 'assigned_to_id', before['assigned_to_id'], assignee_id)
         conn.commit()
+        return bool(before)
     except Exception:
         conn.rollback()
         raise
@@ -909,14 +1160,21 @@ def find_contacts_by_digits(ctx, digits, extension=None):
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT DISTINCT c.id, c.name, c.company, p.extension
+            """SELECT DISTINCT c.id, c.name, c.company, p.extension,
+                              c.assigned_to_id, c.added_by_id
                FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
                WHERE p.digits = %s AND (c.team_id = %s OR c.team_id IS NULL)
                  AND (%s IS NULL OR p.extension IS NULL OR p.extension = %s)
                ORDER BY c.name""",
             (digits, ctx['team_id'], extension, extension),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+        if ctx['is_admin']:
+            return rows
+        return [r if row_visible(ctx, r) else {
+            'id': None, 'name': 'Another rep’s contact', 'company': None,
+            'extension': r.get('extension'), 'claimed': True,
+        } for r in rows]
     finally:
         cur.close()
         conn.close()
@@ -925,17 +1183,22 @@ def find_contacts_by_digits(ctx, digits, extension=None):
 def create_contact(ctx, *, name, title=None, company=None, email=None,
                    source='manual', source_detail=None, building_id=None,
                    building_role='other', phone=None, phone_label=None,
-                   phone_extension=None):
+                   phone_extension=None, assigned_to_id=None):
     """Create a contact, optionally with a first phone and a building link."""
+    assignee = assigned_to_id or ctx['user_id']
+    if not assignee_allowed(ctx, assignee):
+        raise PermissionError('Only an admin can assign a contact to another rep')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
             """INSERT INTO crm_contacts
-               (name, title, company, email, source, source_detail, added_by_id, team_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+               (name, title, company, email, source, source_detail,
+                assigned_to_id, added_by_id, team_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (name.strip(), title or None, company or None, email or None,
-             source, source_detail or None, ctx['user_id'], ctx['team_id']),
+             source, source_detail or None, assignee,
+             ctx['user_id'], ctx['team_id']),
         )
         contact_id = cur.fetchone()['id']
         if phone:
@@ -958,6 +1221,8 @@ def create_contact(ctx, *, name, title=None, company=None, email=None,
                    VALUES (%s,%s,%s) ON CONFLICT (building_id, contact_id) DO NOTHING""",
                 (building_id, contact_id, role),
             )
+        audit_change(cur, ctx, 'contact', contact_id, name.strip(), 'created',
+                     new_value={'source': source, 'assigned_to_id': assignee})
         conn.commit()
         return contact_id
     except Exception:
@@ -995,6 +1260,12 @@ def add_phone(ctx, contact_id, *, number, extension=None, label=None,
              source_detail or None, bool(make_primary), ctx['user_id']),
         )
         phone_id = cur.fetchone()['id']
+        cur.execute("SELECT name FROM crm_contacts WHERE id = %s", (contact_id,))
+        contact = cur.fetchone()
+        audit_change(cur, ctx, 'contact', contact_id,
+                     contact['name'] if contact else None, 'phone_added', 'phone',
+                     new_value={'number': format_phone(digits), 'extension': extension,
+                                'label': label, 'source': source})
         conn.commit()
         return phone_id
     except Exception:
@@ -1012,13 +1283,21 @@ def set_phone_status(ctx, phone_id, status):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_phones p SET status = %s
-               FROM crm_contacts c
-               WHERE p.id = %s AND c.id = p.contact_id
-                 AND (c.team_id = %s OR c.team_id IS NULL)""",
-            (status, phone_id, ctx['team_id']),
+            f"""SELECT p.contact_id, p.status, p.number, c.name
+                FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
+                WHERE p.id = %(phone_id)s AND {record_scope_sql(ctx, 'c')}
+                FOR UPDATE""",
+            {'phone_id': phone_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute("UPDATE crm_phones SET status = %s WHERE id = %s", (status, phone_id))
+        if before['status'] != status:
+            audit_change(cur, ctx, 'contact', before['contact_id'], before['name'],
+                         'phone_updated', 'phone_status', before['status'], status)
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -1032,11 +1311,23 @@ def set_do_not_contact(ctx, contact_id, value):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_contacts SET do_not_contact = %s, updated_at = NOW()
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)""",
-            (bool(value), contact_id, ctx['team_id']),
+            f"""SELECT c.name, c.do_not_contact FROM crm_contacts c
+                WHERE c.id = %(id)s AND {record_scope_sql(ctx, 'c')} FOR UPDATE""",
+            {'id': contact_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if not before:
+            return False
+        value = bool(value)
+        cur.execute(
+            "UPDATE crm_contacts SET do_not_contact = %s, updated_at = NOW() WHERE id = %s",
+            (value, contact_id),
+        )
+        if before['do_not_contact'] != value:
+            audit_change(cur, ctx, 'contact', contact_id, before['name'], 'updated',
+                         'do_not_contact', before['do_not_contact'], value)
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -1049,7 +1340,7 @@ def list_contacts(ctx, *, q=None, starred=False, cold=False, limit=200):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        where = ["(c.team_id = %(team_id)s OR c.team_id IS NULL)"]
+        where = [record_scope_sql(ctx, 'c')]
         params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id'], 'limit': limit}
         if q:
             digits = normalize_phone_digits(q)
@@ -1071,13 +1362,19 @@ def list_contacts(ctx, *, q=None, starred=False, cold=False, limit=200):
         cur.execute(
             f"""
             SELECT c.*, (st.id IS NOT NULL) AS starred,
+                   {_user_name_sql('au')} AS assigned_to_name,
+                   {_user_name_sql('ab')} AS added_by_name,
                    (SELECT p.number || COALESCE(' ext. ' || p.extension, '') FROM crm_phones p
                     WHERE p.contact_id = c.id AND p.status = 'good'
                     ORDER BY p.is_primary DESC, p.created_at LIMIT 1) AS primary_phone,
                    (SELECT COUNT(*) FROM crm_building_contacts bc
-                    WHERE bc.contact_id = c.id) AS building_count
+                    JOIN crm_buildings linked_b ON linked_b.id = bc.building_id
+                    WHERE bc.contact_id = c.id
+                      AND {record_scope_sql(ctx, 'linked_b')}) AS building_count
             FROM crm_contacts c
             LEFT JOIN crm_stars st ON st.contact_id = c.id AND st.user_id = %(user_id)s
+            LEFT JOIN users au ON au.id = c.assigned_to_id
+            JOIN users ab ON ab.id = c.added_by_id
             WHERE {' AND '.join(where)}
             ORDER BY c.last_contacted_at DESC NULLS LAST, c.created_at DESC
             LIMIT %(limit)s
@@ -1097,13 +1394,15 @@ def get_contact(ctx, contact_id):
         cur.execute(
             f"""
             SELECT c.*, (st.id IS NOT NULL) AS starred,
-                   {_user_name_sql('ab')} AS added_by_name
+                   {_user_name_sql('ab')} AS added_by_name,
+                   {_user_name_sql('au')} AS assigned_to_name
             FROM crm_contacts c
-            LEFT JOIN crm_stars st ON st.contact_id = c.id AND st.user_id = %s
+            LEFT JOIN crm_stars st ON st.contact_id = c.id AND st.user_id = %(user_id)s
             JOIN users ab ON ab.id = c.added_by_id
-            WHERE c.id = %s AND (c.team_id = %s OR c.team_id IS NULL)
+            LEFT JOIN users au ON au.id = c.assigned_to_id
+            WHERE c.id = %(contact_id)s AND {record_scope_sql(ctx, 'c')}
             """,
-            (ctx['user_id'], contact_id, ctx['team_id']),
+            {'user_id': ctx['user_id'], 'contact_id': contact_id, 'team_id': ctx['team_id']},
         )
         contact = cur.fetchone()
         if not contact:
@@ -1118,19 +1417,22 @@ def get_contact(ctx, contact_id):
         )
         contact['phones'] = [dict(r) for r in cur.fetchall()]
         cur.execute(
-            """SELECT b.id, b.address, b.borough, b.stage, b.last_contacted_at,
+            f"""SELECT b.id, b.address, b.borough, b.stage, b.last_contacted_at,
                       bc.role AS building_role
                FROM crm_building_contacts bc
                JOIN crm_buildings b ON b.id = bc.building_id
-               WHERE bc.contact_id = %s ORDER BY b.address""",
-            (contact_id,),
+               WHERE bc.contact_id = %(contact_id)s AND {record_scope_sql(ctx, 'b')}
+               ORDER BY b.address""",
+            {'contact_id': contact_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         contact['buildings'] = [dict(r) for r in cur.fetchall()]
         cur.execute(
             f"""SELECT f.*, {_user_name_sql('fu')} AS assigned_to_name
                 FROM crm_follow_ups f JOIN users fu ON fu.id = f.assigned_to_id
-                WHERE f.contact_id = %s AND f.status = 'open' ORDER BY f.due_date""",
-            (contact_id,),
+                WHERE f.contact_id = %(contact_id)s AND f.status = 'open'
+                  AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s)
+                ORDER BY COALESCE(f.due_at, f.due_date::timestamp), f.id""",
+            {'contact_id': contact_id, 'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
         )
         contact['follow_ups'] = [dict(r) for r in cur.fetchall()]
         cur.execute(
@@ -1153,10 +1455,28 @@ def link_contact_to_building(ctx, contact_id, building_id, role='other'):
     cur = conn.cursor()
     try:
         cur.execute(
+            f"""SELECT b.address, c.name
+                FROM crm_buildings b CROSS JOIN crm_contacts c
+                WHERE b.id = %(building_id)s AND c.id = %(contact_id)s
+                  AND {record_scope_sql(ctx, 'b')}
+                  AND {record_scope_sql(ctx, 'c')}""",
+            {'building_id': building_id, 'contact_id': contact_id,
+             'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        labels = cur.fetchone()
+        if not labels:
+            raise PermissionError('Building or contact not found')
+        cur.execute(
             """INSERT INTO crm_building_contacts (building_id, contact_id, role)
-               VALUES (%s,%s,%s) ON CONFLICT (building_id, contact_id) DO NOTHING""",
+               VALUES (%s,%s,%s) ON CONFLICT (building_id, contact_id) DO NOTHING
+               RETURNING role""",
             (building_id, contact_id, role),
         )
+        if cur.fetchone():
+            audit_change(cur, ctx, 'building', building_id, labels['address'],
+                         'contact_linked', 'contact',
+                         new_value={'contact_id': contact_id, 'contact_name': labels['name'],
+                                    'role': role})
         conn.commit()
     except Exception:
         conn.rollback()
@@ -1170,8 +1490,8 @@ def link_contact_to_building(ctx, contact_id, building_id, role='other'):
 # Activity: the one append-only stream
 # ============================================================
 
-def log_contacted(ctx, *, building_id=None, contact_id=None, method='call',
-                  outcome=None, note=None, phone_digits=None):
+def log_contacted(ctx, *, building_id=None, contact_id=None, deal_id=None,
+                  method='call', outcome=None, note=None, phone_digits=None):
     """The Contacted button. One press = one permanent, attributed event.
 
     Side effects, all in one transaction: rollups on the building/contact,
@@ -1182,19 +1502,54 @@ def log_contacted(ctx, *, building_id=None, contact_id=None, method='call',
         method = 'other'
     if outcome is not None and outcome not in CONTACT_OUTCOMES:
         outcome = None
-    if not building_id and not contact_id:
-        raise ValueError('contacted needs a building or a contact')
+    if not building_id and not contact_id and not deal_id:
+        raise ValueError('contacted needs a building, contact, or deal')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        scope_params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id']}
+        if building_id:
+            cur.execute(
+                f"SELECT 1 FROM crm_buildings b WHERE b.id = %(id)s "
+                f"AND {record_scope_sql(ctx, 'b')} FOR SHARE",
+                {**scope_params, 'id': building_id},
+            )
+            if not cur.fetchone():
+                raise ValueError('This building is no longer assigned to you')
+        if contact_id:
+            cur.execute(
+                f"SELECT c.do_not_contact FROM crm_contacts c WHERE c.id = %(id)s "
+                f"AND {record_scope_sql(ctx, 'c')} FOR SHARE",
+                {**scope_params, 'id': contact_id},
+            )
+            contact_guard = cur.fetchone()
+            if not contact_guard:
+                raise ValueError('This contact is no longer assigned to you')
+            if contact_guard and contact_guard['do_not_contact']:
+                raise ValueError('This contact is marked do not contact')
+        if deal_id:
+            cur.execute(
+                f"""SELECT d.contact_id, c.do_not_contact AS contact_do_not_contact
+                    FROM crm_deals d
+                    LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                    WHERE d.id = %(id)s AND {record_scope_sql(ctx, 'd')}
+                    FOR SHARE OF d""",
+                {**scope_params, 'id': deal_id},
+            )
+            deal_guard = cur.fetchone()
+            if not deal_guard:
+                raise ValueError('This deal is no longer assigned to you')
+            if (deal_guard['contact_do_not_contact']
+                    and (not contact_id or deal_guard['contact_id'] == contact_id)):
+                raise ValueError('This deal’s contact is marked do not contact')
         cur.execute(
             """INSERT INTO crm_activity
                (type, method, outcome, note, phone_digits, building_id, contact_id,
-                user_id, team_id)
-               VALUES ('contacted', %s, %s, %s, %s, %s, %s, %s, %s)
+                deal_id, user_id, team_id)
+               VALUES ('contacted', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id, created_at""",
             (method, outcome, (note or '').strip() or None, phone_digits or None,
-             building_id, contact_id, ctx['user_id'], ctx['team_id']),
+             building_id, contact_id, deal_id, ctx['user_id'], ctx['team_id']),
         )
         activity = cur.fetchone()
         if building_id:
@@ -1228,6 +1583,16 @@ def log_contacted(ctx, *, building_id=None, contact_id=None, method='call',
                        WHERE contact_id = %s AND digits = %s""",
                     (contact_id, phone_digits),
                 )
+        if deal_id:
+            cur.execute(
+                """UPDATE crm_deals SET stage = 'contacted', updated_at = NOW()
+                   WHERE id = %s AND stage = 'prospect' RETURNING name""",
+                (deal_id,),
+            )
+            moved = cur.fetchone()
+            if moved:
+                audit_change(cur, ctx, 'deal', deal_id, moved['name'],
+                             'stage_changed', 'stage', 'prospect', 'contacted')
         conn.commit()
         return activity['id']
     except Exception:
@@ -1300,10 +1665,21 @@ def toggle_pin(ctx, activity_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_activity SET is_pinned = NOT is_pinned
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)
-               RETURNING is_pinned""",
-            (activity_id, ctx['team_id']),
+            f"""UPDATE crm_activity a SET is_pinned = NOT a.is_pinned
+               WHERE a.id = %(id)s AND (a.team_id = %(team_id)s OR a.team_id IS NULL)
+                 AND (%(is_admin)s OR a.user_id = %(user_id)s)
+                 AND (a.building_id IS NULL OR EXISTS (
+                      SELECT 1 FROM crm_buildings b WHERE b.id = a.building_id
+                        AND {record_scope_sql(ctx, 'b')}))
+                 AND (a.contact_id IS NULL OR EXISTS (
+                      SELECT 1 FROM crm_contacts c WHERE c.id = a.contact_id
+                        AND {record_scope_sql(ctx, 'c')}))
+                 AND (a.deal_id IS NULL OR EXISTS (
+                      SELECT 1 FROM crm_deals d WHERE d.id = a.deal_id
+                        AND {record_scope_sql(ctx, 'd')}))
+               RETURNING a.is_pinned""",
+            {'id': activity_id, 'team_id': ctx['team_id'],
+             'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
         )
         row = cur.fetchone()
         conn.commit()
@@ -1335,9 +1711,26 @@ def delete_activity(ctx, activity_id):
         if not ctx['is_admin']:
             if activity['user_id'] != ctx['user_id']:
                 return False, 'Only the author or an admin can delete this'
+            for table, field, alias in (
+                    ('crm_buildings', 'building_id', 'b'),
+                    ('crm_contacts', 'contact_id', 'c'),
+                    ('crm_deals', 'deal_id', 'd')):
+                if activity.get(field):
+                    cur.execute(
+                        f"SELECT 1 FROM {table} {alias} WHERE {alias}.id = %(id)s "
+                        f"AND {record_scope_sql(ctx, alias)}",
+                        {'id': activity[field], 'team_id': ctx['team_id'],
+                         'user_id': ctx['user_id']},
+                    )
+                    if not cur.fetchone():
+                        return False, 'That record is no longer assigned to you'
             age = datetime.utcnow() - activity['created_at']
             if age > timedelta(minutes=ACTIVITY_UNDO_MINUTES):
                 return False, f'The {ACTIVITY_UNDO_MINUTES}-minute undo window has passed — ask an admin'
+        audit_change(cur, ctx, 'activity', activity_id,
+                     activity.get('note') or activity['type'], 'deleted',
+                     new_value={'type': activity['type'], 'building_id': activity['building_id'],
+                                'contact_id': activity['contact_id'], 'deal_id': activity['deal_id']})
         cur.execute("DELETE FROM crm_activity WHERE id = %s", (activity_id,))
         if activity['building_id']:
             cur.execute(
@@ -1371,27 +1764,35 @@ def delete_activity(ctx, activity_id):
         conn.close()
 
 
-def get_timeline(ctx, *, building_id=None, contact_id=None, limit=100):
+def get_timeline(ctx, *, building_id=None, contact_id=None, deal_id=None, limit=100):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         if building_id:
-            scope_sql, scope_val = 'a.building_id = %s', building_id
+            scope_sql, scope_val = 'a.building_id = %(scope_id)s', building_id
+        elif contact_id:
+            scope_sql, scope_val = 'a.contact_id = %(scope_id)s', contact_id
         else:
-            scope_sql, scope_val = 'a.contact_id = %s', contact_id
+            scope_sql, scope_val = 'a.deal_id = %(scope_id)s', deal_id
         cur.execute(
             f"""
             SELECT a.*, {_user_name_sql('u')} AS user_name,
-                   c.name AS contact_name, b.address AS building_address
+                   c.name AS contact_name, b.address AS building_address,
+                   d.name AS deal_name
             FROM crm_activity a
             JOIN users u ON u.id = a.user_id
             LEFT JOIN crm_contacts c ON c.id = a.contact_id
+              AND {record_scope_sql(ctx, 'c')}
             LEFT JOIN crm_buildings b ON b.id = a.building_id
-            WHERE {scope_sql} AND (a.team_id = %s OR a.team_id IS NULL)
+              AND {record_scope_sql(ctx, 'b')}
+            LEFT JOIN crm_deals d ON d.id = a.deal_id
+              AND {record_scope_sql(ctx, 'd')}
+            WHERE {scope_sql} AND (a.team_id = %(team_id)s OR a.team_id IS NULL)
             ORDER BY a.created_at DESC
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (scope_val, ctx['team_id'], limit),
+            {'scope_id': scope_val, 'team_id': ctx['team_id'],
+             'user_id': ctx['user_id'], 'limit': limit},
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
@@ -1404,7 +1805,10 @@ def team_feed(ctx, *, user_id=None, types=None, limit=50):
     cur = conn.cursor()
     try:
         where = ["a.team_id = %(team_id)s", "a.type <> 'system'"]
-        params = {'team_id': ctx['team_id'], 'limit': limit}
+        params = {'team_id': ctx['team_id'], 'limit': limit,
+                  'current_user': ctx['user_id'], 'user_id': ctx['user_id']}
+        if not ctx['is_admin']:
+            where.append("a.user_id = %(current_user)s")
         if user_id:
             where.append("a.user_id = %(filter_user)s")
             params['filter_user'] = user_id
@@ -1414,12 +1818,20 @@ def team_feed(ctx, *, user_id=None, types=None, limit=50):
         cur.execute(
             f"""
             SELECT a.*, {_user_name_sql('u')} AS user_name,
-                   c.name AS contact_name, b.address AS building_address, b.id AS b_id
+                   c.name AS contact_name, b.address AS building_address, b.id AS b_id,
+                   d.name AS deal_name
             FROM crm_activity a
             JOIN users u ON u.id = a.user_id
             LEFT JOIN crm_contacts c ON c.id = a.contact_id
+              AND {record_scope_sql(ctx, 'c')}
             LEFT JOIN crm_buildings b ON b.id = a.building_id
+              AND {record_scope_sql(ctx, 'b')}
+            LEFT JOIN crm_deals d ON d.id = a.deal_id
+              AND {record_scope_sql(ctx, 'd')}
             WHERE {' AND '.join(where)}
+              AND (a.building_id IS NULL OR b.id IS NOT NULL)
+              AND (a.contact_id IS NULL OR c.id IS NOT NULL)
+              AND (a.deal_id IS NULL OR d.id IS NOT NULL)
             ORDER BY a.created_at DESC
             LIMIT %(limit)s
             """,
@@ -1472,7 +1884,11 @@ def starred_overview(ctx, *, everyone=False, for_user_id=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        params = {'team_id': ctx['team_id']}
+        params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id']}
+        record_sql = 'TRUE' if ctx['is_admin'] else """(
+            (b.id IS NOT NULL AND b.assigned_to_id = %(user_id)s)
+            OR (c.id IS NOT NULL AND c.assigned_to_id = %(user_id)s)
+        )"""
         if everyone:
             user_sql = """s.user_id IN (
                 SELECT u2.id FROM users u2
@@ -1488,7 +1904,7 @@ def starred_overview(ctx, *, everyone=False, for_user_id=None):
                    {_user_name_sql('su')} AS starred_by_name,
                    b.id AS building_id, b.address, b.borough, b.stage,
                    b.last_contacted_at AS b_last_contacted,
-                   c.id AS contact_id, c.name AS contact_name, c.company,
+                   c.id AS contact_id, c.name AS contact_name, c.company, c.do_not_contact,
                    c.last_contacted_at AS c_last_contacted
             FROM crm_stars s
             JOIN users su ON su.id = s.user_id
@@ -1496,6 +1912,7 @@ def starred_overview(ctx, *, everyone=False, for_user_id=None):
             LEFT JOIN crm_contacts c ON c.id = s.contact_id
             WHERE {user_sql}
               AND COALESCE(b.team_id, c.team_id, %(team_id)s) = %(team_id)s
+              AND {record_sql}
             ORDER BY s.created_at DESC
             """,
             params,
@@ -1510,21 +1927,44 @@ def starred_overview(ctx, *, everyone=False, for_user_id=None):
 # Follow-ups
 # ============================================================
 
-def create_follow_up(ctx, *, title, due_date, note=None, building_id=None,
-                     contact_id=None, assigned_to_id=None):
+def create_follow_up(ctx, *, title, due_date, due_time=None, note=None,
+                     building_id=None, contact_id=None, deal_id=None,
+                     assigned_to_id=None, reminder_minutes=15):
+    assignee = assigned_to_id or ctx['user_id']
+    if not assignee_allowed(ctx, assignee):
+        raise PermissionError('Only an admin can assign follow-ups to another rep')
+    reminder_minutes = max(0, min(int(reminder_minutes or 0), 10080))
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        scope_params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id']}
+        for table, alias, row_id in (
+                ('crm_buildings', 'b', building_id),
+                ('crm_contacts', 'c', contact_id),
+                ('crm_deals', 'd', deal_id)):
+            if not row_id:
+                continue
+            cur.execute(
+                f"SELECT 1 FROM {table} {alias} WHERE {alias}.id = %(id)s "
+                f"AND {record_scope_sql(ctx, alias)} FOR SHARE",
+                {**scope_params, 'id': row_id},
+            )
+            if not cur.fetchone():
+                raise PermissionError('Linked record is no longer assigned to you')
         cur.execute(
             """INSERT INTO crm_follow_ups
-               (title, note, due_date, building_id, contact_id,
-                assigned_to_id, created_by_id, team_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+               (title, note, due_date, due_at, reminder_minutes, building_id,
+                contact_id, deal_id, assigned_to_id, created_by_id, team_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             ((title or 'Follow up').strip()[:255], (note or '').strip() or None,
-             due_date, building_id, contact_id,
-             assigned_to_id or ctx['user_id'], ctx['user_id'], ctx['team_id']),
+             due_date, local_due_at(due_date, due_time), reminder_minutes,
+             building_id, contact_id, deal_id, assignee, ctx['user_id'], ctx['team_id']),
         )
         follow_up_id = cur.fetchone()['id']
+        audit_change(cur, ctx, 'follow_up', follow_up_id,
+                     (title or 'Follow up').strip()[:255], 'created',
+                     new_value={'due_date': str(due_date), 'due_time': str(due_time or '09:00'),
+                                'assigned_to_id': assignee})
         conn.commit()
         return follow_up_id
     except Exception:
@@ -1542,13 +1982,27 @@ def resolve_follow_up(ctx, follow_up_id, status):
     cur = conn.cursor()
     try:
         cur.execute(
+            """SELECT f.title, f.status FROM crm_follow_ups f
+               WHERE f.id = %(id)s AND (f.team_id = %(team_id)s OR f.team_id IS NULL)
+                 AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s) FOR UPDATE""",
+            {'id': follow_up_id, 'team_id': ctx['team_id'],
+             'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
+        )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute(
             """UPDATE crm_follow_ups
                SET status = %s,
                    completed_at = CASE WHEN %s IN ('done','skipped') THEN NOW() ELSE NULL END
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)""",
-            (status, status, follow_up_id, ctx['team_id']),
+               WHERE id = %s""",
+            (status, status, follow_up_id),
         )
+        if before['status'] != status:
+            audit_change(cur, ctx, 'follow_up', follow_up_id, before['title'],
+                         'status_changed', 'status', before['status'], status)
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -1563,12 +2017,32 @@ def snooze_follow_up(ctx, follow_up_id, days):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_follow_ups
-               SET due_date = GREATEST(due_date, %s) + %s, status = 'open', completed_at = NULL
-               WHERE id = %s AND (team_id = %s OR team_id IS NULL)""",
-            (ny_today(), timedelta(days=days), follow_up_id, ctx['team_id']),
+            """SELECT f.title, f.due_date FROM crm_follow_ups f
+               WHERE f.id = %(id)s AND (f.team_id = %(team_id)s OR f.team_id IS NULL)
+                 AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s) FOR UPDATE""",
+            {'id': follow_up_id, 'team_id': ctx['team_id'],
+             'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute(
+            """UPDATE crm_follow_ups f
+               SET due_date = GREATEST(due_date, %(today)s) + %(delta)s,
+                   due_at = GREATEST(COALESCE(due_at, NOW() AT TIME ZONE 'UTC'),
+                                     NOW() AT TIME ZONE 'UTC') + %(delta)s,
+                   status = 'open', completed_at = NULL, notified_at = NULL
+               WHERE f.id = %(id)s AND (f.team_id = %(team_id)s OR f.team_id IS NULL)
+                 AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s)
+               RETURNING f.due_date""",
+            {'today': ny_today(), 'delta': timedelta(days=days), 'id': follow_up_id,
+             'team_id': ctx['team_id'], 'is_admin': ctx['is_admin'], 'user_id': ctx['user_id']},
+        )
+        after = cur.fetchone()
+        audit_change(cur, ctx, 'follow_up', follow_up_id, before['title'],
+                     'snoozed', 'due_date', before['due_date'], after['due_date'])
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -1583,7 +2057,9 @@ def follow_up_queues(ctx, *, whole_team=False, include_done=False):
     cur = conn.cursor()
     try:
         today = ny_today()
-        params = {'team_id': ctx['team_id'], 'today': today}
+        params = {'team_id': ctx['team_id'], 'today': today,
+                  'user_id': ctx['user_id']}
+        whole_team = bool(whole_team and ctx['is_admin'])
         scope = "f.team_id = %(team_id)s" if whole_team else "f.assigned_to_id = %(assignee)s"
         if not whole_team:
             params['assignee'] = ctx['user_id']
@@ -1591,13 +2067,29 @@ def follow_up_queues(ctx, *, whole_team=False, include_done=False):
             f"""
             SELECT f.*, {_user_name_sql('fu')} AS assigned_to_name,
                    b.address AS building_address, b.id AS b_id,
-                   c.name AS contact_name, c.id AS c_id
+                   c.name AS contact_name, c.id AS c_id,
+                   c.do_not_contact AS contact_do_not_contact,
+                   d.name AS deal_name, d.id AS d_id,
+                   db.id AS deal_b_id, db.address AS deal_building_address,
+                   dc.id AS deal_c_id, dc.name AS deal_contact_name,
+                   dc.do_not_contact AS deal_contact_do_not_contact
             FROM crm_follow_ups f
             JOIN users fu ON fu.id = f.assigned_to_id
             LEFT JOIN crm_buildings b ON b.id = f.building_id
+              AND {record_scope_sql(ctx, 'b')}
             LEFT JOIN crm_contacts c ON c.id = f.contact_id
+              AND {record_scope_sql(ctx, 'c')}
+            LEFT JOIN crm_deals d ON d.id = f.deal_id
+              AND {record_scope_sql(ctx, 'd')}
+            LEFT JOIN crm_buildings db ON db.id = d.building_id
+              AND {record_scope_sql(ctx, 'db')}
+            LEFT JOIN crm_contacts dc ON dc.id = d.contact_id
+              AND {record_scope_sql(ctx, 'dc')}
             WHERE {scope} AND f.status = 'open'
-            ORDER BY f.due_date, f.id
+              AND (f.building_id IS NULL OR b.id IS NOT NULL)
+              AND (f.contact_id IS NULL OR c.id IS NOT NULL)
+              AND (f.deal_id IS NULL OR d.id IS NOT NULL)
+            ORDER BY COALESCE(f.due_at, f.due_date::timestamp), f.id
             """,
             params,
         )
@@ -1616,12 +2108,28 @@ def follow_up_queues(ctx, *, whole_team=False, include_done=False):
                 f"""
                 SELECT f.*, {_user_name_sql('fu')} AS assigned_to_name,
                        b.address AS building_address, b.id AS b_id,
-                       c.name AS contact_name, c.id AS c_id
+                       c.name AS contact_name, c.id AS c_id,
+                       c.do_not_contact AS contact_do_not_contact,
+                       d.name AS deal_name, d.id AS d_id,
+                       db.id AS deal_b_id, db.address AS deal_building_address,
+                       dc.id AS deal_c_id, dc.name AS deal_contact_name,
+                       dc.do_not_contact AS deal_contact_do_not_contact
                 FROM crm_follow_ups f
                 JOIN users fu ON fu.id = f.assigned_to_id
                 LEFT JOIN crm_buildings b ON b.id = f.building_id
+                  AND {record_scope_sql(ctx, 'b')}
                 LEFT JOIN crm_contacts c ON c.id = f.contact_id
+                  AND {record_scope_sql(ctx, 'c')}
+                LEFT JOIN crm_deals d ON d.id = f.deal_id
+                  AND {record_scope_sql(ctx, 'd')}
+                LEFT JOIN crm_buildings db ON db.id = d.building_id
+                  AND {record_scope_sql(ctx, 'db')}
+                LEFT JOIN crm_contacts dc ON dc.id = d.contact_id
+                  AND {record_scope_sql(ctx, 'dc')}
                 WHERE {scope} AND f.status IN ('done','skipped')
+                  AND (f.building_id IS NULL OR b.id IS NOT NULL)
+                  AND (f.contact_id IS NULL OR c.id IS NOT NULL)
+                  AND (f.deal_id IS NULL OR d.id IS NOT NULL)
                 ORDER BY f.completed_at DESC NULLS LAST
                 LIMIT 50
                 """,
@@ -1646,14 +2154,25 @@ def list_lists(ctx):
             f"""
             SELECT l.*, {_user_name_sql('ou')} AS owner_name,
                    {_user_name_sql('au')} AS assigned_to_name,
-                   (SELECT COUNT(*) FROM crm_list_items li WHERE li.list_id = l.id) AS item_count
+                   (SELECT COUNT(*) FROM crm_list_items li
+                    WHERE li.list_id = l.id AND (
+                      (li.building_id IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM crm_buildings item_b
+                        WHERE item_b.id = li.building_id
+                          AND {record_scope_sql(ctx, 'item_b')}))
+                      OR
+                      (li.contact_id IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM crm_contacts item_c
+                        WHERE item_c.id = li.contact_id
+                          AND {record_scope_sql(ctx, 'item_c')}))
+                    )) AS item_count
             FROM crm_lists l
             JOIN users ou ON ou.id = l.owner_id
             LEFT JOIN users au ON au.id = l.assigned_to_id
-            WHERE (l.team_id = %s OR l.team_id IS NULL)
+            WHERE {list_scope_sql(ctx, 'l')}
             ORDER BY l.updated_at DESC
             """,
-            (ctx['team_id'],),
+            {'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
@@ -1662,6 +2181,8 @@ def list_lists(ctx):
 
 
 def create_list(ctx, *, name, description=None, color=None, assigned_to_id=None):
+    if not assignee_allowed(ctx, assigned_to_id):
+        raise PermissionError('Only an admin can assign a list to another rep')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -1669,9 +2190,11 @@ def create_list(ctx, *, name, description=None, color=None, assigned_to_id=None)
             """INSERT INTO crm_lists (name, description, color, owner_id, assigned_to_id, team_id)
                VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
             (name.strip()[:120], (description or '').strip() or None, color or None,
-             ctx['user_id'], assigned_to_id or None, ctx['team_id']),
+             ctx['user_id'], assigned_to_id or ctx['user_id'], ctx['team_id']),
         )
         list_id = cur.fetchone()['id']
+        audit_change(cur, ctx, 'list', list_id, name.strip()[:120], 'created',
+                     new_value={'assigned_to_id': assigned_to_id or ctx['user_id']})
         conn.commit()
         return list_id
     except Exception:
@@ -1683,11 +2206,25 @@ def create_list(ctx, *, name, description=None, color=None, assigned_to_id=None)
 
 
 def update_list(ctx, list_id, *, name=None, description=None, assigned_to_id='__keep__'):
+    if assigned_to_id != '__keep__' and not assignee_allowed(ctx, assigned_to_id):
+        raise PermissionError('Only an admin can transfer a list')
+    if not ctx['is_admin'] and assigned_to_id != '__keep__' and assigned_to_id != ctx['user_id']:
+        raise PermissionError('Only an admin can transfer a list')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        cur.execute(
+            f"SELECT name, description, assigned_to_id FROM crm_lists l "
+            f"WHERE l.id = %(id)s AND {list_scope_sql(ctx, 'l')} FOR UPDATE",
+            {'id': list_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        before = cur.fetchone()
+        if not before:
+            return False
         sets, params = ['updated_at = NOW()'], []
         if name is not None:
+            if not name.strip():
+                raise ValueError('List name is required')
             sets.append('name = %s')
             params.append(name.strip()[:120])
         if description is not None:
@@ -1696,13 +2233,25 @@ def update_list(ctx, list_id, *, name=None, description=None, assigned_to_id='__
         if assigned_to_id != '__keep__':
             sets.append('assigned_to_id = %s')
             params.append(assigned_to_id or None)
-        params.extend([list_id, ctx['team_id']])
+        params.append(list_id)
         cur.execute(
-            f"""UPDATE crm_lists SET {', '.join(sets)}
-                WHERE id = %s AND (team_id = %s OR team_id IS NULL)""",
+            f"UPDATE crm_lists SET {', '.join(sets)} WHERE id = %s",
             params,
         )
+        changes = {
+            'name': name.strip()[:120] if name is not None else before['name'],
+            'description': ((description or '').strip() or None)
+            if description is not None else before['description'],
+            'assigned_to_id': (assigned_to_id or None)
+            if assigned_to_id != '__keep__' else before['assigned_to_id'],
+        }
+        for field, value in changes.items():
+            if before[field] != value:
+                audit_change(cur, ctx, 'list', list_id, before['name'],
+                             'assigned' if field == 'assigned_to_id' else 'updated',
+                             field, before[field], value)
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -1717,10 +2266,15 @@ def delete_list(ctx, list_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            "DELETE FROM crm_lists WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
-            (list_id, ctx['team_id']),
+            f"DELETE FROM crm_lists l WHERE l.id = %(id)s AND {list_scope_sql(ctx, 'l')} "
+            f"RETURNING l.name",
+            {'id': list_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        deleted = cur.fetchone()
+        if deleted:
+            audit_change(cur, ctx, 'list', list_id, deleted['name'], 'deleted')
         conn.commit()
+        return bool(deleted)
     except Exception:
         conn.rollback()
         raise
@@ -1740,31 +2294,36 @@ def get_list(ctx, list_id):
             FROM crm_lists l
             JOIN users ou ON ou.id = l.owner_id
             LEFT JOIN users au ON au.id = l.assigned_to_id
-            WHERE l.id = %s AND (l.team_id = %s OR l.team_id IS NULL)
+            WHERE l.id = %(list_id)s AND {list_scope_sql(ctx, 'l')}
             """,
-            (list_id, ctx['team_id']),
+            {'list_id': list_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         lst = cur.fetchone()
         if not lst:
             return None
         lst = dict(lst)
         cur.execute(
-            """
+            f"""
             SELECT li.id AS item_id, li.note AS item_note, li.created_at AS added_at,
                    b.id AS building_id, b.address, b.borough, b.stage,
                    b.last_contacted_at AS b_last_contacted, b.contact_count,
                    c.id AS contact_id, c.name AS contact_name, c.company,
+                   c.do_not_contact,
                    c.last_contacted_at AS c_last_contacted,
                    (SELECT p.number || COALESCE(' ext. ' || p.extension, '') FROM crm_phones p
                     WHERE p.contact_id = c.id AND p.status = 'good'
                     ORDER BY p.is_primary DESC, p.created_at LIMIT 1) AS contact_phone
             FROM crm_list_items li
             LEFT JOIN crm_buildings b ON b.id = li.building_id
+              AND ({record_scope_sql(ctx, 'b')})
             LEFT JOIN crm_contacts c ON c.id = li.contact_id
-            WHERE li.list_id = %s
+              AND ({record_scope_sql(ctx, 'c')})
+            WHERE li.list_id = %(list_id)s
+              AND (li.building_id IS NULL OR b.id IS NOT NULL)
+              AND (li.contact_id IS NULL OR c.id IS NOT NULL)
             ORDER BY li.sort_order, li.id
             """,
-            (list_id,),
+            {'list_id': list_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         lst['items'] = [dict(r) for r in cur.fetchall()]
         return lst
@@ -1779,17 +2338,46 @@ def add_list_item(ctx, list_id, *, building_id=None, contact_id=None, note=None)
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        cur.execute(
+            f"SELECT 1 FROM crm_lists l WHERE l.id = %(id)s AND {list_scope_sql(ctx, 'l')}",
+            {'id': list_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        if not cur.fetchone():
+            raise PermissionError('List not found')
+        if building_id:
+            cur.execute(
+                f"SELECT b.address AS label FROM crm_buildings b WHERE b.id = %(id)s "
+                f"AND {record_scope_sql(ctx, 'b')}",
+                {'id': building_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+            )
+        else:
+            cur.execute(
+                f"SELECT c.name AS label FROM crm_contacts c WHERE c.id = %(id)s "
+                f"AND {record_scope_sql(ctx, 'c')}",
+                {'id': contact_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+            )
+        target = cur.fetchone()
+        if not target:
+            raise PermissionError('Record not found')
         col = 'building_id' if building_id else 'contact_id'
         cur.execute(
             f"""INSERT INTO crm_list_items (list_id, {col}, note, added_by_id, sort_order)
                 SELECT %s, %s, %s, %s,
                        COALESCE((SELECT MAX(sort_order) FROM crm_list_items WHERE list_id = %s), 0) + 1
-                ON CONFLICT DO NOTHING""",
+                ON CONFLICT DO NOTHING RETURNING id""",
             (list_id, building_id or contact_id, (note or '').strip() or None,
              ctx['user_id'], list_id),
         )
+        item = cur.fetchone()
+        if item:
+            cur.execute("SELECT name FROM crm_lists WHERE id = %s", (list_id,))
+            list_row = cur.fetchone()
+            audit_change(cur, ctx, 'list', list_id, list_row['name'], 'item_added',
+                         col, new_value={'item_id': item['id'], 'record_id': building_id or contact_id,
+                                        'label': target['label']})
         cur.execute("UPDATE crm_lists SET updated_at = NOW() WHERE id = %s", (list_id,))
         conn.commit()
+        return bool(item)
     except Exception:
         conn.rollback()
         raise
@@ -1803,13 +2391,23 @@ def remove_list_item(ctx, item_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            """DELETE FROM crm_list_items li
-               USING crm_lists l
-               WHERE li.id = %s AND l.id = li.list_id
-                 AND (l.team_id = %s OR l.team_id IS NULL)""",
-            (item_id, ctx['team_id']),
+            f"""SELECT li.list_id, li.building_id, li.contact_id, l.name
+                FROM crm_list_items li JOIN crm_lists l ON l.id = li.list_id
+                WHERE li.id = %(id)s AND {list_scope_sql(ctx, 'l')}
+                FOR UPDATE OF li""",
+            {'id': item_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        item = cur.fetchone()
+        if not item:
+            return False
+        cur.execute("DELETE FROM crm_list_items WHERE id = %s", (item_id,))
+        audit_change(cur, ctx, 'list', item['list_id'], item['name'], 'item_removed',
+                     'building_id' if item['building_id'] else 'contact_id',
+                     old_value={'item_id': item_id,
+                                'record_id': item['building_id'] or item['contact_id']})
+        cur.execute("UPDATE crm_lists SET updated_at = NOW() WHERE id = %s", (item['list_id'],))
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -2056,25 +2654,25 @@ def needs_attention(ctx, *, stale_days=14, untouched_days=7, limit=12):
     try:
         now = datetime.utcnow()
         cur.execute(
-            """
+            f"""
             SELECT b.id, b.address, b.borough, b.stage, b.last_contacted_at, b.created_at,
-                   CASE WHEN b.stage IN ('contacted','interested','quoted')
-                             AND COALESCE(b.last_contacted_at, b.created_at) < %s
+                   CASE WHEN b.stage IN ('contacted','interested','quoted','nurture')
+                             AND COALESCE(b.last_contacted_at, b.created_at) < %(stale)s
                         THEN 'stale' ELSE 'never_contacted' END AS reason
             FROM crm_buildings b
-            WHERE (b.team_id = %s OR b.team_id IS NULL)
+            WHERE {record_scope_sql(ctx, 'b')}
               AND (
-                (b.stage IN ('contacted','interested','quoted')
-                 AND COALESCE(b.last_contacted_at, b.created_at) < %s)
+                (b.stage IN ('contacted','interested','quoted','nurture')
+                 AND COALESCE(b.last_contacted_at, b.created_at) < %(stale)s)
                 OR
-                (b.stage = 'prospect' AND b.contact_count = 0 AND b.created_at < %s)
+                (b.stage = 'prospect' AND b.contact_count = 0 AND b.created_at < %(untouched)s)
               )
             ORDER BY COALESCE(b.last_contacted_at, b.created_at)
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (now - timedelta(days=stale_days), ctx['team_id'],
-             now - timedelta(days=stale_days), now - timedelta(days=untouched_days),
-             limit),
+            {'stale': now - timedelta(days=stale_days),
+             'untouched': now - timedelta(days=untouched_days), 'limit': limit,
+             'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
@@ -2082,14 +2680,15 @@ def needs_attention(ctx, *, stale_days=14, untouched_days=7, limit=12):
         conn.close()
 
 
-def rep_performance(ctx):
-    """Per-rep aggregates for the admin Team screen."""
+def rep_performance(ctx, days=30):
+    """Per-rep activity, pipeline, conversion, and hygiene for admin reports."""
+    days = max(1, min(int(days), 365))
     roster = get_team_roster(ctx['team_id'])
     if not roster:
         return []
     user_ids = [r['id'] for r in roster]
     today_start = ny_day_start_utc(0)
-    week_start = ny_day_start_utc(-6)
+    period_start = ny_day_start_utc(-(days - 1))
     today = ny_today()
     conn = get_db_connection()
     cur = conn.cursor()
@@ -2097,40 +2696,86 @@ def rep_performance(ctx):
         cur.execute(
             """SELECT user_id,
                  COUNT(*) FILTER (WHERE type = 'contacted' AND created_at >= %s) AS contacted_today,
-                 COUNT(*) FILTER (WHERE type = 'contacted' AND created_at >= %s) AS contacted_7d,
-                 COUNT(*) FILTER (WHERE type = 'visit' AND created_at >= %s) AS visits_7d,
-                 COUNT(*) FILTER (WHERE type = 'note' AND created_at >= %s) AS notes_7d
-               FROM crm_activity WHERE user_id = ANY(%s)
+                 COUNT(*) FILTER (WHERE type = 'contacted' AND created_at >= %s) AS contacted_period,
+                 COUNT(*) FILTER (WHERE type = 'contacted'
+                                  AND outcome IN ('spoke','callback_requested','meeting_set')
+                                  AND created_at >= %s) AS conversations,
+                 COUNT(*) FILTER (WHERE type = 'contacted' AND outcome = 'meeting_set' AND created_at >= %s) AS meetings,
+                 COUNT(*) FILTER (WHERE type = 'visit' AND created_at >= %s) AS visits_period,
+                 COUNT(*) FILTER (WHERE type = 'note' AND created_at >= %s) AS notes_period
+               FROM crm_activity
+               WHERE user_id = ANY(%s) AND (team_id = %s OR team_id IS NULL)
                GROUP BY user_id""",
-            (today_start, week_start, week_start, week_start, user_ids),
+            (today_start, period_start, period_start, period_start,
+             period_start, period_start, user_ids, ctx['team_id']),
         )
         activity = {r['user_id']: dict(r) for r in cur.fetchall()}
         cur.execute(
             """SELECT assigned_to_id AS user_id,
                  COUNT(*) FILTER (WHERE status = 'open') AS followups_open,
                  COUNT(*) FILTER (WHERE status = 'open' AND due_date < %s) AS followups_overdue,
-                 COUNT(*) FILTER (WHERE status = 'done' AND completed_at >= %s) AS followups_done_7d
-               FROM crm_follow_ups WHERE assigned_to_id = ANY(%s)
+                 COUNT(*) FILTER (WHERE status = 'done' AND completed_at >= %s) AS followups_done_period
+               FROM crm_follow_ups
+               WHERE assigned_to_id = ANY(%s) AND (team_id = %s OR team_id IS NULL)
                GROUP BY assigned_to_id""",
-            (today, week_start, user_ids),
+            (today, period_start, user_ids, ctx['team_id']),
         )
         followups = {r['user_id']: dict(r) for r in cur.fetchall()}
         cur.execute(
             """SELECT user_id, COUNT(*) AS views_today
-               FROM crm_view_events WHERE user_id = ANY(%s) AND created_at >= %s
+               FROM crm_view_events
+               WHERE user_id = ANY(%s) AND created_at >= %s AND team_id = %s
                GROUP BY user_id""",
-            (user_ids, today_start),
+            (user_ids, today_start, ctx['team_id']),
         )
         views = {r['user_id']: dict(r) for r in cur.fetchall()}
+        cur.execute(
+            """SELECT assigned_to_id AS user_id,
+                      COUNT(*) FILTER (WHERE stage NOT IN ('won','lost','client')) AS open_deals,
+                      COALESCE(SUM(estimated_value) FILTER (WHERE stage NOT IN ('won','lost')), 0) AS open_value,
+                      COUNT(*) FILTER (WHERE stage = 'nurture') AS nurture_deals,
+                      COUNT(*) FILTER (WHERE stage IN ('won','client') AND won_at >= %s) AS wins,
+                      COALESCE(SUM(estimated_value) FILTER (WHERE stage IN ('won','client') AND won_at >= %s), 0) AS won_value,
+                      COUNT(*) FILTER (WHERE stage = 'lost' AND lost_at >= %s) AS losses,
+                      COUNT(*) FILTER (WHERE stage NOT IN ('won','lost','client') AND next_step_at IS NULL) AS no_next_step
+               FROM crm_deals
+               WHERE assigned_to_id = ANY(%s) AND (team_id = %s OR team_id IS NULL)
+               GROUP BY assigned_to_id""",
+            (period_start, period_start, period_start, user_ids, ctx['team_id']),
+        )
+        deals = {r['user_id']: dict(r) for r in cur.fetchall()}
+        cur.execute(
+            """SELECT added_by_id AS user_id, COUNT(*) FILTER (WHERE created_at >= %s) AS records_added
+               FROM (
+                   SELECT added_by_id, created_at FROM crm_buildings WHERE team_id = %s
+                   UNION ALL SELECT added_by_id, created_at FROM crm_contacts WHERE team_id = %s
+                   UNION ALL SELECT added_by_id, created_at FROM crm_deals WHERE team_id = %s
+               ) records
+               WHERE added_by_id = ANY(%s) GROUP BY added_by_id""",
+            (period_start, ctx['team_id'], ctx['team_id'], ctx['team_id'], user_ids),
+        )
+        records = {r['user_id']: dict(r) for r in cur.fetchall()}
         out = []
         for rep in roster:
             row = dict(rep)
-            row.update({'contacted_today': 0, 'contacted_7d': 0, 'visits_7d': 0,
-                        'notes_7d': 0, 'followups_open': 0, 'followups_overdue': 0,
-                        'followups_done_7d': 0, 'views_today': 0})
+            row.update({'contacted_today': 0, 'contacted_period': 0, 'conversations': 0,
+                        'meetings': 0, 'visits_period': 0, 'notes_period': 0,
+                        'followups_open': 0, 'followups_overdue': 0,
+                        'followups_done_period': 0, 'views_today': 0,
+                        'open_deals': 0, 'open_value': 0, 'nurture_deals': 0,
+                        'wins': 0, 'won_value': 0, 'losses': 0,
+                        'no_next_step': 0, 'records_added': 0})
             row.update(activity.get(rep['id'], {}))
             row.update(followups.get(rep['id'], {}))
             row.update(views.get(rep['id'], {}))
+            row.update(deals.get(rep['id'], {}))
+            row.update(records.get(rep['id'], {}))
+            row['contacted_7d'] = row['contacted_period']
+            row['visits_7d'] = row['visits_period']
+            row['notes_7d'] = row['notes_period']
+            row['followups_done_7d'] = row['followups_done_period']
+            row['conversation_rate'] = round(100 * row['conversations'] / row['contacted_period'], 1) if row['contacted_period'] else 0
+            row['win_rate'] = round(100 * row['wins'] / (row['wins'] + row['losses']), 1) if row['wins'] + row['losses'] else 0
             out.append(row)
         return out
     finally:
@@ -2185,57 +2830,92 @@ def export_activity_rows(ctx, *, days=90):
         conn.close()
 
 
+def export_deals_rows(ctx):
+    """Admin-ready opportunity export with ownership and sourcing attribution."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT d.name, d.service_type, d.stage, d.estimated_value,
+                       d.expected_close_date, d.next_step, d.next_step_at,
+                       d.lost_reason, d.source, b.address AS building,
+                       c.name AS contact, {_user_name_sql('au')} AS assigned_to,
+                       {_user_name_sql('ab')} AS added_by, d.created_at, d.updated_at
+                FROM crm_deals d
+                LEFT JOIN crm_buildings b ON b.id = d.building_id
+                LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                LEFT JOIN users au ON au.id = d.assigned_to_id
+                JOIN users ab ON ab.id = d.added_by_id
+                WHERE d.team_id = %s ORDER BY d.updated_at DESC""",
+            (ctx['team_id'],),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
 # ============================================================
 # v2: search, editing, merge, bulk, focus queue, reports
 # ============================================================
 
 def global_search(ctx, q, limit=6):
-    """⌘K search across buildings, contacts (name/company/phone digits), lists."""
+    """⌘K search across every record the current user may access."""
     q = (q or '').strip()
     if len(q) < 2:
-        return {'buildings': [], 'contacts': [], 'lists': []}
+        return {'buildings': [], 'contacts': [], 'deals': [], 'lists': []}
     like = f'%{q}%'
     digits = normalize_phone_digits(q)
+    params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id'], 'like': like,
+              'raw': q, 'digits': f'%{digits}%', 'limit': limit}
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT id, address, borough, stage, last_contacted_at
-               FROM crm_buildings
-               WHERE (team_id = %s OR team_id IS NULL)
-                 AND (address ILIKE %s OR owner_name ILIKE %s OR bbl = %s)
-               ORDER BY last_contacted_at DESC NULLS LAST, address LIMIT %s""",
-            (ctx['team_id'], like, like, q, limit),
+            f"""SELECT b.id, b.address, b.borough, b.stage, b.last_contacted_at
+               FROM crm_buildings b
+               WHERE {record_scope_sql(ctx, 'b')}
+                 AND (b.address ILIKE %(like)s OR b.owner_name ILIKE %(like)s OR b.bbl = %(raw)s)
+               ORDER BY b.last_contacted_at DESC NULLS LAST, b.address LIMIT %(limit)s""",
+            params,
         )
         buildings = [dict(r) for r in cur.fetchall()]
         if digits and len(digits) >= 4:
             cur.execute(
-                """SELECT DISTINCT c.id, c.name, c.company, c.title, c.last_contacted_at
+                f"""SELECT DISTINCT c.id, c.name, c.company, c.title, c.last_contacted_at
                    FROM crm_contacts c
                    LEFT JOIN crm_phones p ON p.contact_id = c.id
-                   WHERE (c.team_id = %s OR c.team_id IS NULL)
-                     AND (c.name ILIKE %s OR c.company ILIKE %s OR p.digits LIKE %s)
-                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %s""",
-                (ctx['team_id'], like, like, f'%{digits}%', limit),
+                   WHERE {record_scope_sql(ctx, 'c')}
+                     AND (c.name ILIKE %(like)s OR c.company ILIKE %(like)s OR p.digits LIKE %(digits)s)
+                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %(limit)s""",
+                params,
             )
         else:
             cur.execute(
-                """SELECT c.id, c.name, c.company, c.title, c.last_contacted_at
+                f"""SELECT c.id, c.name, c.company, c.title, c.last_contacted_at
                    FROM crm_contacts c
-                   WHERE (c.team_id = %s OR c.team_id IS NULL)
-                     AND (c.name ILIKE %s OR c.company ILIKE %s)
-                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %s""",
-                (ctx['team_id'], like, like, limit),
+                   WHERE {record_scope_sql(ctx, 'c')}
+                     AND (c.name ILIKE %(like)s OR c.company ILIKE %(like)s)
+                   ORDER BY c.last_contacted_at DESC NULLS LAST, c.name LIMIT %(limit)s""",
+                params,
             )
         contacts = [dict(r) for r in cur.fetchall()]
         cur.execute(
-            """SELECT id, name FROM crm_lists
-               WHERE (team_id = %s OR team_id IS NULL) AND name ILIKE %s
-               ORDER BY updated_at DESC LIMIT %s""",
-            (ctx['team_id'], like, limit),
+            f"""SELECT l.id, l.name FROM crm_lists l
+               WHERE {list_scope_sql(ctx, 'l')} AND l.name ILIKE %(like)s
+               ORDER BY l.updated_at DESC LIMIT %(limit)s""",
+            params,
         )
         lists = [dict(r) for r in cur.fetchall()]
-        return {'buildings': buildings, 'contacts': contacts, 'lists': lists}
+        cur.execute(
+            f"""SELECT d.id, d.name, d.service_type, d.stage, d.estimated_value
+                FROM crm_deals d WHERE {record_scope_sql(ctx, 'd')}
+                  AND (d.name ILIKE %(like)s OR d.service_type ILIKE %(like)s)
+                ORDER BY d.updated_at DESC LIMIT %(limit)s""",
+            params,
+        )
+        deals = [dict(r) for r in cur.fetchall()]
+        return {'buildings': buildings, 'contacts': contacts, 'deals': deals, 'lists': lists}
     finally:
         cur.close()
         conn.close()
@@ -2264,14 +2944,29 @@ def _run_update(table, allowed, ctx, row_id, fields, int_fields=()):
     if not sets:
         return False
     sets.append('updated_at = NOW()')
-    params.extend([row_id, ctx['team_id']])
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        alias = 'b' if table == 'crm_buildings' else 'c'
+        label_col = 'address' if table == 'crm_buildings' else 'name'
         cur.execute(
-            f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            f"SELECT {', '.join(allowed)}, {label_col} AS _label FROM {table} {alias} "
+            f"WHERE {alias}.id = %(id)s AND {record_scope_sql(ctx, alias)} FOR UPDATE",
+            {'id': row_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        before = cur.fetchone()
+        if not before:
+            return False
+        params.append(row_id)
+        cur.execute(
+            f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s",
             params,
         )
+        for key in allowed:
+            if key in fields and before.get(key) != fields.get(key):
+                audit_change(cur, ctx, 'building' if table == 'crm_buildings' else 'contact',
+                             row_id, before['_label'], 'updated', key,
+                             before.get(key), fields.get(key))
         conn.commit()
         return cur.rowcount > 0
     except Exception:
@@ -2289,14 +2984,42 @@ def update_building(ctx, building_id, fields):
                        int_fields=('unit_count', 'year_built', 'num_floors'))
 
 
+def delete_building(ctx, building_id):
+    """Delete one team building while retaining an admin audit tombstone."""
+    if not ctx['is_admin']:
+        raise PermissionError('Admin access required')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT address FROM crm_buildings
+               WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+               FOR UPDATE""",
+            (building_id, ctx['team_id']),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        audit_change(cur, ctx, 'building', building_id, row['address'], 'deleted')
+        cur.execute("DELETE FROM crm_buildings WHERE id = %s", (building_id,))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def update_contact(ctx, contact_id, fields):
     if 'name' in fields and not (fields.get('name') or '').strip():
         raise ValueError('name is required')
     return _run_update('crm_contacts', CONTACT_EDITABLE, ctx, contact_id, fields)
 
 
-def update_follow_up(ctx, follow_up_id, *, title=None, due_date=None, note=None,
-                     assigned_to_id='__keep__'):
+def update_follow_up(ctx, follow_up_id, *, title=None, due_date=None, due_time=None,
+                     note=None, assigned_to_id='__keep__', reminder_minutes=None):
     sets, params = [], []
     if title is not None:
         sets.append('title = %s')
@@ -2304,23 +3027,61 @@ def update_follow_up(ctx, follow_up_id, *, title=None, due_date=None, note=None,
     if due_date is not None:
         sets.append('due_date = %s')
         params.append(due_date)
+        sets.append('due_at = %s')
+        params.append(local_due_at(due_date, due_time))
+        sets.append('notified_at = NULL')
     if note is not None:
         sets.append('note = %s')
         params.append(note.strip() or None)
     if assigned_to_id != '__keep__':
+        if not assignee_allowed(ctx, assigned_to_id or ctx['user_id']):
+            raise PermissionError('Only an admin can transfer a follow-up')
         sets.append('assigned_to_id = %s')
         params.append(assigned_to_id or ctx['user_id'])
+    if reminder_minutes is not None:
+        sets.append('reminder_minutes = %s')
+        params.append(max(0, min(int(reminder_minutes), 10080)))
     if not sets:
         return
-    params.extend([follow_up_id, ctx['team_id']])
+    params.extend([follow_up_id, ctx['team_id'], ctx['is_admin'], ctx['user_id']])
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            f"UPDATE crm_follow_ups SET {', '.join(sets)} WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            """SELECT title, due_date, due_at, note, assigned_to_id, reminder_minutes
+               FROM crm_follow_ups
+               WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+                 AND (%s OR assigned_to_id = %s)
+               FOR UPDATE""",
+            (follow_up_id, ctx['team_id'], ctx['is_admin'], ctx['user_id']),
+        )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute(
+            f"""UPDATE crm_follow_ups SET {', '.join(sets)}
+                WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+                  AND (%s OR assigned_to_id = %s)""",
             params,
         )
+        changed = {}
+        if title is not None:
+            changed['title'] = (title.strip() or 'Follow up')[:255]
+        if due_date is not None:
+            changed['due_date'] = due_date
+            changed['due_at'] = local_due_at(due_date, due_time)
+        if note is not None:
+            changed['note'] = note.strip() or None
+        if assigned_to_id != '__keep__':
+            changed['assigned_to_id'] = assigned_to_id or ctx['user_id']
+        if reminder_minutes is not None:
+            changed['reminder_minutes'] = max(0, min(int(reminder_minutes), 10080))
+        for field, value in changed.items():
+            if _json_value(before.get(field)) != _json_value(value):
+                audit_change(cur, ctx, 'follow_up', follow_up_id, before['title'],
+                             'updated', field, before.get(field), value)
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -2334,10 +3095,17 @@ def delete_follow_up(ctx, follow_up_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            "DELETE FROM crm_follow_ups WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
-            (follow_up_id, ctx['team_id']),
+            """DELETE FROM crm_follow_ups WHERE id = %s
+               AND (team_id = %s OR team_id IS NULL)
+               AND (%s OR assigned_to_id = %s)
+               RETURNING title""",
+            (follow_up_id, ctx['team_id'], ctx['is_admin'], ctx['user_id']),
         )
+        row = cur.fetchone()
+        if row:
+            audit_change(cur, ctx, 'follow_up', follow_up_id, row['title'], 'deleted')
         conn.commit()
+        return bool(row)
     except Exception:
         conn.rollback()
         raise
@@ -2351,9 +3119,11 @@ def update_phone(ctx, phone_id, *, label='__keep__', extension='__keep__', make_
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT p.id, p.contact_id FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
-               WHERE p.id = %s AND (c.team_id = %s OR c.team_id IS NULL)""",
-            (phone_id, ctx['team_id']),
+            f"""SELECT p.id, p.contact_id, p.number, p.label, p.extension,
+                       p.is_primary, c.name
+                FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
+               WHERE p.id = %(id)s AND {record_scope_sql(ctx, 'c')}""",
+            {'id': phone_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
         row = cur.fetchone()
         if not row:
@@ -2367,6 +3137,17 @@ def update_phone(ctx, phone_id, *, label='__keep__', extension='__keep__', make_
         if make_primary:
             cur.execute("UPDATE crm_phones SET is_primary = FALSE WHERE contact_id = %s", (row['contact_id'],))
             cur.execute("UPDATE crm_phones SET is_primary = TRUE WHERE id = %s", (phone_id,))
+        old_phone = {'number': row['number'], 'label': row['label'],
+                     'extension': row['extension'], 'is_primary': row['is_primary']}
+        new_phone = {
+            'number': row['number'],
+            'label': row['label'] if label == '__keep__' else ((label or '').strip() or None),
+            'extension': row['extension'] if extension == '__keep__' else normalize_extension(extension),
+            'is_primary': True if make_primary else row['is_primary'],
+        }
+        if old_phone != new_phone:
+            audit_change(cur, ctx, 'contact', row['contact_id'], row['name'],
+                         'phone_updated', 'phone', old_phone, new_phone)
         conn.commit()
         return True
     except Exception:
@@ -2382,12 +3163,21 @@ def delete_phone(ctx, phone_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            """DELETE FROM crm_phones p USING crm_contacts c
-               WHERE p.id = %s AND c.id = p.contact_id AND (c.team_id = %s OR c.team_id IS NULL)""",
-            (phone_id, ctx['team_id']),
+            f"""SELECT p.contact_id, p.number, p.extension, c.name
+                FROM crm_phones p JOIN crm_contacts c ON c.id = p.contact_id
+                WHERE p.id = %(id)s AND {record_scope_sql(ctx, 'c')}
+                FOR UPDATE""",
+            {'id': phone_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        row = cur.fetchone()
+        if not row:
+            return False
+        cur.execute("DELETE FROM crm_phones WHERE id = %s", (phone_id,))
+        audit_change(cur, ctx, 'contact', row['contact_id'], row['name'],
+                     'phone_deleted', 'phone',
+                     old_value={'number': row['number'], 'extension': row['extension']})
         conn.commit()
-        return cur.rowcount > 0
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -2401,12 +3191,27 @@ def unlink_contact(ctx, building_id, contact_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            """DELETE FROM crm_building_contacts bc USING crm_buildings b
-               WHERE bc.building_id = %s AND bc.contact_id = %s
-                 AND b.id = bc.building_id AND (b.team_id = %s OR b.team_id IS NULL)""",
-            (building_id, contact_id, ctx['team_id']),
+            f"""SELECT bc.role, b.address, c.name
+                FROM crm_building_contacts bc
+                JOIN crm_buildings b ON b.id = bc.building_id
+                JOIN crm_contacts c ON c.id = bc.contact_id
+                WHERE bc.building_id = %(building_id)s AND bc.contact_id = %(contact_id)s
+                  AND {record_scope_sql(ctx, 'b')} AND {record_scope_sql(ctx, 'c')}
+                FOR UPDATE OF bc""",
+            {'building_id': building_id, 'contact_id': contact_id,
+             'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute("DELETE FROM crm_building_contacts WHERE building_id = %s AND contact_id = %s",
+                    (building_id, contact_id))
+        audit_change(cur, ctx, 'building', building_id, before['address'],
+                     'contact_unlinked', 'contact',
+                     old_value={'contact_id': contact_id, 'contact_name': before['name'],
+                                'role': before['role']})
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -2421,12 +3226,27 @@ def set_building_contact_role(ctx, building_id, contact_id, role):
     cur = conn.cursor()
     try:
         cur.execute(
-            """UPDATE crm_building_contacts bc SET role = %s FROM crm_buildings b
-               WHERE bc.building_id = %s AND bc.contact_id = %s
-                 AND b.id = bc.building_id AND (b.team_id = %s OR b.team_id IS NULL)""",
-            (role, building_id, contact_id, ctx['team_id']),
+            f"""SELECT bc.role, b.address, c.name
+                FROM crm_building_contacts bc
+                JOIN crm_buildings b ON b.id = bc.building_id
+                JOIN crm_contacts c ON c.id = bc.contact_id
+                WHERE bc.building_id = %(building_id)s AND bc.contact_id = %(contact_id)s
+                  AND {record_scope_sql(ctx, 'b')} AND {record_scope_sql(ctx, 'c')}
+                FOR UPDATE OF bc""",
+            {'building_id': building_id, 'contact_id': contact_id,
+             'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
+        before = cur.fetchone()
+        if not before:
+            return False
+        cur.execute("UPDATE crm_building_contacts SET role = %s WHERE building_id = %s AND contact_id = %s",
+                    (role, building_id, contact_id))
+        if before['role'] != role:
+            audit_change(cur, ctx, 'building', building_id, before['address'],
+                         'contact_role_changed', 'contact_role', before['role'],
+                         {'role': role, 'contact_id': contact_id, 'contact_name': before['name']})
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -2441,11 +3261,16 @@ def delete_contact(ctx, contact_id):
     cur = conn.cursor()
     try:
         cur.execute(
-            "DELETE FROM crm_contacts WHERE id = %s AND (team_id = %s OR team_id IS NULL)",
+            """DELETE FROM crm_contacts
+               WHERE id = %s AND (team_id = %s OR team_id IS NULL)
+               RETURNING name""",
             (contact_id, ctx['team_id']),
         )
+        row = cur.fetchone()
+        if row:
+            audit_change(cur, ctx, 'contact', contact_id, row['name'], 'deleted')
         conn.commit()
-        return cur.rowcount > 0
+        return bool(row)
     except Exception:
         conn.rollback()
         raise
@@ -2516,6 +3341,9 @@ def merge_contacts(ctx, source_id, target_id):
             (f"Merged in duplicate record “{source['name']}”", target_id,
              ctx['user_id'], ctx['team_id'], Json({'merged_from': source_id})),
         )
+        audit_change(cur, ctx, 'contact', target_id, target['name'], 'merged',
+                     new_value={'merged_from_id': source_id,
+                                'merged_from_name': source['name']})
         conn.commit()
         return True
     except Exception:
@@ -2528,6 +3356,8 @@ def merge_contacts(ctx, source_id, target_id):
 
 def find_duplicate_contacts(ctx, limit=20):
     """Numbers shared by more than one contact on the team."""
+    if not ctx['is_admin']:
+        return []
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -2554,14 +3384,23 @@ def bulk_update_buildings(ctx, building_ids, action, value=None):
     ids = [int(i) for i in building_ids][:500]
     if not ids:
         return 0
+    if action == 'assign':
+        assignee = int(value) if value else None
+        if not ctx['is_admin'] or not assignee_allowed(ctx, assignee):
+            raise PermissionError('Only an admin can transfer records')
+    if action == 'list' and not get_list(ctx, int(value)):
+        raise PermissionError('List not found')
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT id FROM crm_buildings WHERE id = ANY(%s) AND (team_id = %s OR team_id IS NULL)",
-            (ids, ctx['team_id']),
+            f"""SELECT b.id, b.address, b.stage, b.assigned_to_id
+                FROM crm_buildings b WHERE b.id = ANY(%(ids)s)
+                AND {record_scope_sql(ctx, 'b')} FOR UPDATE""",
+            {'ids': ids, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
         )
-        visible = {r['id'] for r in cur.fetchall()}
+        visible_rows = {r['id']: dict(r) for r in cur.fetchall()}
+        visible = set(visible_rows)
         # Keep the caller's selection order — it becomes the list order.
         ids = [i for i in ids if i in visible]
         if not ids:
@@ -2581,11 +3420,39 @@ def bulk_update_buildings(ctx, building_ids, action, value=None):
                        VALUES ('stage_change', %s, %s, %s, %s)""",
                     (f'Stage set to {STAGE_LABELS[value]} (bulk)', bid, ctx['user_id'], ctx['team_id']),
                 )
+                before = visible_rows[bid]
+                audit_change(cur, ctx, 'building', bid, before['address'], 'stage_changed',
+                             'stage', before['stage'], value)
         elif action == 'assign':
+            assignee = int(value) if value else None
             cur.execute(
                 "UPDATE crm_buildings SET assigned_to_id = %s, updated_at = NOW() WHERE id = ANY(%s)",
-                (int(value) if value else None, ids),
+                (assignee, ids),
             )
+            if assignee:
+                cur.execute(
+                    """UPDATE crm_contacts c SET assigned_to_id = %s, updated_at = NOW()
+                       FROM crm_building_contacts bc
+                       WHERE bc.contact_id = c.id AND bc.building_id = ANY(%s)
+                         AND c.assigned_to_id IS NULL""",
+                    (assignee, ids),
+                )
+            for bid in ids:
+                before = visible_rows[bid]
+                if before['assigned_to_id'] == assignee:
+                    continue
+                if before['assigned_to_id']:
+                    cur.execute(
+                        "DELETE FROM crm_notifications WHERE user_id = %s AND url = %s",
+                        (before['assigned_to_id'], f'/crm/buildings/{bid}'),
+                    )
+                audit_change(cur, ctx, 'building', bid, before['address'], 'assigned',
+                             'assigned_to_id', before['assigned_to_id'], assignee)
+                if assignee:
+                    create_notification(cur, ctx, assignee, 'assignment',
+                                        'A building was assigned to you', before['address'],
+                                        f'/crm/buildings/{bid}',
+                                        f'building-assigned:{bid}:{assignee}')
         elif action == 'star':
             cur.execute(
                 """INSERT INTO crm_stars (user_id, building_id)
@@ -2603,9 +3470,18 @@ def bulk_update_buildings(ctx, building_ids, action, value=None):
                    SELECT %s, t.b, %s,
                           COALESCE((SELECT MAX(sort_order) FROM crm_list_items WHERE list_id = %s), 0) + t.ord
                    FROM unnest(%s::int[]) WITH ORDINALITY AS t(b, ord)
-                   ON CONFLICT DO NOTHING""",
+                   ON CONFLICT DO NOTHING RETURNING building_id""",
                 (list_id, ctx['user_id'], list_id, ids),
             )
+            added_ids = [r['building_id'] for r in cur.fetchall()]
+            if added_ids:
+                cur.execute("SELECT name FROM crm_lists WHERE id = %s", (list_id,))
+                list_row = cur.fetchone()
+                for bid in added_ids:
+                    audit_change(cur, ctx, 'list', list_id, list_row['name'], 'item_added',
+                                 'building_id',
+                                 new_value={'record_id': bid,
+                                            'label': visible_rows[bid]['address']})
             cur.execute("UPDATE crm_lists SET updated_at = NOW() WHERE id = %s", (list_id,))
         else:
             raise ValueError('unknown bulk action')
@@ -2629,21 +3505,42 @@ def focus_queue(ctx, source='today', list_id=None, limit=40):
     """
     items, seen = [], set()
 
-    def push(kind, ident, label, sub=None, followup_id=None, followup_title=None):
+    def push(kind, ident, label, sub=None, followup_id=None, followup_title=None,
+             deal_id=None):
         key = (kind, ident)
         if key in seen or ident is None:
             return
         seen.add(key)
         items.append({'type': kind, 'id': ident, 'label': label, 'sub': sub,
-                      'followup_id': followup_id, 'followup_title': followup_title})
+                      'followup_id': followup_id, 'followup_title': followup_title,
+                      'deal_id': deal_id})
 
     if source == 'list' and list_id:
         lst = get_list(ctx, list_id)
         for it in (lst or {}).get('items', []):
             if it['building_id']:
                 push('building', it['building_id'], it['address'], it['borough'])
-            elif it['contact_id']:
+            elif it['contact_id'] and not it.get('do_not_contact'):
                 push('contact', it['contact_id'], it['contact_name'], it['company'])
+    elif source == 'nurture':
+        for d in list_deals(ctx, stage='nurture', limit=limit):
+            if d.get('contact_id') and not d.get('contact_do_not_contact'):
+                push('contact', d['contact_id'], d.get('contact_name') or d['name'],
+                     f'Nurture: {d["name"]}', deal_id=d['id'])
+            elif d.get('building_id'):
+                push('building', d['building_id'], d.get('building_address') or d['name'],
+                     f'Nurture: {d["name"]}', deal_id=d['id'])
+    elif source == 'next_steps':
+        for d in list_deals(ctx, missing_next_step=True, limit=limit):
+            if d.get('contact_id') and not d.get('contact_do_not_contact'):
+                push('contact', d['contact_id'], d.get('contact_name') or d['name'],
+                     f'No next step: {d["name"]}', deal_id=d['id'])
+            elif d.get('building_id'):
+                push('building', d['building_id'], d.get('building_address') or d['name'],
+                     f'No next step: {d["name"]}', deal_id=d['id'])
+        for r in records_missing_next_step(ctx, limit=limit):
+            if r['kind'] == 'building':
+                push('building', r['id'], r['label'], 'No next step scheduled')
     elif source == 'cold':
         for b in list_buildings(ctx, cold=True, sort='last_contacted', limit=limit):
             push('building', b['id'], b['address'], 'Untouched 30d+')
@@ -2656,10 +3553,23 @@ def focus_queue(ctx, source='today', list_id=None, limit=40):
         for f in q['overdue'] + q['due_today']:
             if f['b_id']:
                 push('building', f['b_id'], f['building_address'],
-                     f'Follow-up: {f["title"]}', f['id'], f['title'])
-            elif f['c_id']:
+                     f'Follow-up: {f["title"]}', f['id'], f['title'], f.get('d_id'))
+            elif f['c_id'] and not f.get('contact_do_not_contact'):
                 push('contact', f['c_id'], f['contact_name'],
-                     f'Follow-up: {f["title"]}', f['id'], f['title'])
+                     f'Follow-up: {f["title"]}', f['id'], f['title'], f.get('d_id'))
+            elif f.get('deal_c_id') and not f.get('deal_contact_do_not_contact'):
+                push('contact', f['deal_c_id'], f['deal_contact_name'],
+                     f'Deal follow-up: {f["deal_name"]}', f['id'], f['title'], f['d_id'])
+            elif f.get('deal_b_id'):
+                push('building', f['deal_b_id'], f['deal_building_address'],
+                     f'Deal follow-up: {f["deal_name"]}', f['id'], f['title'], f['d_id'])
+        for d in due_deal_steps(ctx, limit=limit):
+            if d.get('contact_id') and not d.get('do_not_contact'):
+                push('contact', d['contact_id'], d['contact_name'],
+                     f'Deal next step: {d["next_step"] or d["name"]}', deal_id=d['id'])
+            elif d.get('building_id'):
+                push('building', d['building_id'], d['building_address'],
+                     f'Deal next step: {d["next_step"] or d["name"]}', deal_id=d['id'])
         for b in needs_attention(ctx, limit=limit):
             push('building', b['id'], b['address'],
                  'Stale' if b['reason'] == 'stale' else 'Never contacted')
@@ -2671,9 +3581,18 @@ def due_count(ctx):
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT COUNT(*) AS n FROM crm_follow_ups
-               WHERE assigned_to_id = %s AND status = 'open' AND due_date <= %s""",
-            (ctx['user_id'], ny_today()),
+            f"""SELECT
+                 (SELECT COUNT(*) FROM crm_follow_ups
+                  WHERE assigned_to_id = %(user_id)s AND status = 'open'
+                    AND due_date <= %(today)s)
+                 +
+                 (SELECT COUNT(*) FROM crm_deals d
+                  WHERE {record_scope_sql(ctx, 'd')}
+                    AND d.stage NOT IN ('won','lost','client')
+                    AND d.next_step_at IS NOT NULL
+                    AND d.next_step_at < %(tomorrow)s) AS n""",
+            {'user_id': ctx['user_id'], 'team_id': ctx['team_id'],
+             'today': ny_today(), 'tomorrow': ny_day_start_utc(1)},
         )
         return cur.fetchone()['n']
     finally:
@@ -2740,3 +3659,928 @@ def contacts_alpha_groups(contacts):
     if '#' in groups:
         ordered.append('#')
     return [(k, groups[k]) for k in ordered]
+
+
+# ============================================================
+# v3: owned records, deals, notifications, reporting & offboarding
+# ============================================================
+
+def _json_value(value):
+    """JSON-safe audit value without losing dates or Decimal-like numbers."""
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(v) for v in value]
+    try:
+        from decimal import Decimal
+        if isinstance(value, Decimal):
+            return float(value)
+    except ImportError:
+        pass
+    return value
+
+
+def audit_change(cur, ctx, entity_type, entity_id, entity_label, action,
+                 field_name=None, old_value=None, new_value=None):
+    """Append one admin-visible audit entry inside the caller's transaction."""
+    cur.execute(
+        """INSERT INTO crm_change_history
+           (entity_type, entity_id, entity_label, action, field_name,
+            old_value, new_value, actor_user_id, team_id)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (entity_type, entity_id, (entity_label or '')[:255] or None, action,
+         field_name, Json(_json_value(old_value)) if old_value is not None else None,
+         Json(_json_value(new_value)) if new_value is not None else None,
+         ctx['user_id'], ctx['team_id']),
+    )
+
+
+def create_notification(cur, ctx, user_id, kind, title, body=None, url=None,
+                        dedupe_key=None):
+    if not user_id:
+        return None
+    preference_column = {
+        'followup': 'followups',
+        'assignment': 'assignments',
+        'deal_change': 'deal_changes',
+        'admin_activity': 'admin_activity',
+    }.get(kind)
+    if preference_column:
+        cur.execute(
+            f"""SELECT enabled, {preference_column} AS kind_enabled
+                FROM crm_notification_preferences WHERE user_id = %s""",
+            (user_id,),
+        )
+        preference = cur.fetchone()
+        if preference and (not preference['enabled'] or not preference['kind_enabled']):
+            return None
+    cur.execute(
+        """INSERT INTO crm_notifications
+           (user_id, team_id, kind, title, body, url, dedupe_key)
+           VALUES (%s,%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+           RETURNING id""",
+        (user_id, ctx['team_id'], kind, title[:255], (body or '').strip() or None,
+         (url or '').strip() or None, dedupe_key),
+    )
+    row = cur.fetchone()
+    return row['id'] if row else None
+
+
+def assign_contact(ctx, contact_id, assignee_id):
+    if not ctx['is_admin'] and assignee_id != ctx['user_id']:
+        raise PermissionError('Only an admin can transfer records')
+    if not assignee_allowed(ctx, assignee_id):
+        raise ValueError('That assignee is not on this team')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT c.name, c.assigned_to_id FROM crm_contacts c
+                WHERE c.id = %(id)s AND {record_scope_sql(ctx, 'c')} FOR UPDATE""",
+            {'id': contact_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        before = cur.fetchone()
+        if before:
+            cur.execute(
+                "UPDATE crm_contacts SET assigned_to_id = %s, updated_at = NOW() WHERE id = %s",
+                (assignee_id, contact_id),
+            )
+            if before['assigned_to_id'] != assignee_id:
+                if before['assigned_to_id']:
+                    cur.execute(
+                        "DELETE FROM crm_notifications WHERE user_id = %s AND url = %s",
+                        (before['assigned_to_id'], f'/crm/contacts/{contact_id}'),
+                    )
+                audit_change(cur, ctx, 'contact', contact_id, before['name'], 'assigned',
+                             'assigned_to_id', before['assigned_to_id'], assignee_id)
+                if assignee_id:
+                    create_notification(cur, ctx, assignee_id, 'assignment',
+                                        'A contact was assigned to you', before['name'],
+                                        f'/crm/contacts/{contact_id}',
+                                        f'contact-assigned:{contact_id}:{assignee_id}')
+        conn.commit()
+        return bool(before)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_deals(ctx, *, stage=None, q=None, assignee_id=None,
+               missing_next_step=False, limit=400):
+    params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id'], 'limit': limit}
+    where = [record_scope_sql(ctx, 'd')]
+    if stage in DEAL_STAGES:
+        where.append('d.stage = %(stage)s')
+        params['stage'] = stage
+    if q:
+        where.append("(d.name ILIKE %(q)s OR d.service_type ILIKE %(q)s OR b.address ILIKE %(q)s OR c.name ILIKE %(q)s)")
+        params['q'] = f'%{q}%'
+    if assignee_id and ctx['is_admin']:
+        where.append('d.assigned_to_id = %(assignee_id)s')
+        params['assignee_id'] = assignee_id
+    if missing_next_step:
+        where.append("d.stage NOT IN ('won','lost','client') AND d.next_step_at IS NULL")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT d.*, b.address AS building_address, c.name AS contact_name,
+                       c.do_not_contact AS contact_do_not_contact,
+                       {_user_name_sql('au')} AS assigned_to_name,
+                       {_user_name_sql('ab')} AS added_by_name,
+                       (d.stage NOT IN ('won','lost','client') AND d.next_step_at IS NULL) AS needs_next_step
+                FROM crm_deals d
+                LEFT JOIN crm_buildings b ON b.id = d.building_id
+                  AND {record_scope_sql(ctx, 'b')}
+                LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                  AND {record_scope_sql(ctx, 'c')}
+                LEFT JOIN users au ON au.id = d.assigned_to_id
+                JOIN users ab ON ab.id = d.added_by_id
+                WHERE {' AND '.join(where)}
+                ORDER BY CASE WHEN d.next_step_at IS NULL THEN 1 ELSE 0 END,
+                         d.next_step_at, d.updated_at DESC
+                LIMIT %(limit)s""",
+            params,
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        if not ctx['is_admin']:
+            for row in rows:
+                if row.get('building_id') and not row.get('building_address'):
+                    row['building_id'] = None
+                if row.get('contact_id') and not row.get('contact_name'):
+                    row['contact_id'] = None
+        return rows
+    finally:
+        cur.close()
+        conn.close()
+
+
+def deal_stage_counts(ctx):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT d.stage, COUNT(*) AS n,
+                       COALESCE(SUM(d.estimated_value), 0) AS value
+                FROM crm_deals d WHERE {record_scope_sql(ctx, 'd')}
+                GROUP BY d.stage""",
+            {'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        counts = {r['stage']: {'n': r['n'], 'value': r['value']} for r in cur.fetchall()}
+        stage_rows = list(counts.values())
+        counts['all'] = {
+            'n': sum(v['n'] for v in stage_rows),
+            'value': sum((v['value'] for v in stage_rows), 0),
+        }
+        open_stages = [counts[s] for s in DEAL_STAGES
+                       if s not in ('won', 'lost', 'client') and s in counts]
+        counts['open'] = {
+            'n': sum(v['n'] for v in open_stages),
+            'value': sum((v['value'] for v in open_stages), 0),
+        }
+        return counts
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_deal(ctx, deal_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT d.*, b.address AS building_address, b.borough,
+                       c.name AS contact_name, c.company AS contact_company,
+                       {_user_name_sql('au')} AS assigned_to_name,
+                       {_user_name_sql('ab')} AS added_by_name
+                FROM crm_deals d
+                LEFT JOIN crm_buildings b ON b.id = d.building_id
+                  AND {record_scope_sql(ctx, 'b')}
+                LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                  AND {record_scope_sql(ctx, 'c')}
+                LEFT JOIN users au ON au.id = d.assigned_to_id
+                JOIN users ab ON ab.id = d.added_by_id
+                WHERE d.id = %(id)s AND {record_scope_sql(ctx, 'd')}""",
+            {'id': deal_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        deal = dict(row)
+        if not ctx['is_admin']:
+            if deal.get('building_id') and not deal.get('building_address'):
+                deal['building_id'] = None
+            if deal.get('contact_id') and not deal.get('contact_name'):
+                deal['contact_id'] = None
+        cur.execute(
+            f"""SELECT f.*, {_user_name_sql('u')} AS assigned_to_name,
+                       b.address AS building_address, b.id AS b_id,
+                       c.name AS contact_name, c.id AS c_id,
+                       d.name AS deal_name, d.id AS d_id
+                FROM crm_follow_ups f JOIN users u ON u.id = f.assigned_to_id
+                LEFT JOIN crm_buildings b ON b.id = f.building_id
+                  AND {record_scope_sql(ctx, 'b')}
+                LEFT JOIN crm_contacts c ON c.id = f.contact_id
+                  AND {record_scope_sql(ctx, 'c')}
+                LEFT JOIN crm_deals d ON d.id = f.deal_id
+                  AND {record_scope_sql(ctx, 'd')}
+                WHERE f.deal_id = %(deal_id)s AND f.status = 'open'
+                  AND (%(is_admin)s OR f.assigned_to_id = %(user_id)s)
+                ORDER BY COALESCE(f.due_at, f.due_date::timestamp)""",
+            {'deal_id': deal_id, 'is_admin': ctx['is_admin'],
+             'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        deal['follow_ups'] = [dict(r) for r in cur.fetchall()]
+        return deal
+    finally:
+        cur.close()
+        conn.close()
+
+
+def deals_for_entity(ctx, *, building_id=None, contact_id=None):
+    rows = list_deals(ctx, limit=500)
+    key, value = ('building_id', building_id) if building_id else ('contact_id', contact_id)
+    return [r for r in rows if r.get(key) == value]
+
+
+def create_deal(ctx, *, name, service_type=None, stage='prospect', estimated_value=None,
+                expected_close_date=None, next_step=None, next_step_at=None,
+                lost_reason=None, source='manual', building_id=None, contact_id=None,
+                assigned_to_id=None):
+    name = (name or '').strip()
+    if not name:
+        raise ValueError('Deal name is required')
+    if stage not in DEAL_STAGES:
+        raise ValueError('Invalid stage')
+    if stage == 'lost' and not (lost_reason or '').strip():
+        raise ValueError('Add a lost reason so the team can learn from it')
+    if (building_id or contact_id) and not entity_in_team(
+            ctx, building_id=building_id, contact_id=contact_id):
+        raise PermissionError('Linked record not found')
+    assignee = assigned_to_id or ctx['user_id']
+    if not assignee_allowed(ctx, assignee):
+        raise PermissionError('Only an admin can assign a deal to another rep')
+    try:
+        value = float(estimated_value) if estimated_value not in (None, '') else None
+    except (TypeError, ValueError):
+        raise ValueError('Estimated value must be a number')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO crm_deals
+               (name, service_type, stage, estimated_value, expected_close_date,
+                next_step, next_step_at, lost_reason, source, building_id,
+                contact_id, assigned_to_id, added_by_id, team_id, won_at, lost_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                       CASE WHEN %s IN ('won','client') THEN NOW() END,
+                       CASE WHEN %s = 'lost' THEN NOW() END)
+               RETURNING id""",
+            (name[:255], (service_type or '').strip()[:120] or None, stage, value,
+             expected_close_date, (next_step or '').strip()[:255] or None,
+             next_step_at, (lost_reason or '').strip() or None, (source or 'manual')[:40],
+             building_id, contact_id, assignee, ctx['user_id'], ctx['team_id'], stage, stage),
+        )
+        deal_id = cur.fetchone()['id']
+        audit_change(cur, ctx, 'deal', deal_id, name, 'created',
+                     new_value={'stage': stage, 'estimated_value': value,
+                                'assigned_to_id': assignee})
+        if assignee != ctx['user_id']:
+            create_notification(cur, ctx, assignee, 'assignment', 'A deal was assigned to you',
+                                name, f'/crm/deals/{deal_id}',
+                                f'deal-assigned:{deal_id}:{assignee}')
+        conn.commit()
+        return deal_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+DEAL_EDITABLE = ('name', 'service_type', 'stage', 'estimated_value',
+                 'expected_close_date', 'next_step', 'next_step_at',
+                 'lost_reason', 'source', 'building_id', 'contact_id',
+                 'assigned_to_id')
+
+
+def update_deal(ctx, deal_id, fields):
+    if fields.get('building_id') and not entity_in_team(
+            ctx, building_id=fields['building_id']):
+        raise PermissionError('Linked building not found')
+    if fields.get('contact_id') and not entity_in_team(
+            ctx, contact_id=fields['contact_id']):
+        raise PermissionError('Linked contact not found')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"SELECT d.* FROM crm_deals d WHERE d.id = %(id)s AND {record_scope_sql(ctx, 'd')} FOR UPDATE",
+            {'id': deal_id, 'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        before = cur.fetchone()
+        if not before:
+            return False
+        stage = fields.get('stage', before['stage'])
+        if stage not in DEAL_STAGES:
+            raise ValueError('Invalid stage')
+        lost_reason = fields.get('lost_reason', before['lost_reason'])
+        if stage == 'lost' and not (lost_reason or '').strip():
+            raise ValueError('Add a lost reason so the team can learn from it')
+        assignee = fields.get('assigned_to_id', before['assigned_to_id'])
+        if not assignee_allowed(ctx, assignee):
+            raise PermissionError('Only an admin can transfer a deal')
+        if not ctx['is_admin'] and assignee != before['assigned_to_id']:
+            raise PermissionError('Only an admin can transfer a deal')
+        sets, values = [], []
+        for field in DEAL_EDITABLE:
+            if field not in fields:
+                continue
+            value = fields[field]
+            if field == 'estimated_value':
+                value = float(value) if value not in (None, '') else None
+            if isinstance(value, str):
+                value = value.strip() or None
+            sets.append(f'{field} = %s')
+            values.append(value)
+        if not sets:
+            return True
+        if 'next_step_at' in fields:
+            sets.append('next_step_notified_at = NULL')
+        sets.extend([
+            "won_at = CASE WHEN %s IN ('won','client') AND stage NOT IN ('won','client') THEN NOW() ELSE won_at END",
+            "lost_at = CASE WHEN %s = 'lost' AND stage <> 'lost' THEN NOW() ELSE lost_at END",
+            'updated_at = NOW()',
+        ])
+        values.extend([stage, stage, deal_id])
+        cur.execute(f"UPDATE crm_deals SET {', '.join(sets)} WHERE id = %s", values)
+        for field in DEAL_EDITABLE:
+            if field in fields and _json_value(before.get(field)) != _json_value(fields[field]):
+                action = 'stage_changed' if field == 'stage' else ('assigned' if field == 'assigned_to_id' else 'updated')
+                audit_change(cur, ctx, 'deal', deal_id, before['name'], action, field,
+                             before.get(field), fields[field])
+        if assignee and assignee != before['assigned_to_id']:
+            if before['assigned_to_id']:
+                cur.execute(
+                    "DELETE FROM crm_notifications WHERE user_id = %s AND url = %s",
+                    (before['assigned_to_id'], f'/crm/deals/{deal_id}'),
+                )
+            create_notification(cur, ctx, assignee, 'assignment', 'A deal was assigned to you',
+                                fields.get('name') or before['name'], f'/crm/deals/{deal_id}',
+                                f'deal-assigned:{deal_id}:{assignee}')
+        elif assignee != before['assigned_to_id'] and before['assigned_to_id']:
+            cur.execute(
+                "DELETE FROM crm_notifications WHERE user_id = %s AND url = %s",
+                (before['assigned_to_id'], f'/crm/deals/{deal_id}'),
+            )
+        elif ('stage' in fields and fields['stage'] != before['stage']
+              and assignee and assignee != ctx['user_id']):
+            create_notification(
+                cur, ctx, assignee, 'deal_change',
+                f'Deal moved to {STAGE_LABELS[fields["stage"]]}',
+                fields.get('name') or before['name'], f'/crm/deals/{deal_id}',
+            )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_deal(ctx, deal_id):
+    if not ctx['is_admin']:
+        raise PermissionError('Admin access required')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT name FROM crm_deals WHERE id = %s AND team_id = %s", (deal_id, ctx['team_id']))
+        row = cur.fetchone()
+        if not row:
+            return False
+        audit_change(cur, ctx, 'deal', deal_id, row['name'], 'deleted')
+        cur.execute("DELETE FROM crm_deals WHERE id = %s", (deal_id,))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def records_missing_next_step(ctx, limit=50):
+    """Active deals and buildings with no dated next action."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id'], 'limit': limit}
+    try:
+        cur.execute(
+            f"""SELECT 'deal' AS kind, d.id, d.name AS label, d.stage,
+                       b.address AS sub, d.updated_at AS age_at
+                FROM crm_deals d LEFT JOIN crm_buildings b ON b.id = d.building_id
+                  AND {record_scope_sql(ctx, 'b')}
+                WHERE {record_scope_sql(ctx, 'd')}
+                  AND d.stage NOT IN ('won','lost','client') AND d.next_step_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM crm_follow_ups f
+                                  WHERE f.deal_id = d.id AND f.status = 'open')
+                UNION ALL
+                SELECT 'building', b.id, b.address, b.stage, b.borough, b.updated_at
+                FROM crm_buildings b
+                WHERE {record_scope_sql(ctx, 'b')}
+                  AND b.stage NOT IN ('won','lost','client')
+                  AND NOT EXISTS (SELECT 1 FROM crm_follow_ups f
+                                  WHERE f.building_id = b.id AND f.status = 'open')
+                ORDER BY age_at LIMIT %(limit)s""",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def due_deal_steps(ctx, limit=50):
+    """Active deal actions due by the end of the current NY day."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    params = {'team_id': ctx['team_id'], 'user_id': ctx['user_id'],
+              'tomorrow': ny_day_start_utc(1), 'limit': limit}
+    try:
+        cur.execute(
+            f"""SELECT d.id, d.name, d.next_step, d.next_step_at, d.stage,
+                       b.id AS building_id, b.address AS building_address,
+                       c.id AS contact_id, c.name AS contact_name,
+                       c.do_not_contact
+                FROM crm_deals d
+                LEFT JOIN crm_buildings b ON b.id = d.building_id
+                  AND {record_scope_sql(ctx, 'b')}
+                LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                  AND {record_scope_sql(ctx, 'c')}
+                WHERE {record_scope_sql(ctx, 'd')}
+                  AND d.stage NOT IN ('won','lost','client')
+                  AND d.next_step_at IS NOT NULL
+                  AND d.next_step_at < %(tomorrow)s
+                ORDER BY d.next_step_at, d.id LIMIT %(limit)s""",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def notification_inbox(ctx, limit=60):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT * FROM crm_notifications WHERE user_id = %s
+               ORDER BY created_at DESC LIMIT %s""",
+            (ctx['user_id'], limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def unread_notification_count(ctx):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) AS n FROM crm_notifications WHERE user_id = %s AND read_at IS NULL",
+                    (ctx['user_id'],))
+        return cur.fetchone()['n']
+    finally:
+        cur.close()
+        conn.close()
+
+
+def mark_notifications_read(ctx, notification_id=None):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if notification_id:
+            cur.execute("UPDATE crm_notifications SET read_at = NOW() WHERE id = %s AND user_id = %s",
+                        (notification_id, ctx['user_id']))
+        else:
+            cur.execute("UPDATE crm_notifications SET read_at = NOW() WHERE user_id = %s AND read_at IS NULL",
+                        (ctx['user_id'],))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def notification_preferences(ctx):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO crm_notification_preferences (user_id)
+               VALUES (%s) ON CONFLICT (user_id) DO NOTHING""",
+            (ctx['user_id'],),
+        )
+        cur.execute("SELECT * FROM crm_notification_preferences WHERE user_id = %s", (ctx['user_id'],))
+        row = dict(cur.fetchone())
+        cur.execute("SELECT COUNT(*) AS n FROM crm_push_subscriptions WHERE user_id = %s", (ctx['user_id'],))
+        row['push_subscriptions'] = cur.fetchone()['n']
+        conn.commit()
+        return row
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_notification_preferences(ctx, fields):
+    allowed = ('enabled', 'followups', 'assignments', 'deal_changes', 'admin_activity',
+               'quiet_start', 'quiet_end', 'timezone', 'reminder_minutes')
+    sets, values = [], []
+    for key in allowed:
+        if key in fields:
+            sets.append(f'{key} = %s')
+            values.append(fields[key])
+    if not sets:
+        return notification_preferences(ctx)
+    notification_preferences(ctx)
+    values.append(ctx['user_id'])
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(f"UPDATE crm_notification_preferences SET {', '.join(sets)}, updated_at = NOW() WHERE user_id = %s",
+                    values)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return notification_preferences(ctx)
+
+
+def save_push_subscription(ctx, subscription, user_agent=None):
+    endpoint = (subscription or {}).get('endpoint')
+    keys = (subscription or {}).get('keys') or {}
+    if not endpoint or not keys.get('p256dh') or not keys.get('auth'):
+        raise ValueError('Invalid push subscription')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO crm_push_subscriptions
+               (user_id, endpoint, p256dh, auth, user_agent)
+               VALUES (%s,%s,%s,%s,%s)
+               ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id,
+                   p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+                   user_agent = EXCLUDED.user_agent, updated_at = NOW()""",
+            (ctx['user_id'], endpoint, keys['p256dh'], keys['auth'], (user_agent or '')[:500]),
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def remove_push_subscription(ctx, endpoint):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM crm_push_subscriptions WHERE user_id = %s AND endpoint = %s",
+                    (ctx['user_id'], endpoint))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def push_public_key():
+    return (os.getenv('CRM_VAPID_PUBLIC_KEY') or '').strip()
+
+
+def dispatch_due_notifications():
+    """Create due reminders, then deliver every queued Web Push notification.
+
+    Safe to run every few minutes: follow-up notified_at and notification
+    dedupe keys make the operation idempotent.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    created = 0
+    try:
+        cur.execute(
+            """SELECT f.id, f.title, f.assigned_to_id, f.team_id, f.due_at,
+                      b.address, c.name AS contact_name, d.id AS deal_id,
+                      d.name AS deal_name,
+                      COALESCE(p.enabled, TRUE) AS notifications_enabled,
+                      COALESCE(p.followups, TRUE) AS followups_enabled
+               FROM crm_follow_ups f
+               JOIN users fu ON fu.id = f.assigned_to_id
+               LEFT JOIN crm_notification_preferences p ON p.user_id = f.assigned_to_id
+               LEFT JOIN crm_buildings b ON b.id = f.building_id
+                 AND (b.assigned_to_id = f.assigned_to_id
+                      OR f.assigned_to_id = f.team_id OR fu.is_admin)
+               LEFT JOIN crm_contacts c ON c.id = f.contact_id
+                 AND (c.assigned_to_id = f.assigned_to_id
+                      OR f.assigned_to_id = f.team_id OR fu.is_admin)
+               LEFT JOIN crm_deals d ON d.id = f.deal_id
+                 AND (d.assigned_to_id = f.assigned_to_id
+                      OR f.assigned_to_id = f.team_id OR fu.is_admin)
+               WHERE f.status = 'open' AND f.notified_at IS NULL
+                 AND (f.building_id IS NULL OR b.id IS NOT NULL)
+                 AND (f.contact_id IS NULL OR c.id IS NOT NULL)
+                 AND (f.deal_id IS NULL OR d.id IS NOT NULL)
+                 AND COALESCE(f.due_at, f.due_date::timestamp) <= (NOW() AT TIME ZONE 'UTC')
+                       + (COALESCE(f.reminder_minutes, p.reminder_minutes, 15) * INTERVAL '1 minute')
+               FOR UPDATE OF f SKIP LOCKED"""
+        )
+        for f in cur.fetchall():
+            if f['notifications_enabled'] and f['followups_enabled']:
+                label = f['deal_name'] or f['contact_name'] or f['address'] or ''
+                url = (f'/crm/deals/{f["deal_id"]}' if f['deal_id'] else '/crm/followups')
+                nid = create_notification(
+                    cur, {'team_id': f['team_id']}, f['assigned_to_id'], 'followup',
+                    f['title'], f'Due soon{(" · " + label) if label else ""}', url,
+                    f'followup-due:{f["id"]}:{f["due_at"]}',
+                )
+                created += bool(nid)
+            cur.execute("UPDATE crm_follow_ups SET notified_at = NOW() WHERE id = %s", (f['id'],))
+        cur.execute(
+            """SELECT d.id, d.name, d.next_step, d.next_step_at,
+                      d.assigned_to_id, d.team_id, b.address,
+                      c.name AS contact_name,
+                      COALESCE(p.enabled, TRUE) AS notifications_enabled,
+                      COALESCE(p.followups, TRUE) AS followups_enabled,
+                      COALESCE(p.reminder_minutes, 15) AS reminder_minutes
+               FROM crm_deals d
+               LEFT JOIN crm_notification_preferences p ON p.user_id = d.assigned_to_id
+               LEFT JOIN crm_buildings b ON b.id = d.building_id
+                 AND b.assigned_to_id = d.assigned_to_id
+               LEFT JOIN crm_contacts c ON c.id = d.contact_id
+                 AND c.assigned_to_id = d.assigned_to_id
+               WHERE d.stage NOT IN ('won','lost','client')
+                 AND d.assigned_to_id IS NOT NULL
+                 AND d.next_step_at IS NOT NULL
+                 AND d.next_step_notified_at IS NULL
+                 AND d.next_step_at <= (NOW() AT TIME ZONE 'UTC')
+                       + (COALESCE(p.reminder_minutes, 15) * INTERVAL '1 minute')
+               FOR UPDATE OF d SKIP LOCKED"""
+        )
+        for deal in cur.fetchall():
+            if deal['notifications_enabled'] and deal['followups_enabled']:
+                label = deal['contact_name'] or deal['address'] or deal['name']
+                nid = create_notification(
+                    cur, {'team_id': deal['team_id']}, deal['assigned_to_id'],
+                    'followup', deal['next_step'] or f'Next step for {deal["name"]}',
+                    f'Deal next step due · {label}', f'/crm/deals/{deal["id"]}',
+                    f'deal-next-step:{deal["id"]}:{deal["next_step_at"]}',
+                )
+                created += bool(nid)
+            cur.execute(
+                "UPDATE crm_deals SET next_step_notified_at = NOW() WHERE id = %s",
+                (deal['id'],),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+    return {'created': created, **send_pending_push_notifications()}
+
+
+def send_pending_push_notifications(limit=200):
+    public_key = push_public_key()
+    private_key = (os.getenv('CRM_VAPID_PRIVATE_KEY') or '').strip()
+    if not public_key or not private_key:
+        return {'pushed': 0, 'push_skipped': 'VAPID not configured'}
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        return {'pushed': 0, 'push_skipped': 'pywebpush not installed'}
+    conn = get_db_connection()
+    cur = conn.cursor()
+    pushed = 0
+    try:
+        cur.execute(
+            """SELECT n.id, n.title, n.body, n.url, s.id AS subscription_id,
+                      s.endpoint, s.p256dh, s.auth
+               FROM crm_notifications n
+               JOIN crm_push_subscriptions s ON s.user_id = n.user_id
+               LEFT JOIN crm_notification_preferences p ON p.user_id = n.user_id
+               WHERE n.pushed_at IS NULL AND n.read_at IS NULL
+                 AND COALESCE(p.enabled, TRUE)
+                 AND (n.kind <> 'followup' OR COALESCE(p.followups, TRUE))
+                 AND (n.kind <> 'assignment' OR COALESCE(p.assignments, TRUE))
+                 AND (n.kind <> 'deal_change' OR COALESCE(p.deal_changes, TRUE))
+                 AND (n.kind <> 'admin_activity' OR COALESCE(p.admin_activity, FALSE))
+               ORDER BY n.created_at LIMIT %s""",
+            (limit,),
+        )
+        import json
+        completed = set()
+        for row in cur.fetchall():
+            try:
+                webpush(
+                    subscription_info={
+                        'endpoint': row['endpoint'],
+                        'keys': {'p256dh': row['p256dh'], 'auth': row['auth']},
+                    },
+                    data=json.dumps({'title': row['title'], 'body': row['body'],
+                                     'url': row['url'] or '/crm'}),
+                    vapid_private_key=private_key,
+                    vapid_claims={'sub': os.getenv('CRM_VAPID_SUBJECT', 'mailto:admin@example.com')},
+                    ttl=86400,
+                )
+                pushed += 1
+                completed.add(row['id'])
+            except WebPushException as exc:
+                if getattr(exc.response, 'status_code', None) in (404, 410):
+                    cur.execute("DELETE FROM crm_push_subscriptions WHERE id = %s", (row['subscription_id'],))
+        if completed:
+            cur.execute("UPDATE crm_notifications SET pushed_at = NOW() WHERE id = ANY(%s)",
+                        (list(completed),))
+        conn.commit()
+        return {'pushed': pushed}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_change_history(ctx, *, entity_type=None, actor_user_id=None, limit=300):
+    if not ctx['is_admin']:
+        return []
+    where = ['h.team_id = %(team_id)s']
+    params = {'team_id': ctx['team_id'], 'limit': limit}
+    if entity_type:
+        where.append('h.entity_type = %(entity_type)s')
+        params['entity_type'] = entity_type
+    if actor_user_id:
+        where.append('h.actor_user_id = %(actor)s')
+        params['actor'] = actor_user_id
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT h.*, {_user_name_sql('u')} AS actor_name
+                FROM crm_change_history h LEFT JOIN users u ON u.id = h.actor_user_id
+                WHERE {' AND '.join(where)} ORDER BY h.created_at DESC LIMIT %(limit)s""",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def admin_report(ctx, days=30):
+    if not ctx['is_admin']:
+        return {}
+    days = max(1, min(int(days), 365))
+    since = datetime.utcnow() - timedelta(days=days)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT
+                 COUNT(*) FILTER (WHERE type = 'contacted') AS touches,
+                 COUNT(*) FILTER (WHERE type = 'contacted'
+                                  AND outcome IN ('spoke','callback_requested','meeting_set')) AS conversations,
+                 COUNT(*) FILTER (WHERE type = 'contacted' AND outcome = 'meeting_set') AS meetings,
+                 COUNT(*) FILTER (WHERE type = 'visit') AS visits
+               FROM crm_activity WHERE team_id = %s AND created_at >= %s""",
+            (ctx['team_id'], since),
+        )
+        result = dict(cur.fetchone())
+        cur.execute(
+            """SELECT COUNT(*) FILTER (WHERE created_at >= %s) AS created,
+                      COUNT(*) FILTER (WHERE stage IN ('won','client') AND won_at >= %s) AS won,
+                      COUNT(*) FILTER (WHERE stage = 'lost' AND lost_at >= %s) AS lost,
+                      COUNT(*) FILTER (WHERE stage = 'nurture') AS nurture,
+                      COUNT(*) FILTER (WHERE stage NOT IN ('won','lost','client') AND next_step_at IS NULL) AS no_next_step,
+                      COALESCE(SUM(estimated_value) FILTER (WHERE stage NOT IN ('won','lost','client')), 0) AS open_value,
+                      COALESCE(SUM(estimated_value) FILTER (WHERE stage IN ('won','client') AND won_at >= %s), 0) AS won_value
+               FROM crm_deals WHERE team_id = %s""",
+            (since, since, since, since, ctx['team_id']),
+        )
+        result.update(dict(cur.fetchone()))
+        cur.execute(
+            """SELECT COUNT(*) FILTER (WHERE status = 'open' AND due_date < %s) AS overdue,
+                      COUNT(*) FILTER (WHERE status = 'done' AND completed_at >= %s) AS completed
+               FROM crm_follow_ups WHERE team_id = %s""",
+            (ny_today(), since, ctx['team_id']),
+        )
+        result.update(dict(cur.fetchone()))
+        result['days'] = days
+        result['conversation_rate'] = round(100 * result['conversations'] / result['touches'], 1) if result['touches'] else 0
+        result['win_rate'] = round(100 * result['won'] / (result['won'] + result['lost']), 1) if result['won'] + result['lost'] else 0
+        return result
+    finally:
+        cur.close()
+        conn.close()
+
+
+def nurture_stats(ctx):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT d.assigned_to_id AS user_id, {_user_name_sql('u')} AS rep_name,
+                       COUNT(*) AS deals,
+                       COALESCE(SUM(d.estimated_value), 0) AS value,
+                       COUNT(*) FILTER (WHERE d.next_step_at IS NULL) AS missing_next_step,
+                       MIN(d.next_step_at) AS next_action
+                FROM crm_deals d LEFT JOIN users u ON u.id = d.assigned_to_id
+                WHERE {record_scope_sql(ctx, 'd')} AND d.stage = 'nurture'
+                GROUP BY d.assigned_to_id, u.id ORDER BY deals DESC""",
+            {'team_id': ctx['team_id'], 'user_id': ctx['user_id']},
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def offboard_rep(ctx, rep_id, transfer_to_id, revoke_access=True):
+    """Atomically transfer live work, preserve authorship, then revoke access."""
+    if not ctx['is_admin']:
+        raise PermissionError('Admin access required')
+    if not rep_id or not transfer_to_id:
+        raise ValueError('Choose the rep leaving and an active teammate to receive the work')
+    if rep_id == ctx['team_id'] or rep_id == transfer_to_id:
+        raise ValueError('Choose a different active rep to receive the work')
+    if not assignee_allowed(ctx, transfer_to_id):
+        raise ValueError('Transfer destination is not an active team member')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT s.id AS sponsorship_id, s.member_user_id,
+                       COALESCE(s.display_name, split_part(s.member_email, '@', 1)) AS name
+                FROM account_sponsorships s
+                WHERE s.sponsor_user_id = %s AND s.member_user_id = %s AND s.status = 'active'
+                FOR UPDATE""",
+            (ctx['team_id'], rep_id),
+        )
+        rep = cur.fetchone()
+        if not rep:
+            raise ValueError('That rep is not active on this team')
+        counts = {}
+        for table in ('crm_buildings', 'crm_contacts', 'crm_deals', 'crm_follow_ups', 'crm_lists'):
+            cur.execute(f"""UPDATE {table} SET assigned_to_id = %s
+                            WHERE (team_id = %s OR team_id IS NULL)
+                              AND assigned_to_id = %s""",
+                        (transfer_to_id, ctx['team_id'], rep_id))
+            counts[table.removeprefix('crm_')] = cur.rowcount
+        cur.execute("""UPDATE crm_lists SET owner_id = %s
+                       WHERE (team_id = %s OR team_id IS NULL) AND owner_id = %s""",
+                    (transfer_to_id, ctx['team_id'], rep_id))
+        counts['list_ownership'] = cur.rowcount
+        cur.execute(
+            """UPDATE crm_saved_filters SET owner_id = %s, updated_at = NOW()
+               WHERE (team_id = %s OR team_id IS NULL) AND owner_id = %s""",
+            (transfer_to_id, ctx['team_id'], rep_id),
+        )
+        counts['saved_searches'] = cur.rowcount
+        if revoke_access:
+            cur.execute(
+                """UPDATE account_sponsorships SET status = 'revoked', revoked_at = NOW(),
+                          invite_token_hash = NULL, invite_expires_at = NULL, updated_at = NOW()
+                   WHERE id = %s""",
+                (rep['sponsorship_id'],),
+            )
+            cur.execute("DELETE FROM user_sessions WHERE user_id = %s", (rep_id,))
+            cur.execute("DELETE FROM crm_push_subscriptions WHERE user_id = %s", (rep_id,))
+            cur.execute(
+                """UPDATE crm_notifications SET read_at = COALESCE(read_at, NOW()),
+                          pushed_at = COALESCE(pushed_at, NOW())
+                   WHERE user_id = %s""",
+                (rep_id,),
+            )
+        audit_change(cur, ctx, 'team_member', rep_id, rep['name'], 'offboarded',
+                     new_value={'transferred_to_id': transfer_to_id,
+                                'access_revoked': bool(revoke_access), 'counts': counts})
+        create_notification(cur, ctx, transfer_to_id, 'assignment',
+                            f'{rep["name"]}’s work was transferred to you',
+                            f'{sum(counts.values())} CRM records reassigned', '/crm',
+                            f'offboard:{rep_id}:{transfer_to_id}')
+        conn.commit()
+        return counts
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
