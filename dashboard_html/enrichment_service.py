@@ -124,7 +124,7 @@ _KNOWN_ORGANIZATION_NAMES = frozenset({
     'FEDERAL NATIONAL MORTGAGE ASSOCIATION',
     'FEDERAL HOME LOAN MORTGAGE CORPORATION',
     'SECRETARY OF HOUSING AND URBAN DEVELOPMENT',
-    'WELLS FARGO', 'JPMORGAN CHASE', 'CITIBANK', 'CITIGROUP',
+    'WELLS FARGO', 'JPMORGAN CHASE', 'CITIBANK', 'CITIGROUP', 'GOLDMAN SACHS',
     'BANK OF AMERICA', 'US BANK', 'U S BANK',
 })
 
@@ -1491,7 +1491,10 @@ def is_sos_agent_title(title):
     than an owner (CEO, director, etc.)."""
     if not title:
         return False
-    return title.strip().upper() in SOS_AGENT_TITLES
+    normalized = re.sub(r'[^A-Z]+', ' ', title.upper()).strip()
+    return (normalized in SOS_AGENT_TITLES or bool(re.search(
+        r'\b(?:REGISTERED AGENT|SERVICE OF PROCESS|AGENT FOR SERVICE|'
+        r'PROCESS AGENT)\b', normalized)))
 
 
 def canonical_name_key(name):

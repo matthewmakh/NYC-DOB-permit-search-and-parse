@@ -1,493 +1,211 @@
 #!/usr/bin/env python3
-"""
-Geocode Permits - Add coordinates to permits missing latitude/longitude
+"""Geocode missing permits using NYC services; safely recheck an old run's results.
 
-This script fetches permits without coordinates and geocodes them using NYC Geoclient API.
-Designed to run as a Railway cron job.
-
-Environment Variables Required:
-- DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME (Database connection)
-- NYC_GEOCLIENT_APP_ID (NYC Geoclient API App ID)
-- NYC_GEOCLIENT_APP_KEY (NYC Geoclient API Key)
-
-Get free NYC Geoclient API credentials at:
-https://developer.cityofnewyork.us/user/register
+NYC_GEOCLIENT_SUBSCRIPTION_KEY is the Geoclient v2 subscription key.
+NYC_GEOCLIENT_APP_KEY / APP_ID remain supported as legacy variable names.
+DATABASE_URL or DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME configure PostgreSQL.
 """
 
+import argparse
+import json
 import os
+import re
 import sys
 import time
-import re
-import requests
-from dotenv import load_dotenv
+from pathlib import Path
+
 import psycopg2
 import psycopg2.extras
+from dotenv import load_dotenv
 
-# Force unbuffered output for Railway logging
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
+import _pipeline_path  # noqa: F401
+from nyc_geocoding import PermitGeocoder, geoclient_key
 
 load_dotenv()
-
-# Configuration - Optimized for NYC Geoclient V2 User
-# V2 Limits: 100 calls/sec, 2,500 calls/min, 500,000 calls/day
-BATCH_SIZE = int(os.getenv('GEOCODE_BATCH_SIZE', '500'))  # Process 500 permits per run
-RATE_LIMIT_DELAY = float(os.getenv('GEOCODE_DELAY', '0.01'))  # 0.01s = 100 requests/sec
-
-# Database configuration
-DB_HOST = os.getenv('DB_HOST')
-DB_PORT = os.getenv('DB_PORT', '5432')
-DB_USER = os.getenv('DB_USER')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_NAME = os.getenv('DB_NAME')
-
-# NYC Geoclient API credentials
-NYC_APP_ID = os.getenv('NYC_GEOCLIENT_APP_ID')
-NYC_APP_KEY = os.getenv('NYC_GEOCLIENT_APP_KEY')
-
-# Validate configuration
-if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
-    print("❌ Error: Database environment variables not set")
-    print("Required: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME")
-    sys.exit(1)
-
-if not NYC_APP_ID or not NYC_APP_KEY:
-    print("⚠️  Warning: NYC Geoclient API credentials not set")
-    print("Set NYC_GEOCLIENT_APP_ID and NYC_GEOCLIENT_APP_KEY for official NYC geocoding")
-    print("Get free credentials at: https://developer.cityofnewyork.us/user/register")
-    print("\nFalling back to address parsing from existing data...")
-    USE_GEOCLIENT = False
-else:
-    USE_GEOCLIENT = True
-    print(f"✅ NYC Geoclient API configured")
+BATCH_SIZE = int(os.getenv('GEOCODE_BATCH_SIZE', '500'))
+RATE_LIMIT_DELAY = max(0.2, float(os.getenv('GEOCODE_DELAY', '0.2')))
 
 
 def get_db_connection():
-    """Create database connection"""
+    options = {'cursor_factory': psycopg2.extras.RealDictCursor}
+    if os.getenv('DATABASE_URL'):
+        return psycopg2.connect(os.environ['DATABASE_URL'], **options)
+    if not all(os.getenv(name) for name in ('DB_HOST', 'DB_USER', 'DB_NAME')):
+        raise ValueError('Set DATABASE_URL or DB_HOST/DB_USER/DB_NAME/DB_PASSWORD for the intended database')
     return psycopg2.connect(
-        host=DB_HOST,
-        port=int(DB_PORT),
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        cursor_factory=psycopg2.extras.RealDictCursor
-    )
+        host=os.getenv('DB_HOST'), port=int(os.getenv('DB_PORT', '5432')),
+        user=os.getenv('DB_USER'), password=os.getenv('DB_PASSWORD'),
+        database=os.getenv('DB_NAME'), **options)
 
 
-def parse_nyc_address(address):
-    """
-    Parse NYC address into components
-    Returns: (house_number, street_name, borough)
-    """
-    if not address:
-        return None, None, None
-    
-    # Clean up address - remove extra whitespace
-    address = ' '.join(address.split()).strip().upper()
-    
-    # Try to extract house number and street
-    match = re.match(r'^(\d+[\w-]*)\s+(.+)$', address)
-    if not match:
-        return None, None, None
-    
-    house_number = match.group(1)
-    street_name = match.group(2).strip()
-    
-    # Extract borough if present (usually at the end)
-    # Common patterns: "STREET, BOROUGH" or "STREET BOROUGH"
-    borough = None
-    for boro in ['MANHATTAN', 'BROOKLYN', 'QUEENS', 'BRONX', 'STATEN ISLAND']:
-        if boro in street_name:
-            borough = boro
-            street_name = street_name.replace(f', {boro}', '').replace(boro, '').strip()
-            break
-    
-    return house_number, street_name, borough
+def ensure_geocode_columns(conn):
+    with conn.cursor() as cur:
+        cur.execute('ALTER TABLE permits ADD COLUMN IF NOT EXISTS geocode_failed BOOLEAN DEFAULT FALSE')
+        cur.execute('ALTER TABLE permits ADD COLUMN IF NOT EXISTS geocode_last_attempted TIMESTAMPTZ')
+    conn.commit()
 
 
-def geocode_with_nyc_geoclient(address, borough=None):
-    """
-    Geocode an address using NYC Geoclient API V2.
-    V2 API requires either borough or zip code.
-    Returns (latitude, longitude) or (None, None) if failed.
-    """
-    if not NYC_APP_ID or not NYC_APP_KEY:
-        return None, None
-    
-    # Parse the NYC address
-    house_number, street_name, parsed_borough = parse_nyc_address(address)
-    if not house_number or not street_name:
-        return None, None
-    
-    # Use provided borough (from BBL) over parsed borough
-    final_borough = borough or parsed_borough
-    if not final_borough:
-        # V2 API requires borough or zip - if we don't have either, skip NYC Geoclient
-        return None, None
-    
-    # V2 API uses subscription key in header, not query params
-    url = "https://api.nyc.gov/geoclient/v2/address"
-    headers = {
-        'subscription-key': NYC_APP_ID  # NYC Geoclient V2 uses subscription-key header
-    }
-    params = {
-        'houseNumber': house_number,
-        'street': street_name,
-        'borough': final_borough
-    }
-    
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # V2 API returns data in 'address' object
-            if 'address' in data:
-                addr_data = data['address']
-                # Get coordinates - V2 uses different field names
-                lat = addr_data.get('latitude')
-                lon = addr_data.get('longitude')
-                
-                if lat and lon:
-                    return float(lat), float(lon)
+def record_result(conn, permit_id, result):
+    with conn.cursor() as cur:
+        if result.found:
+            cur.execute('''UPDATE permits SET latitude = %s, longitude = %s,
+                           geocode_failed = FALSE, geocode_last_attempted = NOW()
+                           WHERE id = %s AND (latitude IS NULL OR longitude IS NULL)''',
+                        (result.latitude, result.longitude, permit_id))
         else:
-            # Debug: show what went wrong
-            try:
-                error_data = response.json()
-                print(f"⚠️ NYC Geoclient status {response.status_code}: {error_data.get('message', 'Unknown error')[:80]}")
-            except:
-                print(f"⚠️ NYC Geoclient returned status {response.status_code}")
-            
-    except Exception as e:
-        print(f"⚠️ NYC Geoclient error: {str(e)}")
-    
-    return None, None
+            # No match can wait a week. Service failures retry in an hour.
+            cur.execute('''UPDATE permits SET geocode_failed = %s, geocode_last_attempted = NOW()
+                           WHERE id = %s AND (latitude IS NULL OR longitude IS NULL)''',
+                        (not bool(result.error), permit_id))
+        changed = cur.rowcount
+    conn.commit()
+    return bool(changed)
 
 
-def geocode_with_nominatim(address):
-    """
-    Fallback geocoding using OpenStreetMap Nominatim (free, no API key)
-    Returns: (latitude, longitude) or (None, None)
-    """
+def geocode_permits(limit=BATCH_SIZE):
+    print('PERMIT GEOCODING — NYC parcel/address validation')
+    print('Geoclient key configured' if geoclient_key() else 'Using NYC GeoSearch (no Geoclient key configured)')
+    conn = get_db_connection()
     try:
-        import re
-        
-        # Clean up address and convert to proper case for better results
-        clean_address = ' '.join(address.split())  # Remove extra whitespace
-        
-        # Convert to title case for better OSM matching
-        clean_address = clean_address.title()
-        
-        # Fix ordinal numbers (141TH → 141st, 22ND → 22nd, etc.)
-        def fix_ordinals(match):
-            num = match.group(1)
-            suffix = match.group(2).lower() if match.group(2) else ''
-            
-            # Determine correct suffix based on number
-            last_digit = num[-1]
-            last_two = num[-2:] if len(num) >= 2 else num
-            
-            if last_two in ['11', '12', '13']:
-                correct_suffix = 'th'
-            elif last_digit == '1':
-                correct_suffix = 'st'
-            elif last_digit == '2':
-                correct_suffix = 'nd'
-            elif last_digit == '3':
-                correct_suffix = 'rd'
+        ensure_geocode_columns(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT id, address, bbl FROM permits
+                WHERE (latitude IS NULL OR longitude IS NULL)
+                  AND address IS NOT NULL AND TRIM(address) != ''
+                  AND (geocode_last_attempted IS NULL OR geocode_last_attempted < NOW() -
+                       CASE WHEN geocode_failed THEN INTERVAL '7 days' ELSE INTERVAL '1 hour' END)
+                ORDER BY geocode_last_attempted ASC NULLS FIRST,
+                         CASE WHEN bbl IS NOT NULL AND bbl != '' THEN 0 ELSE 1 END, id
+                LIMIT %s''', (limit,))
+            rows = cur.fetchall()
+        geocoder = PermitGeocoder()
+        successes = misses = errors = 0
+        for index, row in enumerate(rows, 1):
+            result = geocoder.lookup(row['address'], row['bbl'])
+            saved = record_result(conn, row['id'], result)
+            if result.found and saved:
+                successes += 1
+                status = f'{result.source}: {result.latitude:.6f}, {result.longitude:.6f}'
+            elif result.found:
+                status = 'Skipped: coordinates were updated by another worker'
+            elif result.error:
+                errors += 1
+                status = f'Service failure (will retry): {result.error}'
             else:
-                correct_suffix = 'th'
-            
-            return f"{num}{correct_suffix}"
-        
-        # Fix explicit ordinals (141TH, 22ND, etc.)
-        clean_address = re.sub(r'(\d+)(?:[T][hH]|[N][dD]|[R][dD]|[S][tT])\b', fix_ordinals, clean_address)
-        
-        # Fix bare numbers before Street/Avenue/Place (e.g., "5 Street" → "5th Street")
-        def fix_bare_number_street(match):
-            num = match.group(1)
-            street_type = match.group(2)
-            # Determine correct suffix
-            last_digit = num[-1]
-            last_two = num[-2:] if len(num) >= 2 else num
-            if last_two in ['11', '12', '13']:
-                suffix = 'th'
-            elif last_digit == '1':
-                suffix = 'st'
-            elif last_digit == '2':
-                suffix = 'nd'
-            elif last_digit == '3':
-                suffix = 'rd'
-            else:
-                suffix = 'th'
-            return f"{num}{suffix} {street_type}"
-        
-        clean_address = re.sub(r'(\d+)\s+(Street|Avenue|Place|Road)\b', fix_bare_number_street, clean_address)
-        
-        # Fix common street abbreviations
-        replacements = {
-            r'\bSt\b\.?': 'Street',
-            r'\bAve\b\.?': 'Avenue',
-            r'\bRd\b\.?': 'Road',
-            r'\bBlvd\b\.?': 'Boulevard',
-            r'\bPl\b\.?': 'Place',
-            r'\bDr\b\.?': 'Drive',
-            r'\bCt\b\.?': 'Court',
-            r'\bLn\b\.?': 'Lane',
-            r'\bPkwy\b\.?': 'Parkway'
-        }
-        
-        for pattern, replacement in replacements.items():
-            clean_address = re.sub(pattern, replacement, clean_address)
-        
-        # Try with just NYC first (most likely to work)
-        url = "https://nominatim.openstreetmap.org/search"
-        headers = {
-            'User-Agent': 'DOB-Permit-Geocoder/1.0'
-        }
-        
-        params = {
-            'q': f"{clean_address}, New York, NY",
-            'format': 'json',
-            'limit': 1,
-            'countrycodes': 'us'
-        }
-        
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            results = response.json()
-            if results and len(results) > 0:
-                result = results[0]
-                lat = float(result['lat'])
-                lon = float(result['lon'])
-                return lat, lon
-        
-        # Rate limit for Nominatim (1 request per second)
-        time.sleep(1)
-        
-        return None, None
-        
-    except Exception as e:
-        print(f"  ⚠️  Nominatim error: {str(e)}")
-        return None, None
+                misses += 1
+                status = 'No verified NYC parcel/address match (will recheck in 7 days)'
+            print(f"[{index}/{len(rows)}] Permit #{row['id']}: {status}", flush=True)
+            if index < len(rows):
+                time.sleep(RATE_LIMIT_DELAY)
+        with conn.cursor() as cur:
+            cur.execute('SELECT COUNT(*) AS remaining FROM permits WHERE latitude IS NULL OR longitude IS NULL')
+            remaining = cur.fetchone()['remaining']
+        print(f'Verified and saved: {successes}; no match: {misses}; service failures: {errors}')
+        print(f'Remaining without coordinates: {remaining:,} (includes retry cooldowns and missing addresses)')
+        return 1 if errors else 0
+    finally:
+        conn.close()
 
 
-def update_permit_coordinates(conn, permit_id, latitude, longitude):
-    """Update permit with geocoded coordinates"""
+def logged_geocodes(log_text):
+    """Only select explicit successes from the old geocoder, never arbitrary IDs."""
+    rows = {}
+    permit_id = None
+    for line in log_text.splitlines():
+        match = re.search(r'\[\d+/\d+\] Permit #(\d+):', line)
+        if match:
+            permit_id = int(match.group(1))
+        match = re.search(r'✅ Success: (-?\d+\.\d+), (-?\d+\.\d+)', line)
+        if match and permit_id:
+            rows[permit_id] = tuple(map(float, match.groups()))
+            permit_id = None
+    return rows
+
+
+def repair_logged_geocodes(log_file, report_file, apply=False):
+    """Preview by default. Save old/new values before any explicit repair writes."""
+    logged = logged_geocodes(Path(log_file).read_text())
+    if not logged:
+        raise ValueError('No successful permit geocodes found in the supplied log')
+    # Refuse to overwrite an earlier recovery record, before making API calls.
+    if Path(report_file).exists():
+        raise ValueError('Report already exists; choose a new report filename')
+    conn = get_db_connection()
     try:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE permits 
-            SET latitude = %s, longitude = %s
-            WHERE id = %s
-        """, (latitude, longitude, permit_id))
-        conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        print(f"  ❌ Database update error: {str(e)}")
+        with conn.cursor() as cur:
+            cur.execute('SELECT id, address, bbl, latitude, longitude FROM permits WHERE id = ANY(%s)',
+                        (list(logged),))
+            rows = cur.fetchall()
+        geocoder = PermitGeocoder()
+        report = []
+        for row in rows:
+            old = (row['latitude'], row['longitude'])
+            snapshot = logged[row['id']]
+            entry = dict(row)
+            # The log rounds to six decimal places. Don't touch a subsequent fix.
+            if any(value is None or abs(float(value) - expected) > 0.00000051
+                   for value, expected in zip(old, snapshot)):
+                entry['action'] = 'skip_changed_since_log'
+            else:
+                hit = geocoder.lookup(row['address'], row['bbl'])
+                entry.update(new_latitude=hit.latitude, new_longitude=hit.longitude,
+                             source=hit.source, error=hit.error)
+                entry['action'] = ('replace' if hit.found else
+                                   'unresolved_service_error' if hit.error else 'clear_unverified')
+                time.sleep(RATE_LIMIT_DELAY)
+            report.append(entry)
+            print(f"Permit #{row['id']}: {entry['action']}", flush=True)
+        # An exclusive, durable audit file must exist before altering any coordinates.
+        with open(report_file, 'x') as output:
+            json.dump({'apply_requested': apply, 'repairs': report}, output, indent=2, default=str)
+            output.flush()
+            os.fsync(output.fileno())
+        changed = 0
+        if apply:
+            ensure_geocode_columns(conn)
+            with conn.cursor() as cur:
+                for entry in report:
+                    if entry['action'] not in ('replace', 'clear_unverified'):
+                        continue
+                    cur.execute('''UPDATE permits SET latitude = %s, longitude = %s,
+                                   geocode_failed = %s, geocode_last_attempted = NOW()
+                                   WHERE id = %s AND latitude IS NOT DISTINCT FROM %s
+                                     AND longitude IS NOT DISTINCT FROM %s''',
+                                (entry['new_latitude'], entry['new_longitude'],
+                                 entry['action'] == 'clear_unverified', entry['id'],
+                                 entry['latitude'], entry['longitude']))
+                    changed += cur.rowcount
+            conn.commit()
+        print(f"{'Applied' if apply else 'Previewed'} {len(report)} records; {changed} updated. Report: {report_file}")
+        missing = set(logged) - {row['id'] for row in rows}
+        if missing:
+            print(f'{len(missing)} logged permit IDs were absent from this database')
+        return 1 if missing or any(row['action'] == 'unresolved_service_error' for row in report) else 0
+    except Exception:
         conn.rollback()
-        return False
+        raise
+    finally:
+        conn.close()
 
 
-def geocode_permits():
-    """Main geocoding function"""
-    print("=" * 70)
-    print("🗺️  PERMIT GEOCODING SERVICE")
-    print("=" * 70)
-    print()
-    
-    # Test API connection first
-    if USE_GEOCLIENT:
-        print("🔧 Testing NYC Geoclient API connection...")
-        try:
-            test_url = "https://api.nyc.gov/geoclient/v2/address"
-            test_headers = {
-                'subscription-key': NYC_APP_ID
-            }
-            test_params = {
-                'houseNumber': '1',
-                'street': 'Centre Street',
-                'borough': 'Manhattan'
-            }
-            test_response = requests.get(test_url, params=test_params, headers=test_headers, timeout=5)
-            if test_response.status_code == 200:
-                print("✅ NYC Geoclient API is working!\n")
-            else:
-                print(f"⚠️  NYC Geoclient returned status {test_response.status_code}\n")
-        except Exception as e:
-            print(f"❌ NYC Geoclient API test failed: {str(e)[:100]}")
-            print("Falling back to OpenStreetMap only\n")
-    
-    # Connect to database
-    print("🔌 Connecting to database...")
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        print(f"✅ Connected to database: {DB_HOST}:{DB_PORT}/{DB_NAME}\n")
-    except Exception as e:
-        print(f"❌ Database connection failed: {str(e)}")
-        sys.exit(1)
-    
-    # Get statistics
-    print("📊 Fetching statistics...")
-    cur.execute("SELECT COUNT(*) as total FROM permits")
-    total_permits = cur.fetchone()['total']
-    
-    cur.execute("SELECT COUNT(*) as with_coords FROM permits WHERE latitude IS NOT NULL AND longitude IS NOT NULL")
-    with_coords = cur.fetchone()['with_coords']
-    
-    without_coords = total_permits - with_coords
-    print()
-    print(f"📊 Database Statistics:")
-    print(f"   Total permits: {total_permits:,}")
-    print(f"   With coordinates: {with_coords:,} ({with_coords/total_permits*100:.1f}%)")
-    print(f"   Without coordinates: {without_coords:,} ({without_coords/total_permits*100:.1f}%)")
-    print()
-    
-    if without_coords == 0:
-        print("✅ All permits already have coordinates!")
-        cur.close()
-        conn.close()
-        return
-    
-    # Fetch permits without coordinates (limited by batch size)
-    # Prioritize permits with BBL (can use NYC Geoclient V2)
-    # Skip permits that have already failed geocoding
-    print(f"🔍 Fetching {min(BATCH_SIZE, without_coords)} permits to geocode...\n")
-    
-    cur.execute("""
-        SELECT id, address, bbl
-        FROM permits 
-        WHERE (latitude IS NULL OR longitude IS NULL)
-            AND address IS NOT NULL 
-            AND address != ''
-            AND (geocode_failed IS NULL OR geocode_failed = FALSE)
-        ORDER BY 
-            CASE WHEN bbl IS NOT NULL AND bbl != '' THEN 0 ELSE 1 END,
-            id
-        LIMIT %s
-    """, (BATCH_SIZE,))
-    
-    permits_to_geocode = cur.fetchall()
-    
-    if not permits_to_geocode:
-        print("✅ No permits need geocoding!")
-        cur.close()
-        conn.close()
-        return
-    
-    print(f"Processing {len(permits_to_geocode)} permits...\n")
-    
-    # Geocode each permit
-    success_count = 0
-    fail_count = 0
-    start_time = time.time()
-    
-    for i, permit in enumerate(permits_to_geocode, 1):
-        permit_id = permit['id']
-        address = permit['address']
-        bbl = permit.get('bbl')
-        
-        # Extract borough from BBL if available
-        borough = None
-        if bbl and len(str(bbl)) >= 1:
-            borough_map = {
-                '1': 'Manhattan',
-                '2': 'Bronx', 
-                '3': 'Brooklyn',
-                '4': 'Queens',
-                '5': 'Staten Island'
-            }
-            borough = borough_map.get(str(bbl)[0])
-        
-        # Progress indicator every 50 permits
-        if i % 50 == 0:
-            elapsed = time.time() - start_time
-            rate = i / elapsed if elapsed > 0 else 0
-            remaining = len(permits_to_geocode) - i
-            eta = remaining / rate if rate > 0 else 0
-            print(f"\n⏱️  Progress: {i}/{len(permits_to_geocode)} | {rate:.1f} permits/sec | ETA: {eta/60:.1f} min\n")
-        
-        print(f"[{i}/{len(permits_to_geocode)}] Permit #{permit_id}: {address}")
-        if borough:
-            print(f"  🏙️  Borough: {borough} (from BBL)")
-        
-        # Try NYC Geoclient first (if configured and we have BBL)
-        lat, lon = None, None
-        
-        if USE_GEOCLIENT and borough:
-            print(f"  📍 NYC Geoclient V2: {address}")
-            lat, lon = geocode_with_nyc_geoclient(address, borough)
-        
-        # Fallback to Nominatim if NYC Geoclient didn't work or no BBL
-        if lat is None or lon is None:
-            if borough:
-                print(f"  🌐 Trying OpenStreetMap Nominatim...")
-            else:
-                print(f"  ⚠️  No BBL/borough - using OpenStreetMap Nominatim...")
-            lat, lon = geocode_with_nominatim(address)
-        
-        # Update database if we got coordinates
-        if lat is not None and lon is not None:
-            if update_permit_coordinates(conn, permit_id, lat, lon):
-                print(f"  ✅ Success: {lat:.6f}, {lon:.6f}")
-                success_count += 1
-            else:
-                print(f"  ❌ Failed to update database")
-                fail_count += 1
-        else:
-            print(f"  ❌ Could not geocode address")
-            # Mark as failed so we don't retry it
-            try:
-                cur_fail = conn.cursor()
-                cur_fail.execute("UPDATE permits SET geocode_failed = TRUE WHERE id = %s", (permit_id,))
-                conn.commit()
-                cur_fail.close()
-            except Exception as e:
-                print(f"  ⚠️  Could not mark as failed: {e}")
-            fail_count += 1
-        
-        # Rate limiting
-        if i < len(permits_to_geocode):
-            time.sleep(RATE_LIMIT_DELAY)
-        
-        print()
-    
-    # Summary
-    cur.close()
-    conn.close()
-    
-    print("=" * 70)
-    print("📊 GEOCODING SUMMARY")
-    print("=" * 70)
-    print(f"✅ Successfully geocoded: {success_count}")
-    print(f"❌ Failed to geocode: {fail_count}")
-    print(f"📈 Success rate: {success_count/(success_count+fail_count)*100:.1f}%")
-    print()
-    
-    # Calculate new statistics
-    remaining = without_coords - success_count
-    if remaining > 0:
-        print(f"📝 Remaining permits without coordinates: {remaining:,}")
-        print(f"   Run this script again to continue geocoding")
-    else:
-        print("🎉 All permits now have coordinates!")
-    
-    print()
-    print("=" * 70)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--limit', type=int, default=BATCH_SIZE)
+    parser.add_argument('--repair-log', help='Recheck geocoding successes in a saved pipeline log (preview by default)')
+    parser.add_argument('--report', help='New JSON audit filename, required with --repair-log')
+    parser.add_argument('--apply', action='store_true', help='Apply the repairs after writing the audit report')
+    args = parser.parse_args()
+    if args.limit < 1:
+        parser.error('--limit must be positive')
+    if args.repair_log:
+        if not args.report:
+            parser.error('--repair-log requires --report')
+        return repair_logged_geocodes(args.repair_log, args.report, args.apply)
+    if args.apply or args.report:
+        parser.error('--apply and --report require --repair-log')
+    return geocode_permits(args.limit)
 
 
 if __name__ == '__main__':
-    try:
-        geocode_permits()
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Geocoding interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    sys.stdout.reconfigure(line_buffering=True)
+    raise SystemExit(main())

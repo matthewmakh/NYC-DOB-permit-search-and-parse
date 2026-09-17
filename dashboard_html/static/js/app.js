@@ -401,11 +401,12 @@ function createLeadCard(permit) {
                                 <a href="tel:${c.phone}"><i class="fas fa-phone-alt"></i> ${escapeHtml(c.phone)}</a>
                             </div>
                         `).join('') : '<p style="color: var(--text-muted); text-align: center; padding: 2rem;">No contacts available</p>'}
-                        ${permit.link ? `
+                        ${permit.source_link?.url ? `
                             <div style="margin-top: 1rem;">
-                                <a href="${permit.link}" target="_blank" class="btn btn-primary" style="width: 100%; justify-content: center; display: flex; align-items: center; gap: 0.5rem;">
-                                    <i class="fas fa-external-link-alt"></i> View Official Permit Details
+                                <a href="${escapeHtml(permit.source_link.url)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width: 100%; justify-content: center; display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-external-link-alt"></i> ${escapeHtml(permit.source_link.label)}
                                 </a>
+                                ${permit.source_link.hint ? `<p>${escapeHtml(permit.source_link.hint)}</p>` : ''}
                             </div>
                         ` : ''}
                     </div>

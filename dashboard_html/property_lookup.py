@@ -52,6 +52,7 @@ from step5_enrich_from_sos import (
     get_best_llc_name,
     process_sos_result,
 )
+from nyc_geocoding import geoclient_key, geoclient_headers
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +60,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Input parsing — accept a BBL, a borough+address, or an address
 # ---------------------------------------------------------------------------
-
-NYC_APP_ID = os.getenv('NYC_GEOCLIENT_APP_ID')
 
 # Geoclient borough names it'll accept verbatim (case-insensitive).
 _BOROUGH_TOKENS = {
@@ -196,7 +195,7 @@ def _geoclient_get(path, params):
         resp = requests.get(
             f'https://api.nyc.gov/geoclient/v2/{path}',
             params=params,
-            headers={'subscription-key': NYC_APP_ID},
+            headers=geoclient_headers(),
             timeout=10,
         )
     except requests.RequestException as e:
@@ -301,7 +300,7 @@ def resolve_address_to_property(query):
     service_failures = []
     geoclient_said = None
 
-    if NYC_APP_ID:
+    if geoclient_key():
         if borough or zip5:
             for house_form in _house_number_candidates(house):
                 params = {'houseNumber': house_form, 'street': street}
@@ -336,8 +335,8 @@ def resolve_address_to_property(query):
                 if lookup:
                     return lookup, None
     else:
-        service_failures.append('Geoclient: NYC_GEOCLIENT_APP_ID is not set')
-        print("[auto-add] NYC_GEOCLIENT_APP_ID not set; relying on GeoSearch", flush=True)
+        service_failures.append('Geoclient: subscription key is not set')
+        print("[auto-add] Geoclient subscription key not set; relying on GeoSearch", flush=True)
 
     # Second opinion: NYC Planning's keyless GeoSearch. Covers a missing or
     # rejected Geoclient key, and its fuzzier matching sometimes lands where
@@ -351,7 +350,7 @@ def resolve_address_to_property(query):
             service_failures.append(f'GeoSearch: {note}')
 
     # Nothing matched. Say what actually happened, in order of usefulness.
-    geoclient_worked = NYC_APP_ID and not any(
+    geoclient_worked = geoclient_key() and not any(
         f.startswith('Geoclient') for f in service_failures)
 
     if not geoclient_worked and service_failures:

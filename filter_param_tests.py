@@ -880,7 +880,7 @@ def _fake_geosearch_miss(text):
 
 PL._geoclient_get, _real_get = _fake_geoclient, PL._geoclient_get
 PL._geosearch_get, _real_geosearch = _fake_geosearch_miss, PL._geosearch_get
-PL.NYC_APP_ID, _real_app_id = 'test-key', PL.NYC_APP_ID
+PL.geoclient_key, _real_key = lambda: 'test-key', PL.geoclient_key
 try:
     lookup, reason = PL.resolve_address_to_property('18423 cambridge rd')
     check('borough-less address resolves via search', (lookup or {}).get('bbl'), '4098765432')
@@ -945,18 +945,18 @@ try:
 finally:
     PL._geoclient_get = _real_get
     PL._geosearch_get = _real_geosearch
-    PL.NYC_APP_ID = _real_app_id
+    PL.geoclient_key = _real_key
 
-PL.NYC_APP_ID = None
+PL.geoclient_key = lambda: ''
 PL._geosearch_get = lambda text: (None, 'request failed (blocked)')
 try:
     lookup, reason = PL.resolve_address_to_property('141 WYONA ST, BROOKLYN')
-    check('missing api key is said out loud', 'NYC_GEOCLIENT_APP_ID' in (reason or ''), True)
+    check('missing api key is said out loud', 'subscription key is not set' in (reason or ''), True)
 finally:
-    PL.NYC_APP_ID = _real_app_id
+    PL.geoclient_key = _real_key
     PL._geosearch_get = _real_geosearch
 
-PL.NYC_APP_ID = None
+PL.geoclient_key = lambda: ''
 PL._geoclient_get = lambda path, params: ({}, None)
 PL._geosearch_get = lambda text: (({'bbl': '3012340056', 'bin': None, 'latitude': None,
                                     'longitude': None, 'address': '141 WYONA ST, BROOKLYN, NY',
@@ -965,7 +965,7 @@ try:
     lookup, reason = PL.resolve_address_to_property('141 WYONA ST, BROOKLYN')
     check('no key still resolves through geosearch', (lookup or {}).get('bbl'), '3012340056')
 finally:
-    PL.NYC_APP_ID = _real_app_id
+    PL.geoclient_key = _real_key
     PL._geoclient_get = _real_get
     PL._geosearch_get = _real_geosearch
 

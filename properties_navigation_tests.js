@@ -26,6 +26,8 @@ const context = vm.createContext({
     setTimeout,
     clearTimeout,
     document: {
+        readyState: 'loading',
+        getElementById() { return null; },
         addEventListener() {},
         querySelector(selector) {
             if (!selector.includes('data-property-bbl')) return null;
@@ -35,6 +37,7 @@ const context = vm.createContext({
         },
     },
     SharedFilters: {
+        toPayload(shared) { return { borough: shared.boroughFilter || [] }; },
         fromParams(params) {
             return { boroughFilter: params.getAll('borough') };
         },
@@ -107,3 +110,31 @@ assert.equal(context.window.scrollY, 1200);
 assert.equal(storage.has('properties:list-navigation:v1'), false);
 
 console.log('properties navigation state: 13 checks passed');
+
+// The person-owner checkbox survives links, bulk requests, and saved searches.
+vm.runInContext("restoreStateFromUrl(new URLSearchParams('has_person_owner=true&owner_kind=llc&page=3'))", context);
+assert.equal(vm.runInContext('state.filters.hasPersonOwner', context), true);
+assert.equal(vm.runInContext("buildPropertiesParams().get('has_person_owner')", context), 'true');
+assert.equal(vm.runInContext('buildBulkEnrichFiltersPayload().has_person_owner', context), true);
+assert.match(vm.runInContext("describeSearch('has_person_owner=true').join(', ')", context), /Person listed as owner/);
+assert.equal(vm.runInContext("buildPropertiesParams().get('owner_kind')", context), 'llc');
+vm.runInContext('resetFilters()', context);
+assert.equal(vm.runInContext('state.filters.hasPersonOwner', context), false);
+assert.equal(vm.runInContext("buildPropertiesParams().has('has_person_owner')", context), false);
+vm.runInContext("restoreStateFromUrl(new URLSearchParams('has_person_owner=false'))", context);
+assert.equal(vm.runInContext('state.filters.hasPersonOwner', context), false);
+console.log('person-owner URL, saved-search, bulk and reset checks passed');
+
+// Clear all must also work before plays load, or when none are available.
+const controls = new Map();
+context.document.getElementById = id => {
+    if (!controls.has(id)) controls.set(id, { checked: true, value: 'old', style: {}, innerHTML: '' });
+    return controls.get(id);
+};
+context.SharedFilters.clear = () => {};
+context.SharedFilters.read = () => ({});
+vm.runInContext('loadProperties = () => {}; state.filters.hasPersonOwner = true; clearFilters();', context);
+assert.equal(controls.get('hasPersonOwner').checked, false);
+assert.equal(vm.runInContext('state.filters.hasPersonOwner', context), false);
+assert.equal(vm.runInContext('state.pagination.page', context), 1);
+console.log('clear-all with unavailable prebuilt filters passed');

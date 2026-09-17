@@ -167,15 +167,13 @@ def run_migration(conn):
         print("   ✅ Migration complete")
 
 
-def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool = False, refresh: bool = True) -> List[Dict]:
+def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool = False,
+                             refresh: bool = True, retry_failures: bool = False) -> List[Dict]:
     """
     Get buildings that need SOS enrichment.
     
-    Filters:
-    - NOT already enriched (sos_principal_name is NULL) OR
-    - Stale data (sos_last_enriched older than REFRESH_DAYS)
-    - NOT already attempted (unless reprocess=True)
-    - Has at least one owner name source
+    Select new/stale lookups or unresolved failures with a corporate owner.
+    Completed no-match responses remain complete until the refresh cycle.
     
     Args:
         limit: Max buildings to return
@@ -186,7 +184,9 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
         # Build WHERE clause
         conditions = []
         
-        if not reprocess:
+        if retry_failures:
+            conditions.append("NULLIF(sos_last_error, '') IS NOT NULL")
+        elif not reprocess:
             # A completed lookup with no matching entity is still complete.
             # Selecting every NULL principal made healthy misses run nightly.
             stale_condition = f"""
@@ -196,6 +196,8 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                     OR
                     -- Legacy/incomplete attempt with no success checkpoint
                     sos_last_enriched IS NULL
+                    OR
+                    NULLIF(sos_last_error, '') IS NOT NULL
                     OR
                     -- A deed recorded after the last lookup: the building may
                     -- have changed hands, so the cached principal is suspect
@@ -221,7 +223,8 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 sale_recorded_date,
                 current_owner_name,
                 owner_name_rpad,
-                owner_name_hpd
+                owner_name_hpd,
+                sos_last_error
             FROM buildings
             WHERE {where_clause}
             AND (
@@ -421,7 +424,10 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Preview without saving')
     parser.add_argument('--reprocess', action='store_true', help='Re-process ALL buildings (ignore previous enrichment)')
     parser.add_argument('--no-refresh', action='store_true', help='Skip stale record refresh (only process new buildings)')
+    parser.add_argument('--retry-failures', action='store_true', help='Only retry buildings with a saved SOS error')
     args = parser.parse_args()
+    if args.retry_failures and args.reprocess:
+        parser.error('--retry-failures cannot be combined with --reprocess')
     
     print("=" * 70)
     print("🏛️  Step 5: Enrich Buildings from NY Secretary of State")
@@ -440,7 +446,8 @@ def main():
     # Get buildings to process
     refresh = not args.no_refresh
     print(f"\n📥 Finding buildings with LLC owners{'...' if refresh else ' (no refresh)...'}")
-    buildings = get_buildings_needing_sos(conn, limit=args.limit, reprocess=args.reprocess, refresh=refresh)
+    buildings = get_buildings_needing_sos(conn, limit=args.limit, reprocess=args.reprocess,
+                                        refresh=refresh, retry_failures=args.retry_failures)
     
     # Filter to only those with LLC names, track skip reasons
     llc_buildings = []
@@ -487,6 +494,8 @@ def main():
         print("\n🔍 DRY RUN - First 10 LLCs that would be looked up:")
         for b in llc_buildings[:10]:
             print(f"   • {b['llc_name']} ({b['llc_source']}) - BBL {b['bbl']}")
+            if b.get('sos_last_error'):
+                print(f"     Last error: {b['sos_last_error']}")
         conn.close()
         return
     
@@ -520,7 +529,7 @@ def main():
         batch_start = time.time()
         if names_to_lookup:
             # Deduplicate the lookup list itself
-            unique_names = list(set(names_to_lookup))
+            unique_names = list(dict.fromkeys(names_to_lookup))
             results = lookup_businesses(unique_names, concurrency=CONCURRENCY)
             # Add to cache
             for name, result in results.items():
@@ -548,6 +557,7 @@ def main():
                     cache_hits += 1
 
             if sos_result_needs_retry(result):
+                print(f"   ⚠️ BBL {building['bbl']} | {llc_name}: {result.error}")
                 failures.append({
                     'building_id': building['id'],
                     'error': result.error,
@@ -569,6 +579,9 @@ def main():
         # Save to database
         update_buildings_with_sos(conn, updates)
         record_sos_failures(conn, failures)
+        # An outage is not an entity result: another batch may recover.
+        llc_cache = {key: value for key, value in llc_cache.items()
+                     if not sos_result_needs_retry(value)}
         
         total_found += batch_found
         total_individuals += batch_individuals
@@ -598,6 +611,8 @@ def main():
     
     conn.close()
     if total_failed:
+        print('Successful lookups were saved. Retry only unresolved rows with:')
+        print('   python step5_enrich_from_sos.py --retry-failures')
         raise SystemExit(1)
 
 

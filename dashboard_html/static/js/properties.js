@@ -38,6 +38,7 @@ const state = {
         saleDateFrom: null,
         saleDateTo: null,
         cashOnly: false,
+        hasPersonOwner: false,
         withPermits: false,
         minPermits: null,
         recentSaleDays: null,
@@ -114,6 +115,7 @@ function restoreStateFromUrl(params) {
     state.filters.saleDateFrom = params.get('sale_date_from') || null;
     state.filters.saleDateTo = params.get('sale_date_to') || null;
     state.filters.cashOnly = trueParam(params, 'cash_only');
+    state.filters.hasPersonOwner = trueParam(params, 'has_person_owner');
     state.filters.withPermits = trueParam(params, 'with_permits');
     state.filters.minPermits = finiteParam(params, 'min_permits');
     state.filters.recentSaleDays = finiteParam(params, 'recent_sale_days');
@@ -156,6 +158,7 @@ function applyStateToControls() {
     setValue('financingMax', state.filters.financingMax);
 
     document.getElementById('cashOnly').checked = state.filters.cashOnly;
+    document.getElementById('hasPersonOwner').checked = state.filters.hasPersonOwner;
     document.getElementById('withPermits').checked = state.filters.withPermits;
     MultiSelect.set('ownerKind', state.filters.ownerKinds, { silent: true });
 
@@ -185,6 +188,7 @@ function buildPropertiesParams() {
     if (f.saleDateFrom) params.append('sale_date_from', f.saleDateFrom);
     if (f.saleDateTo) params.append('sale_date_to', f.saleDateTo);
     if (f.cashOnly) params.append('cash_only', 'true');
+    if (f.hasPersonOwner) params.append('has_person_owner', 'true');
     if (f.withPermits) params.append('with_permits', 'true');
     if (f.minPermits !== null) params.append('min_permits', f.minPermits);
     if (f.recentSaleDays) params.append('recent_sale_days', f.recentSaleDays);
@@ -330,6 +334,10 @@ function renderPlayCards() {
             : 'property_intel';
     }
     const activeGroup = groups.find(group => group.id === state.playFamily) || groups[0];
+    if (!activeGroup) {
+        row.innerHTML = '';
+        return;
+    }
 
     const coverageText = play => {
         const coverage = play.coverage;
@@ -1438,6 +1446,12 @@ function initializeEventListeners() {
         loadProperties();
     });
     
+    document.getElementById('hasPersonOwner').addEventListener('change', (e) => {
+        state.filters.hasPersonOwner = e.target.checked;
+        state.pagination.page = 1;
+        loadProperties();
+    });
+
     // Owner type (multi-select, OR'd)
     document.getElementById('ownerKind').addEventListener('change', () => {
         state.filters.ownerKinds = MultiSelect.values('ownerKind');
@@ -1511,6 +1525,7 @@ async function downloadExport() {
     if (state.filters.saleDateFrom) params.append('sale_date_from', state.filters.saleDateFrom);
     if (state.filters.saleDateTo) params.append('sale_date_to', state.filters.saleDateTo);
     if (state.filters.cashOnly) params.append('cash_only', 'true');
+    if (state.filters.hasPersonOwner) params.append('has_person_owner', 'true');
     if (state.filters.withPermits) params.append('with_permits', 'true');
     if (state.filters.minPermits) params.append('min_permits', state.filters.minPermits);
     if (state.filters.recentSaleDays) params.append('recent_sale_days', state.filters.recentSaleDays);
@@ -1685,6 +1700,7 @@ function resetFilters() {
         saleDateFrom: null,
         saleDateTo: null,
         cashOnly: false,
+        hasPersonOwner: false,
         withPermits: false,
         minPermits: null,
         recentSaleDays: null,
@@ -1717,6 +1733,7 @@ function clearFilters() {
     document.getElementById('financingMin').value = '';
     document.getElementById('financingMax').value = '';
     document.getElementById('cashOnly').checked = false;
+    document.getElementById('hasPersonOwner').checked = false;
     document.getElementById('withPermits').checked = false;
     
     state.pagination.page = 1;
@@ -1783,6 +1800,7 @@ function buildBulkEnrichFiltersPayload() {
     if (f.saleDateFrom) payload.sale_date_from = f.saleDateFrom;
     if (f.saleDateTo) payload.sale_date_to = f.saleDateTo;
     if (f.cashOnly) payload.cash_only = true;
+    if (f.hasPersonOwner) payload.has_person_owner = true;
     if (f.withPermits) payload.with_permits = true;
     if (f.minPermits) payload.min_permits = f.minPermits;
     if (f.recentSaleDays) payload.recent_sale_days = f.recentSaleDays;
@@ -2389,6 +2407,7 @@ const SS_OPTION_SOURCES = {
 
 const SS_FLAGS = {
     cash_only: 'Cash purchases',
+    has_person_owner: 'Person listed as owner',
     with_permits: 'Has permits',
 };
 

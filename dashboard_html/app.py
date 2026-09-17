@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import requests
 from urllib.parse import urlsplit
 from socrata_client import SocrataClient, normalize_pluto_record
+from record_links import owner_source_links, permit_source_link, acris_document_url
 
 # Load environment variables
 load_dotenv()
@@ -583,6 +584,7 @@ def get_permits():
             # Add lead scores
             for permit in permits:
                 permit['lead_score'] = calculate_lead_score(permit)
+                permit['source_link'] = permit_source_link(permit)
         
         return jsonify({
             'success': True,
@@ -840,6 +842,7 @@ def _decorate_profile_permit_rows(rows):
             'issued_permit' if issue_date else
             'job_filing' if filing_date else
             'dob_record')
+        permit['source_link'] = permit_source_link(permit)
         permits.append(permit)
     return permits
 
@@ -1073,6 +1076,7 @@ def get_permit_details(permit_id):
         permit['contact_count'] = len(contacts)
         permit['has_mobile'] = any(c.get('is_mobile') for c in contacts)
         permit['lead_score'] = calculate_lead_score(permit)
+        permit['source_link'] = permit_source_link(permit)
         
         return jsonify({
             'success': True,
@@ -1214,6 +1218,7 @@ def permit_detail(permit_id):
             
             # Calculate lead score
             permit['lead_score'] = calculate_lead_score(permit)
+            permit['source_link'] = permit_source_link(permit)
         
         return render_template('permit_detail.html', 
                              permit=permit, 
@@ -1627,6 +1632,7 @@ def get_permit_detail(permit_id):
             
             # Calculate lead score
             permit['lead_score'] = calculate_lead_score(permit)
+            permit['source_link'] = permit_source_link(permit)
         
         return jsonify({
             'success': True,
@@ -4261,6 +4267,46 @@ def _append_owner_kind_filter(args, where_clauses, params):
     params.extend(labels)
 
 
+@cache.memoize(timeout=300, args_to_ignore=['cur'])
+def _person_owner_building_ids(where_sql, filter_params, cur=None):
+    """Classify the complete candidate set before counts, paging or export limits.
+
+    Cache the resolved IDs independently of page/sort. Name classifications
+    are also cached, so changing other filters does not rerun the name model.
+    No schema migration or external name-lookup service is required.
+    """
+    from person_owner_filter import PERSON_OWNER_FIELDS, has_person_owner
+    fields = ', '.join('b.' + field for field in PERSON_OWNER_FIELDS)
+    matches = []
+
+    def scan(cur):
+        cur.execute(f"SELECT b.id, {fields} FROM buildings b WHERE {where_sql}",
+                    list(filter_params))
+        while True:
+            rows = cur.fetchmany(1000)
+            if not rows:
+                break
+            matches.extend(row['id'] for row in rows if has_person_owner(row))
+
+    if cur is not None:
+        scan(cur)
+    else:
+        with DatabaseConnection() as owned_cursor:
+            scan(owned_cursor)
+    return matches
+
+
+def _append_person_owner_filter(args, where_clauses, params, cur=None):
+    if str(args.get('has_person_owner', '')).lower() != 'true':
+        return
+    # All clauses here reference b (permit filters use correlated subqueries).
+    # Pass only server-built SQL and bound values, never raw request SQL.
+    where_sql = ' AND '.join(where_clauses) or 'TRUE'
+    ids = _person_owner_building_ids(where_sql, tuple(params), cur=cur)
+    where_clauses.append('b.id = ANY(%s)')
+    params.append(ids)
+
+
 def _owner_kind(name, classification):
     kind = classification.get('entity_kind')
     if kind == 'person':
@@ -4450,6 +4496,7 @@ def _resolve_filter_building_ids(args, limit=None):
         where_clauses.append("(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
         params.append(min_permits)
     _append_owner_kind_filter(args, where_clauses, params)
+    _append_person_owner_filter(args, where_clauses, params)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
@@ -4689,6 +4736,7 @@ def api_properties():
     Query Parameters:
     - search: Text search (address, BBL, owner name)
     - owner: Owner name search
+    - has_person_owner: At least one non-agent person in the owner sources
     - min_value, max_value: Assessed value range
     - min_sale_price, max_sale_price: Sale price range
     - sale_date_from, sale_date_to: Sale date range
@@ -4850,6 +4898,7 @@ def api_properties():
         
             # Owner type (Person / LLC / Lender / Public ...), any number, OR'd.
             _append_owner_kind_filter(request.args, where_clauses, params)
+            _append_person_owner_filter(request.args, where_clauses, params, cur=cur)
 
             # Build WHERE clause
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -5222,6 +5271,7 @@ def api_properties_export():
                 where_clauses.append("""(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s""")
                 params.append(min_permits)
             _append_owner_kind_filter(request.args, where_clauses, params)
+            _append_person_owner_filter(request.args, where_clauses, params, cur=cur)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -5514,6 +5564,8 @@ def api_properties_export_enrichment_estimate():
             _append_category_filters(request.args, where_clauses, params)
             _append_property_permit_activity_filter(
                 request.args, where_clauses, params)
+            _append_owner_kind_filter(request.args, where_clauses, params)
+            _append_person_owner_filter(request.args, where_clauses, params, cur=cur)
             
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
             
@@ -5704,6 +5756,9 @@ def api_properties_export_with_enrichment():
                 where_clauses.append(
                     "(SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) >= %s")
                 params.append(min_permits)
+
+            _append_owner_kind_filter(request.args, where_clauses, params)
+            _append_person_owner_filter(request.args, where_clauses, params, cur=cur)
 
             # Build query (limit 10000)
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -6796,7 +6851,7 @@ def api_building_profile(bbl):
             # ===== 2. PERMITS (All construction activity) =====
             cur.execute("""
             SELECT
-                id, permit_no, job_type, address, applicant,
+                id, permit_no, job_number, api_source, job_type, address, applicant,
                 stories, total_units, use_type, issue_date, link,
                     permittee_business_name, permittee_phone, permittee_license_type, permittee_license_number,
                     permittee_first_name, permittee_last_name,
@@ -7250,6 +7305,7 @@ def api_building_profile(bbl):
                 'building': building_dict,
                 'building_class_description': building_class_desc,
                 'owners': owners,
+                'owner_source_links': owner_source_links(building, transactions),
                 'owner_classifications': owner_classifications,
                 'sos_data': sos_data,
                 'enrichment': enrichment_info,
@@ -7261,7 +7317,7 @@ def api_building_profile(bbl):
                     'factors': risk_factors
                 },
                 'permits': [dict(p) for p in permits],
-                'transactions': [dict(t) for t in transactions],
+                'transactions': [dict(t, source_url=acris_document_url(t['document_id'])) for t in transactions],
                 'parties': parties_payload,
                 'activity_timeline': activity_timeline[:50],  # Last 50 events
                 'contacts': contacts,

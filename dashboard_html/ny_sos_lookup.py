@@ -29,7 +29,8 @@ import re
 import random
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import List, Dict, Optional, Tuple
 
 try:
@@ -38,6 +39,22 @@ except ImportError:
     raise ImportError("httpx is required. Install with: pip install httpx")
 
 log = logging.getLogger(__name__)
+
+
+def _retry_delay(attempt, response=None):
+    """Honor bounded Retry-After hints, with exponential backoff otherwise."""
+    delay = (2 ** attempt) + random.random()
+    hint = response.headers.get('Retry-After') if response is not None else None
+    if hint:
+        try:
+            wait = float(hint)
+        except ValueError:
+            try:
+                wait = (parsedate_to_datetime(hint) - datetime.now(timezone.utc)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                wait = 0
+        delay = max(delay, wait)
+    return min(delay, 60)
 
 
 # ============================================================================
@@ -301,7 +318,7 @@ class AsyncNYSOSClient:
     def __init__(self, concurrency: int = 5, timeout: int = 30, max_retries: int = 3):
         self.concurrency = concurrency
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max(1, max_retries)
         self.semaphore = asyncio.Semaphore(concurrency)
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
@@ -336,10 +353,13 @@ class AsyncNYSOSClient:
         
         async with self.semaphore:
             for attempt in range(self.max_retries):
+                stage = 'search'
+                response = None
                 try:
                     matches = await self._search_business(business_name)
                     
                     if not matches:
+                        result.error = ''
                         return result
                     
                     selected, match_quality = _select_match(business_name, matches)
@@ -356,13 +376,14 @@ class AsyncNYSOSClient:
                         return result
                     result.match_quality = match_quality
                     
+                    stage = 'details'
                     details = await self._get_business_details(
                         selected['dos_id'], 
                         selected['entity_name']
                     )
                     
                     if not details:
-                        return result
+                        raise ValueError('Empty entity details response')
                     
                     result.found = True
                     result.dos_id = details.get('dos_id', '')
@@ -374,29 +395,28 @@ class AsyncNYSOSClient:
                     result.county = details.get('county', '')
                     result.people = details.get('people', [])
                     result.raw_response = details.get('raw_response', {})
+                    result.error = ''
                     
                     return result
                     
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code in (429, 503):
-                        sleep_time = (2 ** attempt) + random.random()
-                        await asyncio.sleep(sleep_time)
-                        continue
-                    result.error = f"HTTP {e.response.status_code}"
-                    return result
+                    response = e.response
+                    result.error = f"{stage}: HTTP {response.status_code} (attempt {attempt + 1}/{self.max_retries})"
+                    if response.status_code not in (408, 429, 500, 502, 503, 504):
+                        return result
                     
-                except (httpx.TimeoutException, httpx.ConnectError) as e:
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep((2 ** attempt) + random.random())
-                        continue
-                    result.error = f"Connection error: {e}"
-                    return result
+                except (httpx.TransportError, ValueError) as e:
+                    result.error = (f"{stage}: {type(e).__name__} "
+                                    f"(attempt {attempt + 1}/{self.max_retries})")
                     
                 except Exception as e:
-                    result.error = str(e)
+                    result.error = f"{stage}: {type(e).__name__}: {e}"
                     return result
+
+                log.warning('SOS %r: %s', business_name, result.error)
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(_retry_delay(attempt, response))
             
-            result.error = "Max retries exceeded"
             return result
     
     async def lookup_many(self, business_names: List[str]) -> Dict[str, SOSBusinessResult]:
@@ -435,9 +455,13 @@ class AsyncNYSOSClient:
         )
         response.raise_for_status()
         content = response.json()
+        if not isinstance(content, dict) or not isinstance(content.get('entitySearchResultList'), list):
+            raise ValueError('Invalid entity search response')
         
         results = []
         for result in content.get('entitySearchResultList', []):
+            if not isinstance(result, dict) or not result.get('dosID') or not result.get('entityName'):
+                raise ValueError('Invalid entity search row')
             results.append({
                 'dos_id': result.get('dosID'),
                 'entity_name': result.get('entityName'),
@@ -464,6 +488,10 @@ class AsyncNYSOSClient:
         )
         response.raise_for_status()
         content = response.json()
+        if (not isinstance(content, dict)
+                or not isinstance(content.get('entityGeneralInfo'), dict)
+                or not content['entityGeneralInfo'].get('entityName')):
+            raise ValueError('Invalid entity details response')
         
         # Extract people (CEO, agents)
         people = []

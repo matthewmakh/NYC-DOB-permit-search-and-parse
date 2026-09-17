@@ -13,22 +13,12 @@ Location resolution, best source first:
 3. Nothing: the UI offers an address search in Google Maps instead of a
    Street View link that would open on a black screen.
 
-Two link modes, decided by one optional env var:
-
-* ``GOOGLE_MAPS_EMBED_KEY`` set -> an embeddable Street View iframe URL
-  (Maps Embed API, referrer-restricted key; Google bills Embed API requests
-  at $0). Street View needs a lat/lng, so the embed falls back to a map of
-  the address when the lot could not be located.
-* not set -> no iframe; the UI shows an "Open Street View" button.
-
-The Street View *link* (keyed or not) is built from the address —
-``maps?q=<address>&layer=c`` — so Google geocodes it, picks the nearest
-panorama and aims the camera at the building. Two coordinate forms were
-tried before this and rejected: the Maps URLs API ``map_action=pano&viewpoint``
-gives up with "No Street View imagery available here" when nothing was
-photographed within 50 m, and the classic ``cbll=`` snap opens facing along
-the street rather than at the door. Coordinates are still resolved for the
-embedded panorama, which the Maps Embed API can only place by lat/lng.
+The normal Maps link always searches the address (or verified coordinates).
+Street View is an optional, separate link using Google's documented Maps URLs
+format. An address alone never implies that Street View imagery is available.
+With GOOGLE_MAPS_EMBED_KEY, an iframe shows nearby outdoor imagery when we
+have coordinates, otherwise the address map. The map link remains available
+if Google has no imagery at that location.
 """
 
 import math
@@ -174,8 +164,8 @@ def geosearch(address, borough=None, bbl=None):
     returns nothing we trust. Raises on transport failure so the caller can
     tell "no match" from "service down"."""
     want_bbl = str(bbl or '').strip()
-    borough = borough or BOROUGH_NAME.get(want_bbl[:1]) or ''
-    text = ', '.join(p for p in (address, borough, 'NY') if p)
+    borough = borough_name(borough, bbl)
+    text = place_query(address, borough, bbl)
     data = _geosearch_request({'text': text, 'size': 5})
     want_house = _house_number(address)
     fallback = None
@@ -292,22 +282,32 @@ def resolve(cur, bbl=None, address=None, borough=None):
     return None
 
 
-def payload(address, lat=None, lng=None, borough=None, source=None, bbl=None):
-    """Everything a template needs: embed URL (if possible) + open links.
+def borough_name(borough=None, bbl=None):
+    value = str(borough or '').strip()
+    return BOROUGH_NAME.get(value) or BOROUGH_NAME.get(str(bbl or '')[:1]) or value
 
-    The Street View link is built from the *address*, not coordinates. Given
-    an address, Google Maps geocodes it itself, picks the nearest panorama and
-    points the camera at the building; a dropped coordinate only faces down
-    the street, and any error in our geocode becomes the wrong house.
-    Coordinates are still what the Maps Embed API needs for an embedded
-    panorama, so they stay in the payload for that.
-    """
-    coords = _valid(lat, lng)
-    borough = borough or BOROUGH_NAME.get(str(bbl or '')[:1])
-    real_address = bool(address) and not str(address).upper().startswith('BBL ')
-    place = ', '.join(p for p in (address, borough, 'NY') if p)
+
+def place_query(address, borough=None, bbl=None):
+    """Avoid numeric boroughs and duplicate city/state suffixes in map searches."""
+    address = str(address or '').strip()
+    borough = borough_name(borough, bbl)
+    parts = [address] if address and not address.upper().startswith('BBL ') else []
+    if borough and not re.search(r'\b' + re.escape(borough) + r'\b', address, re.I):
+        parts.append(borough)
+    if not re.search(r'\b(?:NY|NEW YORK)(?:\s+\d{5}(?:-\d{4})?)?\s*$', address, re.I):
+        parts.append('NY')
+    return ', '.join(parts)
+
+
+def payload(address, lat=None, lng=None, borough=None, source=None, bbl=None):
+    """Keep the reliable address map separate from optional nearby Street View."""
+    coords = _valid(lat, lng, bbl)
+    real_address = bool(str(address or '').strip()) and not str(address).upper().startswith('BBL ')
+    place = place_query(address, borough, bbl)
+    at = f'{coords[0]:.6f},{coords[1]:.6f}' if coords else None
+    query = place if real_address or not coords else at
     key = embed_key()
-    map_url = 'https://www.google.com/maps/search/?api=1&query=' + quote_plus(place)
+    map_url = 'https://www.google.com/maps/search/?' + urlencode({'api': 1, 'query': query})
     out = {
         'has_coords': coords is not None,
         'lat': coords[0] if coords else None,
@@ -315,35 +315,27 @@ def payload(address, lat=None, lng=None, borough=None, source=None, bbl=None):
         'source': source if coords else None,
         'embed_url': None,
         'embed_kind': None,
-        'open_url': map_url,      # what the Street View button opens
-        'open_kind': 'map',       # 'streetview' when the button really opens a panorama
-        'open_basis': 'none',     # 'address' | 'coords' | 'none' — what the link was built from
+        'open_url': map_url,
+        'open_kind': 'map',
+        'open_basis': 'address' if real_address else 'coords' if coords else 'none',
         'map_url': map_url,
-        'apple_url': 'https://maps.apple.com/?q=' + quote_plus(place),
+        'streetview_url': None,
+        'apple_url': 'https://maps.apple.com/?q=' + quote_plus(query),
         'key_configured': bool(key),
     }
-    if real_address:
-        # layer=c opens Street View; q= lets Google place and aim it.
-        out['open_url'] = 'https://www.google.com/maps?' + urlencode({'q': place, 'layer': 'c'})
-        out['open_kind'] = 'streetview'
-        out['open_basis'] = 'address'
-    elif coords:
-        # No usable address (a bare BBL): fall back to the classic snap-to-nearest form.
-        at = f'{coords[0]:.6f},{coords[1]:.6f}'
-        out['open_url'] = f'https://www.google.com/maps?q={at}&layer=c&cbll={at}'
-        out['open_kind'] = 'streetview'
-        out['open_basis'] = 'coords'
     if coords:
-        lat, lng = coords
+        out['streetview_url'] = 'https://www.google.com/maps/@?' + urlencode({
+            'api': 1, 'map_action': 'pano', 'viewpoint': at,
+        })
         if key:
             out['embed_url'] = 'https://www.google.com/maps/embed/v1/streetview?' + urlencode({
-                'key': key, 'location': f'{lat:.6f},{lng:.6f}', 'fov': 90, 'pitch': 5,
+                'key': key, 'location': at, 'fov': 90, 'pitch': 5,
+                'radius': 100, 'source': 'outdoor',
             })
             out['embed_kind'] = 'streetview'
     elif key:
-        # Could not pinpoint the lot: a map with a pin beats a black panorama.
         out['embed_url'] = 'https://www.google.com/maps/embed/v1/place?' + urlencode({
-            'key': key, 'q': place, 'zoom': 18,
+            'key': key, 'q': query, 'zoom': 18,
         })
         out['embed_kind'] = 'map'
     return out

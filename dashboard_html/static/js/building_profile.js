@@ -206,13 +206,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log('Loading building profile for BBL:', BBL);
     
     // Setup tab navigation
+    setupProfileDisclosures();
     setupTabNavigation();
     
     // Setup modal
     setupRiskModal();
 
     // Keep the top of the profile compact while making the full tax-lot
-    // record one clear action away (expanded by default on wide screens).
+    // record one clear action away on every screen size.
     setupBuildingFactsDisclosure();
     
     // Load building data
@@ -252,10 +253,13 @@ async function loadBuildingProfile() {
         // Update tab badges
         updateTabBadges();
 
-        // Violations detail lists used to load when their tab was opened;
-        // on the one-page dossier they load the first time the section
-        // scrolls into view instead.
+        // Fetch live violation details only if the section is open.
         setupViolationsLazyLoad();
+
+        // Opening a shared section link before data arrives can shift its
+        // position. Align it again once the profile has rendered.
+        const linkedSection = window.location.hash.slice(1).replace(/^tab-/, '');
+        if (document.getElementById(`tab-${linkedSection}`)) switchTab(linkedSection);
 
         // Refresh high-value physical facts independently of the nightly row.
         // The rest of the dossier stays usable if NYC Open Data is slow.
@@ -273,6 +277,18 @@ async function loadBuildingProfile() {
 
 function updateTabBadges() {
     const { building, permits, transactions, contacts, activity_timeline } = buildingData;
+    const counts = {
+        activity: (activity_timeline || []).length,
+        permits: (permits || []).length,
+        transactions: (transactions || []).length,
+        violations: ['hpd_total_violations', 'ecb_violation_count',
+            'dob_violation_count', 'dob_safety_violation_count']
+            .reduce((sum, key) => sum + (Number(building[key]) || 0), 0),
+    };
+    Object.entries(counts).forEach(([key, count]) => {
+        const node = document.getElementById(`${key}-section-count`);
+        if (node) node.textContent = count.toLocaleString();
+    });
     
     // Owners badge - count of owner sources
     const ownerCount = [
@@ -329,6 +345,22 @@ function setBadge(badgeId, count) {
 // ============================================================================
 // HERO SECTION
 // ============================================================================
+
+function renderSourceName(name, source, showHint = true) {
+    const url = safeHttpHref(source?.url);
+    if (!url) return escapeHtml(name || '');
+    return `<a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(source.label || 'View source')} (opens in a new tab)">${escapeHtml(name)} <span aria-hidden="true">↗</span></a>${showHint && source.hint ? `<small class="record-source-hint">${escapeHtml(source.hint)}</small>` : ''}`;
+}
+
+function ownerSourceName(source, name) {
+    return renderSourceName(name, buildingData.owner_source_links?.[source]);
+}
+
+function transactionSourceName(transaction) {
+    return renderSourceName(transaction.document_id, {
+        url: transaction.source_url, label: 'View recorded document in ACRIS'
+    });
+}
 
 function renderHeroSection() {
     const { building, building_class_description, owners, sos_data, risk_assessment } = buildingData;
@@ -413,7 +445,7 @@ function renderHeroSection() {
                 ${isAgent ? '<span class="agent-badge" title="Designated for service of process — not the property owner">AGENT</span>' : ''}
                 ${isMismatch ? '<span class="mismatch-badge" title="The registered company does not match any owner name on record for this property">UNVERIFIED</span>' : ''}
             </span>
-            <span class="owner-name sos-name">${sos_data.principal_name}</span>
+            <span class="owner-name sos-name">${ownerSourceName('sos', sos_data.principal_name)}</span>
             ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
             <span class="sos-entity">Behind: ${sos_data.entity_name || 'LLC'} (${sos_data.entity_status || 'Unknown'})</span>
             ${sos_data.lookup_source ? `<span class="sos-provenance">Looked up from ${sos_data.lookup_source}</span>` : ''}
@@ -431,7 +463,7 @@ function renderHeroSection() {
             ownerItem.className = 'owner-item';
             ownerItem.innerHTML = `
                 <span class="owner-source">${sourceLabels[source]}</span>
-                <span class="owner-name">${name}</span>
+                <span class="owner-name">${ownerSourceName(source, name)}</span>
             `;
             ownerSourcesEl.appendChild(ownerItem);
         }
@@ -931,6 +963,34 @@ function renderRiskExplanation() {
 // Every former tab is a section on one page now. The nav buttons scroll,
 // and a scrollspy keeps the active state honest while the user scrolls
 // on their own.
+function setupProfileDisclosures() {
+    const cards = Array.from(document.querySelectorAll('.profile-disclosure'));
+    const storageKey = `property-sections:v1:${BBL}`;
+    let saved = {};
+    try {
+        saved = JSON.parse(window.sessionStorage.getItem(storageKey) || '{}') || {};
+    } catch (_error) { /* Storage may be unavailable. Native toggles still work. */ }
+    cards.forEach(card => {
+        if (typeof saved[card.id] === 'boolean') card.open = saved[card.id];
+        card.addEventListener('toggle', () => {
+            try {
+                const states = Object.fromEntries(cards.map(item => [item.id, item.open]));
+                window.sessionStorage.setItem(storageKey, JSON.stringify(states));
+            } catch (_error) { /* Persistence is optional. */ }
+            if (card.id === 'tab-violations' && card.open) loadViolationDetailsOnce();
+        });
+    });
+    const openHashSection = () => {
+        const name = window.location.hash.slice(1).replace(/^tab-/, '');
+        if (['overview', 'building', 'owners', 'contacts', 'financials',
+             'activity', 'permits', 'transactions', 'violations'].includes(name)) {
+            switchTab(name);
+        }
+    };
+    window.addEventListener('hashchange', openHashSection);
+    openHashSection();
+}
+
 function setupTabNavigation() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -941,7 +1001,8 @@ function setupTabNavigation() {
     // Deterministic scrollspy: the active section is the last one whose top
     // has passed the sticky-header line. Ratio-based observers pick the
     // biggest section on screen, which is wrong next to short ones.
-    const sections = Array.from(document.querySelectorAll('section[id^="tab-"]'));
+    const sections = Array.from(document.querySelectorAll(
+        'section[id^="tab-"], details[id^="tab-"]'));
     if (sections.length) {
         let ticking = false;
         const markActive = () => {
@@ -999,12 +1060,20 @@ function switchTab(tabName) {
     });
     spyHoldUntil = Date.now() + 1200;
     const section = document.getElementById(`tab-${tabName}`);
-    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (section) {
+        if (section.tagName === 'DETAILS') section.open = true;
+        if (tabName === 'building') {
+            const toggle = document.getElementById('building-facts-toggle');
+            if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+        }
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        section.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    }
     if (tabName === 'violations') loadViolationDetailsOnce();
 }
 
 // The heavy per-violation lists come from live Open Data calls, so they
-// still load lazily — on first sight of the section instead of a tab click.
+// load only when the user expands the section or selects it in navigation.
 let violationDetailsLoaded = false;
 
 function loadViolationDetailsOnce() {
@@ -1030,18 +1099,7 @@ function loadViolationDetailsOnce() {
 
 function setupViolationsLazyLoad() {
     const section = document.getElementById('tab-violations');
-    if (!section) return;
-    if (!('IntersectionObserver' in window)) {
-        loadViolationDetailsOnce();
-        return;
-    }
-    const once = new IntersectionObserver(entries => {
-        if (entries.some(e => e.isIntersecting)) {
-            loadViolationDetailsOnce();
-            once.disconnect();
-        }
-    }, { rootMargin: '200px' });
-    once.observe(section);
+    if (section && section.open) loadViolationDetailsOnce();
 }
 
 // ============================================================================
@@ -1111,31 +1169,15 @@ function setupBuildingFactsDisclosure() {
     const groups = document.getElementById('building-facts-groups');
     if (!button || !groups) return;
 
-    const wideScreen = window.matchMedia('(min-width: 901px)');
-    let userChangedState = false;
-
     const setExpanded = (expanded) => {
         groups.hidden = !expanded;
         button.setAttribute('aria-expanded', String(expanded));
         button.textContent = expanded ? 'Hide full record' : 'Show full record';
     };
 
-    setExpanded(wideScreen.matches);
+    setExpanded(false);
     button.addEventListener('click', () => {
-        userChangedState = true;
         setExpanded(button.getAttribute('aria-expanded') !== 'true');
-    });
-
-    const buildingNav = document.querySelector('[data-tab="building"]');
-    if (buildingNav) {
-        buildingNav.addEventListener('click', () => {
-            userChangedState = true;
-            setExpanded(true);
-        });
-    }
-
-    wideScreen.addEventListener('change', event => {
-        if (!userChangedState) setExpanded(event.matches);
     });
 }
 
@@ -1568,7 +1610,7 @@ function renderOwnersTab() {
             <h4>${sosHeading}</h4>
             <div class="sos-card">
                 <div class="sos-main">
-                    <div class="sos-principal-name">${sos_data.principal_name}</div>
+                    <div class="sos-principal-name">${ownerSourceName('sos', sos_data.principal_name)}</div>
                     ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
                     ${isRealPerson ? '<span class="real-person-badge-large">REAL PERSON IDENTIFIED</span>' : ''}
                     ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">AGENT — not the owner</span>' : ''}
@@ -1626,7 +1668,7 @@ function renderOwnersTab() {
                 <div class="owner-source-icon">${info.icon}</div>
                 <div class="owner-source-info">
                     <div class="owner-source-label">${info.label}</div>
-                    <div class="owner-source-name">${name}</div>
+                    <div class="owner-source-name">${ownerSourceName(source, name)}</div>
                     <span class="entity-kind-badge entity-${kind}">${kind === 'person' ? 'Person' : kind === 'organization' ? 'Organization' : kind === 'multiple' ? 'Multiple parties' : 'Unclassified'}</span>
                 </div>
             </div>`;
@@ -1791,7 +1833,7 @@ function renderTransactionsTab() {
             </div>
             ${txn.doc_amount ? `<div class="txn-amount">${formatCurrency(txn.doc_amount)}</div>` : ''}
             <div class="txn-details">
-                <div class="txn-detail-row"><span>Document ID:</span><span>${txn.document_id}</span></div>
+                <div class="txn-detail-row"><span>Document ID:</span><span>${transactionSourceName(txn)}</span></div>
                 ${txn.crfn ? `<div class="txn-detail-row"><span>CRFN:</span><span>${txn.crfn}</span></div>` : ''}
             </div>`;
         
@@ -1885,7 +1927,7 @@ function filterTransactions() {
             </div>
             ${txn.doc_amount ? `<div class="txn-amount">${formatCurrency(txn.doc_amount)}</div>` : ''}
             <div class="txn-details">
-                <div class="txn-detail-row"><span>Document ID:</span><span>${txn.document_id}</span></div>
+                <div class="txn-detail-row"><span>Document ID:</span><span>${transactionSourceName(txn)}</span></div>
                 ${txn.crfn ? `<div class="txn-detail-row"><span>CRFN:</span><span>${txn.crfn}</span></div>` : ''}
             </div>`;
         
@@ -2147,7 +2189,8 @@ function showPermitDetails(index) {
         }
         return '';
     };
-    const safePermitLink = safeHttpHref(permit.link);
+    const permitSource = permit.source_link;
+    const safePermitLink = safeHttpHref(permitSource?.url);
     
     let html = `
     <div class="permit-detail-modal-content">
@@ -2267,7 +2310,7 @@ function showPermitDetails(index) {
         </div>
         
         <div class="permit-modal-actions">
-            ${safePermitLink ? `<a href="${escapeHtml(safePermitLink)}" target="_blank" rel="noopener noreferrer" class="btn-view-dob">View on DOB Website →</a>` : ''}
+            ${safePermitLink ? `<div class="permit-source-action"><a href="${escapeHtml(safePermitLink)}" target="_blank" rel="noopener noreferrer" class="btn-view-dob">${escapeHtml(permitSource.label)} ↗</a>${permitSource.hint ? `<p class="record-source-hint">${escapeHtml(permitSource.hint)}</p>` : ''}</div>` : ''}
             <button onclick="closePermitModal()" class="btn-close-modal">Close</button>
         </div>
     </div>`;

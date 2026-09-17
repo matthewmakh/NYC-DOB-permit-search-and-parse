@@ -44,3 +44,47 @@ if building.ecb_respondent_name:
 ```
 
 This gives users the most complete picture of property ownership and management.
+
+## Properties: person-owner filter
+
+`has_person_owner=true` (the **Has a person listed as an owner** checkbox)
+checks the latest deed buyer, PLUTO, HPD owner and RPAD fields, plus a Secretary
+of State principal whose entity does not conflict with the recorded owners.
+A registered/service-of-process agent alone does not qualify. An independently
+recorded person in an owner field still qualifies, even when the same property
+also has an agent. Managing agents, site managers, sellers and care-of mailing
+recipients are not additional owner sources for this filter.
+
+The filter uses the local `probablepeople==0.5.6` model with the existing NYC
+organization exclusions. Semicolon/newline-separated parties and recognizable
+household names qualify. Classification is probabilistic, not identity
+verification; ambiguous or unrecognized names can be missed. Agent exclusion
+uses recorded roles rather than trying to infer a profession from a name.
+
+Filtering runs before counts, pagination and export/bulk limits. Name decisions
+are cached in a bounded process-local cache; matching IDs are cached for five
+minutes independently of pagination and sorting. The first uncached request
+scans the candidate owners, so production latency depends on the candidate set.
+No migration or classification backfill is needed. Install the updated dashboard
+requirements when deploying. Existing `owner_kind` filters retain their meaning.
+
+Regression checks: `python person_owner_filter_tests.py`,
+`python filter_param_tests.py`, and `node properties_navigation_tests.js`.
+Set `PERSON_OWNER_TEST_DATABASE_URL` to run the PostgreSQL integration checks;
+they use temporary tables and roll back their fixtures.
+## Public source links
+
+The property profile links each displayed owner name to its source:
+
+- ACRIS: the document matching `sale_crfn`, or the primary deed when no CRFN
+  is stored; otherwise the lot's ACRIS search. CRFNs are never used as document IDs.
+- PLUTO: the parcel's ZoLa page.
+- RPAD: the original historical assessment table, with the BBLE to search.
+- ECB: the BIS parcel page, with a prompt to open OATH/ECB violations.
+- HPD: HPD Online, with the address to search.
+- NY DOS: the public entity search, with the DOS ID or entity name to search.
+
+DOB NOW and NY DOS record pages depend on a search session, so their links
+open the working public portal and show the lookup value. Permit links use
+`api_source` and `job_number`; DOB NOW records override stale stored BIS links.
+ACRIS transaction document IDs also link directly to the official document.

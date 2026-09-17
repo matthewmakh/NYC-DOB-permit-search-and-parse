@@ -24,8 +24,8 @@
                 </div>
                 <div class="dossier-head-actions">
                     <a class="btn btn-secondary" id="streetview-btn" href="#streetview-card"
-                       title="See this building in Google Street View">
-                        <i class="fas fa-street-view"></i> Street View
+                       title="See this property in Google Maps">
+                        <i class="fas fa-map"></i> Google Maps
                     </a>
                     <a class="btn btn-secondary" id="crm-add-btn" href="/crm/buildings/add?bbl={{ bbl }}"
                        title="Track this building in the sales CRM">
@@ -43,21 +43,21 @@
 
         </div>
 
-        <!-- Jump nav: every old tab is a section on this page now. Sticky
-             under the site nav so the sections stay one click away. -->
-        <div class="section-nav-bar">
-            <nav class="section-nav" id="section-nav">
-                <button class="tab-btn active" data-tab="overview"><span class="tab-label">Overview</span></button>
-                <button class="tab-btn" data-tab="building"><span class="tab-label">Building</span></button>
-                <button class="tab-btn" data-tab="owners"><span class="tab-label">Ownership</span><span class="tab-badge" id="owners-badge"></span></button>
-                <button class="tab-btn" data-tab="financials"><span class="tab-label">Financials</span></button>
-                <button class="tab-btn" data-tab="activity"><span class="tab-label">Timeline</span><span class="tab-badge" id="activity-badge"></span></button>
-                <button class="tab-btn" data-tab="permits"><span class="tab-label">Permits</span><span class="tab-badge" id="permits-badge"></span></button>
-                <button class="tab-btn" data-tab="transactions"><span class="tab-label">Transactions</span><span class="tab-badge" id="transactions-badge"></span></button>
-                <button class="tab-btn" data-tab="violations"><span class="tab-label">Violations</span><span class="tab-badge" id="violations-badge"></span></button>
-                <button class="tab-btn" data-tab="contacts"><span class="tab-label">Contacts</span><span class="tab-badge" id="contacts-badge"></span></button>
-            </nav>
-        </div>
+    </div>
+
+    <!-- Sticky section navigation stays available throughout the profile. -->
+    <div class="section-nav-bar">
+        <nav class="section-nav" id="section-nav" aria-label="Property sections">
+            <button class="tab-btn active" data-tab="overview"><span class="tab-label">Overview</span></button>
+            <button class="tab-btn" data-tab="building"><span class="tab-label">Building</span></button>
+            <button class="tab-btn" data-tab="owners"><span class="tab-label">Ownership</span><span class="tab-badge" id="owners-badge"></span></button>
+            <button class="tab-btn" data-tab="contacts"><span class="tab-label">Contacts</span><span class="tab-badge" id="contacts-badge"></span></button>
+            <button class="tab-btn" data-tab="financials"><span class="tab-label">Financials</span></button>
+            <button class="tab-btn" data-tab="activity"><span class="tab-label">Timeline</span><span class="tab-badge" id="activity-badge"></span></button>
+            <button class="tab-btn" data-tab="permits"><span class="tab-label">Permits</span><span class="tab-badge" id="permits-badge"></span></button>
+            <button class="tab-btn" data-tab="transactions"><span class="tab-label">Transactions</span><span class="tab-badge" id="transactions-badge"></span></button>
+            <button class="tab-btn" data-tab="violations"><span class="tab-label">Violations</span><span class="tab-badge" id="violations-badge"></span></button>
+        </nav>
     </div>
 
     <div class="dossier-body" id="tab-overview">
@@ -127,6 +127,19 @@
                     </div>
                 </section>
 
+                <details class="dossier-card profile-disclosure" id="tab-contacts">
+                    <summary class="dossier-card-head">
+                        <h3>Contacts</h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="contacts-panel">
+                        <div class="contacts-directory" id="contacts-directory">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
+                </details>
+
                 <section class="dossier-card" id="tab-financials">
                     <div class="dossier-card-head">
                         <h3>Financial position</h3>
@@ -137,74 +150,67 @@
                     </div>
                 </section>
 
-                <section class="dossier-card" id="tab-activity">
-                    <div class="dossier-card-head">
-                        <h3>Timeline</h3>
+                <details class="dossier-card profile-disclosure" id="tab-activity">
+                    <summary class="dossier-card-head">
+                        <h3>Timeline <span class="disclosure-count" id="activity-section-count"></span></h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="activity-panel">
                         <div class="timeline-filters" id="timeline-filters">
                             <button class="pill-btn active" data-type="all">All</button>
                             <button class="pill-btn" data-type="transaction">Deeds &amp; loans</button>
                             <button class="pill-btn" data-type="permit">Permits</button>
                         </div>
-                    </div>
-                    <div class="dossier-card-body">
                         <div class="activity-feed" id="activity-feed">
                             <div class="skeleton-text"></div>
                             <div class="skeleton-text"></div>
                             <div class="skeleton-text"></div>
                         </div>
                     </div>
-                </section>
+                </details>
 
-                <section class="dossier-card" id="tab-permits">
-                    <div class="dossier-card-head">
+                <details class="dossier-card profile-disclosure" id="tab-permits">
+                    <summary class="dossier-card-head">
                         <div>
-                            <h3>Permits &amp; DOB filings</h3>
+                            <h3>Permits &amp; DOB filings <span class="disclosure-count" id="permits-section-count"></span></h3>
                             <p class="card-subtitle">Issued permits and active job filings, shown together without treating them as the same thing.</p>
                         </div>
-                    </div>
-                    <div class="dossier-card-body">
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="permits-panel">
                         <div id="permits-content">Loading&hellip;</div>
                     </div>
-                </section>
+                </details>
 
-                <section class="dossier-card" id="tab-transactions">
-                    <div class="dossier-card-head">
-                        <h3>ACRIS transactions</h3>
-                    </div>
-                    <div class="dossier-card-body">
+                <details class="dossier-card profile-disclosure" id="tab-transactions">
+                    <summary class="dossier-card-head">
+                        <h3>ACRIS transactions <span class="disclosure-count" id="transactions-section-count"></span></h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="transactions-panel">
                         <div id="transactions-content">Loading&hellip;</div>
                     </div>
-                </section>
+                </details>
 
-                <section class="dossier-card" id="tab-violations">
-                    <div class="dossier-card-head">
-                        <h3>Violations</h3>
-                        <span class="freshness-note">Checked live from NYC Open Data on page load</span>
-                    </div>
-                    <div class="dossier-card-body">
-                        <p class="data-freshness-note">Status reflects each agency's current record. The daily DOB NOW Safety feed is shown separately from legacy DOB/BIS, HPD housing, and ECB penalty records.</p>
+                <details class="dossier-card profile-disclosure" id="tab-violations">
+                    <summary class="dossier-card-head">
+                        <h3>Violations <span class="disclosure-count" id="violations-section-count"></span></h3>
+                        <span class="freshness-note">Live details load when opened</span>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="violations-panel">
+                        <p class="data-freshness-note">Details are checked when this section is opened. Status reflects each agency's current record. The daily DOB NOW Safety feed is shown separately from legacy DOB/BIS, HPD housing, and ECB penalty records.</p>
                         <div id="violations-content">Loading&hellip;</div>
                     </div>
-                </section>
+                </details>
 
-                <section class="dossier-card" id="tab-contacts">
-                    <div class="dossier-card-head">
-                        <h3>Contacts</h3>
-                    </div>
-                    <div class="dossier-card-body">
-                        <div class="contacts-directory" id="contacts-directory">
-                            <div class="skeleton-text"></div>
-                            <div class="skeleton-text"></div>
-                        </div>
-                    </div>
-                </section>
             </div>
 
             <!-- Rail -->
             <aside class="dossier-rail">
                 <div class="dossier-card rail-card streetview-card" id="streetview-card">
                     <div class="dossier-card-head">
-                        <h3><i class="fas fa-street-view" style="color:var(--accent);margin-right:6px"></i>Street View</h3>
+                        <h3><i class="fas fa-map" style="color:var(--accent);margin-right:6px"></i>Map &amp; Street View</h3>
                         <a class="linklike" id="streetview-open" href="#" target="_blank" rel="noopener" style="display:none">Open in Google Maps</a>
                     </div>
                     <div class="streetview-body" id="streetview-body">
@@ -239,18 +245,18 @@
                     </div>
                 </div>
 
-                <div class="dossier-card rail-card">
-                    <div class="dossier-card-head"><h3>Data sources</h3></div>
+                <details class="dossier-card rail-card profile-disclosure" id="property-data-sources">
+                    <summary class="dossier-card-head"><h3>Data sources</h3><span class="disclosure-action" aria-hidden="true"></span></summary>
                     <div class="dossier-card-body">
                         <div class="source-row"><span>PLUTO building facts</span><span class="source-when">live on page load</span></div>
                         <div class="source-row"><span>RPAD / HPD</span><span class="source-when">refreshed nightly</span></div>
                         <div class="source-row"><span>DOB permits</span><span class="source-when">nightly + on lookup</span></div>
                         <div class="source-row"><span>ACRIS deeds &amp; mortgages</span><span class="source-when">refreshed nightly</span></div>
-                        <div class="source-row"><span>HPD / ECB violations</span><span class="source-when">live on page load</span></div>
+                        <div class="source-row"><span>HPD / ECB violations</span><span class="source-when">when opened</span></div>
                         <div class="source-row"><span>DOB NOW Safety</span><span class="source-when">daily feed + live check</span></div>
                         <div class="source-row"><span>Secretary of State</span><span class="source-when">on ownership change</span></div>
                     </div>
-                </div>
+                </details>
             </aside>
         </div>
     </div>
@@ -275,8 +281,7 @@
     const BBL = "{{ bbl }}";
 </script>
 <script>
-    // Street View: embed when the server has a Maps Embed key, else offer a
-    // one-tap deep link. Either way the header button opens the full view.
+    // Google Maps always opens the address map; Street View is a separate option.
     (async function () {
         const body = document.getElementById('streetview-body');
         const openLink = document.getElementById('streetview-open');
@@ -286,26 +291,21 @@
             const res = await fetch('/api/property/{{ bbl }}/streetview');
             const sv = await res.json();
             if (!sv.success) throw new Error(sv.error || 'lookup failed');
-            const pinned = sv.open_kind === 'streetview';
-            if (sv.open_url) {
-                openLink.href = sv.open_url; openLink.style.display = '';
-                headBtn.href = sv.open_url; headBtn.target = '_blank'; headBtn.rel = 'noopener';
-                if (!pinned) headBtn.innerHTML = '<i class="fas fa-map"></i> Map';
+            if (sv.map_url) {
+                openLink.href = sv.map_url; openLink.style.display = '';
+                headBtn.href = sv.map_url; headBtn.target = '_blank'; headBtn.rel = 'noopener noreferrer';
+                headBtn.innerHTML = '<i class="fas fa-map"></i> Google Maps';
             }
+            const mapLink = '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener noreferrer"><i class="fas fa-map"></i> Open in Google Maps</a>';
+            const streetLink = sv.streetview_url ? '<a class="btn btn-secondary btn-sm" href="' + esc(sv.streetview_url) + '" target="_blank" rel="noopener noreferrer"><i class="fas fa-street-view"></i> Street View nearby</a>' : '';
             if (sv.embed_url) {
                 body.innerHTML = '<iframe class="streetview-frame" src="' + esc(sv.embed_url) + '" loading="lazy" ' +
-                    'referrerpolicy="no-referrer-when-downgrade" allowfullscreen title="Street View of ' + esc(sv.address || '') + '"></iframe>' +
-                    '<div class="streetview-foot">' +
-                    '<a class="btn btn-secondary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> ' + (pinned ? 'Full Street View' : 'Open in Google Maps') + '</a>' +
-                    (pinned ? '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener"><i class="fas fa-map"></i> Map</a>' : '') +
-                    (sv.embed_kind === 'map' ? '<span class="streetview-note">Couldn\'t pinpoint this lot yet — showing the address on the map.</span>' : '') +
-                    '</div>';
+                    'referrerpolicy="strict-origin-when-cross-origin" allowfullscreen title="' + (sv.embed_kind === 'streetview' ? 'Street View near ' : 'Map of ') + esc(sv.address || '') + '"></iframe>' +
+                    '<div class="streetview-foot">' + mapLink + streetLink + '</div>';
             } else {
                 body.innerHTML = '<div class="streetview-empty">' +
-                    '<i class="fas fa-street-view"></i>' +
-                    '<p>' + (pinned ? 'See the block and the front of the building before you call.' : 'Couldn\'t pinpoint this lot yet — search the address in Google Maps instead.') + '</p>' +
-                    '<a class="btn btn-primary btn-sm" href="' + esc(sv.open_url) + '" target="_blank" rel="noopener"><i class="fas fa-' + (pinned ? 'street-view' : 'map') + '"></i> ' + (pinned ? 'Open Street View' : 'Open in Google Maps') + '</a>' +
-                    (sv.key_configured ? '' : '<span class="streetview-note">Set <code>GOOGLE_MAPS_EMBED_KEY</code> to embed it here.</span>') +
+                    '<i class="fas fa-map-location-dot"></i>' +
+                    '<p>Explore the property and its surroundings in Google Maps.</p>' + mapLink + streetLink +
                     '</div>';
             }
         } catch (e) {

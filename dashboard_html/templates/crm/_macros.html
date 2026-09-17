@@ -363,12 +363,12 @@
     {% else %}
     <div class="crm-sv__empty">
         <i class="fas fa-street-view"></i>
-        <p>{% if sv.open_kind == 'streetview' %}See the block and the front door before you call.{% else %}Couldn't pinpoint this lot yet — search the address in Google Maps instead.{% endif %}</p>
+        <p>Explore the property and its surroundings in Google Maps.</p>
     </div>
     {% endif %}
     <div class="crm-sv__foot">
-        {% if sv.open_kind == 'streetview' %}
-        <a class="cbtn cbtn-sm{{ ' cbtn-primary' if not sv.embed_url }}" href="{{ sv.open_url }}" target="_blank" rel="noopener"><i class="fas fa-street-view"></i> {{ 'Full Street View' if sv.embed_url else 'Open Street View' }}</a>
+        {% if sv.streetview_url %}
+        <a class="cbtn cbtn-sm" href="{{ sv.streetview_url }}" target="_blank" rel="noopener"><i class="fas fa-street-view"></i> Street View nearby</a>
         <a class="cbtn cbtn-sm" href="{{ sv.map_url }}" target="_blank" rel="noopener"><i class="fas fa-map"></i> Google Maps</a>
         {% else %}
         <a class="cbtn cbtn-sm{{ ' cbtn-primary' if not sv.embed_url }}" href="{{ sv.map_url }}" target="_blank" rel="noopener"><i class="fas fa-map"></i> Open in Google Maps</a>

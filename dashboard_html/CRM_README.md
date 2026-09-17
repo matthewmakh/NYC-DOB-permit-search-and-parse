@@ -212,27 +212,18 @@ detail, and the Focus card) show Google Street View of the lot.
   *Maps Embed API* → create an API key restricted to *HTTP referrers*
   `permits.up.railway.app/*` and any custom domain) and the view is
   **embedded** in the page. Google prices Maps Embed API requests at $0.
-* Without the key, the same spots show an **Open Street View** button that
-  deep-links into Google Maps (keyless Maps URLs API) — nothing breaks.
-* **Where the pin goes** (`streetview.resolve`): first NYC Planning's free
-  GeoSearch API — the official address point for the house number, accepted
-  only when it comes back with the lot's own BBL (or an exact same-house,
-  same-borough match). Answers, including misses, are cached in
-  `building_geocodes` so each lot is looked up once. Second, the geocode on
-  the lot's permits, taking the newest permit that agrees with the others on
-  the lot and sits inside its borough; rounded placeholders, borough
-  centroids, and lone outliers are ignored. If neither works the button
-  becomes **Open in Google Maps** (an address search) rather than a Street
-  View link that opens on a black screen.
-* The **Open / Full Street View** link is built from the *address*
-  (`maps?q=<address, borough, NY>&layer=c`), not from coordinates: Google
-  geocodes it, picks the nearest panorama and aims the camera at the
-  building. Coordinate links were dropped after trying two forms: the Maps
-  URLs API `viewpoint` gives up with "No Street View imagery available here"
-  when nothing was photographed within 50 m, and a coordinate snap opens
-  facing along the street instead of at the door. The pinpointing above is
-  still used for the *embedded* panorama, which the Maps Embed API can only
-  place by lat/lng.
+* The primary **Open in Google Maps** link uses Google's supported address
+  search URL (`maps/search/?api=1&query=...`). It does not force a panorama.
+  Numeric borough codes are converted to names; records without an address
+  use verified coordinates when available.
+* **Where the pin goes** (`streetview.resolve`): NYC Planning's GeoSearch
+  verifies the address against the BBL, then falls back to consistent DOB
+  permit coordinates. Results are cached in `building_geocodes`.
+* The property profile offers a separate **Street View nearby** link only
+  when coordinates are available (`maps/@?api=1&map_action=pano&viewpoint=...`).
+  This requests nearby imagery, not a guarantee of coverage. The embedded
+  panorama searches within 100 metres for outdoor imagery. The normal map
+  link remains available even when Google has no Street View coverage.
 
 ## Migration story
 

@@ -141,6 +141,18 @@
 
 .owner-name { font-weight: 500; text-align: right; }
 
+.record-source-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.record-source-link:hover { text-decoration-thickness: 2px; }
+.record-source-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+.record-source-hint { display: block; margin-top: 3px; color: var(--ink-3); font-size: 11px; line-height: 1.5; font-weight: 400; }
+.permit-source-action { min-width: 0; max-width: 440px; }
+.owner-name { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    .owner-item { flex-wrap: wrap; gap: 3px 12px; }
+    .owner-source { white-space: normal; }
+    .owner-name { text-align: left; }
+}
+
 .owner-item.sos-highlight {
     background: var(--accent-soft);
     margin: 0 -8px;
@@ -1788,6 +1800,7 @@
     margin: 0 auto;
     padding: 0 24px;
     overflow-x: auto;
+    overflow-y: hidden;
 }
 .section-nav .tab-btn {
     display: inline-flex;
@@ -1823,6 +1836,7 @@
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px 24px 0;
+    scroll-margin-top: 130px;
 }
 
 /* Glance strip */
@@ -2036,6 +2050,63 @@
 }
 .dossier-card-body { padding: 16px 18px; }
 .rail-card .dossier-card-body { padding: 14px 18px; }
+
+/* Native disclosures keep long record lists out of the overview while
+   retaining keyboard interaction and screen-reader expanded state. */
+.profile-disclosure > summary {
+    list-style: none;
+    cursor: pointer;
+    min-height: 56px;
+    flex-wrap: nowrap;
+    border-bottom: 0;
+}
+.profile-disclosure > summary::-webkit-details-marker { display: none; }
+.profile-disclosure > summary > div { min-width: 0; }
+.profile-disclosure > summary:hover { background: var(--surface-2); }
+.profile-disclosure > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -3px;
+    border-radius: var(--radius);
+}
+.profile-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+.disclosure-action {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--ink-2);
+    font-size: 12px;
+    flex-shrink: 0;
+}
+.disclosure-action::before { content: 'Show'; }
+.profile-disclosure[open] > summary .disclosure-action::before { content: 'Hide'; }
+.disclosure-action::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+}
+.profile-disclosure[open] > summary .disclosure-action::after { transform: rotate(225deg); }
+.disclosure-count {
+    display: inline-block;
+    padding: 2px 7px;
+    margin-left: 6px;
+    border-radius: 99px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 500;
+    vertical-align: middle;
+}
+.disclosure-count:empty { display: none; }
+.profile-disclosure .timeline-filters { margin-bottom: 16px; flex-wrap: wrap; }
+@media (max-width: 640px) {
+    .profile-disclosure > summary { padding: 14px; gap: 8px; }
+    .profile-disclosure > summary > .freshness-note { display: none; }
+    .disclosure-action::before { display: none; }
+}
 
 .head-count {
     padding: 1px 8px;
@@ -2253,7 +2324,7 @@
     color: var(--ink-2);
     font-size: 13px;
 }
-.streetview-empty i { font-size: 28px; color: var(--ink-3); }
+.streetview-empty > i { font-size: 28px; color: var(--ink-3); }
 .streetview-empty p { margin: 0; max-width: 30ch; line-height: 1.5; }
 
 /* The disclosure toggles the `hidden` attribute, but an author `display: grid`

@@ -125,9 +125,8 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=railway
 
-# NYC Geoclient API (free - get at developer.cityofnewyork.us)
-NYC_GEOCLIENT_APP_ID=your_app_id
-NYC_GEOCLIENT_APP_KEY=your_app_key
+# NYC Geoclient v2 (free - subscribe at api-portal.nyc.gov)
+NYC_GEOCLIENT_SUBSCRIPTION_KEY=your_v2_subscription_key
 
 # Optional Performance Tuning
 BUILDING_BATCH_SIZE=500  # Buildings per enrichment run
@@ -245,8 +244,10 @@ Railway automatically provides:
 Optional performance tuning:
 - `BUILDING_BATCH_SIZE=500`
 - `API_DELAY=0.1`
-- `NYC_GEOCLIENT_APP_ID` (for geocoding)
-- `NYC_GEOCLIENT_APP_KEY` (for geocoding)
+- `NYC_GEOCLIENT_SUBSCRIPTION_KEY` (Geoclient v2; legacy `APP_KEY`, then `APP_ID`, are fallback variable names)
+
+See [Geocoding and SOS recovery](GEOCODING_RECOVERY.md) for retry behavior,
+checking failed SOS lookups, and previewing repairs to old coordinates.
 
 ### Monitoring Deployments
 

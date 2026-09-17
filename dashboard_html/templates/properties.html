@@ -115,6 +115,14 @@
 
             <div class="filter-section">
                 <label class="checkbox-label">
+                    <input type="checkbox" id="hasPersonOwner" aria-describedby="personOwnerHint">
+                    Has a person listed as an owner
+                </label>
+                <small class="filter-hint" id="personOwnerHint">Checks all owner sources, including people behind LLCs. Excludes properties where the only person listed is a registered or service-of-process agent.</small>
+            </div>
+
+            <div class="filter-section">
+                <label class="checkbox-label">
                     <input type="checkbox" id="cashOnly">
                     Cash purchases only
                 </label>
