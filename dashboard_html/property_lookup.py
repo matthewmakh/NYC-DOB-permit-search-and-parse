@@ -415,74 +415,22 @@ def _apply_dict_update(conn, building_id, columns_to_values):
     return len(updates)
 
 
+def _refresh_source(conn, building_id, bbl, source):
+    from property_source_refresh import refresh_property_sources
+    report = refresh_property_sources(conn, building_id, bbl, sources=[source])
+    return report.get(source, report.get('property', 'updated'))
+
+
 def _run_pluto(conn, building_id, bbl):
-    # step2 helpers return a (data, error) tuple with normalized keys.
-    data, error = get_pluto_data_for_bbl(bbl)
-    if error:
-        return f'error: {error}'
-    if not data:
-        return 'no data'
-    n = _apply_dict_update(conn, building_id, {
-        'current_owner_name': data.get('owner_name'),
-        'address': data.get('address'),
-        'bin': data.get('bin'),
-        'building_class': data.get('building_class'),
-        'land_use': data.get('land_use'),
-        'residential_units': data.get('residential_units'),
-        'total_units': data.get('total_units'),
-        'year_built': data.get('year_built'),
-        'year_altered': data.get('year_altered'),
-        'num_floors': data.get('num_floors'),
-        'building_sqft': data.get('building_sqft'),
-        'lot_sqft': data.get('lot_sqft'),
-        'zip_code': data.get('zip_code'),
-        'latitude': data.get('latitude'),
-        'longitude': data.get('longitude'),
-        'zoning_district': data.get('zoning_district'),
-        'built_far': data.get('built_far'),
-        'max_resid_far': data.get('max_resid_far'),
-        'max_comm_far': data.get('max_comm_far'),
-        'unused_far': data.get('unused_far'),
-        'pluto_owner_type': data.get('pluto_owner_type'),
-    })
-    return f'{n} fields updated'
+    return _refresh_source(conn, building_id, bbl, 'pluto')
 
 
 def _run_rpad(conn, building_id, bbl):
-    data, error = get_rpad_data_for_bbl(bbl)
-    if error:
-        return f'error: {error}'
-    if not data:
-        return 'no data'
-    n = _apply_dict_update(conn, building_id, {
-        'owner_name_rpad': data.get('owner_name_rpad'),
-        'assessed_land_value': data.get('assessed_land_value'),
-        'assessed_total_value': data.get('assessed_total_value'),
-    })
-    return f'{n} fields updated'
+    return _refresh_source(conn, building_id, bbl, 'rpad')
 
 
 def _run_hpd(conn, building_id, bbl):
-    data, error = get_hpd_data_for_bbl(bbl)
-    if error:
-        return f'error: {error}'
-    if not data:
-        return 'no data'
-    n = _apply_dict_update(conn, building_id, {
-        'owner_name_hpd': data.get('owner_name_hpd'),
-        'hpd_registration_id': data.get('hpd_registration_id'),
-        'hpd_open_violations': data.get('hpd_open_violations'),
-        'hpd_total_violations': data.get('hpd_total_violations'),
-        'hpd_open_complaints': data.get('hpd_open_complaints'),
-        'hpd_total_complaints': data.get('hpd_total_complaints'),
-        'hpd_owner_business_address': data.get('hpd_owner_business_address'),
-        'hpd_owner_business_city': data.get('hpd_owner_business_city'),
-        'hpd_owner_business_state': data.get('hpd_owner_business_state'),
-        'hpd_owner_business_zip': data.get('hpd_owner_business_zip'),
-        'hpd_agent_name': data.get('hpd_agent_name'),
-        'hpd_site_manager_name': data.get('hpd_site_manager_name'),
-    })
-    return f'{n} fields updated'
+    return _refresh_source(conn, building_id, bbl, 'hpd')
 
 
 def _run_permits(conn, building_id, bbl):
@@ -493,8 +441,16 @@ def _run_permits(conn, building_id, bbl):
 
 
 def _run_acris(conn, building_id, bbl):
-    count = enrich_building_from_acris(conn, building_id, bbl)
-    return f'{count} transactions' if count else 'no transactions'
+    try:
+        count = enrich_building_from_acris(conn, building_id, bbl)
+        return f'{count} transactions' if count else 'no transactions'
+    except Exception as exc:
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE buildings SET acris_last_attempted=NOW(),
+                acris_last_error=%s WHERE id=%s""", (str(exc)[:1000],building_id))
+        conn.commit()
+        raise
 
 
 def _run_tax_liens(conn, building_id, bbl):
@@ -511,33 +467,28 @@ def _run_tax_liens(conn, building_id, bbl):
 
 
 def _run_sos(conn, building_id, bbl):
-    """LLC -> real person via NY Secretary of State. Skipped if no LLC name
-    is present on the row yet (e.g. PLUTO returned a real-person owner)."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
-        SELECT current_owner_name, owner_name_rpad, owner_name_hpd
-          FROM buildings WHERE id = %s
-    """, (building_id,))
-    row = cur.fetchone()
-    cur.close()
+    from ny_sos_lookup import lookup_businesses, SOSBusinessResult
+    from step5_enrich_from_sos import (
+        sos_result_needs_retry, update_buildings_with_sos, record_sos_failures)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT sale_buyer_primary,current_owner_name,owner_name_rpad,owner_name_hpd "
+                    "FROM buildings WHERE id=%s", (building_id,))
+        row = cur.fetchone()
     if not row:
-        return 'no building row'
-
-    llc_name, source = get_best_llc_name(dict(row))
-    if not llc_name:
-        return 'no LLC name'
-
-    # Import here so the heavy async lookup module isn't pulled in at
-    # module-load time for callers who don't need SOS.
-    from ny_sos_lookup import lookup_businesses
-    results = lookup_businesses([llc_name], concurrency=1, timeout=20)
-    sos_result = results.get(llc_name)
-    if not sos_result or not getattr(sos_result, 'found', False):
-        return f'no match for {llc_name!r}'
-
-    sos_fields = process_sos_result(sos_result)
-    n = _apply_dict_update(conn, building_id, sos_fields)
-    return f'{n} fields updated (source={source})'
+        return 'error: no building row'
+    name, source = get_best_llc_name(dict(row))
+    if name:
+        result = lookup_businesses([name], concurrency=1, timeout=20).get(name)
+        if result is None or sos_result_needs_retry(result):
+            error = getattr(result, 'error', '') or 'No SOS result returned'
+            record_sos_failures(conn, [{'building_id': building_id, 'error': error}])
+            return f'error: {error}'
+    else:
+        result = SOSBusinessResult(query_name='', normalized_name='')
+    fields = process_sos_result(result)
+    fields.update(building_id=building_id, lookup_source=source)
+    update_buildings_with_sos(conn, [fields])
+    return 'updated' if result.found else 'no entity match'
 
 
 # Each step is named for the status report. Ordered so that PLUTO/RPAD/HPD
@@ -590,36 +541,6 @@ def run_free_enrichment(conn, building_id, bbl):
             except Exception:
                 pass
 
-    # PLUTO/RPAD/HPD share one property-source freshness clock. Only a clean
-    # pass advances it; partial API failures remain immediately retryable.
-    property_errors = [report[name] for name in ('pluto', 'rpad', 'hpd')
-                       if report.get(name, '').startswith('error:')]
-    try:
-        cur = conn.cursor()
-        cur.execute("SAVEPOINT property_freshness")
-        try:
-            cur.execute("""
-                UPDATE buildings
-                SET property_last_attempted = CURRENT_TIMESTAMP,
-                    property_last_enriched = CASE WHEN %s THEN CURRENT_TIMESTAMP
-                                                  ELSE property_last_enriched END,
-                    property_last_error = %s,
-                    last_updated = CASE WHEN %s THEN CURRENT_TIMESTAMP
-                                        ELSE last_updated END
-                WHERE id = %s
-            """, (not property_errors,
-                  '; '.join(property_errors)[:1000] if property_errors else None,
-                  not property_errors, building_id))
-            cur.execute("RELEASE SAVEPOINT property_freshness")
-        except psycopg2.Error:
-            cur.execute("ROLLBACK TO SAVEPOINT property_freshness")
-        conn.commit()
-        cur.close()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
     return report
 
 
@@ -687,7 +608,7 @@ def _finish_enrichment_job(conn, job_id, report=None, error=None):
             UPDATE property_enrichment_jobs
             SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'queued' END,
                 available_at = CURRENT_TIMESTAMP
-                    + (LEAST(attempts, 5) * INTERVAL '5 minutes'),
+                    + INTERVAL '6 hours',
                 locked_at = NULL, last_error = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
@@ -708,6 +629,9 @@ def process_enrichment_job(connect, job_id):
     conn = connect()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,72105)) AS acquired', (str(job_id),))
+        if not cur.fetchone()['acquired']:
+            return None
         cur.execute("""
             UPDATE property_enrichment_jobs
             SET status = 'running', attempts = attempts + 1,
@@ -749,6 +673,7 @@ def process_queued_enrichment_jobs(connect, limit=25):
                 updated_at = CURRENT_TIMESTAMP
             WHERE status = 'running'
               AND locked_at < NOW() - INTERVAL '20 minutes'
+              AND pg_try_advisory_xact_lock(hashtextextended(id::text,72105))
         """)
         cur.execute("""
             SELECT id FROM property_enrichment_jobs
@@ -760,11 +685,17 @@ def process_queued_enrichment_jobs(connect, limit=25):
         cur.close()
     finally:
         conn.close()
+    failed = 0
     for queued_job_id in job_ids:
         try:
-            process_enrichment_job(connect, queued_job_id)
+            report = process_enrichment_job(connect, queued_job_id)
+            if report and any('error:' in value for value in report.values() if isinstance(value, str)):
+                failed += 1
         except Exception:
             log.exception('queued property enrichment failed for job=%s', queued_job_id)
+            failed += 1
+    if failed:
+        raise RuntimeError(f'{failed} property jobs remain incomplete')
     return len(job_ids)
 
 
@@ -870,3 +801,24 @@ def auto_add_property(connect, query, background=True):
             conn.close()
         except Exception:
             pass
+
+
+_recovery_started = False
+
+
+def start_property_job_recovery(connect):
+    """Drain queued work periodically; database locks coordinate web workers."""
+    global _recovery_started
+    if _recovery_started:
+        return
+    _recovery_started = True
+
+    def recover():
+        import time
+        while True:
+            try:
+                process_queued_enrichment_jobs(connect)
+            except Exception:
+                log.exception('Property enrichment recovery pass failed')
+            time.sleep(60)
+    threading.Thread(target=recover, name='property-job-recovery', daemon=True).start()

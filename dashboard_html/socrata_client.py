@@ -305,8 +305,11 @@ class SocrataClient:
             try:
                 resp = self.session.get(url, params=params, timeout=self.timeout)
                 if resp.status_code == 200:
-                    return resp.json()
-                if resp.status_code == 429 or resp.status_code >= 500:
+                    rows = resp.json()
+                    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                        raise SocrataError(f'Invalid row response for {dataset}')
+                    return rows
+                if resp.status_code in (408, 429) or resp.status_code >= 500:
                     last_error = f"HTTP {resp.status_code}"
                     time.sleep(2 ** attempt)
                     continue
@@ -318,33 +321,44 @@ class SocrataClient:
         raise SocrataError(f"Request failed after {self.max_retries} attempts ({last_error})")
 
     def get_all(self, dataset, page_size=1000, max_rows=100000, **params):
-        """Paginate until short page / max_rows. Requires an $order for
+        """Paginate to completion; raise rather than return truncated data.
+        Requires an $order for
         deterministic paging; defaults to :id which every dataset has."""
+        if page_size < 1 or max_rows < 1:
+            raise ValueError('Page size and row limit must be positive')
         params = dict(params)
+        params.pop('$limit', None)
+        params.pop('$offset', None)
         params.setdefault('$order', ':id')
         rows = []
         offset = 0
         while True:
             page = self.get(dataset, **params, **{'$limit': page_size, '$offset': offset})
             rows.extend(page)
-            if len(page) < page_size or len(rows) >= max_rows:
+            if len(rows) > max_rows:
+                raise SocrataError(f'{dataset} exceeds the {max_rows} row safety limit')
+            if len(page) < page_size:
+                return rows
+            if len(rows) == max_rows:
+                if self.get(dataset, **params, **{'$limit': 1, '$offset': offset + page_size}):
+                    raise SocrataError(f'{dataset} exceeds the {max_rows} row safety limit')
                 return rows
             offset += page_size
 
     def get_batched(self, dataset, field, values, batch_size=50, select=None, extra_where=None):
         """Fetch rows where `field` is any of `values`, in batches.
         Returns one combined list."""
-        values = [v for v in values if v]
+        values = list(dict.fromkeys(v for v in values if v))
         rows = []
         for i in range(0, len(values), batch_size):
             batch = values[i:i + batch_size]
             where = in_clause(field, batch)
             if extra_where:
                 where = f"({where}) AND ({extra_where})"
-            params = {'$where': where, '$limit': max(1000, batch_size * 40)}
+            params = {'$where': where}
             if select:
                 params['$select'] = select
-            rows.extend(self.get(dataset, **params))
+            rows.extend(self.get_all(dataset, page_size=max(1000, batch_size * 40), **params))
         return rows
 
     def get_columns(self, dataset):

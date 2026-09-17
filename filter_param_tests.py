@@ -735,10 +735,10 @@ else:
           S5.get_best_llc_name({'owner_name_rpad': 'OLD RPAD LLC',
                                 'owner_name_hpd': 'HPD LLC'}),
           ('HPD LLC', 'owner_name_hpd'))
-    check('individual buyer falls through to the next LLC',
+    check('individual buyer prevents falling through to an obsolete LLC',
           S5.get_best_llc_name({'sale_buyer_primary': 'JIN PEI XIE',
                                 'current_owner_name': 'PLUTO LLC'}),
-          ('PLUTO LLC', 'current_owner_name'))
+          (None, ''))
 
     print('— references dataset linkage (live schema has no doc-id column) —')
     import step3_enrich_from_acris as S3

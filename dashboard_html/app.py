@@ -172,11 +172,23 @@ def init_db_pool():
             db_pool = None
             return None
         # One-off, idempotent: ensure bulk_enrich_jobs table exists and any
-        # 'running' jobs from a previous container are marked failed.
+        # interrupted jobs can recover their durable progress.
         try:
             import bulk_enrich_service
             bulk_enrich_service.init_bulk_enrich_jobs_table()
+            from property_source_refresh import SCHEMA_SQL as property_schema, BUILDING_COLUMNS_SQL
+            conn = db_pool.getconn()
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute('SELECT pg_advisory_xact_lock(72108,0)')
+                        cur.execute(property_schema)
+                        cur.execute(BUILDING_COLUMNS_SQL)
+            finally:
+                db_pool.putconn(conn)
             bulk_enrich_service.resume_orphaned_jobs()
+            from property_lookup import start_property_job_recovery
+            start_property_job_recovery(lambda: psycopg2.connect(**DB_CONFIG))
         except Exception as e:
             print(f"⚠️  bulk_enrich_service init skipped: {e}", flush=True)
         try:
@@ -4858,7 +4870,7 @@ def api_properties():
                 where_clauses.append("b.sale_date <= %s")
                 params.append(sale_date_to)
         
-            # Cash purchases only
+            # Likely cash purchases only
             if cash_only:
                 where_clauses.append("b.is_cash_purchase = true")
         
@@ -5450,7 +5462,7 @@ def api_properties_export():
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
                 'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
-                'is_cash_purchase': ('Cash Purchase', lambda p: 'Yes' if p['is_cash_purchase'] else 'No'),
+                'is_cash_purchase': ('Likely cash purchase', lambda p: 'Unknown' if p['is_cash_purchase'] is None else ('Yes' if p['is_cash_purchase'] else 'No')),
                 'permit_count': ('Permit Count', lambda p: p['permit_count'] or 0),
                 'violation_count': ('Violation Count', lambda p: p['violation_count'] or 0),
                 # NEW: Permit-based contacts (from Contacts tab)
@@ -5822,36 +5834,27 @@ def api_properties_export_with_enrichment():
                         })
                         continue
                     
-                    # Need to enrich (or just grant access if already enriched)
-                    # For bulk: charge FIRST, then grant access
-                    need_to_charge = should_charge
-                    
-                    if need_to_charge:
-                        # Charge for this enrichment ($0.35 for bulk)
-                        charge_success, charge_msg, charge_id = charge_enrichment_fee(
-                            user_id, building_id, contact_name, is_batch=True,
-                            charge_scope='permit_contact'
-                        )
-                        
-                        if not charge_success:
-                            failed_enrichments.append({
-                                'bbl': bbl,
-                                'contact': contact_name,
-                                'error': f'Payment failed: {charge_msg}'
-                            })
-                            continue
-                        
-                        total_charged += 0.35
-                    else:
-                        charge_id = 'admin_free'
-                    
-                    # Now do the enrichment (with grant_access=True since we already charged)
                     success, enrichment_data, message = enrich_permit_contact(
                         bbl, building_id, permit_id, contact_name, contact_type,
                         license_number, license_type, original_phone, user_id,
-                        grant_access=True  # Grant access since charge succeeded
-                    )
-                    
+                        grant_access=False)
+                    if success:
+                        charge_id = 'admin_free'
+                        if should_charge:
+                            paid, charge_message, charge_id = charge_enrichment_fee(
+                                user_id, building_id, contact_name, is_batch=True,
+                                charge_scope='permit_contact')
+                            if not paid:
+                                failed_enrichments.append({'bbl': bbl, 'contact': contact_name,
+                                                           'error': f'Payment failed: {charge_message}'})
+                                continue
+                            total_charged += 0.35
+                        granted, grant_error = grant_permit_contact_access(
+                            user_id, enrichment_data['id'],
+                            0.35 if should_charge else 0, charge_id)
+                        if not granted:
+                            raise RuntimeError(f'Payment succeeded but access could not be saved: {grant_error}')
+
                     if success:
                         new_enrichments_count += 1
                         enriched_contacts_by_bbl[bbl].append({
@@ -6939,12 +6942,8 @@ def api_building_profile(bbl):
                 # write time so rows stored before the lookup verified its own
                 # match are flagged without waiting for a re-run.
                 try:
-                    from enrichment_service import entity_match_quality
-                    quality, matched_name = entity_match_quality(
-                        building['sos_entity_name'],
-                        [building['current_owner_name'], building['owner_name_rpad'],
-                         building['owner_name_hpd'], building['sale_buyer_primary']],
-                    )
+                    from enrichment_service import owner_entity_match_quality
+                    quality, matched_name = owner_entity_match_quality(building)
                 except Exception as e:
                     print(f"SOS entity match check failed: {e}")
                     quality, matched_name = 'unknown', None
@@ -6958,14 +6957,14 @@ def api_building_profile(bbl):
             risk_factors = []
             risk_score = 0
         
-            # Tax delinquency (30 points)
+            # A published notice is a weak signal; present unpaid debt is unverified.
             if building['has_tax_delinquency']:
                 if building['tax_delinquency_water_only']:
                     risk_score += 10
-                    risk_factors.append({'factor': 'Water Debt', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} water delinquency notices"})
+                    risk_factors.append({'factor': 'Water lien-sale notice', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} water lien-sale notices; current debt unverified"})
                 else:
-                    risk_score += 30
-                    risk_factors.append({'factor': 'Property Tax Delinquency', 'severity': 'high', 'points': 30, 'details': f"{building['tax_delinquency_count']} tax delinquency notices"})
+                    risk_score += 10
+                    risk_factors.append({'factor': 'Lien-sale notice', 'severity': 'low', 'points': 10, 'details': f"{building['tax_delinquency_count']} lien-sale notices; current debt unverified"})
         
             # ECB violations with outstanding balance (40 points max)
             if building['ecb_total_balance'] and building['ecb_total_balance'] > 0:
@@ -7436,7 +7435,7 @@ def api_enrich_owner():
         has_access, existing_data_list, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
         if has_access and existing_data_list:
             # Find the data for this specific owner
-            owner_data = next((d for d in existing_data_list if d.get('owner_name') == owner_name), existing_data_list[0] if existing_data_list else None)
+            owner_data = next((d for d in existing_data_list if names_compatible(canonical_name_key(d.get('owner_name')), canonical_name_key(owner_name))), None)
             return jsonify({
                 'success': True,
                 'data': owner_data,
@@ -7462,27 +7461,25 @@ def api_enrich_owner():
                 'error': 'This person is not a verified owner candidate for the property.'
             }), 400
         
+        owner_name = next(person['name'] for person in related_people
+                          if names_compatible(requested_key, canonical_name_key(person['name'])))
         # Perform enrichment FIRST (before charging)
         success, data, message = enrich_owner(building_id, owner_name, address, user_id)
         print(f"Enrichment result: success={success}, message={message}")
         
         if success:
-            # Only charge AFTER successful enrichment - single lookup = $0.50
+            from paid_enrichment_store import grant_owner_access
             charge_id = 'admin_free'
             charged = False
             if should_charge:
                 charge_success, charge_msg, charge_id = charge_enrichment_fee(
                     user_id, building_id, owner_name, is_batch=False,
                     charge_scope='owner_enrichment')
-                charged = charge_success
                 if not charge_success:
-                    from enrichment_service import revoke_owner_enrichment_access
-                    revoke_owner_enrichment_access(user_id, building_id, owner_name)
-                    return jsonify({
-                        'success': False,
-                        'error': f'Payment failed: {charge_msg}'
-                    }), 402
-            
+                    return jsonify({'success': False, 'error': f'Payment failed: {charge_msg}'}), 402
+                charged = True
+            grant_owner_access(user_id, building_id, owner_name, charge_id)
+
             return jsonify({
                 'success': True,
                 'data': data,
@@ -7870,6 +7867,24 @@ def api_enrich_permit_contact():
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
         
+        from enrichment_service import get_enrichable_permit_contacts
+        source_contact = next((c for c in get_enrichable_permit_contacts(bbl, user_id)
+                               if c['name'].strip().upper() == contact_name.strip().upper()
+                               and c['type'] == contact_type and c['is_enrichable']), None)
+        if not source_contact:
+            return jsonify({'success': False, 'error': 'Contact is not listed on a permit for this property'}), 400
+        contact_name = source_contact['name']
+        permit_id = source_contact['permit_id']
+        license_number = source_contact.get('license_number')
+        license_type = source_contact.get('license_type')
+        original_phone = source_contact.get('existing_phone')
+        with DatabaseConnection() as cur:
+            cur.execute('SELECT id FROM buildings WHERE bbl=%s', (bbl,))
+            building = cur.fetchone()
+            if not building:
+                return jsonify({'success': False, 'error': 'Building not found'}), 404
+            building_id = building['id']
+
         # Check if already enriched and user has access
         already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
             bbl, contact_name, contact_type, user_id
@@ -7920,11 +7935,10 @@ def api_enrich_permit_contact():
                 
                 if charge_success:
                     # Only grant access AFTER successful charge
-                    grant_permit_contact_access(
-                        user_id, enrichment_id, 
-                        charge_amount=0.50, 
-                        stripe_charge_id=charge_id
-                    )
+                    granted, grant_error = grant_permit_contact_access(
+                        user_id, enrichment_id, charge_amount=0.50, stripe_charge_id=charge_id)
+                    if not granted:
+                        raise RuntimeError(f'Payment succeeded but access could not be saved: {grant_error}')
                     return jsonify({
                         'success': True,
                         'data': enrichment_data,
@@ -7940,7 +7954,9 @@ def api_enrich_permit_contact():
                         'error': f'Payment failed: {charge_msg}'
                     }), 402
             else:
-                # Admin or no charge needed - already granted access
+                granted, grant_error = grant_permit_contact_access(user_id, enrichment_id, 0, 'free_access')
+                if not granted:
+                    raise RuntimeError(grant_error)
                 return jsonify({
                     'success': True,
                     'data': enrichment_data,

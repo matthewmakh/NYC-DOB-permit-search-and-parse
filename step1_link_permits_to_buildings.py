@@ -111,8 +111,7 @@ def link_permits_to_buildings():
     print("=" * 60, flush=True)
     
     # Debug: Show connection info (masked)
-    db_url_masked = DATABASE_URL[:30] + "..." if DATABASE_URL else "None"
-    print(f"🔌 Connecting to database ({db_url_masked})...", flush=True)
+    print("🔌 Connecting to database...", flush=True)
     
     try:
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor, connect_timeout=30)
@@ -168,20 +167,26 @@ def link_permits_to_buildings():
     print(f"   Found {len(buildings_to_create)} new buildings to create")
     
     buildings_created = 0
+    buildings_failed = 0
     for building in buildings_to_create:
         try:
+            cur.execute('SAVEPOINT create_building')
             cur.execute("""
                 INSERT INTO buildings (bbl, address, borough, block, lot, bin, last_updated)
                 VALUES (%s, %s, %s, %s, %s, %s, NULL)
                 ON CONFLICT (bbl) DO NOTHING
             """, (building['bbl'], building['address'], building['bbl'][0],
                   building['block'], building['lot'], building['bin']))
-            buildings_created += 1
+            buildings_created += cur.rowcount
+            cur.execute('RELEASE SAVEPOINT create_building')
             
             if buildings_created % 100 == 0:
                 conn.commit()
                 print(f"   Created {buildings_created}/{len(buildings_to_create)} buildings...")
         except Exception as e:
+            cur.execute('ROLLBACK TO SAVEPOINT create_building')
+            cur.execute('RELEASE SAVEPOINT create_building')
+            buildings_failed += 1
             print(f"   ⚠️ Error creating building {building['bbl']}: {e}")
             continue
     
@@ -229,6 +234,8 @@ def link_permits_to_buildings():
     
     cur.close()
     conn.close()
+    if buildings_failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

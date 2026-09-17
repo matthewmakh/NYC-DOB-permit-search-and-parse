@@ -529,7 +529,7 @@ async function checkResumableBulkEnrichJob() {
         const res = await fetch('/api/enrichment/bulk-jobs');
         const data = await res.json();
         if (!data.success || !data.jobs || !data.jobs.length) return;
-        const active = data.jobs.find(j => ['pending', 'running', 'cancel_requested'].includes(j.status));
+        const active = data.jobs.find(j => ['pending', 'running', 'cancel_requested', 'charging'].includes(j.status));
         if (!active) return;
         // Auto-open progress modal so the user can watch it / cancel.
         const modal = document.createElement('div');
@@ -750,7 +750,7 @@ function renderProperties() {
                 </div>
 
                 <div class="property-badges">
-                    ${property.is_cash_purchase ? '<span class="badge badge-cash">Cash purchase</span>' : ''}
+                    ${property.is_cash_purchase ? '<span class="badge badge-cash">Likely cash purchase</span>' : ''}
                     ${property.acris_total_transactions > 0 ? '<span class="badge badge-acris">ACRIS</span>' : ''}
                     ${permitCount > 0 ? `<span class="badge badge-permits">${permitCount} permit${permitCount > 1 ? 's' : ''}</span>` : ''}
                     ${violationCount > 0 ? `<span class="badge badge-violations">${violationCount} open violation${violationCount > 1 ? 's' : ''}</span>` : ''}
@@ -1000,7 +1000,7 @@ function renderPeek(data) {
         ['Sold', b.sale_date ? formatDate(b.sale_date) : null],
         ['Buyer', b.sale_buyer_primary || null],
         ['Seller', b.sale_seller_primary || null],
-        ['Mortgage', b.mortgage_amount ? `${peekMoney(b.mortgage_amount)}${b.mortgage_lender_primary ? ` · ${escapeHtml(b.mortgage_lender_primary)}` : ''}` : (b.is_cash_purchase ? 'None — cash purchase' : null)],
+        ['Mortgage', b.mortgage_amount ? `${peekMoney(b.mortgage_amount)}${b.mortgage_lender_primary ? ` · ${escapeHtml(b.mortgage_lender_primary)}` : ''}` : (b.is_cash_purchase ? 'No purchase mortgage found' : null)],
         ['Financing', b.financing_ratio != null && b.financing_ratio !== '' ? `${Math.round(Number(b.financing_ratio) * 100)}% financed` : null],
     ].filter(([, v]) => v);
 
@@ -1052,7 +1052,7 @@ function renderPeek(data) {
 
         ${sale.length ? `
         <section class="peek__section">
-            <div class="peek__section-head"><h3>Sale &amp; financing</h3>${b.is_cash_purchase ? '<span class="badge badge-cash">Cash purchase</span>' : ''}</div>
+            <div class="peek__section-head"><h3>Sale &amp; financing</h3>${b.is_cash_purchase ? '<span class="badge badge-cash">Likely cash purchase</span>' : ''}</div>
             <dl class="peek-kv">${sale.map(([k, v]) => `<div><dt>${k}</dt><dd title="${escapeAttr(String(v).replace(/<[^>]+>/g, ''))}">${v}</dd></div>`).join('')}</dl>
         </section>` : ''}
 
@@ -2406,7 +2406,7 @@ const SS_OPTION_SOURCES = {
 };
 
 const SS_FLAGS = {
-    cash_only: 'Cash purchases',
+    cash_only: 'Likely cash purchases',
     has_person_owner: 'Person listed as owner',
     with_permits: 'Has permits',
 };

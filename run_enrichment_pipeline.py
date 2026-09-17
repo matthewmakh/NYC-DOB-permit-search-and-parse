@@ -73,6 +73,7 @@ def run_script(script_name, description, extra_env=None):
             [sys.executable, '-u', script_name],  # -u for unbuffered Python output
             text=True,
             check=False,
+            timeout=max(60, int(os.getenv('PIPELINE_STEP_TIMEOUT_SECONDS', '14400'))),
             env={**os.environ, **(extra_env or {})},
             # Note: No capture_output, so stdout/stderr go directly to console
         )
@@ -126,6 +127,13 @@ def main():
     if not results['signals_migration']:
         print_error("Signal intelligence migration failed - cannot safely continue")
         sys.exit(1)
+    results['reliability_migration'] = run_script(
+        'migrate_enrichment_reliability.py', 'Create independent enrichment checkpoints')
+    if not results['reliability_migration']:
+        sys.exit(1)
+    results['safety'] = run_script('sync_dob_safety.py', 'Refresh daily DOB Safety totals citywide')
+    # Recover interactive work before the longer periodic backfills.
+    results['property_jobs'] = run_script('process_property_enrichment_jobs.py', 'Recover queued property lookups')
     
     # ===== STEP 1: Link Permits to Buildings =====
     print_step(1, "Link Permits to Buildings (BBL Generation)")
@@ -226,14 +234,6 @@ def main():
     if not results['geocode']:
         print_warning("Geocoding failed - pipeline otherwise complete")
 
-    # ===== STEP 8: Recover auto-add work interrupted by web-worker restarts =====
-    print_step(8, "Process Durable Property Enrichment Queue")
-    results['property_jobs'] = run_script(
-        'process_property_enrichment_jobs.py',
-        'Recover and finish auto-add enrichment jobs left by web workers'
-    )
-    if not results['property_jobs']:
-        print_warning("Property enrichment queue processing failed")
 
     # ===== SUMMARY =====
     end_time = datetime.now()
@@ -255,6 +255,7 @@ def main():
         'migrations',
         'project_migration',
         'signals_migration',
+        'reliability_migration', 'safety', 'property_jobs', 'geocode', 'recent_sales',
         'step1',
         'step2',
         'step6',
@@ -272,10 +273,24 @@ def main():
         sys.exit(0)
 
 if __name__ == "__main__":
+    pipeline_conn = None
     try:
+        import psycopg2
+        from migrate_add_freshness_and_jobs import database_dsn
+        pipeline_conn = psycopg2.connect(database_dsn(), connect_timeout=10)
+        with pipeline_conn.cursor() as lock_cursor:
+            lock_cursor.execute('SELECT pg_try_advisory_lock(72101,0)')
+            if not lock_cursor.fetchone()[0]:
+                print('Another enrichment pipeline is running; skipping overlapping run', flush=True)
+                sys.exit(0)
+        pipeline_conn.commit()
         main()
     except Exception as e:
         print(f"[FATAL] Unhandled exception in pipeline: {e}", flush=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+    finally:
+        if pipeline_conn is not None:
+            pipeline_conn.close()

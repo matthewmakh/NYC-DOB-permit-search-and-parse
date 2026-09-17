@@ -50,6 +50,8 @@ class SignalClientStub:
         return self.columns[dataset]
 
     def get_all(self, dataset, **params):
+        if dataset == 'll84_energy':
+            return self.get(dataset, **params)
         if dataset == 'hpd_litigation':
             check('litigation queries the live bbl field',
                   params['$where'] == "bbl='1008350041'", params['$where'])

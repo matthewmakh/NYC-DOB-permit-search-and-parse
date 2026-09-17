@@ -288,6 +288,31 @@ def _payment_idempotency_key(scope, actor_user_id, building_id, subject):
     return f'nyc-permit-leads-{scope}-{fingerprint}'
 
 
+def _create_enrichment_payment(cur, conn, **parameters):
+    """Persist exact request parameters and successful receipts across restarts."""
+    import json
+    from types import SimpleNamespace
+    key = parameters['idempotency_key']
+    cur.execute('SELECT pg_advisory_lock(hashtextextended(%s,72106))', (key,))
+    cur.execute("""INSERT INTO enrichment_payment_attempts(request_key,request_json)
+        VALUES (%s,%s) ON CONFLICT DO NOTHING""", (key,json.dumps(parameters)))
+    cur.execute("""SELECT request_json,payment_id,
+        started_at < NOW()-INTERVAL '23 hours' AS expired
+        FROM enrichment_payment_attempts WHERE request_key=%s""", (key,))
+    attempt = cur.fetchone()
+    conn.commit()  # Durable before the external side effect.
+    if attempt['payment_id']:
+        return SimpleNamespace(id=attempt['payment_id'],status='succeeded')
+    if attempt['expired']:
+        raise ValueError('Payment outcome needs reconciliation before another charge')
+    payment = stripe.PaymentIntent.create(**attempt['request_json'])
+    if payment.status == 'succeeded':
+        cur.execute('UPDATE enrichment_payment_attempts SET payment_id=%s WHERE request_key=%s',
+                    (payment.id,key))
+        conn.commit()
+    return payment
+
+
 def charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False,
                           charge_scope='owner', idempotency_key=None):
     """
@@ -320,7 +345,7 @@ def charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False,
             user_id, building_id, owner_name,
         )
         subject_label = 'Permit contact' if charge_scope == 'permit_contact' else 'Owner'
-        payment_intent = stripe.PaymentIntent.create(
+        payment_intent = _create_enrichment_payment(cur, conn,
             amount=fee_cents,
             currency='usd',
             customer=payer['stripe_customer_id'],
@@ -351,11 +376,12 @@ def charge_enrichment_fee(user_id, building_id, owner_name, is_batch=False,
                 INSERT INTO enrichment_transactions
                 (user_id, billing_user_id, building_id, transaction_type, amount,
                  stripe_payment_intent_id, status, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (SELECT 1 FROM enrichment_transactions WHERE stripe_payment_intent_id=%s)
             """, (
                 user_id, payer['id'], building_id, charge_scope, fee_dollars,
                 payment_intent.id, payment_intent.status,
-                f"Enrichment for: {owner_name}"
+                f"Enrichment for: {owner_name}", payment_intent.id
             ))
             conn.commit()
         except Exception as audit_error:
@@ -428,7 +454,7 @@ def charge_batch_enrichment_total(user_id, building_ids, num_enrichments, enrich
             'bulk_owner', user_id, building_ids[0] if building_ids else 0,
             f'{num_enrichments}|{owners_str}',
         )
-        payment_intent = stripe.PaymentIntent.create(
+        payment_intent = _create_enrichment_payment(cur, conn,
             amount=total_cents,
             currency='usd',
             customer=payer['stripe_customer_id'],
@@ -456,12 +482,13 @@ def charge_batch_enrichment_total(user_id, building_ids, num_enrichments, enrich
                 INSERT INTO enrichment_transactions
                 (user_id, billing_user_id, building_id, transaction_type, amount,
                  stripe_payment_intent_id, status, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (SELECT 1 FROM enrichment_transactions WHERE stripe_payment_intent_id=%s)
             """, (
                 user_id, payer['id'], building_ids[0] if building_ids else None,
                 'bulk_enrichment', total_dollars,
                 payment_intent.id, payment_intent.status,
-                f"Bulk enrichment: {num_enrichments} owners - {owners_str[:100]}"
+                f"Bulk enrichment: {num_enrichments} owners - {owners_str[:100]}", payment_intent.id
             ))
             conn.commit()
         except Exception as audit_error:

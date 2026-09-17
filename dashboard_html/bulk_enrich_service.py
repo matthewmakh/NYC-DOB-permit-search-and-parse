@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS bulk_enrich_jobs (
 
 # Run after CREATE so the column also lands on existing tables from earlier deploys.
 ALTER_TABLE_SQL = [
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS prepared_at TIMESTAMPTZ",
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS billing_started_at TIMESTAMPTZ",
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS payment_intent_id TEXT",
+    "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS final_status TEXT",
+
     "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'enformion_fallback'",
     "ALTER TABLE bulk_enrich_jobs ADD COLUMN IF NOT EXISTS billing_user_id INTEGER REFERENCES users(id)",
 ]
@@ -84,19 +89,32 @@ CREATE_INDEXES_SQL = [
 
 def init_bulk_enrich_jobs_table():
     """Idempotently create the bulk_enrich_jobs table. Safe to call at every worker start."""
+    conn = None
     try:
         conn = _get_conn()
         cur = conn.cursor()
+        cur.execute('SELECT pg_advisory_xact_lock(72108,0)')
         cur.execute(CREATE_TABLE_SQL)
         for alter_sql in ALTER_TABLE_SQL:
             cur.execute(alter_sql)
         for idx_sql in CREATE_INDEXES_SQL:
             cur.execute(idx_sql)
+        from paid_enrichment_store import SCHEMA_SQL
+        cur.execute(SCHEMA_SQL)
+        cur.execute("""CREATE TABLE IF NOT EXISTS bulk_enrich_items (
+            job_id INTEGER REFERENCES bulk_enrich_jobs(id) ON DELETE CASCADE,
+            building_id INTEGER REFERENCES buildings(id) ON DELETE CASCADE,
+            owner_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT, PRIMARY KEY(job_id,building_id,owner_name))""")
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
         print(f"[bulk_enrich] init_bulk_enrich_jobs_table error: {e}")
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +299,7 @@ _RUNNING_JOBS_LOCK = threading.Lock()
 def start_job_worker(job_id):
     """Spawn a daemon thread to run the job. Idempotent: ignores duplicates."""
     with _RUNNING_JOBS_LOCK:
-        if job_id in _RUNNING_JOBS:
+        if job_id in _RUNNING_JOBS or len(_RUNNING_JOBS) >= max(1, int(os.getenv('BULK_ENRICH_WORKERS','2'))):
             return False
         _RUNNING_JOBS.add(job_id)
 
@@ -294,166 +312,139 @@ def start_job_worker(job_id):
 def _run_job_safe(job_id):
     try:
         _run_job(job_id)
-    except Exception as e:
+    except Exception:
+        # Keep durable progress recoverable, including an uncertain payment.
         traceback.print_exc()
-        try:
-            _set_status(job_id, 'failed', error_message=str(e))
-        except Exception:
-            pass
     finally:
         with _RUNNING_JOBS_LOCK:
             _RUNNING_JOBS.discard(job_id)
 
 
 def _run_job(job_id):
-    """Process every building_id in the job, enriching owners per the chosen strategy.
-
-    Lazy-imports of enrichment_service / stripe_service avoid a circular import
-    at module load time.
-    """
-    from enrichment_service import (
-        get_available_owners_for_enrichment,
-        enrich_owner,
-        filter_owners_by_strategy,
-        revoke_owner_enrichment_access,
-    )
+    from enrichment_service import (get_available_owners_for_enrichment,
+                                    filter_owners_by_strategy, enrich_owner)
     from stripe_service import charge_batch_enrichment_total
+    from paid_enrichment_store import grant_result
 
-    job = get_job(job_id)
-    if not job:
-        return
-
-    user_id = job['user_id']
-    is_admin = job['is_admin']
-    owner_strategy = job['owner_strategy']
-    provider = job.get('provider') or 'enformion_fallback'
-    building_ids = list(job['building_ids'] or [])
-
-    _set_status(job_id, 'running')
-
-    enriched_building_ids = []
-    enrichment_details = []  # for the final Stripe charge metadata
-
-    for bid in building_ids:
-        if _check_cancel_requested(job_id):
-            break
-
-        try:
-            owners = get_available_owners_for_enrichment(bid, user_id)
-            available = [o for o in owners if not o.get('already_enriched')]
-            chosen = filter_owners_by_strategy(available, owner_strategy)
-        except Exception as e:
-            print(f"[bulk_enrich job {job_id}] owner lookup failed for building {bid}: {e}")
-            _increment_counters(job_id, properties_processed=1)
-            continue
-
-        if not chosen:
-            _increment_counters(job_id, properties_processed=1, skipped=len(available))
-            continue
-
-        any_success_for_building = False
-        for owner in chosen:
-            if _check_cancel_requested(job_id):
-                break
-            try:
-                # enrich_owner resolves authoritative street/borough/ZIP from
-                # the building row; no client/worker-composed address needed.
-                success, _data, _msg = enrich_owner(
-                    bid, owner['name'], '', user_id, provider=provider)
-                if success:
-                    any_success_for_building = True
-                    _increment_counters(job_id, attempted=1, successful=1)
-                    enrichment_details.append({'building_id': bid, 'owner': owner['name']})
-                else:
-                    _increment_counters(job_id, attempted=1, failed=1)
-            except Exception as e:
-                print(f"[bulk_enrich job {job_id}] enrich_owner crashed for {owner['name']} @ {bid}: {e}")
-                _increment_counters(job_id, attempted=1, failed=1)
-            # Be gentle with the upstream API; tweak if you have a real rate limit.
-            time.sleep(0.05)
-
-        if any_success_for_building:
-            enriched_building_ids.append(bid)
-        _increment_counters(job_id, properties_processed=1)
-
-    # Determine terminal status
-    final_status = 'cancelled' if _check_cancel_requested(job_id) else 'completed'
-
-    # Charge once at the end for everything that succeeded
-    job_after = get_job(job_id) or {}
-    successful = int(job_after.get('owners_successful', 0))
-
-    charge_message = None
-    total_charged = 0.0
-    if successful > 0 and not is_admin:
-        try:
-            ok, msg, _charge_id = charge_batch_enrichment_total(
-                user_id, enriched_building_ids, successful, enrichment_details,
-                idempotency_key=f'bulk-enrich-job-{job_id}',
-            )
-            if ok:
-                calculated = successful * float(job_after.get('cost_per_lookup', 0.35))
-                total_charged = max(calculated, 0.50)
-                charge_message = msg
-            else:
-                charge_message = f"Enrichment finished but payment failed: {msg}"
-                print(f"[bulk_enrich job {job_id}] CHARGE FAILED: {msg}")
-                for detail in enrichment_details:
-                    revoke_owner_enrichment_access(
-                        user_id, detail['building_id'], detail['owner'])
-        except Exception as e:
-            charge_message = f"Charge error: {e}"
-            print(f"[bulk_enrich job {job_id}] CHARGE ERROR: {e}")
-            for detail in enrichment_details:
-                try:
-                    revoke_owner_enrichment_access(
-                        user_id, detail['building_id'], detail['owner'])
-                except Exception:
-                    pass
-
-    # Final state write
     conn = _get_conn()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        cur.execute(
-            """
-            UPDATE bulk_enrich_jobs
-            SET status = %s,
-                total_charged = %s,
-                error_message = COALESCE(error_message, %s),
-                completed_at = NOW(),
-                last_updated_at = NOW()
-            WHERE id = %s
-            """,
-            (final_status, total_charged, charge_message, job_id),
-        )
+        cur.execute('SELECT pg_try_advisory_lock(72104,%s) AS acquired', (job_id,))
+        if not cur.fetchone()['acquired']:
+            return
+        conn.commit()
+        job = get_job(job_id)
+        if not job or job['status'] not in ('pending','running','cancel_requested','charging'):
+            return
+        user_id = job['user_id']
+        if not job['prepared_at'] and job['status'] != 'cancel_requested':
+            # Freeze the payable set before any provider requests; never exceed
+            # the quantity the user reviewed when creating this job.
+            items = []
+            for bid in job['building_ids']:
+                owners = get_available_owners_for_enrichment(bid, user_id)
+                available = [o for o in owners if not o.get('already_enriched')]
+                for owner in filter_owners_by_strategy(available, job['owner_strategy']):
+                    items.append((job_id,bid,owner['name'].strip().upper()))
+            items = list(dict.fromkeys(items))[:job['total_owners_planned']]
+            for item in items:
+                cur.execute("""INSERT INTO bulk_enrich_items(job_id,building_id,owner_name)
+                    VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""", item)
+            cur.execute("""UPDATE bulk_enrich_jobs SET prepared_at=NOW(),
+                status=CASE WHEN status='cancel_requested' THEN status ELSE 'running' END,
+                started_at=COALESCE(started_at,NOW()) WHERE id=%s""", (job_id,))
+            conn.commit()
+
+        if job['status'] != 'charging':
+            cur.execute("""SELECT building_id,owner_name FROM bulk_enrich_items
+                WHERE job_id=%s AND status='pending' ORDER BY building_id,owner_name""", (job_id,))
+            items = cur.fetchall()
+            conn.commit()
+            for item in items:
+                if _check_cancel_requested(job_id):
+                    break
+                success, _data, message = enrich_owner(
+                    item['building_id'], item['owner_name'], '', user_id,
+                    provider=job['provider'], bulk_job_id=job_id)
+                cur.execute("""UPDATE bulk_enrich_items SET status=%s,error=%s
+                    WHERE job_id=%s AND building_id=%s AND owner_name=%s""",
+                    ('succeeded' if success else 'failed', None if success else message,
+                     job_id,item['building_id'],item['owner_name']))
+                cur.execute("""UPDATE bulk_enrich_jobs SET
+                    owners_successful=(SELECT COUNT(*) FROM bulk_enrich_items WHERE job_id=%s AND status='succeeded'),
+                    owners_failed=(SELECT COUNT(*) FROM bulk_enrich_items WHERE job_id=%s AND status='failed'),
+                    owners_attempted=(SELECT COUNT(*) FROM bulk_enrich_items WHERE job_id=%s AND status<>'pending'),
+                    properties_processed=(SELECT COUNT(DISTINCT building_id) FROM bulk_enrich_items WHERE job_id=%s AND status<>'pending'),
+                    last_updated_at=NOW() WHERE id=%s""", (job_id,)*5)
+                conn.commit()
+            cur.execute("""UPDATE bulk_enrich_jobs SET
+                final_status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE 'completed' END,
+                status='charging', billing_started_at=COALESCE(billing_started_at,NOW()),
+                last_updated_at=NOW() WHERE id=%s""", (job_id,))
+            conn.commit()
+
+        job = get_job(job_id)
+        cur.execute("""SELECT building_id,owner_name FROM bulk_enrich_items
+            WHERE job_id=%s AND status='succeeded' ORDER BY building_id,owner_name""", (job_id,))
+        results = cur.fetchall()
+        conn.commit()
+        payment_id = job['payment_intent_id']
+        count = len(results)
+        if count and not job['is_admin'] and not payment_id:
+            details = [{'building_id':r['building_id'],'owner':r['owner_name']} for r in results]
+            ok, message, payment_id = charge_batch_enrichment_total(
+                user_id, sorted({r['building_id'] for r in results}), count, details,
+                idempotency_key=f'bulk-enrich-job-{job_id}')
+            if not ok:
+                if 'reconciliation' in message.lower():
+                    _set_status(job_id, 'failed', message)
+                    return
+                cur.execute("""UPDATE bulk_enrich_jobs SET error_message=%s,last_updated_at=NOW()
+                    WHERE id=%s""", (f'Payment pending: {message}',job_id))
+                conn.commit()
+                return
+            cur.execute("""UPDATE bulk_enrich_jobs SET payment_intent_id=%s,
+                total_charged=%s WHERE id=%s""",
+                (payment_id,max(round(count*0.35,2),0.50),job_id))
+            conn.commit()
+        receipt = payment_id or 'admin_free'
+        for result in results:
+            grant_result(cur,user_id,result['building_id'],result['owner_name'],receipt)
+        cur.execute("""UPDATE bulk_enrich_jobs SET status=%s,completed_at=NOW(),
+            last_updated_at=NOW(),error_message=NULL,owners_successful=%s,
+            properties_processed=CASE WHEN %s='completed' THEN total_properties ELSE properties_processed END
+            WHERE id=%s""", (job['final_status'],count,job['final_status'],job_id))
         conn.commit()
     finally:
-        cur.close()
-        conn.close()
+        conn.close()  # Releases the cross-worker lock, including after a crash.
+
+
+_RECOVERY_STARTED = False
 
 
 def resume_orphaned_jobs():
-    """On worker startup, look for jobs stuck in 'running' (e.g., previous container crashed)
-    and mark them 'failed'. We do NOT auto-resume because we cannot guarantee that
-    in-flight charges weren't issued, and partial double-charging is worse than a
-    user re-kicking the job."""
-    try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE bulk_enrich_jobs
-            SET status = 'failed',
-                error_message = COALESCE(error_message, 'Worker restarted before job completed'),
-                completed_at = NOW(),
-                last_updated_at = NOW()
-            WHERE status IN ('pending', 'running', 'cancel_requested')
-              AND last_updated_at < NOW() - INTERVAL '5 minutes'
-            """
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"[bulk_enrich] resume_orphaned_jobs error: {e}")
+    """Recover persisted work at startup and after transient worker failures."""
+    global _RECOVERY_STARTED
+    if _RECOVERY_STARTED:
+        return
+    _RECOVERY_STARTED = True
+
+    def recover():
+        while True:
+            try:
+                conn = _get_conn()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""SELECT id FROM bulk_enrich_jobs
+                            WHERE status IN ('pending','running','cancel_requested','charging')
+                            ORDER BY last_updated_at LIMIT 25""")
+                        jobs = cur.fetchall()
+                    for (job_id,) in jobs:
+                        start_job_worker(job_id)
+                finally:
+                    conn.close()
+            except Exception as exc:
+                print(f'[bulk_enrich] recovery error: {exc}')
+            time.sleep(60)
+
+    threading.Thread(target=recover,daemon=True,name='bulk-enrich-recovery').start()

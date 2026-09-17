@@ -232,11 +232,13 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 OR current_owner_name IS NOT NULL 
                 OR owner_name_rpad IS NOT NULL 
                 OR owner_name_hpd IS NOT NULL
+                OR sos_entity_name IS NOT NULL
             )
-            AND concat_ws(' ', sale_buyer_primary, current_owner_name,
-                           owner_name_hpd, owner_name_rpad) ~* %s
-            ORDER BY 
-                sos_last_enriched ASC NULLS FIRST,
+            AND (concat_ws(' ', sale_buyer_primary, current_owner_name,
+                           owner_name_hpd, owner_name_rpad) ~* %s OR sos_entity_name IS NOT NULL)
+            {'' if retry_failures or reprocess else "AND (sos_last_error IS NULL OR sos_last_error_at IS NULL OR sos_last_error_at < NOW() - INTERVAL '6 hours')"}
+            ORDER BY
+                COALESCE(sos_last_error_at, sos_last_enriched) ASC NULLS FIRST,
                 -- Prioritize buildings with ACRIS data (most recent)
                 CASE WHEN sale_buyer_primary IS NOT NULL THEN 10 ELSE 0 END +
                 CASE WHEN current_owner_name IS NOT NULL THEN 1 ELSE 0 END +
@@ -289,6 +291,8 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
         # Without ny_sos_lookup the person-check is unavailable; is_llc_name
         # below still keeps obvious non-companies out.
         if is_likely_individual is not None and is_likely_individual(name):
+            if source_field == 'sale_buyer_primary':
+                return (None, '')
             continue
         
         # Only look up if it's an LLC/Corp
@@ -453,6 +457,7 @@ def main():
     llc_buildings = []
     skipped_individual = 0
     skipped_no_owner = 0
+    clear_updates = []
     
     for b in buildings:
         llc_name, source = get_best_llc_name(b)
@@ -461,6 +466,9 @@ def main():
             b['llc_source'] = source
             llc_buildings.append(b)
         else:
+            cleared = process_sos_result(SOSBusinessResult(query_name='', normalized_name=''))
+            cleared.update(building_id=b['id'], lookup_source='')
+            clear_updates.append(cleared)
             # Figure out why skipped
             any_owner = (
                 b.get('sale_buyer_primary') or 
@@ -485,6 +493,8 @@ def main():
     if len(unique_llcs) < len(llc_buildings):
         print(f"   📊 {len(unique_llcs)} unique LLCs (saving {len(llc_buildings) - len(unique_llcs)} duplicate lookups)")
     
+    if clear_updates and not args.dry_run:
+        update_buildings_with_sos(conn, clear_updates)
     if not llc_buildings:
         print("\n✅ No buildings need SOS enrichment!")
         conn.close()

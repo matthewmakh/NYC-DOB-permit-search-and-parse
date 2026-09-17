@@ -65,7 +65,7 @@ ACRIS_RETENTION_WHERE = (
     f"recorded_datetime >= '{ACRIS_RETENTION_START_DATE.isoformat()}T00:00:00.000' "
     "OR recorded_datetime IS NULL"
 )
-ACRIS_LOGIC_VERSION = 5  # v5 enforces the live-database retention boundary
+ACRIS_LOGIC_VERSION = 6  # complete snapshots, authoritative empty results, qualified cash inference
 ACRIS_MAX_WORKERS = max(1, int(os.getenv('ACRIS_MAX_WORKERS', '6')))
 ACRIS_MAX_BUILDINGS = max(0, int(os.getenv('ACRIS_MAX_BUILDINGS', '0')))
 ACRIS_PROGRESS_EVERY = max(1, int(os.getenv('ACRIS_PROGRESS_EVERY', '100')))
@@ -226,7 +226,7 @@ def get_acris_full_history(bbl):
                     'acris_references', ref_field, doc_ids,
                     select=select_fields))
     except SocrataError as e:
-        print(f"      ⚠️ References fetch failed (non-fatal): {e}")
+        raise SocrataError(f'Incomplete ACRIS references: {e}') from e
 
     remarks_by_doc = {}
     try:
@@ -237,7 +237,7 @@ def get_acris_full_history(bbl):
                 doc_id = row['document_id']
                 remarks_by_doc[doc_id] = (remarks_by_doc.get(doc_id, '') + ' ' + text).strip()
     except SocrataError as e:
-        print(f"      ⚠️ Remarks fetch failed (non-fatal): {e}")
+        raise SocrataError(f'Incomplete ACRIS remarks: {e}') from e
 
     parties_by_doc = {}
     for p in parties_rows:
@@ -476,9 +476,6 @@ def save_transactions_and_parties(cur, building_id, bbl, transactions,
                                   primary_mortgage_id=None):
     """Replace stored history for this building. Returns (primary_deed,
     primary_mortgage) for the buildings-table summary."""
-    if not transactions:
-        return None, None
-
     cur.execute("DELETE FROM acris_parties WHERE building_id = %s", (building_id,))
     cur.execute("DELETE FROM acris_transactions WHERE building_id = %s", (building_id,))
 
@@ -558,9 +555,8 @@ def save_references(cur, building_id, bbl, references):
         cur.execute("RELEASE SAVEPOINT acris_refs")
         return True
     except psycopg2.Error:
-        # Table not migrated yet — references are re-fetchable, skip quietly.
         cur.execute("ROLLBACK TO SAVEPOINT acris_refs")
-        return False
+        raise
 
 
 def update_buildings_table(cur, building_id, transactions, primary_deed,
@@ -571,7 +567,7 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
 
     sale_price = sale_date = sale_recorded_date = sale_crfn = None
     sale_buyer_primary = sale_seller_primary = sale_percent_transferred = None
-    is_cash_purchase = False
+    is_cash_purchase = None
     financing_ratio = None
     days_since_sale = None
 
@@ -589,7 +585,10 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
                 p['name'] for p in primary_deed['sellers'] if p.get('name')))[:255] or None
         # B3: cash/LTV refer to financing at the purchase, not a later refi.
         purchase_mortgage = find_purchase_mortgage(transactions, sale_date)
-        is_cash_purchase = purchase_mortgage is None
+        # Absence of a recorded mortgage is an inference, never proof of cash.
+        # Nominal or partial-interest transfers do not establish a purchase.
+        if sale_price and sale_price >= 1000 and sale_percent_transferred in (None, 100):
+            is_cash_purchase = purchase_mortgage is None
         financing_ratio = purchase_financing_ratio(
             sale_price, purchase_mortgage)
         if sale_date:
@@ -641,6 +640,7 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
         cur.execute("RELEASE SAVEPOINT acris_equity")
     except psycopg2.Error:
         cur.execute("ROLLBACK TO SAVEPOINT acris_equity")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -666,12 +666,9 @@ def enrich_building_from_acris(conn, building_id, bbl):
                                    primary_deed, primary_mortgage,
                                    history['references'])
         else:
-            cur.execute("""
-                UPDATE buildings
-                SET acris_last_enriched = CURRENT_TIMESTAMP,
-                    last_updated = CURRENT_TIMESTAMP
-                WHERE id = %s
-            """, (building_id,))
+            save_transactions_and_parties(cur, building_id, bbl, [])
+            save_references(cur, building_id, bbl, [])
+            update_buildings_table(cur, building_id, [], None, None, [])
         if table_has_column(cur, 'buildings', 'acris_last_attempted'):
             cur.execute("""
                 UPDATE buildings
@@ -753,9 +750,12 @@ def enrich_buildings_from_acris():
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (acris_last_enriched IS NULL
+             OR NULLIF(acris_last_error, '') IS NOT NULL
              OR acris_last_enriched < NOW() - INTERVAL '30 days'
              {logic_version_filter})
-        ORDER BY id
+        AND (acris_last_error IS NULL OR acris_last_attempted IS NULL
+             OR acris_last_attempted < NOW() - INTERVAL '6 hours')
+        ORDER BY acris_last_attempted ASC NULLS FIRST, id
         {limit_sql}
     """, params)
     buildings = cur.fetchall()
@@ -840,6 +840,7 @@ def enrich_buildings_from_acris():
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (acris_last_enriched IS NULL
+             OR NULLIF(acris_last_error, '') IS NOT NULL
              OR acris_last_enriched < NOW() - INTERVAL '30 days'
              {logic_version_filter})
     """, params)

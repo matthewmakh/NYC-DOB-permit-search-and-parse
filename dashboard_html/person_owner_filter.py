@@ -11,7 +11,7 @@ import re
 import probablepeople
 
 from enrichment_service import (
-    entity_match_quality, is_business_entity, is_sos_agent_title,
+    owner_entity_match_quality, is_business_entity, is_sos_agent_title,
     split_candidate_names,
 )
 
@@ -60,7 +60,5 @@ does not disqualify a person independently recorded in an owner source.
     title = row.get('sos_principal_title')
     if is_sos_agent_title(title):
         return False
-    match, _ = entity_match_quality(
-        row.get('sos_entity_name'), [row.get(field) for field in OWNER_FIELDS],
-    )
+    match, _ = owner_entity_match_quality(row)
     return match != 'mismatch' and contains_person_name(row.get('sos_principal_name'))

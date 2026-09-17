@@ -125,6 +125,12 @@ class FakeCursor:
                 'id': 1, 'email': 'matt@tyeny.com',
                 'stripe_customer_id': 'cus_sponsor',
             }
+        elif 'INSERT INTO enrichment_payment_attempts' in sql:
+            import json
+            self.connection.payment_parameters = json.loads(params[1])
+        elif 'FROM enrichment_payment_attempts' in sql:
+            self.next_row = {'request_json': self.connection.payment_parameters,
+                             'payment_id': None, 'expired': False}
         elif 'INSERT INTO enrichment_transactions' in sql and self.fail_audit:
             raise RuntimeError('temporary ledger error')
 

@@ -298,7 +298,7 @@ class DatabaseTests(unittest.TestCase):
                 sale_date DATE, sale_recorded_date TIMESTAMPTZ, current_owner_name TEXT,
                 owner_name_rpad TEXT, owner_name_hpd TEXT, sos_last_error TEXT,
                 sos_last_error_at TIMESTAMPTZ, sos_last_enriched TIMESTAMPTZ,
-                sos_lookup_attempted BOOLEAN)''')
+                sos_lookup_attempted BOOLEAN, sos_entity_name TEXT)''')
             cur.execute("INSERT INTO buildings(id,bbl,current_owner_name,sos_last_enriched,sos_lookup_attempted,sos_last_error) VALUES (1,'3012980066','ABC LLC',NOW(),TRUE,'HTTP 503'),(2,'3012980067','XYZ LLC',NOW(),TRUE,NULL),(3,'3012980068','NEW LLC',NULL,FALSE,NULL)")
         self.conn.commit()
         # SOS selection uses ordinary tuple cursors, unlike the permit geocoder.

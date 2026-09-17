@@ -550,7 +550,7 @@ function renderGlanceStrip() {
         { label: building.sale_date ? `Last sale · ${String(building.sale_date).slice(0, 4)}` : 'Last sale',
           value: building.sale_price ? formatLargeNumber(building.sale_price) : '—' },
         { label: 'Financing',
-          value: building.is_cash_purchase ? 'Cash'
+          value: building.is_cash_purchase ? 'Likely cash'
                : (building.financing_ratio !== null && building.financing_ratio !== undefined)
                    ? `${(building.financing_ratio * 100).toFixed(1)}%` : '—' },
         { label: 'Units', value: building.total_units ? formatNumber(building.total_units) : '—' },
@@ -579,8 +579,8 @@ function renderSignalsCard() {
         signals.push({ tone: 'red', text: 'On the HPD speculation watch list' });
     }
     if (building.has_tax_delinquency) {
-        signals.push({ tone: building.tax_delinquency_water_only ? 'amber' : 'red',
-                       text: `Tax delinquency — ${building.tax_delinquency_count} notice(s)${building.tax_delinquency_water_only ? ' (water only)' : ''}` });
+        signals.push({ tone: 'amber',
+                       text: `Lien-sale notice — ${building.tax_delinquency_count} notice(s)${building.tax_delinquency_water_only ? ' (water only)' : ''}` });
     }
     if (building.ecb_total_balance > 0) {
         signals.push({ tone: 'amber', text: `ECB balance outstanding — $${formatNumber(building.ecb_total_balance)}` });
@@ -1487,10 +1487,10 @@ function renderOverviewTab() {
     const metricsEl = document.getElementById('quick-metrics');
     const metrics = [];
     
-    if (building.is_cash_purchase !== null) {
+    if (typeof building.is_cash_purchase === 'boolean') {
         metrics.push({
             label: 'Purchase Type',
-            value: building.is_cash_purchase ? 'Cash Purchase' : 'Financed',
+            value: building.is_cash_purchase ? 'Likely cash purchase' : 'Financed',
             class: building.is_cash_purchase ? 'metric-highlight' : ''
         });
     }
@@ -1539,7 +1539,7 @@ function renderFinancialsTab() {
     const flag = document.getElementById('financing-flag');
     if (flag) {
         if (building.is_cash_purchase) {
-            flag.textContent = 'Cash purchase';
+            flag.textContent = 'Likely cash purchase';
             flag.className = 'fin-flag flag-green';
             flag.style.display = '';
         } else if (building.financing_ratio !== null && building.financing_ratio !== undefined) {
@@ -1604,14 +1604,14 @@ function renderFinancialsTab() {
     const hasLienData = building.has_tax_delinquency || building.ecb_total_balance;
     if (hasLienData) {
         html += `<div class="financial-card alert-card">
-            <h4>Outstanding Liabilities</h4>
+            <h4>Lien notices & recorded balances</h4>
             <div class="financial-rows">`;
         
         if (building.has_tax_delinquency) {
             html += `
                 <div class="fin-row alert">
-                    <span>Tax Delinquency:</span>
-                    <span>${building.tax_delinquency_count} notice(s) ${building.tax_delinquency_water_only ? '(Water Only)' : '(Property Tax)'}</span>
+                    <span>Lien-sale notice:</span>
+                    <span>${building.tax_delinquency_count} notice(s) ${building.tax_delinquency_water_only ? '(Water Only)' : '(Property Tax)'} — current debt unverified</span>
                 </div>`;
         }
         

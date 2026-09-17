@@ -110,7 +110,7 @@ def get_tax_delinquency_data(bbl):
     try:
         client = _get_client()
         where = where_block_lot('borough', 'block', 'lot', bbl)
-        data = client.get('tax_lien_sale', **{'$where': where, '$limit': 500})
+        data = client.get_all('tax_lien_sale', max_rows=10000, **{'$where': where})
         time.sleep(API_DELAY)
 
         empty = {
@@ -138,11 +138,8 @@ def get_tax_delinquency_data(bbl):
             cutoff = date.today() - timedelta(days=LIEN_RECENCY_MONTHS * 30)
             is_current = latest_date >= cutoff
         else:
-            # Cycle column missing/unparseable: fall back to flagging (old
-            # behavior) rather than silently hiding real delinquencies.
-            latest_date = None
-            latest_rows = data
-            is_current = True
+            # An unknown publication date cannot establish a current notice.
+            raise ValueError('Lien-sale notices have no parseable publication date')
 
         has_non_water = any(
             (r.get('water_debt_only') or 'NO').upper() == 'NO' for r in latest_rows
@@ -170,7 +167,7 @@ def get_ecb_violations_data(bbl):
         # padded or stripped) this dataset stores, without extra calls.
         data = _get_client().get_all('ecb_violations', page_size=1000, max_rows=10000, **{
             "$where": where_block_lot('boro', 'block', 'lot', bbl),
-            "$order": "issue_date DESC",
+            "$order": "issue_date DESC, :id",
         })
         time.sleep(API_DELAY)
         
@@ -339,7 +336,7 @@ def get_dob_safety_violations_data(bbl):
         return None, f"DOB Safety violations API error: {str(e)}"
 
 
-def enrich_building(building_id, bbl):
+def enrich_building(building_id, bbl, include_safety=True):
     """
     Enrich a single building with tax delinquency and lien data
     Returns dict with all data or None if error
@@ -367,7 +364,8 @@ def enrich_building(building_id, bbl):
     # The Safety dataset is distinct from the legacy BIS violations above
     # and publishes daily. Keep its success/freshness independent so an ECB
     # outage cannot make a successful Safety refresh look stale.
-    safety_data, safety_error = get_dob_safety_violations_data(bbl)
+    safety_data, safety_error = (get_dob_safety_violations_data(bbl)
+                                 if include_safety else (None, None))
     if safety_error:
         print(f"      ⚠️  {safety_error}")
         errors.append(safety_error)
@@ -382,6 +380,8 @@ def enrich_building(building_id, bbl):
     if not any((tax_error, ecb_error, dob_error)):
         result['tax_lien_last_checked'] = datetime.now()
     result['_errors'] = errors
+    result['tax_last_attempted'] = datetime.now()
+    result['tax_last_error'] = '; '.join(errors)[:2000] if errors else None
     
     return result
 
@@ -399,6 +399,7 @@ def update_building_tax_lien_data(cursor, building_id, data):
         'dob_violation_count', 'dob_open_violations', 'tax_lien_last_checked',
         'dob_safety_violation_count', 'dob_safety_open_violations',
         'dob_safety_last_checked',
+        'tax_last_attempted', 'tax_last_error',
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
@@ -438,7 +439,7 @@ def process_single_building(building, position, total):
             print(f"   📍 {address}")
         
         # Enrich the building
-        data = enrich_building(building_id, bbl)
+        data = enrich_building(building_id, bbl, include_safety=False)
         
         if data:
             # Update database
@@ -449,7 +450,7 @@ def process_single_building(building, position, total):
             indicators = []
             if data.get('has_tax_delinquency'):
                 water_note = " (water only)" if data['tax_delinquency_water_only'] else ""
-                indicators.append(f"Tax Delinquency: {data['tax_delinquency_count']} notices{water_note}")
+                indicators.append(f"Lien-sale notice: {data['tax_delinquency_count']} notices{water_note}")
             if data.get('ecb_total_balance', 0) > 0:
                 indicators.append(f"ECB Balance: ${data['ecb_total_balance']:,.2f}")
             if data.get('ecb_open_violations', 0) > 0:
@@ -508,18 +509,16 @@ def main():
             WHERE bbl IS NOT NULL
             AND LENGTH(bbl) = 10
             AND (
-                tax_lien_last_checked IS NULL 
+                tax_lien_last_checked IS NULL
+                OR NULLIF(tax_last_error, '') IS NOT NULL
                 OR tax_lien_last_checked < NOW() - INTERVAL '30 days'
-                OR dob_safety_last_checked IS NULL
-                OR dob_safety_last_checked < NOW() - INTERVAL '1 day'
             )
+            AND (tax_last_error IS NULL OR tax_last_attempted IS NULL
+                 OR tax_last_attempted < NOW() - INTERVAL '6 hours')
             -- Always rotate through the oldest/never-checked records first.
             -- Ordering only by id let yesterday's first batch become stale
             -- and monopolize every subsequent daily run.
-            ORDER BY LEAST(
-                COALESCE(tax_lien_last_checked, TIMESTAMP '1970-01-01'),
-                COALESCE(dob_safety_last_checked, TIMESTAMP '1970-01-01')
-            ), id
+            ORDER BY tax_last_attempted ASC NULLS FIRST, id
             LIMIT %s
         """, (BUILDING_BATCH_SIZE,))
         

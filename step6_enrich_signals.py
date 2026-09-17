@@ -59,7 +59,7 @@ SIGNALS_MAX_BUILDINGS = max(0, int(os.getenv('SIGNALS_MAX_BUILDINGS', '0')))
 SIGNALS_PROGRESS_EVERY = max(1, int(os.getenv('SIGNALS_PROGRESS_EVERY', '100')))
 # Bump this whenever source mappings or signal semantics change. A building is
 # current only after every source succeeds under this version.
-SIGNALS_ENRICHMENT_VERSION = 2
+SIGNALS_ENRICHMENT_VERSION = 3
 # LL97 broadly covers buildings over 25,000 sqft; the official covered-
 # buildings list is only published as a DOB spreadsheet, so we estimate.
 LL97_SQFT_THRESHOLD = 25000
@@ -220,7 +220,7 @@ def fetch_speculation(bbl, bin_number):
         where = where_block_lot('boro', 'block', 'lot', bbl)
     else:
         raise RuntimeError('Speculation Watch List has no usable parcel fields')
-    rows = _get_client().get('speculation_watch', **{'$where': where, '$limit': 50})
+    rows = _get_client().get_all('speculation_watch', page_size=1000, max_rows=10000, **{'$where': where})
     if not rows:
         return {'on_speculation_watch_list': False, 'speculation_watch_date': None}
     date_col = _first_present(columns, ['deed_date', 'sale_date', 'as_of_date', 'date'])
@@ -235,8 +235,8 @@ def fetch_speculation(bbl, bin_number):
 def fetch_dob_complaints(bbl, bin_number):
     if not bin_number:
         return {
-            'dob_complaint_count': 0,
-            'dob_active_complaint_count': 0,
+            'dob_complaint_count': None,
+            'dob_active_complaint_count': None,
             'dob_last_complaint_date': None,
         }
     rows = _get_client().get_all('dob_complaints', page_size=1000, max_rows=10000, **{
@@ -348,7 +348,7 @@ def fetch_ll84(bbl, bin_number):
         'nyc_borough_block_and_lot_bbl'])
     if not bbl_col:
         raise RuntimeError('LL84 Energy has no usable BBL field')
-    rows = _get_client().get('ll84_energy', **{'$where': f"{bbl_col}={soql_quote(bbl)}", '$limit': 200})
+    rows = _get_client().get_all('ll84_energy', page_size=1000, max_rows=20000, **{'$where': f"{bbl_col}={soql_quote(bbl)}"})
     if not rows:
         return {
             'energy_star_score': None,
@@ -488,21 +488,21 @@ def _process_building(building, position, total):
             if assignments:
                 cur.execute(
                     f"""UPDATE buildings SET {assignments},
-                        signals_last_error = %s,
+                        signals_last_attempted = NOW(), signals_last_error = %s,
                         signals_last_error_at = NOW()
                         WHERE id = %s""",
                     values + [error_text, building['id']])
             else:
                 cur.execute(
                     """UPDATE buildings
-                       SET signals_last_error = %s,
+                       SET signals_last_attempted = NOW(), signals_last_error = %s,
                            signals_last_error_at = NOW()
                        WHERE id = %s""",
                     (error_text, building['id']))
         elif assignments:
             cur.execute(
                 f"""UPDATE buildings SET {assignments},
-                    signals_last_enriched = NOW(),
+                    signals_last_attempted = NOW(), signals_last_enriched = NOW(),
                     signals_enrichment_version = %s,
                     signals_last_error = NULL,
                     signals_last_error_at = NULL
@@ -511,7 +511,7 @@ def _process_building(building, position, total):
         else:
             cur.execute(
                 """UPDATE buildings
-                   SET signals_last_enriched = NOW(),
+                   SET signals_last_attempted = NOW(), signals_last_enriched = NOW(),
                        signals_enrichment_version = %s,
                        signals_last_error = NULL,
                        signals_last_error_at = NULL
@@ -530,6 +530,14 @@ def _process_building(building, position, total):
     except Exception as e:
         if conn is not None:
             conn.rollback()
+            try:
+                with conn.cursor() as error_cur:
+                    error_cur.execute("""UPDATE buildings SET signals_last_attempted=NOW(),
+                        signals_last_error=%s,signals_last_error_at=NOW() WHERE id=%s""",
+                        (str(e)[:4000],building['id']))
+                conn.commit()
+            except Exception:
+                conn.rollback()
         with _print_lock:
             print(f"[{position}/{total}] BBL {building['bbl']}: ❌ {e}")
         return False
@@ -569,9 +577,12 @@ def main():
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (signals_enrichment_version < {SIGNALS_ENRICHMENT_VERSION}
+             OR NULLIF(signals_last_error, '') IS NOT NULL
              OR signals_last_enriched IS NULL
              OR signals_last_enriched < NOW() - INTERVAL '{SIGNALS_REFRESH_DAYS} days')
-        ORDER BY id
+        AND (signals_last_error IS NULL OR signals_last_attempted IS NULL
+             OR signals_last_attempted < NOW() - INTERVAL '6 hours')
+        ORDER BY signals_last_attempted ASC NULLS FIRST, id
         {limit_sql}
     """)
     buildings = cur.fetchall()
@@ -635,6 +646,7 @@ def main():
         FROM buildings
         WHERE bbl IS NOT NULL
         AND (signals_enrichment_version < {SIGNALS_ENRICHMENT_VERSION}
+             OR NULLIF(signals_last_error, '') IS NOT NULL
              OR signals_last_enriched IS NULL
              OR signals_last_enriched < NOW() - INTERVAL '{SIGNALS_REFRESH_DAYS} days')
     """)

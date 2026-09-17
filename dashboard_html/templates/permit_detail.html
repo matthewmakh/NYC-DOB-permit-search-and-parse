@@ -205,7 +205,7 @@
             {% if permit.mortgage_amount %}<div class="info-item"><span class="info-label">Mortgage</span><span class="info-value">${{ "{:,}".format(permit.mortgage_amount|int) }}</span></div>{% endif %}
             {% if permit.mortgage_date %}<div class="info-item"><span class="info-label">Mortgage date</span><span class="info-value">{{ permit.mortgage_date.strftime('%b %d, %Y') }}</span></div>{% endif %}
             {% if permit.mortgage_lender_primary %}<div class="info-item"><span class="info-label">Lender</span><span class="info-value">{{ permit.mortgage_lender_primary }}</span></div>{% endif %}
-            {% if permit.is_cash_purchase %}<div class="info-item"><span class="info-label">Cash purchase</span><span class="info-value value-warn">Yes</span></div>{% endif %}
+            {% if permit.is_cash_purchase %}<div class="info-item"><span class="info-label">Likely cash purchase</span><span class="info-value value-warn">Yes</span></div>{% endif %}
             {% if permit.financing_ratio %}<div class="info-item"><span class="info-label">LTV ratio</span><span class="info-value">{{ (permit.financing_ratio * 100)|round(1) }}%</span></div>{% endif %}
             {% if permit.days_since_sale %}<div class="info-item"><span class="info-label">Days since sale</span><span class="info-value">{{ permit.days_since_sale }} days</span></div>{% endif %}
             {% if permit.estimated_equity %}<div class="info-item"><span class="info-label">Estimated equity</span><span class="info-value value-good">${{ "{:,}".format(permit.estimated_equity|int) }}</span></div>{% endif %}
