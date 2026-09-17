@@ -233,9 +233,10 @@ def get_buildings_needing_sos(conn, limit: Optional[int] = None, reprocess: bool
                 OR owner_name_rpad IS NOT NULL 
                 OR owner_name_hpd IS NOT NULL
                 OR sos_entity_name IS NOT NULL
+                OR sos_last_error IS NOT NULL
             )
             AND (concat_ws(' ', sale_buyer_primary, current_owner_name,
-                           owner_name_hpd, owner_name_rpad) ~* %s OR sos_entity_name IS NOT NULL)
+                           owner_name_hpd, owner_name_rpad) ~* %s OR sos_entity_name IS NOT NULL OR sos_last_error IS NOT NULL)
             {'' if retry_failures or reprocess else "AND (sos_last_error IS NULL OR sos_last_error_at IS NULL OR sos_last_error_at < NOW() - INTERVAL '6 hours')"}
             ORDER BY
                 COALESCE(sos_last_error_at, sos_last_enriched) ASC NULLS FIRST,
@@ -296,7 +297,8 @@ def get_best_llc_name(building: Dict) -> Tuple[Optional[str], str]:
             continue
         
         # Only look up if it's an LLC/Corp
-        if is_llc_name(name):
+        from ny_sos_lookup import normalize_business_name
+        if is_llc_name(name) and normalize_business_name(name):
             return (name, source_field)
     
     return (None, '')

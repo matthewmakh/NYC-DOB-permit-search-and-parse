@@ -71,6 +71,21 @@ class SourceRegressionTests(unittest.TestCase):
                    'Address Locality':'Brooklyn','Address Region':'NY','Postal Code':'11201'}
         self.assertIsNone(contacts._evaluate_apify_item(candidate,'John','Smith','123 Main St','Brooklyn','NY','11201'))
 
+    def test_sos_blank_people_do_not_crash_valid_entity_details(self):
+        import asyncio
+        import ny_sos_lookup as ny
+        from unittest.mock import AsyncMock
+        self.assertEqual(ny._parse_name('   '),('','',''))
+        client=ny.AsyncNYSOSClient()
+        response=Mock()
+        response.json.return_value={'entityGeneralInfo':{'entityName':'EXAMPLE LLC'},
+            'sopAddress':{'name':'   '},'ceo':{'name':'John Smith','address':None}}
+        client._client=Mock()
+        client._client.post=AsyncMock(return_value=response)
+        result=asyncio.run(client._get_business_details('123','EXAMPLE LLC'))
+        self.assertEqual([p.full_name for p in result['people']],['John Smith'])
+        self.assertEqual(sos.get_best_llc_name({'current_owner_name':'CORPORATION'}),(None,''))
+
     def test_safety_snapshot_aggregates_and_rejects_empty(self):
         self.assertEqual(aggregate_safety([
             {'bbl':'3012980066','violation_status':'Active','violation_count':'2'},
@@ -327,6 +342,38 @@ class DatabaseRegressionTests(unittest.TestCase):
         self.assertEqual(repair(self.conn,True),{'unsupported_cash':1,'stale_lien_notice':1})
         self.assertEqual(self.scalar('SELECT sale_price FROM buildings'),10)
         self.assertEqual(repair(self.conn,True),{'unsupported_cash':0,'stale_lien_notice':0})
+
+    def test_permit_batch_matches_quoted_total_and_recovers_as_a_subset(self):
+        from permit_contact_billing import settle_permit_contacts
+        with self.conn.cursor() as cur:
+            cur.execute("""CREATE TABLE user_permit_contact_unlocks(user_id INTEGER,
+                enrichment_id INTEGER,charge_amount NUMERIC,stripe_charge_id TEXT,
+                UNIQUE(user_id,enrichment_id))""")
+        self.conn.commit()
+        items=[{'id':10,'building_id':1,'name':'John Smith'},
+               {'id':11,'building_id':1,'name':'Jane Smith'}]
+        with patch.object(billing,'charge_batch_enrichment_total',return_value=(False,'network interruption',None)) as charge:
+            self.assertFalse(settle_permit_contacts(1,items,is_batch=True)[0])
+            self.assertEqual(charge.call_args.args[2],2)
+        self.assertEqual(self.scalar('SELECT COUNT(*) FROM user_permit_contact_unlocks'),0)
+        with patch.object(billing,'charge_batch_enrichment_total',return_value=(True,'paid','pi_permit_batch')) as charge,patch.object(billing,'charge_enrichment_fee',side_effect=AssertionError('must recover the original batch')):
+            result=settle_permit_contacts(1,items[:1],is_batch=False)
+            self.assertTrue(result[0]);self.assertEqual(result[2],0.70)
+            self.assertEqual(charge.call_args.args[2],2)
+        self.assertEqual(self.scalar('SELECT COUNT(*) FROM user_permit_contact_unlocks'),2)
+        with patch.object(billing,'charge_batch_enrichment_total',side_effect=AssertionError('repeat charge')):
+            self.assertEqual(settle_permit_contacts(1,items,is_batch=True)[2],0)
+
+    def test_one_successful_contact_in_export_uses_quoted_minimum(self):
+        from permit_contact_billing import settle_permit_contacts
+        with self.conn.cursor() as cur:
+            cur.execute("""CREATE TABLE user_permit_contact_unlocks(user_id INTEGER,
+                enrichment_id INTEGER,charge_amount NUMERIC,stripe_charge_id TEXT,
+                UNIQUE(user_id,enrichment_id))""")
+        self.conn.commit()
+        with patch.object(billing,'charge_batch_enrichment_total',return_value=(True,'paid','pi_one')):
+            result=settle_permit_contacts(1,[{'id':10,'building_id':1,'name':'John Smith'}],is_batch=True)
+            self.assertEqual(result[2],0.50)
 
     def _raw_lookup(self,real_enrich,job):
         with patch.object(contacts,'_best_owner_search_location',return_value=(('123 Main St','Brooklyn','NY','11201'),'property')),patch.object(contacts,'call_enformion_api',return_value=(True,{},None)),patch.object(contacts,'extract_contact_info',return_value=([{'number':'5551234'}],[],'person1')):

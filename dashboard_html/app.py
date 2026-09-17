@@ -5673,10 +5673,9 @@ def api_properties_export_with_enrichment():
         from enrichment_service import (
             enrich_permit_contact, 
             check_permit_contact_enrichment,
-            grant_permit_contact_access,
             get_enrichable_permit_contacts
         )
-        from stripe_service import charge_enrichment_fee, ensure_usage_billing_ready
+        from stripe_service import ensure_usage_billing_ready
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
@@ -5797,6 +5796,7 @@ def api_properties_export_with_enrichment():
             new_enrichments_count = 0
             already_unlocked_count = 0
             failed_enrichments = []
+            pending_purchases = []
             
             # Process each property's permit contacts
             for prop in properties:
@@ -5839,23 +5839,8 @@ def api_properties_export_with_enrichment():
                         license_number, license_type, original_phone, user_id,
                         grant_access=False)
                     if success:
-                        charge_id = 'admin_free'
-                        if should_charge:
-                            paid, charge_message, charge_id = charge_enrichment_fee(
-                                user_id, building_id, contact_name, is_batch=True,
-                                charge_scope='permit_contact')
-                            if not paid:
-                                failed_enrichments.append({'bbl': bbl, 'contact': contact_name,
-                                                           'error': f'Payment failed: {charge_message}'})
-                                continue
-                            total_charged += 0.35
-                        granted, grant_error = grant_permit_contact_access(
-                            user_id, enrichment_data['id'],
-                            0.35 if should_charge else 0, charge_id)
-                        if not granted:
-                            raise RuntimeError(f'Payment succeeded but access could not be saved: {grant_error}')
-
-                    if success:
+                        pending_purchases.append({'id': enrichment_data['id'],
+                                                  'building_id': building_id,'name': contact_name})
                         new_enrichments_count += 1
                         enriched_contacts_by_bbl[bbl].append({
                             'name': contact_name,
@@ -5870,6 +5855,12 @@ def api_properties_export_with_enrichment():
                             'error': message
                         })
             
+            from permit_contact_billing import settle_permit_contacts
+            paid, payment_message, total_charged, _receipts = settle_permit_contacts(
+                user_id, pending_purchases, should_charge=should_charge, is_batch=True)
+            if not paid:
+                return jsonify({'success': False, 'error': f'Payment failed: {payment_message}'}), 402
+
             print(f"[Bulk Export] Enrichment complete: {new_enrichments_count} new, {already_unlocked_count} already unlocked, {len(failed_enrichments)} failed. Total charged: ${total_charged:.2f}")
             
             # Build CSV with enriched data
@@ -7837,10 +7828,8 @@ def api_enrich_permit_contact():
         from enrichment_service import (
             enrich_permit_contact, 
             check_permit_contact_enrichment,
-            grant_permit_contact_access,
             classify_party_name,
         )
-        from stripe_service import charge_enrichment_fee
         
         data = request.get_json()
         
@@ -7917,53 +7906,14 @@ def api_enrich_permit_contact():
         )
         
         if success:
-            enrichment_id = enrichment_data.get('id')
-            
-            if need_to_charge:
-                # Get building_id for charge record
-                if not building_id:
-                    with DatabaseConnection() as cur:
-                        cur.execute("SELECT id FROM buildings WHERE bbl = %s", (bbl,))
-                        result = cur.fetchone()
-                        building_id = result['id'] if result else None
-                
-                # Charge FIRST
-                charge_success, charge_msg, charge_id = charge_enrichment_fee(
-                    user_id, building_id or 0, contact_name, is_batch=False,
-                    charge_scope='permit_contact'
-                )
-                
-                if charge_success:
-                    # Only grant access AFTER successful charge
-                    granted, grant_error = grant_permit_contact_access(
-                        user_id, enrichment_id, charge_amount=0.50, stripe_charge_id=charge_id)
-                    if not granted:
-                        raise RuntimeError(f'Payment succeeded but access could not be saved: {grant_error}')
-                    return jsonify({
-                        'success': True,
-                        'data': enrichment_data,
-                        'charged': True,
-                        'charge_id': charge_id,
-                        'message': message
-                    })
-                else:
-                    # Charge failed - don't grant access, don't return data
-                    print(f"Permit contact enrichment charge failed: {charge_msg}")
-                    return jsonify({
-                        'success': False, 
-                        'error': f'Payment failed: {charge_msg}'
-                    }), 402
-            else:
-                granted, grant_error = grant_permit_contact_access(user_id, enrichment_id, 0, 'free_access')
-                if not granted:
-                    raise RuntimeError(grant_error)
-                return jsonify({
-                    'success': True,
-                    'data': enrichment_data,
-                    'charged': False,
-                    'charge_id': 'admin_free' if is_admin else None,
-                    'message': message
-                })
+            from permit_contact_billing import settle_permit_contacts
+            paid, payment_message, amount, receipts = settle_permit_contacts(
+                user_id, [{'id': enrichment_data['id'], 'building_id': building_id, 'name': contact_name}],
+                should_charge=should_charge)
+            if not paid:
+                return jsonify({'success': False, 'error': f'Payment failed: {payment_message}'}), 402
+            return jsonify({'success': True, 'data': enrichment_data, 'charged': amount > 0,
+                            'charge_id': receipts[0] if receipts else None, 'message': message})
         else:
             return jsonify({'success': False, 'error': message}), 400
             

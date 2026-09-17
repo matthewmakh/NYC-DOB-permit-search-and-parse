@@ -101,6 +101,8 @@ def init_bulk_enrich_jobs_table():
             cur.execute(idx_sql)
         from paid_enrichment_store import SCHEMA_SQL
         cur.execute(SCHEMA_SQL)
+        from permit_contact_billing import SCHEMA_SQL as permit_purchase_schema
+        cur.execute(permit_purchase_schema)
         cur.execute("""CREATE TABLE IF NOT EXISTS bulk_enrich_items (
             job_id INTEGER REFERENCES bulk_enrich_jobs(id) ON DELETE CASCADE,
             building_id INTEGER REFERENCES buildings(id) ON DELETE CASCADE,

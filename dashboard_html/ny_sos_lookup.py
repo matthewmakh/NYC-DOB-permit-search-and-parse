@@ -231,6 +231,8 @@ def _parse_name(full_name: str) -> Tuple[str, str, str]:
     if not full_name:
         return ('', '', '')
     parts = full_name.strip().split()
+    if not parts:
+        return ('', '', '')
     if len(parts) == 1:
         return (parts[0], '', '')
     elif len(parts) == 2:
@@ -502,11 +504,15 @@ class AsyncNYSOSClient:
         }
         
         for key, title in titles.items():
-            person_data = content.get(key, {})
-            if person_data and person_data.get('name'):
-                name = person_data.get('name', '')
+            person_data = content.get(key) or {}
+            if not isinstance(person_data, dict):
+                raise ValueError(f'Invalid {key} details')
+            name = (person_data.get('name') or '').strip()
+            if name:
                 first_name, middle_name, last_name = _parse_name(name)
-                address = person_data.get('address', {})
+                address = person_data.get('address') or {}
+                if not isinstance(address, dict):
+                    raise ValueError(f'Invalid {key} address')
                 
                 people.append(SOSPerson(
                     full_name=name,
