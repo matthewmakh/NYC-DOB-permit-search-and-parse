@@ -7,7 +7,7 @@ The buildings table tracks owner information from **4 separate sources**. Each s
 | Column | Source | Description | Use Case |
 |--------|--------|-------------|----------|
 | `current_owner_name` | PLUTO (MapPLUTO) | Corporate owner name from city GIS data | Most reliable for corporate entities |
-| `owner_name_rpad` | RPAD (Property Tax) | Taxpayer of record | Most up-to-date for tax purposes |
+| `owner_name_rpad` | Historical RPAD assessment | Historical assessed owner (through FY2018/19) | Historical ownership context |
 | `owner_name_hpd` | HPD Registration | Registered owner with Housing Preservation | Required for rental properties |
 | `ecb_respondent_name` | ECB Violations | Respondent on ECB violations | Property manager or responsible party |
 
@@ -15,7 +15,7 @@ The buildings table tracks owner information from **4 separate sources**. Each s
 
 Different city agencies maintain their own owner records:
 - **PLUTO**: Geographic/planning perspective (corporate entities)
-- **RPAD**: Tax assessment perspective (who pays taxes)
+- **RPAD**: Historical assessment perspective (the published source ends in FY2018/19)
 - **HPD**: Housing compliance perspective (registered managing agent)
 - **ECB**: Enforcement perspective (who responds to violations)
 
@@ -80,11 +80,15 @@ The property profile links each displayed owner name to its source:
   is stored; otherwise the lot's ACRIS search. CRFNs are never used as document IDs.
 - PLUTO: the parcel's ZoLa page.
 - RPAD: the original historical assessment table, with the BBLE to search.
-- ECB: the BIS parcel page, with a prompt to open OATH/ECB violations.
+- ECB: the BIS OATH/ECB list for the building BIN; if the BIN is missing,
+  the BIS lot page prompts the user to choose the building.
 - HPD: HPD Online, with the address to search.
 - NY DOS: the public entity search, with the DOS ID or entity name to search.
 
 DOB NOW and NY DOS record pages depend on a search session, so their links
-open the working public portal and show the lookup value. Permit links use
+open the working public portal and show the lookup value with a copy button.
+HPD and RPAD search hints also offer a copy button. The collapsed Data sources
+section links to each official public page and makes direct versus search-only
+destinations clear. Permit links use
 `api_source` and `job_number`; DOB NOW records override stale stored BIS links.
 ACRIS transaction document IDs also link directly to the official document.

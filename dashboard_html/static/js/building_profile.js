@@ -215,6 +215,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Keep the top of the profile compact while making the full tax-lot
     // record one clear action away on every screen size.
     setupBuildingFactsDisclosure();
+    setupSourceCopyButtons();
     
     // Load building data
     await loadBuildingProfile();
@@ -249,6 +250,7 @@ async function loadBuildingProfile() {
         renderViolationsTab();
         renderActivityTab();
         renderContactsTab();
+        renderDataSourceDirectory();
 
         // Update tab badges
         updateTabBadges();
@@ -346,10 +348,37 @@ function setBadge(badgeId, count) {
 // HERO SECTION
 // ============================================================================
 
+function renderSourceHelp(source) {
+    const hint = source?.hint ? `<small class="record-source-hint">${escapeHtml(source.hint)}</small>` : '';
+    const value = String(source?.lookup_value || '').trim();
+    const copyLabel = `Copy ${source?.lookup_label || 'ID'}`;
+    const copy = value ? `<button type="button" class="record-source-copy" data-source-copy="${escapeHtml(value)}" data-copy-label="${escapeHtml(copyLabel)}" aria-label="${escapeHtml(copyLabel)}" aria-live="polite">${escapeHtml(copyLabel)}</button>` : '';
+    return hint || copy ? `<span class="record-source-help">${hint}${copy}</span>` : '';
+}
+
+function setupSourceCopyButtons() {
+    document.addEventListener('click', async (event) => {
+        const button = event.target?.closest?.('[data-source-copy]');
+        if (!button) return;
+        try {
+            await navigator.clipboard.writeText(button.dataset.sourceCopy);
+            button.textContent = 'Copied';
+            button.setAttribute('aria-label', 'Copied');
+            setTimeout(() => {
+                button.textContent = button.dataset.copyLabel || 'Copy ID';
+                button.setAttribute('aria-label', button.textContent);
+            }, 2200);
+        } catch (_error) {
+            button.textContent = 'Select the value above';
+            button.setAttribute('aria-label', button.textContent);
+        }
+    });
+}
+
 function renderSourceName(name, source, showHint = true) {
     const url = safeHttpHref(source?.url);
     if (!url) return escapeHtml(name || '');
-    return `<a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(source.label || 'View source')} (opens in a new tab)">${escapeHtml(name)} <span aria-hidden="true">↗</span></a>${showHint && source.hint ? `<small class="record-source-hint">${escapeHtml(source.hint)}</small>` : ''}`;
+    return `<a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(source.label || 'View source')} (opens in a new tab)">${escapeHtml(name)} <span aria-hidden="true">↗</span></a>${showHint ? renderSourceHelp(source) : ''}`;
 }
 
 function ownerSourceName(source, name) {
@@ -360,6 +389,29 @@ function transactionSourceName(transaction) {
     return renderSourceName(transaction.document_id, {
         url: transaction.source_url, label: 'View recorded document in ACRIS'
     });
+}
+
+function renderDataSourceDirectory() {
+    const container = document.getElementById('source-directory');
+    if (!container) return;
+    const links = buildingData.owner_source_links || {};
+    const rows = [
+        ['PLUTO building facts', links.pluto, 'Direct lot page'],
+        ['Historical RPAD assessment', links.rpad, 'Search BBL; through FY2018/19'],
+        ['HPD registration & violations', links.hpd, 'Search address'],
+        ['ACRIS deeds & mortgages', links.acris_parcel, 'Direct parcel search'],
+        ['BIS jobs & permits', links.bis, links.bis?.hint ? 'Choose building' : 'Direct building profile'],
+        ['OATH/ECB violations', links.ecb, links.ecb?.hint ? 'Choose building' : 'Direct violation list'],
+        ['DOB NOW filings & Safety', links.dob_now, 'Search job number'],
+        ['NY Secretary of State', links.sos, 'Search DOS ID or entity'],
+    ];
+    container.innerHTML = rows.map(([label, source, timing]) => {
+        const url = safeHttpHref(source?.url);
+        const name = url
+            ? `<a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(label)} (opens in a new tab)">${escapeHtml(label)} <span aria-hidden="true">↗</span></a>`
+            : `<span>${escapeHtml(label)}</span>`;
+        return `<div class="source-row">${name}<span class="source-when">${escapeHtml(timing)}</span></div>`;
+    }).join('');
 }
 
 function renderHeroSection() {
@@ -2310,7 +2362,7 @@ function showPermitDetails(index) {
         </div>
         
         <div class="permit-modal-actions">
-            ${safePermitLink ? `<div class="permit-source-action"><a href="${escapeHtml(safePermitLink)}" target="_blank" rel="noopener noreferrer" class="btn-view-dob">${escapeHtml(permitSource.label)} ↗</a>${permitSource.hint ? `<p class="record-source-hint">${escapeHtml(permitSource.hint)}</p>` : ''}</div>` : ''}
+            ${safePermitLink ? `<div class="permit-source-action"><a href="${escapeHtml(safePermitLink)}" target="_blank" rel="noopener noreferrer" class="btn-view-dob">${escapeHtml(permitSource.label)} ↗</a>${renderSourceHelp(permitSource)}</div>` : ''}
             <button onclick="closePermitModal()" class="btn-close-modal">Close</button>
         </div>
     </div>`;

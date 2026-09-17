@@ -194,12 +194,18 @@ assert.doesNotThrow(() => nodes.get('tab-permits').dispatch('toggle'));
 console.log('profile disclosure navigation, persistence, reduced motion and lazy-loading checks passed');
 
 // Source links must survive rendering and keep untrusted record text escaped.
-context.sourceInfo = {url: 'https://apps.dos.ny.gov/publicInquiry/', label: 'NY DOS', hint: 'Search DOS ID: 6719932'};
+context.sourceInfo = {url: 'https://apps.dos.ny.gov/publicInquiry/', label: 'NY DOS',
+    hint: 'Search DOS ID: 6719932', lookup_value: '6719932', lookup_label: 'DOS ID'};
 const linkedName = vm.runInContext("renderSourceName('<img src=x>', sourceInfo)", context);
 assert.match(linkedName, /href="https:\/\/apps.dos.ny.gov\/publicInquiry\/"/);
 assert.match(linkedName, /rel="noopener noreferrer"/);
 assert.match(linkedName, /&lt;img src=x&gt;/);
 assert.match(linkedName, /Search DOS ID: 6719932/);
+assert.match(linkedName, /data-source-copy="6719932"/);
+assert.match(linkedName, /aria-label="Copy DOS ID"/);
+context.sourceInfo.lookup_value = '" onmouseover="alert(1)';
+assert.doesNotMatch(vm.runInContext("renderSourceName('Name', sourceInfo)", context),
+    /data-source-copy="" onmouseover=/);
 context.sourceInfo.url = 'javascript:alert(1)';
 assert.equal(vm.runInContext("renderSourceName('Name', sourceInfo)", context), 'Name');
 assert.equal(vm.runInContext("renderSourceName('Name & Co', undefined)", context), 'Name &amp; Co');
@@ -207,10 +213,39 @@ const modal = {innerHTML:'', style:{}, querySelectorAll() {return [];}};
 nodes.set('permit-modal', modal);
 context.linkedPermit = {...records[0], source_link: {
     url:'https://a810-dobnow.nyc.gov/publish/Index.html#!/', label:'Open in DOB NOW',
-    hint:'Under Search the Public Portal, choose Job Number and enter B01344580.'
+    hint:'Under Search the Public Portal, choose Job Number and enter B01344580.',
+    lookup_value:'B01344580', lookup_label:'job number'
 }, link:'https://a810-bisweb.nyc.gov/wrong-record'};
 vm.runInContext('buildingData = {permits:[linkedPermit]}; showPermitDetails(0)', context);
 assert.match(modal.innerHTML, /Open in DOB NOW/);
 assert.match(modal.innerHTML, /enter B01344580/);
+assert.match(modal.innerHTML, /data-source-copy="B01344580"/);
 assert.doesNotMatch(modal.innerHTML, /wrong-record/);
-console.log('source link rendering and DOB NOW modal checks passed');
+const directory = fakeNode('source-directory', 'DIV');
+nodes.set('source-directory', directory);
+context.directoryLinks = {
+    pluto: {url:'https://zola.planning.nyc.gov/l/lot/3/1298/66'},
+    ecb: {url:'https://a810-bisweb.nyc.gov/bisweb/ECBQueryByLocationServlet?allbin=3034250'},
+    acris_parcel: {url:'https://a836-acris.nyc.gov/bblsearch/bblsearch.asp?borough=3&block=1298&lot=66'},
+    dob_now: {url:'https://a810-dobnow.nyc.gov/publish/Index.html#!/'},
+};
+vm.runInContext('buildingData = {owner_source_links: directoryLinks}; renderDataSourceDirectory()', context);
+assert.match(directory.innerHTML, /Direct violation list/);
+assert.match(directory.innerHTML, /ECBQueryByLocationServlet/);
+assert.match(directory.innerHTML, /ACRIS deeds &amp; mortgages/);
+
+let copyClickHandler;
+context.document.addEventListener = (type, handler) => {
+    if (type === 'click') copyClickHandler = handler;
+};
+context.navigator = {clipboard: {writeText: async value => { context.copiedValue = value; }}};
+context.setTimeout = () => 0;
+vm.runInContext('setupSourceCopyButtons()', context);
+const copyButton = {dataset: {sourceCopy: 'B01344580', copyLabel: 'Copy job number'},
+    textContent: 'Copy job number', setAttribute(name, value) { this[name] = value; }};
+copyClickHandler({target: {closest: () => copyButton}}).then(() => {
+    assert.equal(context.copiedValue, 'B01344580');
+    assert.equal(copyButton.textContent, 'Copied');
+    assert.equal(copyButton['aria-label'], 'Copied');
+    console.log('source link, directory, copy, and DOB NOW modal checks passed');
+}).catch(error => { console.error(error); process.exitCode = 1; });

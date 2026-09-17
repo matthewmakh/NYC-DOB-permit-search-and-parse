@@ -9,16 +9,31 @@ from dashboard_html.streetview import payload, geosearch
 
 class RecordLinksTests(unittest.TestCase):
     def test_ownership_uses_matching_deed_not_other_transactions_or_crfn_as_id(self):
-        building = dict(bbl='3012980066', sale_crfn='2026000246222', sos_dos_id='6719932')
+        building = dict(bbl='3012980066', bin=3034250, address='521 MONTGOMERY STREET',
+                        sale_crfn='2026000246222', sos_dos_id='6719932')
         txns = [dict(document_id='2026090100000001', crfn='other', is_primary_deed=True),
                 dict(document_id='2026082601030001', crfn='2026000246222')]
         links = owner_source_links(building, txns)
         self.assertEqual(parse_qs(urlsplit(links['acris']['url']).query), {'doc_id': ['2026082601030001']})
         self.assertEqual(links['pluto']['url'], 'https://zola.planning.nyc.gov/l/lot/3/1298/66')
         self.assertIn('6719932', links['sos']['hint'])
+        self.assertEqual(links['sos']['lookup_value'], '6719932')
+        self.assertEqual(links['hpd']['lookup_value'], '521 MONTGOMERY STREET, Brooklyn')
         self.assertIn('3012980066', links['rpad']['hint'])
-        self.assertIn('allblock=1298', links['ecb']['url'])
+        self.assertEqual(links['rpad']['lookup_value'], '3012980066')
+        self.assertIn('allbin=3034250', links['ecb']['url'])
+        self.assertIn('ECBQueryByLocationServlet', links['ecb']['url'])
+        self.assertIn('bin=3034250', links['bis']['url'])
+        self.assertEqual(parse_qs(urlsplit(links['acris_parcel']['url']).query),
+                         {'borough': ['3'], 'block': ['1298'], 'lot': ['66']})
         self.assertIn('bblsearch.asp', owner_source_links(building, txns[:1])['acris']['url'])
+
+    def test_ecb_falls_back_to_bis_lot_search_without_a_valid_bin(self):
+        for bin_value in (None, 'invalid'):
+            with self.subTest(bin=bin_value):
+                links = owner_source_links({'bbl': '3012980066', 'bin': bin_value})
+                self.assertIn('allblock=1298', links['ecb']['url'])
+                self.assertIn('Choose the building', links['ecb']['hint'])
 
     def test_missing_ids_and_legacy_acris_documents(self):
         self.assertIsNone(acris_document_url(None))
@@ -34,6 +49,7 @@ class RecordLinksTests(unittest.TestCase):
                     link='https://a810-bisweb.nyc.gov/bisweb/JobsQueryByNumberServlet?passjobnumber=B01344580-P1'))
                 self.assertIn('a810-dobnow.nyc.gov/publish/Index.html', link['url'])
                 self.assertIn('enter B01344580.', link['hint'])
+                self.assertEqual(link['lookup_value'], 'B01344580')
         self.assertIn('dobnow', permit_source_link({'permit_no':'B01344580-P1'})['url'])
         for number in ('EL:M01234567-I1', 'VT:M01234567-I1'):
             self.assertIn('enter M01234567.', permit_source_link({'permit_no':number})['hint'])

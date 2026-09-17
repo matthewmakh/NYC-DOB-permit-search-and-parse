@@ -20,34 +20,61 @@ def acris_document_url(document_id):
 def owner_source_links(building, transactions=()):
     bbl = str(building.get('bbl') or '').strip()
     parcel = re.fullmatch(r'([1-5])(\d{5})(\d{4})', bbl)
+    borough_names = {'1': 'Manhattan', '2': 'Bronx', '3': 'Brooklyn',
+                     '4': 'Queens', '5': 'Staten Island'}
+    borough_name = borough_names.get(str(building.get('borough') or '')) or borough_names.get(bbl[:1])
+    address = str(building.get('address') or '').strip()
+    hpd_lookup = (f'{address}, {borough_name}'
+                  if address and borough_name and borough_name.lower() not in address.lower()
+                  else address)
     links = {
         'sos': {
             'url': 'https://apps.dos.ny.gov/publicInquiry/',
-            'label': 'NY Secretary of State',
-            'hint': (f"Search DOS ID: {building['sos_dos_id']}" if building.get('sos_dos_id')
-                     else f"Search entity: {building.get('sos_entity_name') or ''}"),
+            'label': 'Search NY Secretary of State',
+            'hint': (f"Choose Search By → DOS ID, then enter {building['sos_dos_id']}."
+                     if building.get('sos_dos_id') else
+                     f"Search entity name: {building.get('sos_entity_name') or ''}"),
+            'lookup_value': str(building.get('sos_dos_id') or building.get('sos_entity_name') or ''),
+            'lookup_label': 'DOS ID' if building.get('sos_dos_id') else 'entity name',
         },
-        'hpd': {'url': 'https://hpdonline.nyc.gov/hpdonline/', 'label': 'HPD Online',
-                'hint': f"Search address: {building.get('address') or bbl}"},
+        'hpd': {'url': 'https://hpdonline.nyc.gov/hpdonline/', 'label': 'Search HPD Online',
+                'hint': f'Search address: {hpd_lookup}' if hpd_lookup else 'Search this property by address.',
+                'lookup_value': hpd_lookup, 'lookup_label': 'address'},
         'rpad': {
             'url': 'https://data.cityofnewyork.us/City-Government/Property-Valuation-and-Assessment-Data/yjxr-fw8i/data_preview',
             'label': 'Historical assessment records', 'hint': f'Search BBLE: {bbl}',
+            'lookup_value': bbl, 'lookup_label': 'BBL',
         },
+        'dob_now': {'url': DOB_NOW, 'label': 'DOB NOW public portal', 'hint': ''},
     }
     if parcel:
         borough, block, lot = map(int, parcel.groups())
         links['pluto'] = {'url': f'https://zola.planning.nyc.gov/l/lot/{borough}/{block}/{lot}',
                           'label': 'ZoLa property record', 'hint': ''}
-        links['ecb'] = {
-            'url': BIS + 'PropertyBrowseByBBLServlet?' + urlencode({
-                'allborough': borough, 'allblock': block, 'alllot': lot, 'requestid': 0}),
-            'label': 'BIS property record', 'hint': 'Open OATH/ECB violations in BIS',
-        }
-        links['acris'] = {
+        parcel_url = BIS + 'PropertyBrowseByBBLServlet?' + urlencode({
+                'allborough': borough, 'allblock': block, 'alllot': lot, 'requestid': 0})
+        links['bis'] = {'url': parcel_url, 'label': 'BIS property record',
+                        'hint': 'Choose the matching building on this lot.'}
+        links['ecb'] = {'url': parcel_url, 'label': 'BIS property record',
+                        'hint': 'Choose the building, then OATH/ECB violations.'}
+        bin_value = str(building.get('bin') or '').strip()
+        if re.fullmatch(r'\d{7}', bin_value):
+            links['bis'] = {
+                'url': BIS + 'PropertyProfileOverviewServlet?' + urlencode({
+                    'bin': bin_value, 'requestid': 1}),
+                'label': 'BIS building profile', 'hint': '',
+            }
+            links['ecb'] = {
+                'url': BIS + 'ECBQueryByLocationServlet?' + urlencode({
+                    'requestid': 2, 'allbin': bin_value}),
+                'label': 'BIS OATH/ECB violations', 'hint': '',
+            }
+        links['acris_parcel'] = {
             'url': 'https://a836-acris.nyc.gov/bblsearch/bblsearch.asp?' + urlencode({
                 'borough': borough, 'block': block, 'lot': lot}),
-            'label': 'ACRIS property records', 'hint': '',
+            'label': 'ACRIS parcel search', 'hint': '',
         }
+        links['acris'] = links['acris_parcel']
 
     crfn = str(building.get('sale_crfn') or '').strip()
     deed = next((t for t in transactions if (
@@ -70,7 +97,8 @@ def permit_source_link(permit):
         match = re.match(r'^([BMQSX]\d{8})(?:-|$)', number, re.I)
         job = match.group(1).upper() if match else number
         return {'url': DOB_NOW, 'label': 'Open in DOB NOW',
-                'hint': f'Under Search the Public Portal, choose Job Number and enter {job}.'}
+                'hint': f'Under Search the Public Portal, choose Job Number and enter {job}.',
+                'lookup_value': job, 'lookup_label': 'job number'}
     if re.fullmatch(r'\d{9}(?:-.*)?', number):
         return {'url': BIS + 'JobsQueryByNumberServlet?' + urlencode({
             'passjobnumber': number[:9], 'requestid': 0}),
@@ -85,4 +113,5 @@ def permit_source_link(permit):
             'a810-bisweb.nyc.gov', 'a810-dobnow.nyc.gov'):
         return {'url': link, 'label': 'View DOB record', 'hint': ''}
     return {'url': 'https://www.nyc.gov/site/buildings/dob/building-information-search.page',
-            'label': 'Search DOB records', 'hint': f'Search permit or job number: {number}'}
+            'label': 'Search DOB records', 'hint': f'Search permit or job number: {number}',
+            'lookup_value': number, 'lookup_label': 'permit or job number'}
