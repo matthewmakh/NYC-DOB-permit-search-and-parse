@@ -18,6 +18,12 @@
     {% endif %}
     <div id="prospect-lists"></div>
     <div id="prospect-workspace" hidden>
+        <div class="prospect-sheet-tools prospect-view-toolbar">
+            <div class="prospect-view-tabs" role="group" aria-label="List view"><button type="button" class="cbtn" data-network-view="people" aria-pressed="true">People</button><button type="button" class="cbtn" data-network-view="company" aria-pressed="false">Companies</button><button type="button" class="cbtn" data-network-view="building" aria-pressed="false">Buildings</button></div>
+            <div class="prospect-column-tools"><button type="button" class="cbtn" id="prospect-add-person">Add person</button><button type="button" class="cbtn" id="prospect-append-csv">Add CSV to this list</button><button type="button" class="cbtn" id="prospect-new-profile">Add company / building</button></div>
+        </div>
+        <div id="prospect-network-view" hidden><label class="prospect-network-search">Search profiles<input type="search" id="prospect-network-search" placeholder="Name, address or notes"></label><p class="prospect-hint">Profiles and relationships are private to this sheet. A company from an uploaded row is an association, not verified management or ownership.</p><div id="prospect-network-cards" class="prospect-network-cards"></div></div>
+        <div id="prospect-people-view">
         <div class="prospect-ownership">
             <p id="prospect-owner-label"></p>
             {% if crm_ctx.is_admin %}
@@ -34,20 +40,93 @@
             <label>Search<input type="search" name="q" placeholder="Search any column or notes" maxlength="200"></label>
             <label>Status<select name="status"><option value="">All leads</option><option value="active">Not in CRM</option><option value="promoted">Added to CRM</option></select></label>
             <label>Sort<select name="sort"><option value="position">File order</option><option value="name">Name</option><option value="last_touch">Last touch</option><option value="follow_up">Next follow-up</option><option value="status">Status</option></select></label>
+            <label>Show<select name="archived"><option value="active">Current leads</option><option value="archived">Archived leads</option><option value="all">All leads</option></select></label>
             <label class="prospect-check"><input type="checkbox" name="due"> Follow-ups due</label>
             <button class="cbtn" type="submit">Apply</button>
-            <details class="prospect-columns"><summary class="cbtn">Columns</summary><div id="prospect-columns"></div></details>
+            <details class="prospect-columns"><summary class="cbtn">Columns</summary><div class="prospect-columns-panel"><div class="prospect-column-tools"><button class="cbtn cbtn-sm" type="button" id="prospect-add-column">Add column</button><button class="cbtn cbtn-sm" type="button" id="prospect-reset-layout">Reset layout</button></div><div id="prospect-columns"></div></div></details>
         </form>
-        <p class="prospect-hint">Drag column handles to reorder. Use Alt + ← / → on a handle, or the arrows in Columns. Your layout saves automatically for this list.</p>
+        <div class="prospect-sheet-tools"><div><button class="cbtn cbtn-sm" type="button" id="prospect-check-duplicates">Check duplicates</button> <span id="prospect-duplicate-summary" role="status"></span></div><button class="cbtn cbtn-sm" type="button" id="prospect-undo" hidden>Undo last edit</button></div>
+        <p class="prospect-hint">Drag headers to reorder or their edges to resize. Column options include pinning and renaming. Paste a range from Excel into an editable cell.</p>
         <p class="prospect-layout-feedback"><span id="prospect-layout-status" role="status" aria-live="polite"></span> <button type="button" class="cbtn cbtn-sm" id="prospect-layout-retry" hidden>Retry saving layout</button></p>
+        <div id="prospect-bulk-bar" class="prospect-bulk-bar" hidden aria-label="Selected lead actions">
+            <strong id="prospect-selection-count" role="status"></strong>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-edit">Update selected</button>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-review">Review for CRM</button>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-archive">Archive</button>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-restore">Restore</button>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-clear-selection">Clear selection</button>
+        </div>
         <div class="prospect-table-wrap" tabindex="0" role="region" aria-label="Lead spreadsheet, scroll horizontally for more columns">
             <table class="prospect-table"><thead id="prospect-head"></thead><tbody id="prospect-rows"></tbody></table>
         </div>
         <div class="prospect-pagination"><span id="prospect-page-label"></span><div>
             <button class="cbtn" id="prospect-prev" type="button">Previous</button>
             <button class="cbtn" id="prospect-next" type="button">Next</button></div></div>
+        </div>
     </div>
 </section>
+
+<dialog class="prospect-dialog" id="prospect-person-dialog" aria-labelledby="prospect-person-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-person-title">Add a person to this list</h2><button type="button" class="cbtn" data-close>Cancel</button></div>
+    <p>Fill in what you know. The lead stays in this sheet until you choose Add to CRM.</p>
+    <form id="prospect-person-form" class="prospect-form"><div id="prospect-person-fields" class="prospect-form-grid"></div><p class="prospect-error" id="prospect-person-error" role="alert"></p><button type="submit" class="cbtn cbtn-primary">Add person</button></form>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-append-dialog" aria-labelledby="prospect-append-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-append-title">Add a CSV to this list</h2><button type="button" class="cbtn" data-close>Cancel</button></div>
+    <p>Add rows without replacing existing leads, notes or history. Review where each incoming column belongs.</p>
+    <form id="prospect-append-upload" class="prospect-form"><label>CSV or TSV file<input type="file" name="file" accept=".csv,.tsv,.txt" required></label><div class="prospect-form-grid"><label>Separator<select name="delimiter"><option value="auto">Detect automatically</option><option value=",">Comma</option><option value=";">Semicolon</option><option value="&#9;">Tab</option><option value="|">Pipe</option></select></label><label class="prospect-check"><input type="checkbox" name="has_header" checked>First row contains column names</label></div><button type="submit" class="cbtn">Preview additions</button></form>
+    <div id="prospect-append-preview" hidden><p id="prospect-append-summary"></p><form id="prospect-append-form" class="prospect-form"><div id="prospect-append-mapping" class="prospect-form-grid"></div><p class="prospect-hint">Duplicates are preserved for review. Check duplicates after adding the rows.</p><button type="submit" class="cbtn cbtn-primary">Add rows to this list</button></form></div><p class="prospect-error" id="prospect-append-error" role="alert"></p>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-profile-edit-dialog" aria-labelledby="prospect-profile-edit-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-profile-edit-title">Company or building profile</h2><button type="button" class="cbtn" data-close>Cancel</button></div>
+    <form id="prospect-profile-form" class="prospect-form"><div class="prospect-form-grid"><label>Profile type<select name="kind"><option value="company">Company</option><option value="building">Building</option></select></label><label>Name / building address<input name="name" maxlength="255" required></label><label>Address<input name="address" maxlength="500"></label><label>Website<input name="website" type="url" maxlength="1000" placeholder="https://"></label></div><label>Profile notes<textarea name="notes" maxlength="20000" rows="4"></textarea></label><p class="prospect-error" id="prospect-profile-error" role="alert"></p><button type="submit" class="cbtn cbtn-primary">Save profile</button></form>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-profile-dialog" aria-labelledby="prospect-profile-title">
+    <div class="prospect-dialog-head"><div><p id="prospect-profile-kind" class="prospect-eyebrow"></p><h2 id="prospect-profile-title"></h2></div><button type="button" class="cbtn" data-close>Close</button></div>
+    <div id="prospect-profile-body"></div>
+    <details class="prospect-link-editor"><summary>Add or update a relationship</summary><p class="prospect-hint">Choose the direction explicitly: Company → Manages → Building. You can link any two profiles in this sheet.</p>
+        <form id="prospect-link-form" class="prospect-form"><label>From<select name="source_id" required></select></label><label>Relationship<select name="relation" required></select></label><label>To<select name="target_id" required></select></label><label>Relationship note<input name="note" maxlength="2000" placeholder="Role, source or verification details"></label><button type="submit" class="cbtn cbtn-primary">Save relationship</button></form>
+    </details>
+    <details id="prospect-crm-reference" class="prospect-link-editor"><summary>Link an existing CRM record</summary><p class="prospect-hint">Choose a record you can access. Linking does not create a contact or copy outreach. Add to CRM later to carry this lead’s research into the linked contact.</p><form id="prospect-crm-search" class="prospect-form"><label>Search CRM<input name="q" minlength="2" maxlength="100" required></label><button type="submit" class="cbtn">Search records</button></form><form id="prospect-crm-link" class="prospect-form" hidden><label>Matching CRM records<select name="record_id" required></select></label><button type="submit" class="cbtn">Link record</button></form><p id="prospect-crm-search-message" role="status"></p><button type="button" class="cbtn" id="prospect-unlink-crm" hidden>Remove CRM link</button></details>
+    <p class="prospect-error" id="prospect-link-error" role="alert"></p>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-bulk-dialog" aria-labelledby="prospect-bulk-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-bulk-title">Update selected leads</h2><button type="button" class="cbtn" data-close>Cancel</button></div>
+    <p id="prospect-bulk-description"></p>
+    <form id="prospect-bulk-form" class="prospect-form">
+        <div id="prospect-bulk-fields" class="prospect-form-grid">
+            <label>Contact status<select name="status"><option value="">Keep current status</option></select></label>
+            <label>Follow-up<select name="follow_action"><option value="keep">Keep current date</option><option value="set">Set a date</option><option value="clear">Clear date</option></select></label>
+            <label id="prospect-bulk-date" hidden>Follow-up date<input type="date" name="next_follow_up"></label>
+        </div>
+        <p class="prospect-error" id="prospect-bulk-error" role="alert"></p>
+        <button type="submit" class="cbtn cbtn-primary" id="prospect-bulk-confirm">Apply changes</button>
+    </form>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-column-dialog" aria-labelledby="prospect-column-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-column-title">Column settings</h2><button type="button" class="cbtn" data-close>Cancel</button></div>
+    <form id="prospect-column-form" class="prospect-form">
+        <label>Column name<input name="label" required maxlength="200"></label>
+        <p class="prospect-hint" id="prospect-column-help">Names and custom columns belong to this sheet. Width and pinning are saved just for you.</p>
+        <div id="prospect-column-layout-fields" class="prospect-form-grid">
+            <label>Width (pixels)<input name="width" type="number" min="100" max="600" step="1" required></label>
+            <label class="prospect-check"><input name="pinned" type="checkbox">Pin on wide screens</label>
+        </div>
+        <p class="prospect-error" id="prospect-column-error" role="alert"></p>
+        <button type="submit" class="cbtn cbtn-primary">Save column</button>
+    </form>
+</dialog>
+
+<dialog class="prospect-dialog" id="prospect-duplicates-dialog" aria-labelledby="prospect-duplicates-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-duplicates-title">Possible duplicates</h2><button type="button" class="cbtn" data-close>Close</button></div>
+    <p>Matches in this sheet and CRM contacts you can access. Shared numbers or email addresses may represent different people. Nothing is merged automatically.</p>
+    <div id="prospect-duplicates-body"></div>
+</dialog>
 
 <dialog class="prospect-dialog prospect-import-dialog" id="prospect-import-dialog" aria-labelledby="prospect-import-title">
     <div class="prospect-dialog-head"><h2 id="prospect-import-title">Import a prospect list</h2><button class="cbtn" type="button" data-close>Close</button></div>
@@ -76,8 +155,9 @@
 
 <dialog class="prospect-dialog prospect-lead-dialog" id="prospect-lead-dialog" aria-labelledby="prospect-lead-title">
     <div class="prospect-dialog-head"><div><p class="prospect-eyebrow">Prospect details</p><h2 id="prospect-lead-title"></h2></div><button class="cbtn" type="button" data-close>Close</button></div>
+    <div id="prospect-review-queue" class="prospect-sheet-tools" hidden><span id="prospect-review-progress"></span><button type="button" class="cbtn cbtn-sm" id="prospect-review-next">Next selected lead</button><button type="button" class="cbtn cbtn-sm" id="prospect-review-stop">End review</button></div>
     <div id="prospect-lead-body"></div>
     <p class="prospect-error" id="prospect-lead-error" role="alert"></p>
 </dialog>
 {% endblock %}
-{% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script>{% endblock %}
+{% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_network.js') }}"></script>{% endblock %}

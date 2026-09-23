@@ -19,6 +19,9 @@ from flask import Flask
 import crm_service as crm
 import prospecting_service as s
 import prospecting_routes as routes
+import prospecting_workflows as w
+import prospecting_imports as imports
+import prospecting_network as network
 from crm_routes import crm_bp
 
 SAMPLE = b'Contact Name,Company,Email,Phone,Extra\nJane Doe,Example,jane@example.test,212-555-0100,=1+1\nJohn Smith,Example,john@example.test,212-555-0100,https://example.test\n'
@@ -29,6 +32,10 @@ OUTSIDER = dict(user_id=4,team_id=4,is_admin=True)
 
 
 class CsvTests(unittest.TestCase):
+    def test_api_serializes_naive_and_aware_timestamps(self):
+        self.assertEqual(routes._serial(datetime.fromisoformat('2026-09-23T10:00:00-04:00')), '2026-09-23T14:00:00Z')
+        self.assertEqual(routes._serial(datetime(2026,9,23,14,0)), '2026-09-23T14:00:00Z')
+
     def test_bom_and_aliases(self):
         parsed = s.parse_csv(b'\xef\xbb\xbfbest_contact,manager_or_operator,normalized_address\r\nJane Doe,Example,123 Main St\r\n')
         self.assertEqual(parsed['mapping']['name'], 'c0')
@@ -131,7 +138,7 @@ class DatabaseTests(unittest.TestCase):
         layout={'order':list(reversed(before['layout']['order'])),'visible':['c4','c0']}
         s.save_layout(REP,self.list_id,layout)
         after=s.list_rows(REP,self.list_id)
-        self.assertEqual(after['layout'],{**layout,'saved':True})
+        self.assertEqual(after['layout'],{**layout,'saved':True,'widths':{},'pinned':'lead'})
         self.assertEqual(before['rows'],after['rows'])
         self.assertEqual(before['listing']['version'],after['listing']['version'])
         # All source columns may be hidden while tracking columns stay available.
@@ -404,6 +411,235 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(response.json['rows'][0]['cells']['c0'],'Jane Doe')
         with patch('auth_service.validate_session',return_value=None):
             self.assertEqual(client.get('/crm/prospecting/api/lists').status_code,302)
+
+    def batch_data(self, action='update', **extra):
+        data=s.list_rows(REP,self.list_id,archived='all')
+        return dict(action=action,request_key=str(uuid.uuid4()),list_version=data['listing']['version'],
+                    rows=[{'id':r['id'],'version':r['version']} for r in data['rows']],**extra)
+
+    def test_bulk_update_undo_and_retry(self):
+        data=self.batch_data(changes={'status':'interested','next_follow_up':'2026-12-01'})
+        result=w.batch_edit(REP,self.list_id,data)
+        self.assertEqual(result['count'],2)
+        self.assertTrue(w.batch_edit(REP,self.list_id,data)['replayed'])
+        after=s.list_rows(REP,self.list_id)
+        self.assertTrue(all(r['status']=='interested' for r in after['rows']))
+        self.assertEqual(self.count('prospect_changes'),1)
+        w.undo(REP,self.list_id,result['change_id'])
+        self.assertEqual(w.undo(REP,self.list_id,result['change_id'])['count'],2)
+        restored=s.list_rows(REP,self.list_id)
+        self.assertTrue(all(r['status']=='new' and not r['next_follow_up'] for r in restored['rows']))
+        self.assertIsNone(restored['last_change'])
+        self.assertEqual(self.count('crm_contacts'),0)
+
+    def test_bulk_stale_or_foreign_row_is_atomic(self):
+        data=self.batch_data(changes={'status':'interested'})
+        s.update_row(REP,self.rows[1]['id'],{'version':1,'notes':'newer work'})
+        with self.assertRaises(s.Conflict):w.batch_edit(REP,self.list_id,data)
+        self.assertEqual(s.row_detail(REP,self.rows[0]['id'])['row']['status'],'new')
+        data=self.batch_data(changes={'status':'interested'})
+        other=self.create();data['rows'].append({'id':s.list_rows(REP,other)['rows'][0]['id'],'version':1})
+        with self.assertRaises(LookupError):w.batch_edit(REP,self.list_id,data)
+        self.assertEqual(s.row_detail(REP,self.rows[0]['id'])['row']['status'],'new')
+
+    def test_bulk_respects_reassignment_promotion_and_dnc(self):
+        data=self.batch_data(changes={'next_follow_up':'2026-12-01'})
+        s.update_row(REP,self.rows[1]['id'],{'version':1,'status':'do_not_contact'})
+        data=self.batch_data(changes={'next_follow_up':'2026-12-01'})
+        with self.assertRaises(ValueError):w.batch_edit(REP,self.list_id,data)
+        self.assertIsNone(s.row_detail(REP,self.rows[0]['id'])['row']['next_follow_up'])
+        s.promote(REP,self.rows[0]['id'],{'version':1})
+        with self.assertRaises(s.Conflict):w.batch_edit(REP,self.list_id,self.batch_data(changes={'status':'interested'}))
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        with self.assertRaises(LookupError):w.batch_edit(REP,self.list_id,data)
+
+    def test_archive_restore_preserves_history_and_blocks_editing(self):
+        self.touch(self.rows[0])
+        w.batch_edit(REP,self.list_id,self.batch_data('archive'))
+        self.assertEqual(s.list_rows(REP,self.list_id)['total'],0)
+        archived=s.list_rows(REP,self.list_id,archived='archived')
+        self.assertEqual(archived['total'],2)
+        self.assertEqual(archived['summary']['due'],0)
+        row=archived['rows'][0]
+        with self.assertRaises(s.Conflict):s.update_row(REP,row['id'],{'version':row['version'],'notes':'no'})
+        w.batch_edit(REP,self.list_id,self.batch_data('restore'))
+        self.assertEqual(s.list_rows(REP,self.list_id)['rows'][0]['touch_count'],1)
+
+    def test_undo_never_overwrites_new_work_or_other_user(self):
+        result=w.batch_edit(REP,self.list_id,self.batch_data(changes={'status':'interested'}))
+        with self.assertRaises(LookupError):w.undo(ADMIN,self.list_id,result['change_id'])
+        s.update_row(ADMIN,self.rows[0]['id'],{'version':2,'notes':'admin notes'})
+        with self.assertRaises(s.Conflict):w.undo(REP,self.list_id,result['change_id'])
+        self.assertEqual(s.row_detail(REP,self.rows[0]['id'])['row']['notes'],'admin notes')
+
+    def test_paste_atomic_validation_and_original_cells(self):
+        data=self.batch_data('paste');data['rows'][0]['cells']={'c0':'Updated Name','c4':'<script>alert(1)</script>'};data['rows'][1]['cells']={'bad':'x'}
+        with self.assertRaises(ValueError):w.batch_edit(REP,self.list_id,data)
+        self.assertEqual(s.row_detail(REP,self.rows[0]['id'])['row']['cells']['c0'],'Jane Doe')
+        data['rows'][1]['cells']={'c4':'new research'}
+        result=w.batch_edit(REP,self.list_id,data)
+        row=s.row_detail(REP,self.rows[0]['id'])['row'];self.assertEqual(row['original_cells']['c0'],'Jane Doe')
+        self.assertEqual(row['cells']['c0'],'Updated Name')
+        w.undo(REP,self.list_id,result['change_id'])
+        self.assertEqual(s.row_detail(REP,self.rows[0]['id'])['row']['cells']['c0'],'Jane Doe')
+
+    def test_column_add_rename_and_layout_settings(self):
+        result=w.manage_column(REP,self.list_id,{'version':1,'label':'Priority'})
+        cid=result['column_id'];self.assertEqual(cid,'c5')
+        self.assertEqual(s.list_rows(REP,self.list_id)['rows'][0]['cells'][cid],'')
+        w.manage_column(REP,self.list_id,{'version':2,'id':'c0','label':'Full name'})
+        listing=s.list_rows(REP,self.list_id)['listing'];self.assertEqual(listing['mapping']['name'],'c0')
+        self.assertEqual(listing['columns'][0]['original_label'],'Contact Name')
+        with self.assertRaises(s.Conflict):w.manage_column(REP,self.list_id,{'version':1,'label':'stale'})
+        layout=s.list_rows(REP,self.list_id)['layout'];layout.update(widths={'lead':400,'c5':220},pinned='c5')
+        s.save_layout(REP,self.list_id,layout)
+        self.assertEqual(s.list_rows(REP,self.list_id)['layout']['widths'],layout['widths'])
+        self.assertEqual(s.list_rows(ADMIN,self.list_id)['layout']['widths'],{})
+        for value in ({'c5':True},{'c5':900},{'bogus':200}):
+            with self.assertRaises(ValueError):s.save_layout(REP,self.list_id,{**layout,'widths':value})
+
+    def test_duplicate_checks_shared_phone_and_private_crm(self):
+        own=crm.create_contact(REP,name='Jane Doe',email='JANE@example.test',phone='(212) 555-0100')
+        crm.create_contact(OTHER_REP,name='Private name',email='john@example.test',phone='2125550100')
+        found=w.duplicates(REP,self.list_id)['duplicates']
+        for row in self.rows:
+            match=found[str(row['id'])];self.assertEqual(match['list_count'],1);self.assertEqual(match['crm_count'],1)
+            self.assertEqual(match['crm_matches'][0]['name'],'Jane Doe')
+        self.assertNotIn('Private name',str(found))
+        self.assertEqual(w.duplicates(ADMIN,self.list_id)['duplicates'][str(self.rows[0]['id'])]['crm_count'],2)
+        self.assertEqual(self.count('crm_contacts'),2)
+        with self.assertRaises(LookupError):w.duplicates(OTHER_REP,self.list_id)
+
+    def test_duplicate_checks_ignore_blank_and_invalid_identifiers(self):
+        parsed=s.parse_csv(b'Name,Phone,Email\nA,123,no\nB,123,no\n')
+        other=self.create(parsed=parsed)
+        self.assertEqual(w.duplicates(REP,other)['duplicates'],{})
+        self.assertEqual(w.identity_keys({'phone':'2125550100 ext 123'}),{('phone','2125550100')})
+        self.assertEqual(w.identity_keys({'phone':'2125550100 / 2125550101'}),set())
+
+    def test_append_manual_csv_matches_and_idempotency(self):
+        original=s.list_rows(REP,self.list_id)['rows']
+        token=str(uuid.uuid4());result=imports.append(REP,self.list_id,cells={'c0':'Third person','c1':'Example'},request_key=token,version=1)
+        self.assertEqual(result['count'],1)
+        self.assertTrue(imports.append(REP,self.list_id,cells={'c0':'Third person','c1':'Example'},request_key=token,version=1)['replayed'])
+        parsed=s.parse_csv(b'Email,Name,New field\nfour@example.test,Fourth,Value\n')
+        mapping=imports.suggest_matches(s.list_rows(REP,self.list_id)['listing'],parsed)
+        self.assertEqual(mapping,{'c0':'c2','c1':'c0','c2':'new'})
+        imports.append(REP,self.list_id,parsed=parsed,mapping=mapping,filename='extra.csv',request_key=str(uuid.uuid4()),version=1)
+        result=s.list_rows(REP,self.list_id)
+        self.assertEqual(result['total'],4);self.assertEqual(len(result['listing']['columns']),6)
+        self.assertEqual(result['rows'][3]['cells']['c5'],'Value');self.assertEqual(result['rows'][3]['source_filename'],'extra.csv')
+        for before,after in zip(original,result['rows'][:2]):self.assertEqual(before['cells'],after['cells'])
+        self.assertEqual(self.count('crm_contacts'),0)
+        self.assertIn('extra.csv',s.export_rows(REP,self.list_id))
+
+    def test_append_rejects_collision_stale_and_unauthorized(self):
+        parsed=s.parse_csv(b'Name,Alias\nA,B\n')
+        with self.assertRaises(ValueError):imports.append(REP,self.list_id,parsed=parsed,mapping={'c0':'c0','c1':'c0'},request_key=str(uuid.uuid4()),version=1)
+        with self.assertRaises(ValueError):imports.append(REP,self.list_id,cells={'bogus':'name'},request_key=str(uuid.uuid4()),version=1)
+        with self.assertRaises(s.Conflict):imports.append(REP,self.list_id,cells={'c0':'name'},request_key=str(uuid.uuid4()),version=0)
+        with self.assertRaises(LookupError):imports.append(OTHER_REP,self.list_id,cells={'c0':'name'},request_key=str(uuid.uuid4()),version=1)
+        self.assertEqual(s.list_rows(REP,self.list_id)['total'],2)
+
+    def test_network_build_profiles_relationships_and_privacy(self):
+        self.assertEqual(network.sync_people(REP,self.list_id)['added'],2)
+        self.assertEqual(network.sync_people(REP,self.list_id)['added'],0)
+        graph=network.get_network(REP,self.list_id)
+        self.assertEqual(len(graph['nodes']),3);self.assertEqual(len(graph['links']),2)
+        self.assertTrue(all(l['relation']=='associated_with' for l in graph['links']))
+        company=next(n for n in graph['nodes'] if n['kind']=='company')
+        building=network.save_entity(REP,self.list_id,{'kind':'building','name':'123 Main St','address':'123 Main St, Brooklyn'})['entity_id']
+        relation={'source_id':company['id'],'target_id':building,'relation':'manages','note':'Confirmed with Jane'}
+        link_id=network.link(REP,self.list_id,relation)['link_id']
+        self.assertEqual(network.link(REP,self.list_id,relation)['link_id'],link_id)
+        graph=network.get_network(REP,self.list_id);self.assertEqual(len(graph['links']),3)
+        with self.assertRaises(LookupError):network.get_network(OTHER_REP,self.list_id)
+        with self.assertRaises(LookupError):network.link(OTHER_REP,self.list_id,relation)
+        network.unlink(REP,self.list_id,link_id)
+        self.assertEqual(len(network.get_network(REP,self.list_id)['links']),2)
+        self.assertEqual(self.count('crm_buildings'),0);self.assertEqual(self.count('crm_contacts'),0)
+
+    def test_network_rejects_cross_list_and_invalid_relationships(self):
+        network.sync_people(REP,self.list_id);other=self.create();network.sync_people(REP,other)
+        a=network.get_network(REP,self.list_id)['nodes'][0];b=network.get_network(REP,other)['nodes'][0]
+        with self.assertRaises(LookupError):network.link(REP,self.list_id,{'source_id':a['id'],'target_id':b['id'],'relation':'associated_with'})
+        with self.assertRaises(ValueError):network.link(REP,self.list_id,{'source_id':a['id'],'target_id':a['id'],'relation':'associated_with'})
+        with self.assertRaises(ValueError):network.save_entity(REP,self.list_id,{'kind':'company','name':'Bad','website':'javascript:alert(1)'})
+        with self.assertRaises(s.Conflict):network.save_entity(REP,self.list_id,{'kind':'company','name':'example'})
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        with self.assertRaises(LookupError):network.sync_people(REP,self.list_id)
+        self.assertEqual(len(network.get_network(OTHER_REP,self.list_id)['nodes']),3)
+
+    def test_network_live_person_name_and_crm_reference_redaction(self):
+        network.sync_people(REP,self.list_id)
+        s.update_row(REP,self.rows[0]['id'],{'version':1,'cells':{'c0':'Jane Updated'}})
+        node=next(n for n in network.get_network(REP,self.list_id)['nodes'] if n['row_id']==self.rows[0]['id'])
+        self.assertEqual(node['display_name'],'Jane Updated')
+        promoted=s.promote(REP,self.rows[0]['id'],{'version':2})
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        node=next(n for n in network.get_network(OTHER_REP,self.list_id)['nodes'] if n['row_id']==self.rows[0]['id'])
+        self.assertIsNone(node['promoted_contact_id']);self.assertTrue(node['crm_restricted'])
+
+    def test_explicit_crm_reference_promotes_to_chosen_record(self):
+        own=crm.create_contact(REP,name='Jane Old Spelling',email='old@example.test')
+        private=crm.create_contact(OTHER_REP,name='Private CRM')
+        network.sync_people(REP,self.list_id)
+        node=next(n for n in network.get_network(REP,self.list_id)['nodes'] if n['row_id']==self.rows[0]['id'])
+        self.assertEqual(network.search_crm(REP,self.list_id,'person','Private')['records'],[])
+        with self.assertRaises(LookupError):network.link_crm(REP,self.list_id,node['id'],{'record_id':private,'version':1})
+        network.link_crm(REP,self.list_id,node['id'],{'record_id':own,'version':1})
+        result=s.promote(REP,self.rows[0]['id'],{'version':1})
+        self.assertEqual(result['contact_id'],own);self.assertTrue(result['existing'])
+        self.assertEqual(self.count('crm_contacts'),2)
+        with self.assertRaises(s.Conflict):network.link_crm(REP,self.list_id,node['id'],{'record_id':None,'version':2})
+        with s.transaction() as cur:
+            cur.execute("SELECT note FROM crm_activity WHERE contact_id=%s AND type='note'",(own,))
+            self.assertIn('Relationship:',cur.fetchone()['note'])
+
+    def test_new_mutation_routes_require_csrf_and_current_scope(self):
+        app=Flask(__name__);app.secret_key='test';app.register_blueprint(routes.prospecting_bp);client=app.test_client()
+        paths=['batch','undo','columns','people','network/build','profiles','relationships']
+        with client.session_transaction() as session:session['prospecting_csrf']='token'
+        with patch('auth_service.validate_session',return_value={'id':2,'is_sponsored':True,'sponsor_user_id':1}):
+            for path in paths:
+                with self.subTest(path=path):self.assertEqual(client.post(f'/crm/prospecting/api/lists/{self.list_id}/{path}',json={}).status_code,403)
+        with patch('auth_service.validate_session',return_value={'id':3,'is_sponsored':True,'sponsor_user_id':1}):
+            for path in ('network','duplicates','crm-records?kind=person&q=Jane'):
+                with self.subTest(path=path):self.assertEqual(client.get(f'/crm/prospecting/api/lists/{self.list_id}/{path}').status_code,404)
+
+    def test_sheet_company_edits_refresh_links_without_restoring_unlinked_relationships(self):
+        network.sync_people(REP,self.list_id)
+        graph=network.get_network(REP,self.list_id)
+        jane=next(n for n in graph['nodes'] if n['row_id']==self.rows[0]['id'])
+        company=next(n for n in graph['nodes'] if n['kind']=='company')
+        link=next(l for l in graph['links'] if l['source_id']==jane['id'])
+        network.unlink(REP,self.list_id,link['id']);network.sync_people(REP,self.list_id)
+        self.assertFalse(any(l['source_id']==jane['id'] for l in network.get_network(REP,self.list_id)['links']))
+        network.save_entity(REP,self.list_id,{'id':company['id'],'version':1,'kind':'company','name':'Example Renamed'})
+        network.sync_people(REP,self.list_id)
+        self.assertEqual(len([n for n in network.get_network(REP,self.list_id)['nodes'] if n['kind']=='company']),1)
+        s.update_row(REP,self.rows[0]['id'],{'version':1,'cells':{'c1':'New Company'}})
+        network.sync_people(REP,self.list_id);graph=network.get_network(REP,self.list_id)
+        target=next(l['target_id'] for l in graph['links'] if l['source_id']==jane['id'])
+        self.assertEqual(next(n['name'] for n in graph['nodes'] if n['id']==target),'New Company')
+
+    def test_duplicate_scan_bounds_large_shared_switchboard(self):
+        parsed=s.parse_csv(('Name,Phone\n'+'\n'.join(f'Person {i},2125550100' for i in range(1000))).encode())
+        list_id=self.create(parsed=parsed)
+        found=w.duplicates(REP,list_id)['duplicates']
+        self.assertEqual(len(found),1000)
+        self.assertTrue(all(d['list_count']==999 and len(d['list_matches'])==8 for d in found.values()))
+
+    def test_concurrent_bulk_edit_and_append_positions(self):
+        data=self.batch_data(changes={'status':'interested'})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(lambda _:w.batch_edit(REP,self.list_id,data),range(2)))
+        self.assertEqual(self.count('prospect_changes'),1)
+        self.assertEqual(sum(bool(r['replayed']) for r in results),1)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda i:imports.append(REP,self.list_id,cells={'c0':f'Person {i}'},request_key=str(uuid.uuid4()),version=1),range(2)))
+        rows=s.list_rows(REP,self.list_id)['rows']
+        self.assertEqual([r['position'] for r in rows],[1,2,3,4])
 
 
 if __name__=='__main__': unittest.main()

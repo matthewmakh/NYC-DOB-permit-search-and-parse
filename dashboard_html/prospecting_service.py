@@ -4,6 +4,7 @@ Every lookup is scoped to the assignee (team admins can see their team's lists).
 Original columns use stable positional IDs so duplicate/blank headers lose no data.
 """
 import csv
+import copy
 import hashlib
 import io
 import json
@@ -102,6 +103,47 @@ SCHEMA = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (list_id, user_id)
     )""",
+    """ALTER TABLE prospect_list_views ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'""",
+    """ALTER TABLE prospect_rows ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP""",
+    """CREATE TABLE IF NOT EXISTS prospect_changes (
+        id BIGSERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        request_key UUID, request_hash TEXT, label TEXT NOT NULL,
+        before_rows JSONB NOT NULL, after_rows JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), undone_at TIMESTAMPTZ,
+        UNIQUE(user_id, request_key)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_prospect_changes_latest ON prospect_changes(list_id,user_id,id DESC)""",
+    """CREATE TABLE IF NOT EXISTS prospect_imports (
+        id BIGSERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, request_key UUID NOT NULL,
+        request_hash TEXT NOT NULL, filename TEXT NOT NULL, row_count INTEGER NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id,request_key)
+    )""",
+    """ALTER TABLE prospect_rows ADD COLUMN IF NOT EXISTS source_filename TEXT""",
+    """CREATE TABLE IF NOT EXISTS prospect_entities (
+        id SERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('person','company','building')), name TEXT NOT NULL,
+        address TEXT NOT NULL DEFAULT '', website TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+        row_id INTEGER UNIQUE REFERENCES prospect_rows(id) ON DELETE CASCADE,
+        crm_contact_id INTEGER REFERENCES crm_contacts(id) ON DELETE SET NULL,
+        crm_building_id INTEGER REFERENCES crm_buildings(id) ON DELETE SET NULL,
+        version INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_prospect_entities_list ON prospect_entities(list_id,kind)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_prospect_entity_name ON prospect_entities(list_id,kind,LOWER(TRIM(name))) WHERE row_id IS NULL""",
+    """CREATE TABLE IF NOT EXISTS prospect_links (
+        id SERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
+        source_id INTEGER NOT NULL REFERENCES prospect_entities(id) ON DELETE CASCADE,
+        target_id INTEGER NOT NULL REFERENCES prospect_entities(id) ON DELETE CASCADE,
+        relation TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+        added_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CHECK(source_id<>target_id),
+        UNIQUE(source_id,target_id,relation)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_prospect_links_list ON prospect_links(list_id)""",
+    """ALTER TABLE prospect_links ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'manual'""",
+    """ALTER TABLE prospect_links ADD COLUMN IF NOT EXISTS source_value TEXT NOT NULL DEFAULT ''""",
 ]
 
 
@@ -288,18 +330,21 @@ def list_lists(ctx):
         cur.execute(f"""SELECT l.id,l.name,l.filename,l.created_at,l.added_by_id,l.assigned_to_id,l.version,
             {LIST_PEOPLE_SQL},COUNT(r.id) AS row_count,
             COUNT(r.id) FILTER (WHERE r.promoted_at IS NOT NULL) AS promoted_count,
-            COUNT(r.id) FILTER (WHERE r.next_follow_up<=%(today)s AND r.promoted_at IS NULL
+            COUNT(r.id) FILTER (WHERE r.next_follow_up<=%(today)s AND r.promoted_at IS NULL AND r.archived_at IS NULL
                 AND r.status NOT IN ('do_not_contact','not_interested')) AS due_count
             FROM prospect_lists l LEFT JOIN prospect_rows r ON r.list_id=l.id
             WHERE {scope(ctx)} GROUP BY l.id ORDER BY l.created_at DESC,l.id DESC""", {**ctx, 'today': crm.ny_today()})
         return [dict(r) for r in cur.fetchall()]
 
 
-def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page=1):
+def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page=1, archived='active'):
+    import prospecting_workflows as workflows
     with transaction() as cur:
         listing = get_list(ctx, list_id, cur)
         layout = get_layout(ctx, listing, cur)
         where = ['r.list_id=%(id)s']
+        if archived != 'all':
+            where.append('r.archived_at IS NOT NULL' if archived == 'archived' else 'r.archived_at IS NULL')
         params = {'id': list_id, 'today': crm.ny_today()}
         if q:
             where.append("(r.cells::text ILIKE %(q)s ESCAPE '\\' OR r.notes ILIKE %(q)s ESCAPE '\\')")
@@ -324,12 +369,14 @@ def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page
         cur.execute(f'SELECT r.* FROM prospect_rows r WHERE {clause} ORDER BY {orders.get(sort, orders["position"])},r.id LIMIT 50 OFFSET %(offset)s', params)
         rows = [dict(r) for r in cur.fetchall()]
         cur.execute("""SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE promoted_at IS NOT NULL) AS promoted,
-            COUNT(*) FILTER (WHERE touch_count>0) AS touched,
-            COUNT(*) FILTER (WHERE next_follow_up<=%s AND promoted_at IS NULL
+            COUNT(*) FILTER (WHERE touch_count>0) AS touched, COUNT(*) FILTER (WHERE archived_at IS NOT NULL) AS archived,
+            COUNT(*) FILTER (WHERE next_follow_up<=%s AND promoted_at IS NULL AND archived_at IS NULL
                 AND status NOT IN ('do_not_contact','not_interested')) AS due
             FROM prospect_rows WHERE list_id=%s""", (crm.ny_today(), list_id))
+        summary = dict(cur.fetchone())
         return {'listing': listing, 'rows': rows, 'total': total, 'page': page,
-                'pages': max(1, (total + 49) // 50), 'summary': dict(cur.fetchone()), 'layout': layout}
+                'pages': max(1, (total + 49) // 50), 'summary': summary, 'layout': layout,
+                'last_change': workflows.latest_change(ctx, list_id, cur)}
 
 
 def default_layout(listing):
@@ -345,16 +392,19 @@ def default_layout(listing):
 def get_layout(ctx, listing, cur):
     """The caller has already locked and authorized the list. Views are per user."""
     fallback = default_layout(listing)
-    cur.execute('SELECT column_order,visible_columns FROM prospect_list_views WHERE list_id=%s AND user_id=%s',
+    cur.execute('SELECT column_order,visible_columns,settings FROM prospect_list_views WHERE list_id=%s AND user_id=%s',
                 (listing['id'], ctx['user_id']))
     saved = cur.fetchone()
     if not saved:
-        return {**fallback, 'saved': False}
+        return {**fallback, 'saved': False, 'widths': {}, 'pinned': 'lead'}
     # Append any new columns; stale IDs cannot displace a live column.
     allowed = set(fallback['order'])
     order = list(dict.fromkeys(cid for cid in saved['column_order'] if cid in allowed))
     order.extend(cid for cid in fallback['order'] if cid not in order)
-    return {'order': order, 'visible': [cid for cid in saved['visible_columns'] if cid in {c['id'] for c in listing['columns']}], 'saved': True}
+    settings = saved['settings']
+    return {'order': order, 'visible': [cid for cid in saved['visible_columns'] if cid in {c['id'] for c in listing['columns']}],
+            'saved': True, 'widths': {cid: width for cid, width in settings.get('widths', {}).items() if cid in allowed},
+            'pinned': settings.get('pinned', 'lead') if settings.get('pinned', 'lead') in allowed else None}
 
 
 def save_layout(ctx, list_id, data):
@@ -370,11 +420,18 @@ def save_layout(ctx, list_id, data):
                 raise ValueError('A column can only appear once.')
         if set(order) != allowed or not set(visible).issubset(source_ids):
             raise ValueError('The layout must contain the columns from this list.')
-        cur.execute("""INSERT INTO prospect_list_views(list_id,user_id,column_order,visible_columns)
-            VALUES (%s,%s,%s,%s) ON CONFLICT (list_id,user_id) DO UPDATE
-            SET column_order=EXCLUDED.column_order,visible_columns=EXCLUDED.visible_columns,updated_at=NOW()""",
-            (list_id, ctx['user_id'], Json(order), Json(visible)))
-        return {'order': order, 'visible': visible, 'saved': True}
+        previous = get_layout(ctx, listing, cur)
+        widths, pinned = data.get('widths', previous['widths']), data.get('pinned', previous['pinned'])
+        if not isinstance(widths, dict) or set(widths) - allowed or any(type(w) is not int or not 100 <= w <= 600 for w in widths.values()):
+            raise ValueError('Column widths must be between 100 and 600 pixels.')
+        if pinned is not None and (not isinstance(pinned, str) or pinned not in allowed):
+            raise ValueError('Choose a column to pin, or None.')
+        cur.execute("""INSERT INTO prospect_list_views(list_id,user_id,column_order,visible_columns,settings)
+            VALUES (%s,%s,%s,%s,%s) ON CONFLICT (list_id,user_id) DO UPDATE
+            SET column_order=EXCLUDED.column_order,visible_columns=EXCLUDED.visible_columns,
+                settings=EXCLUDED.settings,updated_at=NOW()""",
+            (list_id, ctx['user_id'], Json(order), Json(visible), Json({'widths': widths, 'pinned': pinned})))
+        return {'order': order, 'visible': visible, 'saved': True, 'widths': widths, 'pinned': pinned}
 
 
 def get_row(ctx, row_id, cur, *, lock=False):
@@ -394,6 +451,8 @@ def check_edit(row, version):
         raise Conflict('This lead has been added to CRM. Continue tracking it there.')
     if version != row['version']:
         raise Conflict('This lead changed in another window. Reload before saving.')
+    if row.get('archived_at'):
+        raise Conflict('Restore this archived lead before editing it.')
 
 
 def parse_date(value):
@@ -409,6 +468,7 @@ def update_row(ctx, row_id, data):
     with transaction() as cur:
         row = get_row(ctx, row_id, cur, lock=True)
         check_edit(row, data.get('version'))
+        before = copy.deepcopy(row)
         listing = get_list(ctx, row['list_id'], cur)
         cells = data.get('cells', {})
         if not isinstance(cells, dict) or set(cells) - {c['id'] for c in listing['columns']}:
@@ -424,7 +484,10 @@ def update_row(ctx, row_id, data):
             follow_up = None
         cur.execute("""UPDATE prospect_rows SET cells=%s,status=%s,notes=%s,next_follow_up=%s,
             version=version+1,updated_at=NOW() WHERE id=%s RETURNING *""", (Json(row['cells']), status, notes, follow_up, row_id))
-        return dict(cur.fetchone())
+        updated = dict(cur.fetchone())
+        import prospecting_workflows as workflows
+        workflows.record_change(cur, ctx, row['list_id'], 'Edit lead', [before], [updated])
+        return updated
 
 
 def row_detail(ctx, row_id):
@@ -438,7 +501,11 @@ def row_detail(ctx, row_id):
                 row['promoted_contact_id'] = None
                 row['crm_contact_restricted'] = True
         cur.execute('SELECT * FROM prospect_touches WHERE row_id=%s ORDER BY occurred_at DESC,id DESC', (row_id,))
-        return {'row': row, 'listing': listing, 'fields': mapped(row, listing), 'touches': [dict(t) for t in cur.fetchall()]}
+        touches = [dict(t) for t in cur.fetchall()]
+        import prospecting_workflows as workflows
+        duplicates = workflows.find_duplicates(ctx, listing, cur, target_ids={row_id})
+        return {'row': row, 'listing': listing, 'fields': mapped(row, listing), 'touches': touches,
+                'duplicates': duplicates.get(str(row_id))}
 
 
 def add_touch(ctx, row_id, data):
@@ -517,14 +584,28 @@ def promote(ctx, row_id, data):
                 phones.append((raw, digits, crm.split_phone_extension(raw)[1]))
         # Serialize promotions for the team, including promotions from other lists.
         cur.execute('SELECT pg_advisory_xact_lock(875213,%s)', (ctx['team_id'],))
+        cur.execute('SELECT crm_contact_id FROM prospect_entities WHERE row_id=%s', (row_id,))
+        profile = cur.fetchone()
+        linked_id = profile['crm_contact_id'] if profile else None
         cur.execute("""SELECT DISTINCT c.* FROM crm_contacts c LEFT JOIN crm_phones p ON p.contact_id=c.id
             WHERE c.team_id=%s AND LOWER(TRIM(c.name))=LOWER(%s)
             AND ((%s<>'' AND LOWER(c.email)=LOWER(%s)) OR p.digits=ANY(%s)) ORDER BY c.id""",
             (ctx['team_id'], fields['name'], fields['email'], fields['email'], [p[1] for p in phones]))
         candidates = cur.fetchall()
+        if linked_id:
+            cur.execute(f'SELECT c.* FROM crm_contacts c WHERE c.id=%(id)s AND {crm.record_scope_sql(ctx, "c")} FOR UPDATE', {**ctx, 'id': linked_id})
+            linked = cur.fetchone()
+            if not linked:
+                raise Conflict('The linked CRM contact is no longer accessible. Ask your team admin to review it.')
+            candidates = [linked]
         if len(candidates) > 1:
             raise Conflict('Several CRM contacts match this lead. Resolve the duplicates in CRM before adding it.')
         existing = candidates[0] if candidates else None
+        if existing:
+            cur.execute('SELECT * FROM crm_contacts WHERE id=%s FOR UPDATE', (existing['id'],))
+            existing = cur.fetchone()
+            if not existing:
+                raise Conflict('The matching CRM contact changed. Reload before adding this lead.')
         if existing and not crm.row_visible(ctx, existing):
             raise Conflict('A matching contact is assigned to another rep. Ask your team admin to review it.')
         if existing and existing['do_not_contact']:
@@ -545,9 +626,15 @@ def promote(ctx, row_id, data):
                 VALUES (%s,%s,%s,%s,%s,'import',%s,%s) ON CONFLICT (contact_id,digits) DO NOTHING""",
                 (contact_id, crm.format_phone(digits), digits, extension, i == 0 and not has_primary, source, ctx['user_id']))
         # Always preserve the complete research, including unmapped fields and sources.
-        research = [f"Imported from prospecting list: {listing['name']}", f"File: {listing['filename']}, row {row['position']}",
+        research = [f"Imported from prospecting list: {listing['name']}", f"File: {row.get('source_filename') or listing['filename']}, row {row['position']}",
                     f"Prospecting status: {STATUSES[row['status']]}"]
         research.extend(f"{c['label']}: {row['cells'].get(c['id'], '')}" for c in listing['columns'])
+        cur.execute("""SELECT a.name AS source,b.name AS target,l.relation,l.note FROM prospect_links l
+            JOIN prospect_entities a ON a.id=l.source_id JOIN prospect_entities b ON b.id=l.target_id
+            WHERE l.list_id=%s AND l.origin<>'dismissed' AND (a.row_id=%s OR b.row_id=%s) ORDER BY l.id""", (listing['id'], row_id, row_id))
+        for link in cur.fetchall():
+            research.append(f"Relationship: {link['source']} — {link['relation'].replace('_', ' ')} — {link['target']}" +
+                            (f" ({link['note']})" if link['note'] else ''))
         if row['notes']:
             research.append('Working notes: ' + row['notes'])
         cur.execute("""INSERT INTO crm_activity(type,note,contact_id,user_id,team_id,meta)
@@ -578,9 +665,9 @@ def export_rows(ctx, list_id):
     def safe(value):
         text = str(value) if value is not None else ''
         return "'" + text if text.lstrip().startswith(('=', '+', '-', '@', '\t', '\r', '\n')) else text
-    writer.writerow([safe(c['label']) for c in listing['columns']] + ['Contact status', 'Last touch (UTC)', 'Touch count', 'Next follow-up', 'Working notes', 'CRM contact ID'])
+    writer.writerow([safe(c['label']) for c in listing['columns']] + ['Contact status', 'Last touch (UTC)', 'Touch count', 'Next follow-up', 'Working notes', 'CRM contact ID', 'Archived', 'Source file'])
     for row in rows:
         writer.writerow([safe(row['cells'].get(c['id'], '')) for c in listing['columns']] +
                         [STATUSES[row['status']], str(row['last_touch_at'] or ''), row['touch_count'],
-                         str(row['next_follow_up'] or ''), safe(row['notes']), row['promoted_contact_id'] or ''])
+                         str(row['next_follow_up'] or ''), safe(row['notes']), row['promoted_contact_id'] or '', 'Yes' if row['archived_at'] else 'No', safe(row.get('source_filename') or listing['filename'])])
     return '\ufeff' + output.getvalue()

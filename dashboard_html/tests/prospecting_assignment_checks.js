@@ -28,7 +28,7 @@ async page => {
     await page.locator('#prospect-lead-dialog [data-close]').click();
     const forbidden=await page.evaluate(async id=>(await fetch(`/crm/prospecting/api/lists/${id}/assignment`,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':window.PROSPECT_CONFIG.csrf},body:JSON.stringify({assigned_to_id:3,version:1})})).status,id);
     assert(forbidden===403,'Member cannot forge assignment API');
-    await page.getByRole('button',{name:'Import CSV',exact:true}).click();
+    await page.getByRole('button',{name:'New list',exact:true}).click();
     assert(await page.locator('#prospect-import-owner').count()===0,'Member has no import assignee selector');
     await page.locator('#prospect-import-dialog [data-close]').click();
     await asUser(3);await page.goto(base+'/crm/prospecting');

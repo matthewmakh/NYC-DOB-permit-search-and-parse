@@ -36,6 +36,49 @@ each list and restore across browsers. Each user's layout is independent, even
 when an admin views the same sheet. A failed save stays visible with a retry
 button; changing layout never modifies lead data or the shared list version.
 
+Column edges resize with pointer/touch or arrow keys. The Columns menu can add
+custom fields, rename imported/custom headers, pin one column on wide screens,
+set widths, or reset the personal layout. Header renames keep field mappings and
+original header labels. Custom fields and names belong to the sheet; widths,
+pinning, visibility and order belong to each user's view. Pasted TSV ranges are
+reviewed before replacing displayed editable cells (up to 1 MB). Tracking fields
+are excluded from pasted ranges; values are never evaluated as formulas.
+
+Select rows across pages (up to 500) to update status/follow-up dates, archive or
+restore, or open a sequential CRM review queue. Filters clear selection. Bulk
+edits are atomic, version checked and retry safe; one stale or inaccessible lead
+rolls back the batch. Promoted rows cannot be bulk edited. Archive preserves
+research and history and removes the lead from current/due views. One-level undo
+persists per user/list for cell, row, bulk and paste edits, and refuses to overwrite
+newer work or promoted records. Touch events and CRM promotion are not undoable
+through this control.
+
+**Add person** inserts a lead using the sheet's current columns. **Add CSV to this
+list** previews incoming headers with existing-column/new-column/skip choices.
+Imports append rather than overwrite, retain the source filename per row and
+preserve original cells, notes and touches. Total sheet capacity remains 10,000
+rows and 100 columns. Concurrent additions allocate unique positions and import
+request keys prevent retry duplicates.
+
+**Check duplicates** compares normalized valid emails/phones and identical source
+rows within the sheet, plus CRM contacts the viewer can access. Archived rows are
+included as possible matches. Results show reasons, bounded samples, and CRM
+Do not contact/last-contacted details. The check never merges records or treats a
+shared switchboard as a verified identity. Checks invalidate after edits; opening
+a lead also checks current matches.
+
+People, Companies and Buildings are separate views of the same private sheet.
+Company values generate labeled, unverified associations, not management or
+ownership assertions. Users can add company/building profiles with addresses,
+websites and notes, and explicit works-at, manages, owns, contact-for, knows,
+part-of, located-at or associated-with links. Company profiles group related
+people and buildings; buildings also show people at managing companies. Derived
+associations follow company-field edits without recreating deliberately unlinked
+relationships. Links to existing accessible CRM contacts/buildings are references
+only; they do not create CRM records. Reassignment rechecks and redacts inaccessible
+CRM references. All profiles and links are list-scoped, including admin views;
+cross-list/global profile merging is intentionally not automatic.
+
 Reps see only sheets currently assigned to them; team admins can review their team's sheets.
 Uploads default to the uploader. Members cannot choose another owner or reassign
 sheets. Admins can choose an active teammate during import, filter sheets by
@@ -54,15 +97,19 @@ contact, carries research, working notes, outreach timestamps, phone numbers, an
 the next follow-up, and freezes the prospect row. New contacts and follow-ups belong to
 the sheet's current assignee, including when an admin promotes on their behalf.
 Reassigning a sheet does not transfer contacts already in CRM; their independent
-CRM permissions still apply. Existing contacts require an exact name plus matching email or
-normalized phone; a shared switchboard alone is not a match. Contacts assigned to
+CRM permissions still apply. Automatic matching requires an exact name plus matching email or
+normalized phone; a shared switchboard alone is not a match. A CRM contact explicitly
+linked from the lead's profile takes precedence after fresh permission and Do not
+contact checks. Direct relationships are copied into the research note. Contacts assigned to
 another rep or marked Do not contact block promotion. Repeated/concurrent
 promotion requests cannot create duplicate contacts or activities. CRM work then
 continues on the contact; the prospect list remains a historical record.
 
-Implementation: `prospecting_service.py`, `prospecting_routes.py`,
-`templates/crm/prospecting.html`, and `static/{css,js}/prospecting.*`. The additive
-`prospect_lists`, `prospect_rows`, `prospect_touches`, and `prospect_list_views` tables initialize under
+Implementation: `prospecting_service.py`, `prospecting_workflows.py`,
+`prospecting_imports.py`, `prospecting_network.py`, `prospecting_routes.py`,
+`templates/crm/prospecting.html`, and `static/{css,js}/prospecting*`. The additive
+`prospect_lists`, `prospect_rows`, `prospect_touches`, `prospect_list_views`,
+`prospect_changes`, `prospect_imports`, `prospect_entities`, and `prospect_links` tables initialize under
 the existing startup schema lock in `init_crm_tables()`. The ownership migration
 assigns existing sheets to their uploaders once; subsequent restarts preserve
 reassignments. An insert-only default also covers uploads from older workers
@@ -79,6 +126,7 @@ playwright-cli -s=prospecting open http://127.0.0.1:5101/crm/prospecting
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_browser_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_assignment_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_columns_checks.js
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_workflows_checks.js
 ```
 
 ## Files

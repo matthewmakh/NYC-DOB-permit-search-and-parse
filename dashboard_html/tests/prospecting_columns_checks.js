@@ -3,7 +3,7 @@ async page => {
     const base='http://127.0.0.1:5101';
     if(!page.url().startsWith(base+'/')) throw new Error('Use the disposable local preview.');
     const assert=(ok,message)=>{if(!ok)throw new Error(message);};
-    const order=async p=>p.locator('#prospect-head th').evaluateAll(nodes=>nodes.map(n=>n.dataset.column));
+    const order=async p=>p.locator('#prospect-head th[data-column]').evaluateAll(nodes=>nodes.map(n=>n.dataset.column));
     const saved=async()=>page.waitForFunction(()=>document.getElementById('prospect-layout-status').textContent==='Layout saved');
     await page.request.post(base+'/__test/user/1');
     await page.setViewportSize({width:1440,height:1000});
@@ -25,11 +25,11 @@ async page => {
     await page.mouse.up();await saved();
     assert((await order(page))[0]==='c2','Pointer drag moves Phone ahead of Lead');
     const aligned=await page.locator('.prospect-table').evaluate(table=>{
-        const ids=[...table.querySelectorAll('thead th')].map(n=>n.dataset.column);
-        return [...table.querySelectorAll('tbody tr')].every(row=>JSON.stringify([...row.cells].map(n=>n.dataset.column))===JSON.stringify(ids));
+        const ids=[...table.querySelectorAll('thead th[data-column]')].map(n=>n.dataset.column);
+        return [...table.querySelectorAll('tbody tr')].every(row=>JSON.stringify([...row.querySelectorAll('td[data-column]')].map(n=>n.dataset.column))===JSON.stringify(ids));
     });
     assert(aligned,'Header and row values remain aligned');
-    assert(await page.locator('#prospect-rows tr').first().locator('td').first().innerText()==='212-555-0100','Correct phone moves with header');
+    assert(await page.locator('#prospect-rows tr').first().locator('td[data-column]').first().innerText()==='212-555-0100','Correct phone moves with header');
     await page.locator('[data-column-handle=status]').focus();await page.keyboard.press('Alt+ArrowRight');await saved();
     const reordered=await order(page);
     assert(reordered.indexOf('status')>reordered.indexOf('c3'),'Tracking columns support keyboard moves');
