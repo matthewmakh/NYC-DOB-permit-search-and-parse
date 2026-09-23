@@ -9,6 +9,7 @@
     const apiRoot = '/crm/prospecting/api';
     let listing, rows = [], page = 1, pages = 1, visible = new Set(), preview, importKey, uploadFile;
     let rowDetail, touchKey, loadingSequence = 0;
+    let columnOrder = [], layoutGeneration = 0, layoutSavedGeneration = 0, layoutSaveQueue = Promise.resolve(), dragState;
     const saves = new Map();
     const dateTime = value => value ? new Intl.DateTimeFormat('en-US', {timeZone:'America/New_York', month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(value)) : 'Never';
     const nyInputTime = () => {
@@ -59,7 +60,7 @@
         }
     }));
     window.addEventListener('beforeunload', event => {
-        if (saves.size || document.querySelector('#prospect-rows textarea') || ($('prospect-lead-dialog').open && (workingChanged() || $('prospect-touch-form')?.elements.note.value))) {
+        if (layoutGeneration !== layoutSavedGeneration || saves.size || document.querySelector('#prospect-rows textarea') || ($('prospect-lead-dialog').open && (workingChanged() || $('prospect-touch-form')?.elements.note.value))) {
             event.preventDefault(); event.returnValue = '';
         }
     });
@@ -122,42 +123,151 @@
                 }
             }
             $('prospect-summary').innerHTML = [['total','leads'],['touched','contacted or attempted'],['due','follow-ups due'],['promoted','added to CRM']].map(([key, text]) => `<div><strong>${data.summary[key]}</strong><span>${text}</span></div>`).join('');
-            if (first) initColumns();
+            if (first) initColumns(data.layout);
             renderTable();
             $('prospect-page-label').textContent = `${data.total.toLocaleString()} matching leads · Page ${page} of ${pages}`;
             $('prospect-prev').disabled = page <= 1; $('prospect-next').disabled = page >= pages;
         } finally { if (sequence === loadingSequence) $('prospect-workspace').removeAttribute('aria-busy'); }
     }
-    function initColumns() {
-        visible = new Set(['phone','email','title','address'].map(f => listing.mapping[f]).filter(Boolean));
-        if (!visible.size) listing.columns.slice(0,6).forEach(c => visible.add(c.id));
-        try { const saved = JSON.parse(localStorage.getItem(`prospect-columns-${listing.id}`)); if (Array.isArray(saved)) visible = new Set(saved); } catch (_) {}
-        $('prospect-columns').innerHTML = listing.columns.map(c => `<label><input type="checkbox" value="${c.id}" ${visible.has(c.id) ? 'checked' : ''}>${esc(c.label)}</label>`).join('');
+    function initColumns(layout) {
+        columnOrder = layout.order.slice(); visible = new Set(layout.visible);
+        // One-time upgrade of the earlier browser-only visibility preference.
+        if (!layout.saved) {
+            try {
+                const legacy = JSON.parse(localStorage.getItem(`prospect-columns-${listing.id}`));
+                if (Array.isArray(legacy)) {
+                    visible = new Set(legacy.filter(cid => listing.columns.some(c => c.id === cid)));
+                    persistLayout().then(() => localStorage.removeItem(`prospect-columns-${listing.id}`)).catch(() => {});
+                }
+            } catch (_) {}
+        }
+        renderColumnControls();
         $('prospect-columns').onchange = async event => {
             try { await Promise.all([...saves.values()]); }
             catch (error) { event.target.checked = visible.has(event.target.value); notice(error.message); return; }
             event.target.checked ? visible.add(event.target.value) : visible.delete(event.target.value);
-            try { localStorage.setItem(`prospect-columns-${listing.id}`, JSON.stringify([...visible])); } catch (_) {}
-            renderTable();
+            renderTable(); persistLayout().catch(() => {});
+        };
+        $('prospect-columns').onclick = event => {
+            const button = event.target.closest('[data-move-column]');
+            if (button) moveAdjacent(button.dataset.moveColumn, Number(button.dataset.direction), 'menu').catch(e => notice(e.message));
         };
     }
+    function columnLabel(cid) {
+        return ({lead:'Lead',status:'Contact status',last_touch:'Last touch · New York',touch_count:'Touches',next_follow_up:'Next follow-up'})[cid] || listing.columns.find(c => c.id === cid)?.label || cid;
+    }
+    function displayedColumns() { return columnOrder.filter(cid => !cid.startsWith('c') || visible.has(cid)); }
+    function renderColumnControls() {
+        const panel = $('prospect-columns'), scrollTop = panel.scrollTop;
+        panel.innerHTML = columnOrder.map((cid,i) => `<div class="prospect-column-option">${cid.startsWith('c') ? `<label><input type="checkbox" value="${cid}" ${visible.has(cid) ? 'checked' : ''}>${esc(columnLabel(cid))}</label>` : `<span>${esc(columnLabel(cid))}</span>`}<button type="button" data-move-column="${cid}" data-direction="-1" aria-label="Move ${esc(columnLabel(cid))} left" ${i===0?'disabled':''}>←</button><button type="button" data-move-column="${cid}" data-direction="1" aria-label="Move ${esc(columnLabel(cid))} right" ${i===columnOrder.length-1?'disabled':''}>→</button></div>`).join('');
+        panel.scrollTop = scrollTop;
+    }
+    function persistLayout() {
+        const generation = ++layoutGeneration, snapshot = {order:columnOrder.slice(),visible:[...visible]};
+        $('prospect-layout-status').textContent = 'Saving layout…'; $('prospect-layout-retry').hidden = true;
+        // Serialize saves so an older request cannot overwrite a later arrangement.
+        layoutSaveQueue = layoutSaveQueue.catch(() => {}).then(async () => {
+            await api(`/lists/${listing.id}/layout`,{method:'PUT',body:snapshot});
+            layoutSavedGeneration = generation;
+            if (generation === layoutGeneration) $('prospect-layout-status').textContent = 'Layout saved';
+        }).catch(error => {
+            if (generation === layoutGeneration) {
+                $('prospect-layout-status').textContent = `Layout not saved. ${error.message}`;
+                $('prospect-layout-retry').hidden = false;
+            }
+            throw error;
+        });
+        return layoutSaveQueue;
+    }
+    $('prospect-layout-retry').onclick = () => persistLayout().catch(() => {});
+    async function moveColumn(cid, target, after, focus='header') {
+        if (cid === target) return;
+        await Promise.all([...saves.values()]);
+        if (document.querySelector('#prospect-rows textarea')) throw new Error('Finish saving the edited cell before moving columns.');
+        const next = columnOrder.filter(c => c !== cid), index = next.indexOf(target);
+        if (index < 0 || !columnOrder.includes(cid)) return;
+        next.splice(index + Number(after),0,cid);
+        if (next.every((c,i) => c === columnOrder[i])) return;
+        columnOrder = next; renderTable(); renderColumnControls();
+        const selector = focus === 'menu' ? `[data-move-column="${cid}"]:not(:disabled)` : `[data-column-handle="${cid}"]`;
+        document.querySelector(selector)?.focus({preventScroll:true});
+        persistLayout().catch(() => {});
+    }
+    async function moveAdjacent(cid, direction, focus='header') {
+        const cols = focus === 'menu' ? columnOrder : displayedColumns(), index = cols.indexOf(cid);
+        const target = cols[index + direction];
+        if (target) await moveColumn(cid,target,direction>0,focus);
+    }
     function renderTable() {
-        const columns = listing.columns.filter(c => visible.has(c.id));
-        const contactIds = [listing.mapping.phone, listing.mapping.email];
-        const contactColumns = contactIds.map(id => columns.find(c => c.id === id)).filter((c,i,all) => c && all.indexOf(c) === i);
-        const researchColumns = columns.filter(c => !contactIds.includes(c.id));
-        const headers = cols => cols.map(c => `<th scope="col">${esc(c.label)}</th>`).join('');
-        $('prospect-head').innerHTML = '<tr><th scope="col">Lead</th><th scope="col">Contact status</th>' + headers(contactColumns) + '<th scope="col">Last touch · New York</th><th scope="col" class="prospect-count-col">Touches</th><th scope="col">Next follow-up</th>' + headers(researchColumns) + '</tr>';
+        const columns = displayedColumns();
+        const grip = '<svg viewBox="0 0 12 18" width="12" height="18" aria-hidden="true"><path d="M3 3h0M9 3h0M3 9h0M9 9h0M3 15h0M9 15h0" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>';
+        $('prospect-head').innerHTML = '<tr>' + columns.map(cid => `<th scope="col" data-column="${cid}"><button type="button" class="prospect-column-handle" data-column-handle="${cid}" aria-label="Reorder ${esc(columnLabel(cid))}" title="Drag to move ${esc(columnLabel(cid))}. Keyboard: Alt + Left or Right arrow.">${grip}<span>${esc(columnLabel(cid))}</span></button></th>`).join('') + '</tr>';
         $('prospect-rows').innerHTML = rows.length ? rows.map(row => {
             const locked = !!row.promoted_at;
-            const cells = cols => cols.map(c => `<td><button type="button" class="prospect-cell" data-cell="${c.id}" data-id="${row.id}" title="${esc(row.cells[c.id])}" aria-label="Edit ${esc(c.label)} for ${esc(label(row))}" ${locked ? 'disabled' : ''}>${esc(row.cells[c.id]) || '—'}</button></td>`).join('');
-            return `<tr data-row="${row.id}"><td><button class="prospect-open" data-open="${row.id}">${esc(label(row))}<small>${locked ? 'Added to CRM' : esc(field(row,'company') || `Row ${row.position}`)}</small></button></td>
-                <td>${locked ? '<span>Added to CRM</span>' : `<select aria-label="Status for ${esc(label(row))}" data-status="${row.id}">${options(config.statuses,row.status)}</select>`}</td>
-                ${cells(contactColumns)}<td><span>${esc(dateTime(row.last_touch_at))}</span></td><td class="prospect-count-col"><span>${row.touch_count}</span></td>
-                <td>${locked ? `<span>${esc(row.next_follow_up || '—')}</span>` : `<input type="date" aria-label="Next follow-up for ${esc(label(row))}" data-follow-up="${row.id}" value="${esc(row.next_follow_up || '')}" ${['do_not_contact','not_interested'].includes(row.status) ? 'disabled' : ''}>`}</td>
-                ${cells(researchColumns)}</tr>`;
-        }).join('') : `<tr><td colspan="${5 + columns.length}"><span>No leads match these filters.</span></td></tr>`;
+            const system = {
+                lead:`<button class="prospect-open" data-open="${row.id}">${esc(label(row))}<small>${locked ? 'Added to CRM' : esc(field(row,'company') || `Row ${row.position}`)}</small></button>`,
+                status:locked ? '<span>Added to CRM</span>' : `<select aria-label="Status for ${esc(label(row))}" data-status="${row.id}">${options(config.statuses,row.status)}</select>`,
+                last_touch:`<span>${esc(dateTime(row.last_touch_at))}</span>`, touch_count:`<span>${row.touch_count}</span>`,
+                next_follow_up:locked ? `<span>${esc(row.next_follow_up || '—')}</span>` : `<input type="date" aria-label="Next follow-up for ${esc(label(row))}" data-follow-up="${row.id}" value="${esc(row.next_follow_up || '')}" ${['do_not_contact','not_interested'].includes(row.status) ? 'disabled' : ''}>`
+            };
+            return `<tr data-row="${row.id}">` + columns.map(cid => `<td data-column="${cid}">${system[cid] ?? `<button type="button" class="prospect-cell" data-cell="${cid}" data-id="${row.id}" title="${esc(row.cells[cid])}" aria-label="Edit ${esc(columnLabel(cid))} for ${esc(label(row))}" ${locked ? 'disabled' : ''}>${esc(row.cells[cid]) || '—'}</button>`}</td>`).join('') + '</tr>';
+        }).join('') : `<tr><td colspan="${columns.length}"><span>No leads match these filters.</span></td></tr>`;
     }
+    const header = $('prospect-head'), tableWrap = document.querySelector('.prospect-table-wrap');
+    function clearDropMarks() { header.querySelectorAll('.drop-before,.drop-after').forEach(el => el.classList.remove('drop-before','drop-after')); }
+    function dragTarget() {
+        const drag = dragState; if (!drag?.active) return;
+        clearDropMarks(); drag.target = null;
+        const cell = document.elementFromPoint(drag.x,drag.y)?.closest('#prospect-head th[data-column]');
+        if (!cell || cell.dataset.column === drag.id) return;
+        drag.target = cell.dataset.column;
+        const rect = cell.getBoundingClientRect(); drag.after = drag.x >= rect.left + rect.width/2;
+        cell.classList.add(drag.after ? 'drop-after' : 'drop-before');
+    }
+    function scrollDrag() {
+        const drag=dragState; if (!drag?.active) return;
+        const rect=tableWrap.getBoundingClientRect();
+        if (drag.x < rect.left+36) tableWrap.scrollLeft-=12;
+        else if (drag.x > rect.right-36) tableWrap.scrollLeft+=12;
+        dragTarget(); drag.frame=requestAnimationFrame(scrollDrag);
+    }
+    function endDrag(commit) {
+        const drag=dragState; if(!drag) return; dragState=null;
+        cancelAnimationFrame(drag.frame); drag.ghost?.remove(); clearDropMarks();
+        drag.handle.classList.remove('is-dragging'); document.body.classList.remove('prospect-column-dragging');
+        if (drag.handle.hasPointerCapture(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+        if(commit && drag.active && drag.target) moveColumn(drag.id,drag.target,drag.after).catch(e => notice(e.message));
+    }
+    header.addEventListener('pointerdown', event => {
+        const handle=event.target.closest('[data-column-handle]');
+        if(!handle || event.button!==0 || !event.isPrimary) return;
+        event.preventDefault(); handle.focus();
+        dragState={id:handle.dataset.columnHandle,handle,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY};
+        handle.setPointerCapture(event.pointerId);
+    });
+    header.addEventListener('pointermove', event => {
+        const drag=dragState; if(!drag || drag.pointerId!==event.pointerId) return;
+        drag.x=event.clientX; drag.y=event.clientY;
+        if(!drag.active && Math.hypot(drag.x-drag.startX,drag.y-drag.startY)>=6) {
+            drag.active=true; drag.handle.classList.add('is-dragging'); document.body.classList.add('prospect-column-dragging');
+            drag.ghost=document.createElement('div'); drag.ghost.className='prospect-column-ghost';
+            drag.ghost.textContent=columnLabel(drag.id); document.body.append(drag.ghost); scrollDrag();
+        }
+        if(drag.active) {
+            event.preventDefault(); drag.ghost.style.left=`${Math.min(drag.x+14,window.innerWidth-140)}px`; drag.ghost.style.top=`${drag.y+14}px`; dragTarget();
+        }
+    });
+    header.addEventListener('pointerup', () => endDrag(true));
+    header.addEventListener('pointercancel', () => endDrag(false));
+    header.addEventListener('lostpointercapture', () => endDrag(false));
+    header.addEventListener('keydown', event => {
+        if(event.key==='Escape' && dragState) {event.preventDefault(); event.stopPropagation(); endDrag(false);}
+        const handle=event.target.closest('[data-column-handle]');
+        if(handle && event.altKey && ['ArrowLeft','ArrowRight'].includes(event.key)) {
+            event.preventDefault(); event.stopPropagation();
+            moveAdjacent(handle.dataset.columnHandle,event.key==='ArrowRight'?1:-1).catch(e => notice(e.message));
+        }
+    });
     function saveRow(id, changes) {
         const previous = saves.get(id) || Promise.resolve();
         const pending = previous.catch(() => {}).then(async () => {

@@ -95,6 +95,13 @@ SCHEMA = [
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, UNIQUE(row_id, request_key)
     )""",
     """CREATE INDEX IF NOT EXISTS idx_prospect_touches_row ON prospect_touches(row_id, occurred_at DESC)""",
+    """CREATE TABLE IF NOT EXISTS prospect_list_views (
+        list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        column_order JSONB NOT NULL, visible_columns JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (list_id, user_id)
+    )""",
 ]
 
 
@@ -291,6 +298,7 @@ def list_lists(ctx):
 def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page=1):
     with transaction() as cur:
         listing = get_list(ctx, list_id, cur)
+        layout = get_layout(ctx, listing, cur)
         where = ['r.list_id=%(id)s']
         params = {'id': list_id, 'today': crm.ny_today()}
         if q:
@@ -321,7 +329,52 @@ def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page
                 AND status NOT IN ('do_not_contact','not_interested')) AS due
             FROM prospect_rows WHERE list_id=%s""", (crm.ny_today(), list_id))
         return {'listing': listing, 'rows': rows, 'total': total, 'page': page,
-                'pages': max(1, (total + 49) // 50), 'summary': dict(cur.fetchone())}
+                'pages': max(1, (total + 49) // 50), 'summary': dict(cur.fetchone()), 'layout': layout}
+
+
+def default_layout(listing):
+    columns = [c['id'] for c in listing['columns']]
+    contact = list(dict.fromkeys(listing['mapping'].get(f) for f in ('phone', 'email')))
+    contact = [cid for cid in contact if cid in columns]
+    visible = list(dict.fromkeys(listing['mapping'].get(f) for f in ('phone', 'email', 'title', 'address')))
+    visible = [cid for cid in visible if cid in columns] or columns[:6]
+    return {'order': ['lead', 'status'] + contact + ['last_touch', 'touch_count', 'next_follow_up'] +
+            [cid for cid in columns if cid not in contact], 'visible': visible}
+
+
+def get_layout(ctx, listing, cur):
+    """The caller has already locked and authorized the list. Views are per user."""
+    fallback = default_layout(listing)
+    cur.execute('SELECT column_order,visible_columns FROM prospect_list_views WHERE list_id=%s AND user_id=%s',
+                (listing['id'], ctx['user_id']))
+    saved = cur.fetchone()
+    if not saved:
+        return {**fallback, 'saved': False}
+    # Append any new columns; stale IDs cannot displace a live column.
+    allowed = set(fallback['order'])
+    order = list(dict.fromkeys(cid for cid in saved['column_order'] if cid in allowed))
+    order.extend(cid for cid in fallback['order'] if cid not in order)
+    return {'order': order, 'visible': [cid for cid in saved['visible_columns'] if cid in {c['id'] for c in listing['columns']}], 'saved': True}
+
+
+def save_layout(ctx, list_id, data):
+    with transaction() as cur:
+        listing = get_list(ctx, list_id, cur)
+        allowed = set(default_layout(listing)['order'])
+        source_ids = {c['id'] for c in listing['columns']}
+        order, visible = data.get('order'), data.get('visible')
+        for values in (order, visible):
+            if not isinstance(values, list) or len(values) > MAX_COLUMNS + 5 or any(not isinstance(v, str) for v in values):
+                raise ValueError('Invalid column layout.')
+            if len(values) != len(set(values)):
+                raise ValueError('A column can only appear once.')
+        if set(order) != allowed or not set(visible).issubset(source_ids):
+            raise ValueError('The layout must contain the columns from this list.')
+        cur.execute("""INSERT INTO prospect_list_views(list_id,user_id,column_order,visible_columns)
+            VALUES (%s,%s,%s,%s) ON CONFLICT (list_id,user_id) DO UPDATE
+            SET column_order=EXCLUDED.column_order,visible_columns=EXCLUDED.visible_columns,updated_at=NOW()""",
+            (list_id, ctx['user_id'], Json(order), Json(visible)))
+        return {'order': order, 'visible': visible, 'saved': True}
 
 
 def get_row(ctx, row_id, cur, *, lock=False):

@@ -141,6 +141,12 @@ def assignment(list_id):
         assigned_to_id=data['assigned_to_id'], version=data.get('version'))}
 
 
+@prospecting_bp.put('/api/lists/<int:list_id>/layout')
+@api
+def layout(list_id):
+    return {'layout': service.save_layout(_ctx(), list_id, _data())}
+
+
 @prospecting_bp.get('/api/rows/<int:row_id>')
 @api
 def detail(row_id):

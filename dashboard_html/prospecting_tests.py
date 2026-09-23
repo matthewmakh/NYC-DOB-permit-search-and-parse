@@ -126,6 +126,65 @@ class DatabaseTests(unittest.TestCase):
         crm.init_crm_tables()
         self.assertEqual(self.count('prospect_rows'),2)
 
+    def test_layout_persists_without_changing_leads(self):
+        before=s.list_rows(REP,self.list_id)
+        layout={'order':list(reversed(before['layout']['order'])),'visible':['c4','c0']}
+        s.save_layout(REP,self.list_id,layout)
+        after=s.list_rows(REP,self.list_id)
+        self.assertEqual(after['layout'],{**layout,'saved':True})
+        self.assertEqual(before['rows'],after['rows'])
+        self.assertEqual(before['listing']['version'],after['listing']['version'])
+        # All source columns may be hidden while tracking columns stay available.
+        layout['visible']=[]
+        s.save_layout(REP,self.list_id,layout)
+        self.assertEqual(s.list_rows(REP,self.list_id)['layout']['visible'],[])
+
+    def test_layout_is_private_per_user_and_per_list(self):
+        layout=s.list_rows(REP,self.list_id)['layout']
+        layout['order'].reverse()
+        s.save_layout(REP,self.list_id,layout)
+        self.assertFalse(s.list_rows(ADMIN,self.list_id)['layout']['saved'])
+        other=self.create()
+        self.assertFalse(s.list_rows(REP,other)['layout']['saved'])
+        for ctx in (OTHER_REP,OUTSIDER):
+            with self.assertRaises(LookupError):s.save_layout(ctx,self.list_id,layout)
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        self.assertFalse(s.list_rows(OTHER_REP,self.list_id)['layout']['saved'])
+        with self.assertRaises(LookupError):s.save_layout(REP,self.list_id,layout)
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=2,version=2)
+        self.assertEqual(s.list_rows(REP,self.list_id)['layout']['order'],layout['order'])
+
+    def test_invalid_layouts_rejected_without_overwriting_preferences(self):
+        layout=s.list_rows(REP,self.list_id)['layout']
+        invalid=[{}, {'order':layout['order'],'visible':['lead']},
+                 {'order':layout['order'][:-1],'visible':[]},
+                 {'order':layout['order']+['c0'],'visible':[]},
+                 {'order':layout['order']+['missing'],'visible':[]},
+                 {'order':[{}],'visible':[]}, {'order':layout['order'],'visible':'c0'},
+                 {'order':layout['order'],'visible':['c0','c0']}]
+        for value in invalid:
+            with self.subTest(value=value),self.assertRaises(ValueError):s.save_layout(REP,self.list_id,value)
+        self.assertFalse(s.list_rows(REP,self.list_id)['layout']['saved'])
+
+    def test_default_layout_handles_duplicate_mappings(self):
+        listing=s.list_rows(REP,self.list_id)['listing']
+        listing['mapping']['email']=listing['mapping']['phone']
+        layout=s.default_layout(listing)
+        self.assertEqual(len(layout['order']),len(set(layout['order'])))
+        self.assertEqual(len(layout['order']),len(listing['columns'])+5)
+
+    def test_layout_api_checks_csrf_and_owner(self):
+        app=Flask(__name__);app.secret_key='test';app.register_blueprint(routes.prospecting_bp)
+        client=app.test_client()
+        layout=s.list_rows(REP,self.list_id)['layout']
+        path=f'/crm/prospecting/api/lists/{self.list_id}/layout'
+        with client.session_transaction() as session:session['prospecting_csrf']='token'
+        with patch('auth_service.validate_session',return_value={'id':2,'is_sponsored':True,'sponsor_user_id':1}):
+            self.assertEqual(client.put(path,json=layout).status_code,403)
+            self.assertEqual(client.put(path,json=layout,headers={'X-CSRF-Token':'token'}).status_code,200)
+        with patch('auth_service.validate_session',return_value={'id':3,'is_sponsored':True,'sponsor_user_id':1}):
+            self.assertEqual(client.put(path,json=layout,headers={'X-CSRF-Token':'token'}).status_code,404)
+
     def test_assignment_migration_preserves_old_uploads_without_regranting_access(self):
         with s.transaction() as cur:cur.execute('ALTER TABLE prospect_lists DROP COLUMN assigned_to_id CASCADE')
         crm.init_crm_tables()

@@ -29,6 +29,13 @@ formula-injection protection. Imported source URLs open from the lead's research
 section. Last touch and touch count are derived from logged outreach, not status
 changes. Touch input and display use New York time; timestamps are stored in UTC.
 
+Drag any column header, including tracking columns, to change its position.
+Touch dragging, Alt + Left/Right on a focused header, and the Columns menu's
+arrow buttons are supported. Order and hidden columns save to the account for
+each list and restore across browsers. Each user's layout is independent, even
+when an admin views the same sheet. A failed save stays visible with a retry
+button; changing layout never modifies lead data or the shared list version.
+
 Reps see only sheets currently assigned to them; team admins can review their team's sheets.
 Uploads default to the uploader. Members cannot choose another owner or reassign
 sheets. Admins can choose an active teammate during import, filter sheets by
@@ -55,7 +62,7 @@ continues on the contact; the prospect list remains a historical record.
 
 Implementation: `prospecting_service.py`, `prospecting_routes.py`,
 `templates/crm/prospecting.html`, and `static/{css,js}/prospecting.*`. The additive
-`prospect_lists`, `prospect_rows`, and `prospect_touches` tables initialize under
+`prospect_lists`, `prospect_rows`, `prospect_touches`, and `prospect_list_views` tables initialize under
 the existing startup schema lock in `init_crm_tables()`. The ownership migration
 assigns existing sheets to their uploaders once; subsequent restarts preserve
 reassignments. An insert-only default also covers uploads from older workers
@@ -71,6 +78,7 @@ PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
 playwright-cli -s=prospecting open http://127.0.0.1:5101/crm/prospecting
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_browser_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_assignment_checks.js
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_columns_checks.js
 ```
 
 ## Files

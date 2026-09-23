@@ -38,7 +38,8 @@
             <button class="cbtn" type="submit">Apply</button>
             <details class="prospect-columns"><summary class="cbtn">Columns</summary><div id="prospect-columns"></div></details>
         </form>
-        <p class="prospect-hint">Click a cell to edit it. Open a lead to view research, log a touch, or add it to CRM.</p>
+        <p class="prospect-hint">Drag column handles to reorder. Use Alt + ← / → on a handle, or the arrows in Columns. Your layout saves automatically for this list.</p>
+        <p class="prospect-layout-feedback"><span id="prospect-layout-status" role="status" aria-live="polite"></span> <button type="button" class="cbtn cbtn-sm" id="prospect-layout-retry" hidden>Retry saving layout</button></p>
         <div class="prospect-table-wrap" tabindex="0" role="region" aria-label="Lead spreadsheet, scroll horizontally for more columns">
             <table class="prospect-table"><thead id="prospect-head"></thead><tbody id="prospect-rows"></tbody></table>
         </div>
