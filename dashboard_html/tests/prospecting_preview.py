@@ -21,6 +21,7 @@ import auth_service
 import crm_service as crm
 from crm_routes import crm_bp
 import prospecting_routes as routes
+import prospecting_research as research
 
 dsn=os.environ['PROSPECTING_TEST_DATABASE_URL']
 if urlparse(dsn).hostname not in ('127.0.0.1','localhost'):
@@ -40,6 +41,12 @@ def cleanup():
 atexit.register(cleanup)
 crm.get_db_connection=lambda:psycopg2.connect(dsn,options=f'-c search_path={schema}',cursor_factory=RealDictCursor)
 crm.init_crm_tables()
+# All research providers are synthetic in this preview, even for advanced runs.
+research._fetch_property=lambda source,bbl: {}
+research._fetch_permits=lambda dataset,bbl: []
+research._resolve=lambda address: {'property':None,'error':'Synthetic address has no match.'}
+research._fetch_sos=lambda company: ({'entity_name':company,'dos_id':'123456','status':'Active','quality':'exact',
+    'people':[{'name':'Test Agent','role':'Registered Agent'}]} if company=='Unknown Co' else {})
 def fixture_user(token):
     user_id=session.get('preview_user',1)
     return dict(id=user_id,is_admin=user_id==1,is_sponsored=user_id!=1,sponsor_user_id=1,email=f'preview{user_id}@example.test')

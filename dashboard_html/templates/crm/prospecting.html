@@ -18,6 +18,7 @@
     {% endif %}
     <div id="prospect-lists"></div>
     <div id="prospect-workspace" hidden>
+        <div class="prospect-research-bar"><div><strong>Enrich this list</strong><p id="prospect-enrichment-status" role="status">Check existing records, research unresolved leads, then approve what to keep.</p></div><button type="button" class="cbtn" id="prospect-enrich">Research &amp; review</button></div>
         <div class="prospect-sheet-tools prospect-view-toolbar">
             <div class="prospect-view-tabs" role="group" aria-label="List view"><button type="button" class="cbtn" data-network-view="people" aria-pressed="true">People</button><button type="button" class="cbtn" data-network-view="company" aria-pressed="false">Companies</button><button type="button" class="cbtn" data-network-view="building" aria-pressed="false">Buildings</button></div>
             <div class="prospect-column-tools"><button type="button" class="cbtn" id="prospect-add-person">Add person</button><button type="button" class="cbtn" id="prospect-append-csv">Add CSV to this list</button><button type="button" class="cbtn" id="prospect-new-profile">Add company / building</button></div>
@@ -51,6 +52,7 @@
         <div id="prospect-bulk-bar" class="prospect-bulk-bar" hidden aria-label="Selected lead actions">
             <strong id="prospect-selection-count" role="status"></strong>
             <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-edit">Update selected</button>
+            <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-enrich">Enrich selected</button>
             <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-review">Review for CRM</button>
             <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-archive">Archive</button>
             <button type="button" class="cbtn cbtn-sm" id="prospect-bulk-restore">Restore</button>
@@ -147,6 +149,8 @@
             {% else %}<p class="prospect-hint">This list will be assigned to you. Team admins can also view and reassign it.</p>{% endif %}
             <details open><summary>Match your columns</summary><p class="prospect-hint">Review the suggested matches. Unmatched fields are fine; all original columns remain available.</p><div id="prospect-mapping" class="prospect-form-grid"></div></details>
             <details><summary>Preview first five rows</summary><div class="prospect-preview-table" id="prospect-preview-table"></div></details>
+            <label class="prospect-check"><input type="checkbox" name="check_records">Check for matches in our system after import</label>
+            <p class="prospect-hint">Findings stay pending until you approve them. No new paid lookups.</p>
             <button class="cbtn cbtn-primary" type="submit">Create prospect list</button>
         </form>
     </div>
@@ -159,5 +163,19 @@
     <div id="prospect-lead-body"></div>
     <p class="prospect-error" id="prospect-lead-error" role="alert"></p>
 </dialog>
+<dialog class="prospect-dialog prospect-enrichment-dialog" id="prospect-enrichment-dialog" aria-labelledby="prospect-enrichment-title">
+    <div class="prospect-dialog-head"><div><p class="prospect-eyebrow">Research workspace</p><h2 id="prospect-enrichment-title">Enrich &amp; review</h2></div><button type="button" class="cbtn" data-close>Close</button></div>
+    <p>Start with records we already have. Advanced research checks NYC property, ownership, violations and NY business records. Findings remain proposals until approved.</p>
+    <p class="prospect-hint">No new paid lookups. Existing CRM access and your unlocked contact data are respected. Approved findings become sheet research and travel with its assignment. Ownership, employment and management roles are never inferred from a company name alone.</p>
+    <div class="prospect-research-controls"><label>Research scope<select id="prospect-enrichment-scope"><option value="all">All eligible leads in this list</option><option value="selected">Selected leads</option></select></label><button type="button" class="cbtn cbtn-primary" id="prospect-enrichment-internal">Check existing records</button><button type="button" class="cbtn" id="prospect-enrichment-advanced">Run advanced research</button></div>
+    <p class="prospect-hint">Archived, Do not contact and promoted leads are excluded. Whole-list research includes leads outside the current filters.</p>
+    <label class="prospect-research-history">Your research runs<select id="prospect-enrichment-runs"><option value="">No runs yet</option></select></label>
+    <div id="prospect-enrichment-summary" role="status" aria-live="polite"></div>
+    <div class="prospect-research-controls"><button type="button" class="cbtn" id="prospect-enrichment-unresolved" hidden>Research unresolved leads</button><button type="button" class="cbtn" id="prospect-enrichment-cancel" hidden>Cancel remaining research</button></div>
+    <p class="prospect-error" id="prospect-enrichment-error" role="alert"></p>
+    <div id="prospect-enrichment-items"></div>
+    <div class="prospect-research-footer"><div class="prospect-research-controls"><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-check">Select clear findings on this page</button><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-clear">Uncheck all on this page</button></div><p id="prospect-enrichment-selection"></p><p class="prospect-hint">Across the run: keep your checkbox choices and use clear defaults for unseen pages. Saves in groups of 25 leads; Undo reverses the latest saved group.</p><button type="button" class="cbtn cbtn-primary" id="prospect-enrichment-approve">Approve selected findings</button><button type="button" class="cbtn" id="prospect-enrichment-approve-run">Approve selected across entire run</button><button type="button" class="cbtn" id="prospect-enrichment-dismiss">Dismiss unchecked leads on this page</button></div>
+    <div class="prospect-pagination"><span id="prospect-enrichment-page"></span><div><button type="button" class="cbtn" id="prospect-enrichment-prev">Previous</button><button type="button" class="cbtn" id="prospect-enrichment-next">Next</button></div></div>
+</dialog>
 {% endblock %}
-{% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_network.js') }}"></script>{% endblock %}
+{% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_network.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_enrichment.js') }}"></script>{% endblock %}

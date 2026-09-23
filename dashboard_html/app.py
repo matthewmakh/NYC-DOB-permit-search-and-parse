@@ -203,6 +203,8 @@ def init_db_pool():
         try:
             import crm_service
             crm_service.init_crm_tables()
+            from prospecting_enrichment import start_worker as start_prospect_research
+            start_prospect_research()
         except Exception as e:
             print(f"⚠️  CRM schema init skipped: {e}", flush=True)
         try:

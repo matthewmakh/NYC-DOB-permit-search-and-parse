@@ -17,7 +17,7 @@ from psycopg2.extras import Json
 import crm_service as crm
 import prospecting_service as s
 
-EDIT_FIELDS = ('cells', 'status', 'notes', 'next_follow_up', 'archived_at')
+EDIT_FIELDS = ('cells', 'status', 'notes', 'next_follow_up', 'archived_at', 'research')
 MAX_BATCH = 500
 
 
@@ -44,8 +44,9 @@ def latest_change(ctx, list_id, cur):
 
 def write_row(cur, row):
     cur.execute("""UPDATE prospect_rows SET cells=%s,status=%s,notes=%s,next_follow_up=%s,archived_at=%s,
-        version=version+1,updated_at=NOW() WHERE id=%s RETURNING *""",
-        (Json(row['cells']), row['status'], row['notes'], row['next_follow_up'], row['archived_at'], row['id']))
+        research=COALESCE(%s,research),version=version+1,updated_at=NOW() WHERE id=%s RETURNING *""",
+        (Json(row['cells']), row['status'], row['notes'], row['next_follow_up'], row['archived_at'],
+         Json(row['research']) if 'research' in row else None, row['id']))
     return dict(cur.fetchone())
 
 

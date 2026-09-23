@@ -14,6 +14,7 @@ import prospecting_service as service
 import prospecting_workflows as workflows
 import prospecting_imports as imports
 import prospecting_network as network
+import prospecting_enrichment as enrichment
 
 prospecting_bp = Blueprint('prospecting', __name__, url_prefix='/crm/prospecting')
 
@@ -125,7 +126,38 @@ def import_list():
     list_id = service.create_list(_ctx(), parsed, name=request.form.get('name', ''), filename=upload.filename or 'upload.csv',
         mapping=json.loads(request.form.get('mapping', '{}')), import_key=request.form.get('import_key'),
         assigned_to_id=request.form.get('assigned_to_id'))
-    return {'list_id': list_id}
+    result = {'list_id': list_id}
+    if request.form.get('check_records') == 'true':
+        result.update(enrichment.start(_ctx(), list_id, {'mode': 'internal', 'request_key': request.form.get('import_key')}))
+        enrichment.start_worker()
+    return result
+
+
+@prospecting_bp.get('/api/lists/<int:list_id>/enrichment')
+@api
+def research_results(list_id):
+    job_id = request.args.get('job_id', type=int)
+    return enrichment.results(_ctx(), list_id, job_id, request.args.get('page', 1))
+
+
+@prospecting_bp.post('/api/lists/<int:list_id>/enrichment')
+@api
+def research_start(list_id):
+    result = enrichment.start(_ctx(), list_id, _data())
+    enrichment.start_worker()
+    return result
+
+
+@prospecting_bp.post('/api/lists/<int:list_id>/enrichment/<int:job_id>/cancel')
+@api
+def research_cancel(list_id, job_id):
+    return enrichment.cancel(_ctx(), list_id, job_id)
+
+
+@prospecting_bp.post('/api/lists/<int:list_id>/enrichment/<int:job_id>/approve')
+@api
+def research_approve(list_id, job_id):
+    return enrichment.approve(_ctx(), list_id, job_id, _data())
 
 
 @prospecting_bp.get('/api/lists/<int:list_id>')

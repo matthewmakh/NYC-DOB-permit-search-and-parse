@@ -105,11 +105,57 @@ another rep or marked Do not contact block promotion. Repeated/concurrent
 promotion requests cannot create duplicate contacts or activities. CRM work then
 continues on the contact; the prospect list remains a historical record.
 
+### Staged list enrichment
+
+Import can optionally check existing records. **Research & review** also checks
+the whole list or selected leads after import. Archived, promoted, and Do not
+contact leads are excluded. Pending runs are private to their requester, even
+when another admin can access the sheet. Approval explicitly saves the chosen
+evidence to the sheet, which then travels with reassignment.
+
+The initial pass checks accessible CRM contacts, public property records, the
+permit contact directory, and the requester's previously unlocked owner data.
+A name plus company/email/phone is required for a CRM identity match; company
+or name-only hits remain unchecked candidates. Ambiguous matches never supply
+automatic person-field replacements. No paid provider or billing function is
+called by this feature.
+
+Advanced research reuses read-only fetchers for PLUTO, HPD, historical RPAD,
+ACRIS, lien-sale notices, ECB, DOB/BIS violations, DOB NOW Safety, BIS permits,
+DOB NOW filings/permits, and the NY business registry. It retains source roles:
+agents, applicants and respondents are not asserted to be owners. Geocoded
+property candidates require review; a mapped BBL is the strongest parcel key.
+Permit evidence is bounded to 20 recent records per source, and candidate
+searches show at most 20 hits. Source failures are distinct from no matches,
+including partial failures alongside successful findings. This is public-record
+research, not unrestricted web research or a refresh of shared building tables.
+
+Jobs/items use database leases, fencing tokens and bounded restart retries.
+Each web process starts one consumer after schema initialization and on enqueue.
+The worker releases database connections during HTTP calls. Public responses
+and source failures are cached per run to avoid repeated calls for the same
+building/company. Cancelling prevents in-flight results from being saved and
+stops subsequent source calls. Pending jobs recover on worker startup.
+
+Review shows source links, lookup hints, current versus proposed field values,
+match basis, and per-lead outcomes. Clear additions are checked by default;
+conflicts and possible matches are unchecked. Approval rechecks list access,
+source CRM access, mapping/assignment version, and row version. It never
+promotes contacts or changes public buildings. Approved findings are stored as
+structured `prospect_rows.research`, visible in lead details, searchable,
+included in CSV export and carried into CRM on explicit promotion. Working
+notes remain separate. One-level undo includes approved research and cell
+changes. Whole-run approval respects unchecked choices, saves up to 25 leads
+atomically per request, reports partial progress on failure, and offers undo
+for the last saved group. Reviewed runs remain as history after undo.
+
 Implementation: `prospecting_service.py`, `prospecting_workflows.py`,
 `prospecting_imports.py`, `prospecting_network.py`, `prospecting_routes.py`,
+`prospecting_enrichment.py`, `prospecting_research.py`,
 `templates/crm/prospecting.html`, and `static/{css,js}/prospecting*`. The additive
 `prospect_lists`, `prospect_rows`, `prospect_touches`, `prospect_list_views`,
-`prospect_changes`, `prospect_imports`, `prospect_entities`, and `prospect_links` tables initialize under
+`prospect_changes`, `prospect_imports`, `prospect_entities`, `prospect_links`,
+and `prospect_enrichment_{jobs,items,cache}` tables initialize under
 the existing startup schema lock in `init_crm_tables()`. The ownership migration
 assigns existing sheets to their uploaders once; subsequent restarts preserve
 reassignments. An insert-only default also covers uploads from older workers
@@ -119,7 +165,7 @@ Verification (use a disposable PostgreSQL, never production):
 
 ```sh
 PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
-  uv run --with flask --with psycopg2-binary --with requests python -m unittest discover -s dashboard_html -p prospecting_tests.py -v
+  uv run --with flask --with psycopg2-binary --with requests python -m unittest discover -s dashboard_html -p 'prospecting*tests.py' -v
 PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
   uv run --with flask --with psycopg2-binary --with requests python dashboard_html/tests/prospecting_preview.py
 playwright-cli -s=prospecting open http://127.0.0.1:5101/crm/prospecting
@@ -127,6 +173,7 @@ playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecti
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_assignment_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_columns_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_workflows_checks.js
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_enrichment_checks.js
 ```
 
 ## Files

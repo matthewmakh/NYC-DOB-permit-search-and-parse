@@ -440,6 +440,9 @@ def init_crm_tables():
         from prospecting_service import SCHEMA as PROSPECTING_SCHEMA
         for statement in PROSPECTING_SCHEMA:
             cur.execute(statement)
+        from prospecting_enrichment import SCHEMA as RESEARCH_SCHEMA
+        for statement in RESEARCH_SCHEMA:
+            cur.execute(statement)
         conn.commit()
     except Exception:
         conn.rollback()

@@ -29,7 +29,7 @@ STATUSES = {
 FIELDS = {
     'name': 'Contact name', 'company': 'Company', 'title': 'Role / title',
     'phone': 'Phone', 'secondary_phone': 'Second phone', 'email': 'Email',
-    'address': 'Address', 'notes': 'Notes',
+    'address': 'Address', 'bbl': 'NYC property BBL', 'notes': 'Notes',
 }
 ALIASES = {
     'name': ['best contact', 'contact name', 'full name', 'person', 'contact', 'name'],
@@ -39,6 +39,7 @@ ALIASES = {
     'secondary_phone': ['secondary phone', 'phone 2', 'alternate phone', 'other phone'],
     'email': ['email', 'email address', 'contact email', 'primary email'],
     'address': ['normalized address', 'street address', 'property address', 'address', 'input address'],
+    'bbl': ['bbl', 'borough block lot', 'property bbl'],
     'notes': ['verification notes', 'notes', 'comments', 'description'],
 }
 
@@ -121,6 +122,7 @@ SCHEMA = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id,request_key)
     )""",
     """ALTER TABLE prospect_rows ADD COLUMN IF NOT EXISTS source_filename TEXT""",
+    """ALTER TABLE prospect_rows ADD COLUMN IF NOT EXISTS research JSONB NOT NULL DEFAULT '[]'""",
     """CREATE TABLE IF NOT EXISTS prospect_entities (
         id SERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
         kind TEXT NOT NULL CHECK(kind IN ('person','company','building')), name TEXT NOT NULL,
@@ -347,7 +349,7 @@ def list_rows(ctx, list_id, *, q='', status='', due=False, sort='position', page
             where.append('r.archived_at IS NOT NULL' if archived == 'archived' else 'r.archived_at IS NULL')
         params = {'id': list_id, 'today': crm.ny_today()}
         if q:
-            where.append("(r.cells::text ILIKE %(q)s ESCAPE '\\' OR r.notes ILIKE %(q)s ESCAPE '\\')")
+            where.append("(r.cells::text ILIKE %(q)s ESCAPE '\\' OR r.notes ILIKE %(q)s ESCAPE '\\' OR r.research::text ILIKE %(q)s ESCAPE '\\')")
             params['q'] = '%' + q[:200].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
         if status == 'promoted':
             where.append('r.promoted_at IS NOT NULL')
@@ -637,6 +639,8 @@ def promote(ctx, row_id, data):
                             (f" ({link['note']})" if link['note'] else ''))
         if row['notes']:
             research.append('Working notes: ' + row['notes'])
+        if row.get('research'):
+            research.append('Approved research:\n' + research_text(row['research']))
         cur.execute("""INSERT INTO crm_activity(type,note,contact_id,user_id,team_id,meta)
             VALUES ('note',%s,%s,%s,%s,%s)""",
             ('\n'.join(research), contact_id, ctx['user_id'], ctx['team_id'], Json({'prospect_row_id': row_id, 'original_cells': row['original_cells']})))
@@ -665,9 +669,14 @@ def export_rows(ctx, list_id):
     def safe(value):
         text = str(value) if value is not None else ''
         return "'" + text if text.lstrip().startswith(('=', '+', '-', '@', '\t', '\r', '\n')) else text
-    writer.writerow([safe(c['label']) for c in listing['columns']] + ['Contact status', 'Last touch (UTC)', 'Touch count', 'Next follow-up', 'Working notes', 'CRM contact ID', 'Archived', 'Source file'])
+    writer.writerow([safe(c['label']) for c in listing['columns']] + ['Contact status', 'Last touch (UTC)', 'Touch count', 'Next follow-up', 'Working notes', 'CRM contact ID', 'Archived', 'Source file', 'Approved research'])
     for row in rows:
         writer.writerow([safe(row['cells'].get(c['id'], '')) for c in listing['columns']] +
                         [STATUSES[row['status']], str(row['last_touch_at'] or ''), row['touch_count'],
-                         str(row['next_follow_up'] or ''), safe(row['notes']), row['promoted_contact_id'] or '', 'Yes' if row['archived_at'] else 'No', safe(row.get('source_filename') or listing['filename'])])
+                         str(row['next_follow_up'] or ''), safe(row['notes']), row['promoted_contact_id'] or '', 'Yes' if row['archived_at'] else 'No', safe(row.get('source_filename') or listing['filename']), safe(research_text(row.get('research', [])))])
     return '\ufeff' + output.getvalue()
+
+
+def research_text(entries):
+    return '\n\n'.join(f"{f['label']}: {f['value']}\nSource: {f['source']['label']} — {f['source']['url']}\n"
+        + f.get('basis', '') + ('\n'+f['source']['hint'] if f['source'].get('hint') else '') for f in entries)

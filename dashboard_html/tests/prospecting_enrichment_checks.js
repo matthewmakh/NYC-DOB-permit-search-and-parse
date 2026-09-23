@@ -1,0 +1,61 @@
+async page => {
+    const base='http://127.0.0.1:5101';
+    if(!page.url().startsWith(base+'/'))throw new Error('Use the disposable local preview.');
+    const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+    const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    await page.request.post(base+'/__test/user/1');
+    await page.setViewportSize({width:1440,height:1050});
+    await page.goto(base+'/crm/prospecting');
+    // Import-time check uses the real queue, scope, API and review flow.
+    await page.locator('#prospect-import').click();
+    await page.locator('#prospect-upload-form input[type=file]').setInputFiles('dashboard_html/tests/fixtures/prospecting_research.csv');
+    await page.getByRole('button',{name:'Preview file',exact:true}).click();
+    await page.locator('#prospect-preview:not([hidden])').waitFor();
+    await page.locator('[name=check_records]').check();
+    await page.getByRole('button',{name:'Create prospect list',exact:true}).click();
+    await page.waitForURL(/prospecting\/[0-9]+/);
+    const listUrl=page.url(), listId=Number(listUrl.match(/prospecting\/(\d+)/)[1]);
+    await page.locator('#prospect-enrichment-dialog[open]').waitFor();
+    await page.waitForFunction(()=>document.getElementById('prospect-enrichment-status').textContent.includes('2 not found'));
+    assert(await page.locator('#prospect-enrichment-unresolved').isVisible(),'Unresolved follow-up offered');
+    await page.locator('#prospect-enrichment-unresolved').click();
+    await page.waitForFunction(()=>document.getElementById('prospect-enrichment-status').textContent.includes('1 matched'));
+    const first=page.locator('.prospect-finding-card').first();await first.locator('summary').first().click();
+    assert((await first.innerText()).includes('Registered Agent'),'Agent role preserved');
+    assert(await first.locator('input[type=checkbox]:checked').count()===2,'Clear research selected by default');
+    await first.locator('input[type=checkbox]').last().uncheck();
+    await page.locator('#prospect-enrichment-approve').click();
+    await page.waitForFunction(()=>document.getElementById('prospect-enrichment-status').textContent.includes('1 reviewed'));
+    const rows=await (await page.request.get(base+`/crm/prospecting/api/lists/${listId}`)).json();
+    assert(rows.rows[0].research.length===1,'Only checked finding saved');
+    assert(rows.rows[0].research[0].label==='Registered company','Unselected agent excluded');
+    assert(rows.rows[0].notes==='' && rows.rows[0].cells.c0==='Jane Doe','Notes/name unchanged');
+    await page.locator('#prospect-enrichment-dialog [data-close]').click();
+    await page.evaluate(id=>window.ProspectSheet.openLead(id),rows.rows[0].id);
+    await page.locator('.prospect-approved-research summary').click();
+    assert(await page.locator('.prospect-approved-research a').getAttribute('href')==='https://apps.dos.ny.gov/publicInquiry/','Approved source link retained');
+    await page.locator('#prospect-lead-dialog [data-close]').click();
+    await page.locator('#prospect-undo').click();
+    await page.waitForFunction(()=>document.getElementById('prospect-message').textContent.includes('undone'));
+    const undone=await (await page.request.get(base+`/crm/prospecting/api/lists/${listId}`)).json();
+    assert(undone.rows[0].research.length===0,'Undo removes approved research');
+    // One selected lead can be rechecked independently, and a whole-run
+    // approval applies the default selections without promoting to CRM.
+    await page.locator('[data-select-row]').first().check();await page.locator('#prospect-bulk-enrich').click();
+    assert(await page.locator('#prospect-enrichment-scope').inputValue()==='selected','Selected scope honored');
+    await page.locator('#prospect-enrichment-advanced').click();
+    await page.waitForFunction(()=>document.getElementById('prospect-enrichment-page').textContent==='Leads 1–1 of 1' && !document.getElementById('prospect-enrichment-approve-run').disabled);
+    await page.locator('#prospect-enrichment-approve-run').click();
+    await page.waitForFunction(()=>document.getElementById('prospect-enrichment-status').textContent.includes('1 reviewed'));
+    const approved=await (await page.request.get(base+`/crm/prospecting/api/lists/${listId}`)).json();
+    assert(approved.rows[0].research.length===2 && !approved.rows[0].promoted_at,'Whole-run approval stays outside CRM');
+    await page.locator('#prospect-enrichment-dialog [data-close]').click();
+    await page.reload();await page.locator('#prospect-enrich').click();
+    assert((await page.locator('#prospect-enrichment-items').innerText()).includes('Reviewed'),'Review survives reload');
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('.prospect-finding-card summary').first().click();
+    assert(await page.locator('#prospect-enrichment-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Mobile review does not overflow');
+    await page.screenshot({path:'/tmp/prospecting-enrichment-mobile.png',fullPage:true});
+    assert(!errors.length,errors.join('; '));
+    return 'PASS: import check, unresolved research, role/source labels, selective approval, undo, selected scope, whole-run approval, persistence, mobile';
+}

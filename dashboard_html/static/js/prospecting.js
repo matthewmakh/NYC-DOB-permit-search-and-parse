@@ -555,8 +555,9 @@
             Object.keys(config.fields).forEach(field => { mapping[field] = importForm.elements[`map_${field}`].value; });
             data.set('mapping',JSON.stringify(mapping)); data.set('name',importForm.elements.name.value); data.set('import_key',importKey);
             if (config.isAdmin) data.set('assigned_to_id',importForm.elements.assigned_to_id.value);
+            data.set('check_records',String(importForm.elements.check_records.checked));
             const result = await api('/import',{method:'POST',body:data});
-            window.location.assign(`/crm/prospecting/${result.list_id}`);
+            window.location.assign(`/crm/prospecting/${result.list_id}${result.job_id?'?research='+result.job_id:''}`);
         });
     });
     async function openLead(id, keepOpen=false) {
@@ -583,6 +584,7 @@
                 bindLeadForms(id);
             }
             if(detail.duplicates) $('prospect-lead-body').insertAdjacentHTML('afterbegin',`<details class="prospect-match-warning" open><summary>Review possible duplicates</summary><p>Matching phone numbers or emails may be shared. Review before contacting or adding to CRM.</p>${duplicateMarkup(detail.duplicates)}</details>`);
+            if(row.research?.length)$('prospect-lead-body').insertAdjacentHTML('afterbegin',`<details class="prospect-approved-research"><summary>Approved research · ${row.research.length}</summary>${row.research.map(f=>`<div class="prospect-touch"><strong>${esc(f.label)}</strong><p>${esc(f.value)}</p><a href="${esc(f.source.url)}" target="_blank" rel="noopener noreferrer">${esc(f.source.label)} ↗</a><small>${esc(f.source.hint||'')} ${esc(f.basis)}</small><small>Approved ${esc(dateTime(f.approved_at))}</small></div>`).join('')}</details>`);
             $('prospect-lead-body').insertAdjacentHTML('afterbegin',`<p><button type="button" class="cbtn" data-profile-row="${row.id}">People, companies &amp; buildings linked to this lead</button></p>`);
             if (!keepOpen && !$('prospect-lead-dialog').open) $('prospect-lead-dialog').showModal();
         } catch (error) { keepOpen ? $('prospect-lead-error').textContent = error.message : notice(error.message); }
@@ -625,7 +627,7 @@
             });
         });
     }
-    window.ProspectSheet={api,esc,busy,notice,finishEdits,openLead,canCloseLead,getListing:()=>listing,
+    window.ProspectSheet={api,esc,busy,notice,finishEdits,openLead,canCloseLead,getListing:()=>listing,getSelected:()=>[...selected.keys()],
         refresh:async()=>{selected.clear();invalidateDuplicates();await loadRows();}};
     (config.listId ? loadRows() : loadLists()).catch(error => notice(error.message));
 })();

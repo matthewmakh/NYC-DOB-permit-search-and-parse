@@ -165,3 +165,33 @@
     .prospect-view-tabs .cbtn { flex: 1; }
     .prospect-network-search input { font-size: 16px; }
 }
+/* Research stays visually separate from the editable lead sheet. */
+.prospect-research-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 18px; margin:0 0 18px; background:var(--c-blue-tint); border:1px solid var(--c-hairline); border-radius:12px; }
+.prospect-research-bar p { margin:5px 0 0; font-size:13px; color:var(--c-label-2); }
+.prospect-enrichment-dialog { width:min(1000px,96vw); }
+.prospect-research-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; margin:12px 0; }
+.prospect-research-controls label,.prospect-research-history { display:grid; gap:5px; font-size:13px; }
+.prospect-research-history { margin-top:22px; }
+.prospect-enrichment-dialog select { padding:9px; border:1px solid var(--c-hairline); border-radius:7px; background:var(--c-surface); max-width:100%; }
+.prospect-enrichment-dialog progress { width:100%; height:8px; accent-color:var(--c-blue); }
+.prospect-finding-card { border:1px solid var(--c-hairline); border-radius:10px; margin:12px 0; overflow:hidden; }
+.prospect-finding-card>summary { display:flex; justify-content:space-between; gap:15px; padding:15px; cursor:pointer; background:var(--c-surface-2); }
+.prospect-finding-card>summary::before { content:'▸'; }
+.prospect-finding-card[open]>summary::before { content:'▾'; }
+.prospect-finding-card>summary>span:first-of-type { flex:1; }
+.prospect-finding-card small { display:block; color:var(--c-label-2); margin-top:4px; }
+.prospect-finding-body { padding:8px 16px 16px; }
+.prospect-finding { display:flex; gap:12px; padding:15px 0; border-bottom:1px solid var(--c-sep); overflow-wrap:anywhere; }
+.prospect-finding input { flex:0 0 auto; width:18px; height:18px; margin:2px 0; }
+.prospect-finding>span { min-width:0; }
+.prospect-finding-value { display:block; margin:5px 0; white-space:pre-wrap; }
+.prospect-finding a { display:inline-block; margin-top:7px; }
+.prospect-finding-conflict { background:var(--c-orange-tint); padding:15px 8px; }
+.prospect-finding .prospect-review-required { color:var(--c-orange-ink); }
+.prospect-research-footer { border-top:1px solid var(--c-hairline); background:var(--c-surface); padding:12px 0; margin-top:18px; }
+.prospect-research-footer p { font-size:13px; color:var(--c-label-2); }
+@media(max-width:600px) { .prospect-research-bar { align-items:start; flex-direction:column; } .prospect-finding-card>summary { flex-wrap:wrap; } .prospect-finding-card>summary>span:last-child { width:100%; } .prospect-research-controls label { width:100%; } }
+
+.prospect-enrichment-dialog>.prospect-dialog-head { position:sticky; top:-24px; z-index:2; background:var(--c-surface); padding:14px 0; border-bottom:1px solid var(--c-hairline); }
+.prospect-enrichment-dialog select { color:var(--c-label); }
+@media(max-width:600px) { .prospect-enrichment-dialog>.prospect-dialog-head { top:-18px; } }
