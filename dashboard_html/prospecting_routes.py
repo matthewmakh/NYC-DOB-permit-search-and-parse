@@ -52,6 +52,8 @@ def api(f):
             return jsonify(error=str(exc)), 404
         except service.Conflict as exc:
             return jsonify(error=str(exc)), 409
+        except PermissionError as exc:
+            return jsonify(error=str(exc)), 403
         except (ValueError, TypeError) as exc:
             return jsonify(error=str(exc)), 400
         except RequestEntityTooLarge:
@@ -94,7 +96,9 @@ def page(list_id=None):
     return render_template('crm/prospecting.html', **_base_template_args(ctx, 'prospecting'),
         prospect_config={'listId': list_id, 'csrf': _token(), 'statuses': service.STATUSES,
                          'fields': service.FIELDS, 'methods': crm_service.METHOD_LABELS,
-                         'outcomes': crm_service.OUTCOME_LABELS})
+                         'outcomes': crm_service.OUTCOME_LABELS, 'userId': ctx['user_id'],
+                         'isAdmin': ctx['is_admin'],
+                         'roster': crm_service.get_team_roster(ctx['team_id']) if ctx['is_admin'] else []})
 
 
 @prospecting_bp.get('/api/lists')
@@ -115,7 +119,8 @@ def preview():
 def import_list():
     upload, parsed = _upload()
     list_id = service.create_list(_ctx(), parsed, name=request.form.get('name', ''), filename=upload.filename or 'upload.csv',
-        mapping=json.loads(request.form.get('mapping', '{}')), import_key=request.form.get('import_key'))
+        mapping=json.loads(request.form.get('mapping', '{}')), import_key=request.form.get('import_key'),
+        assigned_to_id=request.form.get('assigned_to_id'))
     return {'list_id': list_id}
 
 
@@ -124,6 +129,16 @@ def import_list():
 def rows(list_id):
     return service.list_rows(_ctx(), list_id, q=request.args.get('q', ''), status=request.args.get('status', ''),
         due=request.args.get('due') == 'true', sort=request.args.get('sort', 'position'), page=int(request.args.get('page', 1)))
+
+
+@prospecting_bp.patch('/api/lists/<int:list_id>/assignment')
+@api
+def assignment(list_id):
+    data = _data()
+    if 'assigned_to_id' not in data:
+        raise ValueError('Choose a list owner.')
+    return {'listing': service.assign_list(_ctx(), list_id,
+        assigned_to_id=data['assigned_to_id'], version=data.get('version'))}
 
 
 @prospecting_bp.get('/api/rows/<int:row_id>')

@@ -29,7 +29,14 @@ formula-injection protection. Imported source URLs open from the lead's research
 section. Last touch and touch count are derived from logged outreach, not status
 changes. Touch input and display use New York time; timestamps are stored in UTC.
 
-Reps see only their own imports; team admins can review their team's imports.
+Reps see only sheets currently assigned to them; team admins can review their team's sheets.
+Uploads default to the uploader. Members cannot choose another owner or reassign
+sheets. Admins can choose an active teammate during import, filter sheets by
+owner, and reassign any team sheet to themselves or another active teammate.
+The uploader and touch authors remain immutable attribution. Changing the owner
+preserves all rows, notes, and history, removes the former owner's access, and
+records an admin audit event. List locks serialize reassignment against in-flight
+work; versions reject stale assignment forms and old row drafts.
 Reads, writes, exports, and promotion all enforce this scope. Mutations require a
 session CSRF token. Optimistic versions reject stale edits; request keys prevent
 duplicate imports/touches. `original_cells` preserves the uploaded data separately
@@ -37,8 +44,10 @@ from working edits. No imported content is executed or rendered as HTML.
 
 **Add to CRM** is an explicit review form. One transaction creates or links a
 contact, carries research, working notes, outreach timestamps, phone numbers, and
-the next follow-up, and freezes the prospect row. New contacts remain assigned to
-the uploader. Existing contacts require an exact name plus matching email or
+the next follow-up, and freezes the prospect row. New contacts and follow-ups belong to
+the sheet's current assignee, including when an admin promotes on their behalf.
+Reassigning a sheet does not transfer contacts already in CRM; their independent
+CRM permissions still apply. Existing contacts require an exact name plus matching email or
 normalized phone; a shared switchboard alone is not a match. Contacts assigned to
 another rep or marked Do not contact block promotion. Repeated/concurrent
 promotion requests cannot create duplicate contacts or activities. CRM work then
@@ -47,7 +56,10 @@ continues on the contact; the prospect list remains a historical record.
 Implementation: `prospecting_service.py`, `prospecting_routes.py`,
 `templates/crm/prospecting.html`, and `static/{css,js}/prospecting.*`. The additive
 `prospect_lists`, `prospect_rows`, and `prospect_touches` tables initialize under
-the existing startup schema lock in `init_crm_tables()`; no backfill is needed.
+the existing startup schema lock in `init_crm_tables()`. The ownership migration
+assigns existing sheets to their uploaders once; subsequent restarts preserve
+reassignments. An insert-only default also covers uploads from older workers
+during a rolling deployment.
 
 Verification (use a disposable PostgreSQL, never production):
 
@@ -58,6 +70,7 @@ PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
   uv run --with flask --with psycopg2-binary --with requests python dashboard_html/tests/prospecting_preview.py
 playwright-cli -s=prospecting open http://127.0.0.1:5101/crm/prospecting
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_browser_checks.js
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_assignment_checks.js
 ```
 
 ## Files

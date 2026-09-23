@@ -7,6 +7,7 @@ import os
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -90,6 +91,8 @@ class DatabaseTests(unittest.TestCase):
         with s.transaction() as cur:
             cur.execute('CREATE TABLE users(id INTEGER PRIMARY KEY,email TEXT,is_admin BOOLEAN,last_login TIMESTAMP)')
             cur.execute("INSERT INTO users VALUES(1,'admin@example.test',true,NULL),(2,'rep@example.test',false,NULL),(3,'other@example.test',false,NULL),(4,'outsider@example.test',true,NULL)")
+            cur.execute('CREATE TABLE account_sponsorships(sponsor_user_id INTEGER,member_user_id INTEGER,status TEXT,display_name TEXT,accepted_at TIMESTAMP)')
+            cur.execute("INSERT INTO account_sponsorships VALUES(1,2,'active','Rep One',NOW()),(1,3,'active','Rep Two',NOW())")
         crm.init_crm_tables()
         self.parsed=s.parse_csv(SAMPLE)
         self.list_id=self.create()
@@ -100,9 +103,9 @@ class DatabaseTests(unittest.TestCase):
         with self.admin.cursor() as cur:cur.execute(f'DROP SCHEMA {self.schema} CASCADE')
         self.admin.close()
 
-    def create(self, ctx=REP, parsed=None, import_key=None):
+    def create(self, ctx=REP, parsed=None, import_key=None, assigned_to_id=None):
         p=parsed or self.parsed
-        return s.create_list(ctx,p,name='Test list',filename='test.csv',mapping=p['mapping'],import_key=import_key or str(uuid.uuid4()))
+        return s.create_list(ctx,p,name='Test list',filename='test.csv',mapping=p['mapping'],import_key=import_key or str(uuid.uuid4()),assigned_to_id=assigned_to_id)
 
     def count(self,table):
         with s.transaction() as cur:
@@ -122,6 +125,117 @@ class DatabaseTests(unittest.TestCase):
     def test_schema_can_run_twice(self):
         crm.init_crm_tables()
         self.assertEqual(self.count('prospect_rows'),2)
+
+    def test_assignment_migration_preserves_old_uploads_without_regranting_access(self):
+        with s.transaction() as cur:cur.execute('ALTER TABLE prospect_lists DROP COLUMN assigned_to_id CASCADE')
+        crm.init_crm_tables()
+        listing=s.list_rows(REP,self.list_id)['listing']
+        self.assertEqual(listing['assigned_to_id'],REP['user_id'])
+        with s.transaction() as cur:cur.execute('UPDATE prospect_lists SET assigned_to_id=NULL WHERE id=%s',(self.list_id,))
+        crm.init_crm_tables()
+        self.assertEqual(s.list_lists(REP),[])
+        self.assertIsNone(s.list_rows(ADMIN,self.list_id)['listing']['assigned_to_id'])
+
+    def test_old_worker_upload_defaults_owner_during_rolling_deploy(self):
+        with s.transaction() as cur:
+            cur.execute("""INSERT INTO prospect_lists(name,filename,columns,mapping,import_key,import_hash,team_id,added_by_id)
+                SELECT name,filename,columns,mapping,%s,import_hash,team_id,added_by_id FROM prospect_lists WHERE id=%s RETURNING assigned_to_id""",
+                (str(uuid.uuid4()),self.list_id))
+            self.assertEqual(cur.fetchone()['assigned_to_id'],2)
+
+    def test_import_defaults_to_self_and_admin_can_choose_member(self):
+        self.assertEqual(s.list_rows(REP,self.list_id)['listing']['assigned_to_id'],2)
+        mine=self.create(ADMIN)
+        theirs=self.create(ADMIN,assigned_to_id=3)
+        self.assertEqual(s.list_rows(ADMIN,mine)['listing']['assigned_to_id'],1)
+        listing=s.list_rows(OTHER_REP,theirs)['listing']
+        self.assertEqual(listing['assigned_to_id'],3)
+        self.assertEqual(listing['added_by_id'],1)
+        with self.assertRaises(LookupError):s.list_rows(REP,theirs)
+        with self.assertRaises(PermissionError):self.create(REP,assigned_to_id=3)
+        with self.assertRaises(ValueError):self.create(ADMIN,assigned_to_id=4)
+        with s.transaction() as cur:cur.execute("UPDATE account_sponsorships SET status='revoked' WHERE member_user_id=3")
+        with self.assertRaises(ValueError):self.create(ADMIN,assigned_to_id=3)
+
+    def test_reassignment_revokes_uploader_access_and_preserves_work(self):
+        row=s.update_row(REP,self.rows[0]['id'],{'version':1,'notes':'Keep this research'})
+        self.touch(row)
+        listing=s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        self.assertEqual(listing['added_by_id'],2)
+        self.assertEqual(listing['assigned_to_id'],3)
+        self.assertEqual(s.list_lists(REP),[])
+        for call in [lambda:s.list_rows(REP,self.list_id),lambda:s.row_detail(REP,row['id']),
+                     lambda:s.export_rows(REP,self.list_id),lambda:s.update_row(REP,row['id'],{'version':3,'notes':'forbidden'}),
+                     lambda:self.touch(row),lambda:s.promote(REP,row['id'],{'version':3})]:
+            with self.assertRaises(LookupError):call()
+        detail=s.row_detail(OTHER_REP,row['id'])
+        self.assertEqual(detail['row']['notes'],'Keep this research')
+        self.assertEqual(detail['row']['touch_count'],1)
+        self.assertEqual(detail['touches'][0]['user_id'],2)
+        self.assertEqual(detail['row']['original_cells'],self.rows[0]['original_cells'])
+        self.assertEqual(self.count('crm_change_history'),1)
+        self.assertIn('Keep this research',s.export_rows(OTHER_REP,self.list_id))
+
+    def test_only_admin_reassigns_with_team_and_version_checks(self):
+        for ctx in [REP,OTHER_REP]:
+            with self.assertRaises(PermissionError):s.assign_list(ctx,self.list_id,assigned_to_id=ctx['user_id'],version=1)
+        with self.assertRaises(LookupError):s.assign_list(OUTSIDER,self.list_id,assigned_to_id=4,version=1)
+        for value in [4,999,True,1.5,'abc']:
+            with self.assertRaises(ValueError):s.assign_list(ADMIN,self.list_id,assigned_to_id=value,version=1)
+        assigned=s.assign_list(ADMIN,self.list_id,assigned_to_id=1,version=1)
+        self.assertEqual(assigned['assigned_to_id'],1)
+        with self.assertRaises(s.Conflict):s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        back=s.assign_list(ADMIN,self.list_id,assigned_to_id=2,version=2)
+        self.assertEqual(back['version'],3)
+        with self.assertRaises(s.Conflict):s.update_row(REP,self.rows[0]['id'],{'version':1,'notes':'stale draft'})
+
+    def test_promotion_after_reassignment_uses_current_owner(self):
+        self.touch(self.rows[0])
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=3,version=1)
+        row=s.list_rows(OTHER_REP,self.list_id)['rows'][0]
+        result=s.promote(ADMIN,row['id'],{'version':row['version']})
+        with s.transaction() as cur:
+            cur.execute('SELECT assigned_to_id,added_by_id FROM crm_contacts WHERE id=%s',(result['contact_id'],))
+            self.assertEqual(dict(cur.fetchone()),dict(assigned_to_id=3,added_by_id=1))
+            cur.execute('SELECT assigned_to_id FROM crm_follow_ups WHERE contact_id=%s',(result['contact_id'],))
+            self.assertEqual(cur.fetchone()['assigned_to_id'],3)
+        s.assign_list(ADMIN,self.list_id,assigned_to_id=2,version=2)
+        detail=s.row_detail(REP,row['id'])
+        self.assertTrue(detail['row']['crm_contact_restricted'])
+        self.assertIsNone(detail['row']['promoted_contact_id'])
+
+    def test_write_racing_with_reassignment_rechecks_owner(self):
+        locked,release=Event(),Event()
+        original=s.resolve_assignee
+        def held_resolve(ctx,value,cur):
+            result=original(ctx,value,cur)
+            locked.set()
+            if not release.wait(5):raise RuntimeError('Test did not release assignment')
+            return result
+        with patch.object(s,'resolve_assignee',side_effect=held_resolve), ThreadPoolExecutor(max_workers=2) as pool:
+            assignment=pool.submit(s.assign_list,ADMIN,self.list_id,assigned_to_id=3,version=1)
+            self.assertTrue(locked.wait(5))
+            write=pool.submit(s.update_row,REP,self.rows[0]['id'],{'version':1,'notes':'old owner write'})
+            release.set()
+            assignment.result(timeout=5)
+            with self.assertRaises(LookupError):write.result(timeout=5)
+        self.assertEqual(s.row_detail(OTHER_REP,self.rows[0]['id'])['row']['notes'],'')
+
+    def test_assignment_api_forbids_members_and_accepts_admin(self):
+        app=Flask(__name__);app.secret_key='test';app.register_blueprint(routes.prospecting_bp)
+        client=app.test_client()
+        with client.session_transaction() as session:session['prospecting_csrf']='test-token'
+        path=f'/crm/prospecting/api/lists/{self.list_id}/assignment'
+        with patch('auth_service.validate_session',return_value={'id':2,'is_sponsored':True,'sponsor_user_id':1}):
+            self.assertEqual(client.patch(path,json={'version':1,'assigned_to_id':2},headers={'X-CSRF-Token':'test-token'}).status_code,403)
+        with patch('auth_service.validate_session',return_value={'id':1,'is_admin':True}):
+            self.assertEqual(client.patch(path,json={'version':1,'assigned_to_id':3}).status_code,403)
+            response=client.patch(path,json={'version':1,'assigned_to_id':3},headers={'X-CSRF-Token':'test-token'})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.json['listing']['assigned_to_id'],3)
+        with patch('auth_service.validate_session',return_value={'id':2,'is_sponsored':True,'sponsor_user_id':1}):
+            self.assertEqual(client.get(f'/crm/prospecting/{self.list_id}').status_code,404)
+            self.assertEqual(client.get(f'/crm/prospecting/{self.list_id}/export.csv').status_code,404)
 
     def test_scope_on_every_read_and_write(self):
         row=self.rows[0]

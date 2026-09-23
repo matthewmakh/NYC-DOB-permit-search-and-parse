@@ -74,10 +74,26 @@
         try { const url = new URL(value); if (['http:', 'https:'].includes(url.protocol)) return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(value)}</a>`; } catch (_) { /* plain text */ }
         return esc(value);
     }
+    function ownerName(id, name) { return Number(id) === config.userId ? 'Me' : (name || 'Unassigned'); }
+    function ownerOptions(selected) {
+        return (config.roster || []).map(u => `<option value="${u.id}" ${u.id === Number(selected) ? 'selected' : ''}>${esc(ownerName(u.id,u.name))}</option>`).join('');
+    }
     async function loadLists() {
         const data = await api('/lists');
-        $('prospect-lists').innerHTML = data.lists.length ? data.lists.map(l => `<a class="prospect-list-card" href="/crm/prospecting/${l.id}"><div><h2>${esc(l.name)}</h2><p>${l.row_count} leads · ${l.promoted_count} added to CRM</p></div><span>${l.due_count ? `${l.due_count} follow-ups due` : 'Open list →'}</span></a>`).join('') : '<div class="prospect-empty"><h2>Your next good contact starts here</h2><p>Import a list, keep your research together, and track each conversation.</p><button class="cbtn cbtn-primary" type="button" id="prospect-first-import">Import your first CSV</button></div>';
-        $('prospect-first-import')?.addEventListener('click', openImport);
+        function renderLists() {
+            const owner = $('prospect-owner-filter')?.value || '';
+            const lists = data.lists.filter(l => !owner || String(l.assigned_to_id || 'unassigned') === owner);
+            $('prospect-lists').innerHTML = lists.length ? lists.map(l => `<a class="prospect-list-card" href="/crm/prospecting/${l.id}"><div><h2>${esc(l.name)}</h2><p>${l.row_count} leads · ${l.promoted_count} added to CRM</p><p>Assigned to ${esc(ownerName(l.assigned_to_id,l.assigned_to_name))} · Uploaded by ${esc(ownerName(l.added_by_id,l.added_by_name))}</p></div><span>${l.due_count ? `${l.due_count} follow-ups due` : 'Open list →'}</span></a>`).join('') : `<div class="prospect-empty"><h2>${data.lists.length ? 'No lists assigned to this person' : 'Your next good contact starts here'}</h2><p>Import a list, keep your research together, and track each conversation.</p><button class="cbtn cbtn-primary" type="button" id="prospect-first-import">Import a CSV</button></div>`;
+            $('prospect-first-import')?.addEventListener('click', openImport);
+        }
+        if (config.isAdmin) {
+            $('prospect-owner-filter-wrap').hidden=false;
+            const owners = new Map((config.roster || []).map(u => [String(u.id),ownerName(u.id,u.name)]));
+            data.lists.forEach(l => owners.set(String(l.assigned_to_id || 'unassigned'),ownerName(l.assigned_to_id,l.assigned_to_name)));
+            $('prospect-owner-filter').innerHTML='<option value="">All team lists</option>' + options(Object.fromEntries(owners),'');
+            $('prospect-owner-filter').onchange=renderLists;
+        }
+        renderLists();
     }
     function filters() {
         const f = $('prospect-filters').elements;
@@ -97,6 +113,14 @@
             $('prospect-back').hidden = false; $('prospect-export').hidden = false;
             $('prospect-export').href = `/crm/prospecting/${listing.id}/export.csv`;
             $('prospect-workspace').hidden = false;
+            $('prospect-owner-label').textContent = `Assigned to ${ownerName(listing.assigned_to_id,listing.assigned_to_name)} · Uploaded by ${ownerName(listing.added_by_id,listing.added_by_name)}`;
+            if (config.isAdmin) {
+                const select = $('prospect-assignment-form').elements.assigned_to_id;
+                select.innerHTML = ownerOptions(listing.assigned_to_id);
+                if (!(config.roster || []).some(u => u.id === listing.assigned_to_id)) {
+                    select.insertAdjacentHTML('afterbegin',`<option value="" selected disabled>${esc(listing.assigned_to_name || 'Choose an owner')}</option>`);
+                }
+            }
             $('prospect-summary').innerHTML = [['total','leads'],['touched','contacted or attempted'],['due','follow-ups due'],['promoted','added to CRM']].map(([key, text]) => `<div><strong>${data.summary[key]}</strong><span>${text}</span></div>`).join('');
             if (first) initColumns();
             renderTable();
@@ -194,6 +218,19 @@
     function openImport() { $('prospect-import-dialog').showModal(); }
     $('prospect-import').onclick = openImport;
     const uploadForm = $('prospect-upload-form'), importForm = $('prospect-import-form');
+    if (config.isAdmin) {
+        $('prospect-import-owner').innerHTML = ownerOptions(config.userId);
+        $('prospect-assignment-form').addEventListener('submit', event => {
+            event.preventDefault(); const form=event.target;
+            busy(form,'prospect-assignment-error',async () => {
+                await Promise.all([...saves.values()]);
+                const result=await api(`/lists/${listing.id}/assignment`,{method:'PATCH',body:{
+                    assigned_to_id:Number(form.elements.assigned_to_id.value),version:listing.version}});
+                await loadRows();
+                notice(`List assigned to ${ownerName(result.listing.assigned_to_id,result.listing.assigned_to_name)}. Research and touch history preserved.`);
+            });
+        });
+    }
     uploadForm.addEventListener('change', () => { preview = null; $('prospect-preview').hidden=true; });
     function uploadBody() {
         const data = new FormData(); data.set('file', uploadFile);
@@ -221,6 +258,7 @@
             const data = uploadBody(), mapping = {};
             Object.keys(config.fields).forEach(field => { mapping[field] = importForm.elements[`map_${field}`].value; });
             data.set('mapping',JSON.stringify(mapping)); data.set('name',importForm.elements.name.value); data.set('import_key',importKey);
+            if (config.isAdmin) data.set('assigned_to_id',importForm.elements.assigned_to_id.value);
             const result = await api('/import',{method:'POST',body:data});
             window.location.assign(`/crm/prospecting/${result.list_id}`);
         });
@@ -236,7 +274,7 @@
             const research = `<details><summary>All imported columns (${detail.listing.columns.length})</summary><dl class="prospect-research">${detail.listing.columns.map(c => `<dt>${esc(c.label)}</dt><dd>${safeLink(row.cells[c.id]) || '—'}</dd>`).join('')}</dl></details>`;
             const history = `<h3>Touch history · ${row.touch_count}</h3>${detail.touches.length ? detail.touches.map(t => `<div class="prospect-touch"><strong>${esc(config.methods[t.method])} · ${esc(config.outcomes[t.outcome])}</strong><p>${esc(t.note)}</p><small>${esc(dateTime(t.occurred_at))} · New York</small></div>`).join('') : '<p>No outreach logged yet.</p>'}`;
             if (row.promoted_at) {
-                $('prospect-lead-body').innerHTML = `<p>This lead’s research, notes, touches, and follow-up were carried into CRM.</p>${row.promoted_contact_id ? `<a class="cbtn cbtn-primary" href="/crm/contacts/${row.promoted_contact_id}">Open CRM contact</a>` : '<p>The CRM contact has since been deleted.</p>'}${research}<p>${esc(row.notes)}</p>${history}`;
+                $('prospect-lead-body').innerHTML = `<p>This lead’s research, notes, touches, and follow-up were carried into CRM.</p>${row.promoted_contact_id ? `<a class="cbtn cbtn-primary" href="/crm/contacts/${row.promoted_contact_id}">Open CRM contact</a>` : `<p>${row.crm_contact_restricted ? 'This CRM contact is assigned to another person. Ask your team admin to review its assignment.' : 'The CRM contact has since been deleted.'}</p>`}${research}<p>${esc(row.notes)}</p>${history}`;
             } else {
                 $('prospect-lead-body').innerHTML = `<form id="prospect-notes-form" class="prospect-form"><div class="prospect-form-grid"><label>Status<select name="status">${options(config.statuses,row.status)}</select></label><label>Next follow-up<input type="date" name="next_follow_up" value="${esc(row.next_follow_up || '')}"></label></div><label>Working notes<textarea name="notes" maxlength="20000">${esc(row.notes)}</textarea></label><button class="cbtn" type="submit">Save notes &amp; status</button></form>${research}
                     <h3>Log a touch</h3>${row.status === 'do_not_contact' ? '<p>This lead is marked Do not contact. Review its status before logging outreach.</p>' : `<form id="prospect-touch-form" class="prospect-form"><div class="prospect-form-grid"><label>Method<select name="method">${options(config.methods,'call')}</select></label><label>Outcome<select name="outcome">${options(config.outcomes,'no_answer')}</select></label><label>When (New York time)<input type="datetime-local" name="occurred_at" value="${nyInputTime()}" required></label><label>Status after touch<select name="status">${options(config.statuses,row.status==='new' ? 'attempted' : row.status)}</select></label></div><label>Conversation notes<textarea name="note" maxlength="20000"></textarea></label><label>Next follow-up<input type="date" name="next_follow_up" value="${esc(row.next_follow_up || '')}"></label><button type="submit" class="cbtn cbtn-primary">Save touch</button></form>`}

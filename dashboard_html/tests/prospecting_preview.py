@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask
+from flask import Flask, session, abort
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -30,7 +30,9 @@ admin=psycopg2.connect(dsn);admin.autocommit=True
 with admin.cursor() as cur:
     cur.execute(f'CREATE SCHEMA {schema}')
     cur.execute(f'CREATE TABLE {schema}.users(id INTEGER PRIMARY KEY,email TEXT,is_admin BOOLEAN,last_login TIMESTAMP)')
-    cur.execute(f"INSERT INTO {schema}.users VALUES(1,'preview@example.test',true,NULL)")
+    cur.execute(f"INSERT INTO {schema}.users VALUES(1,'preview@example.test',true,NULL),(2,'alex@example.test',false,NULL),(3,'sam@example.test',false,NULL)")
+    cur.execute(f'CREATE TABLE {schema}.account_sponsorships(sponsor_user_id INTEGER,member_user_id INTEGER,status TEXT,display_name TEXT,accepted_at TIMESTAMP)')
+    cur.execute(f"INSERT INTO {schema}.account_sponsorships VALUES(1,2,'active','Alex',NOW()),(1,3,'active','Sam',NOW())")
 
 def cleanup():
     with admin.cursor() as cur:cur.execute(f'DROP SCHEMA {schema} CASCADE')
@@ -38,7 +40,10 @@ def cleanup():
 atexit.register(cleanup)
 crm.get_db_connection=lambda:psycopg2.connect(dsn,options=f'-c search_path={schema}',cursor_factory=RealDictCursor)
 crm.init_crm_tables()
-auth_service.validate_session=lambda token:dict(id=1,is_admin=True,email='preview@example.test')
+def fixture_user(token):
+    user_id=session.get('preview_user',1)
+    return dict(id=user_id,is_admin=user_id==1,is_sponsored=user_id!=1,sponsor_user_id=1,email=f'preview{user_id}@example.test')
+auth_service.validate_session=fixture_user
 routes._base_template_args=lambda ctx,tab:dict(active_page='crm',crm_tab=tab,crm_ctx=ctx,crm_user_name='Preview user',
     due_count=0,notification_count=0,push_public_key='',default_reminder_minutes=15,
     stages=crm.STAGES,stage_labels=crm.STAGE_LABELS,method_labels=crm.METHOD_LABELS,
@@ -51,5 +56,11 @@ app.register_blueprint(routes.prospecting_bp)
 app.add_url_rule('/auth/login',endpoint='auth.login',view_func=lambda:'Local preview')
 # Avoid unrelated notification requests during local browser QA.
 app.add_url_rule('/crm/api/push/config',view_func=lambda:dict(success=True,enabled=False))
+
+@app.post('/__test/user/<int:user_id>')
+def switch_test_user(user_id):
+    if user_id not in (1,2,3):abort(404)
+    session['preview_user']=user_id
+    return dict(success=True)
 
 if __name__=='__main__':app.run(host='127.0.0.1',port=5101)

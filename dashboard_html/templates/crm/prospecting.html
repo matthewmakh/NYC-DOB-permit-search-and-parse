@@ -11,8 +11,24 @@
             <button type="button" class="cbtn cbtn-primary" id="prospect-import">Import CSV</button></div>
     </div>
     <div id="prospect-message" role="status" aria-live="polite"></div>
+    {% if crm_ctx.is_admin %}
+    <label id="prospect-owner-filter-wrap" class="prospect-owner-filter" hidden>List owner
+        <select id="prospect-owner-filter"><option value="">All team lists</option></select>
+    </label>
+    {% endif %}
     <div id="prospect-lists"></div>
     <div id="prospect-workspace" hidden>
+        <div class="prospect-ownership">
+            <p id="prospect-owner-label"></p>
+            {% if crm_ctx.is_admin %}
+            <form id="prospect-assignment-form" class="prospect-assignment-form">
+                <label>Assigned to<select name="assigned_to_id" required></select></label>
+                <button class="cbtn" type="submit">Save assignment</button>
+            </form>
+            <p class="prospect-hint">The assigned person and team admins can access this sheet. Reassignment includes its research and touch history. Contacts already in CRM keep their existing assignments.</p>
+            <p class="prospect-error" id="prospect-assignment-error" role="alert"></p>
+            {% else %}<p class="prospect-hint">Assigned to you. Team admins can also view and reassign this sheet.</p>{% endif %}
+        </div>
         <div class="prospect-summary" id="prospect-summary"></div>
         <form class="prospect-toolbar" id="prospect-filters">
             <label>Search<input type="search" name="q" placeholder="Search any column or notes" maxlength="200"></label>
@@ -45,6 +61,10 @@
         <p id="prospect-preview-summary"></p>
         <form id="prospect-import-form" class="prospect-form">
             <label>List name<input name="name" required maxlength="200"></label>
+            {% if crm_ctx.is_admin %}
+            <label>Assign to<select name="assigned_to_id" id="prospect-import-owner" required></select></label>
+            <p class="prospect-hint">Only the assigned person and team admins can access this list.</p>
+            {% else %}<p class="prospect-hint">This list will be assigned to you. Team admins can also view and reassign it.</p>{% endif %}
             <details open><summary>Match your columns</summary><p class="prospect-hint">Review the suggested matches. Unmatched fields are fine; all original columns remain available.</p><div id="prospect-mapping" class="prospect-form-grid"></div></details>
             <details><summary>Preview first five rows</summary><div class="prospect-preview-table" id="prospect-preview-table"></div></details>
             <button class="cbtn cbtn-primary" type="submit">Create prospect list</button>
