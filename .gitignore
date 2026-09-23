@@ -43,6 +43,7 @@ test2.py
 
 # Data files
 *.csv
+!dashboard_html/tests/fixtures/prospecting.csv
 phone_type_results.csv
 postgres_data.sql
 postgres_schema.sql

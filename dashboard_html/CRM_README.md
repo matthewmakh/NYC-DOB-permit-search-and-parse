@@ -9,9 +9,56 @@ shortlists per rep, and a complete admin view of who did what, when.
 ## The golden rule
 
 The scraper-owned tables (`permits`, `contacts`, `buildings`, ACRIS, …) are
-**read-only to humans**. Every piece of human-entered data lives in `crm_*`
+**read-only to humans**. Every piece of human-entered data lives in `crm_*` or `prospect_*`
 tables, joined to permit data by BBL. Scrapers never overwrite a rep-found
 phone number; the CRM never writes to permit tables.
+
+## Prospecting before CRM
+
+`/crm/prospecting` accepts CSV/TSV work lists without creating contacts, buildings,
+activities, or CRM follow-ups. Preview suggests common contact fields and allows
+manual mapping, delimiter selection, and files without headers. UTF-8 (with or
+without BOM), UTF-16 with BOM, and Windows-1252 are supported. Limits: 10 MB,
+10,000 rows, 100 columns, 10,000 characters per cell. Excel workbooks must be saved
+as CSV first. Duplicate rows are reported and preserved, not silently merged.
+
+Every original column is retained under a stable positional ID, even when headers
+repeat or are blank. The spreadsheet supports inline cell/status/date edits,
+column selection, full-row search, sorting, pagination, and CSV export with
+formula-injection protection. Imported source URLs open from the lead's research
+section. Last touch and touch count are derived from logged outreach, not status
+changes. Touch input and display use New York time; timestamps are stored in UTC.
+
+Reps see only their own imports; team admins can review their team's imports.
+Reads, writes, exports, and promotion all enforce this scope. Mutations require a
+session CSRF token. Optimistic versions reject stale edits; request keys prevent
+duplicate imports/touches. `original_cells` preserves the uploaded data separately
+from working edits. No imported content is executed or rendered as HTML.
+
+**Add to CRM** is an explicit review form. One transaction creates or links a
+contact, carries research, working notes, outreach timestamps, phone numbers, and
+the next follow-up, and freezes the prospect row. New contacts remain assigned to
+the uploader. Existing contacts require an exact name plus matching email or
+normalized phone; a shared switchboard alone is not a match. Contacts assigned to
+another rep or marked Do not contact block promotion. Repeated/concurrent
+promotion requests cannot create duplicate contacts or activities. CRM work then
+continues on the contact; the prospect list remains a historical record.
+
+Implementation: `prospecting_service.py`, `prospecting_routes.py`,
+`templates/crm/prospecting.html`, and `static/{css,js}/prospecting.*`. The additive
+`prospect_lists`, `prospect_rows`, and `prospect_touches` tables initialize under
+the existing startup schema lock in `init_crm_tables()`; no backfill is needed.
+
+Verification (use a disposable PostgreSQL, never production):
+
+```sh
+PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
+  uv run --with flask --with psycopg2-binary --with requests python -m unittest discover -s dashboard_html -p prospecting_tests.py -v
+PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55443/postgres \
+  uv run --with flask --with psycopg2-binary --with requests python dashboard_html/tests/prospecting_preview.py
+playwright-cli -s=prospecting open http://127.0.0.1:5101/crm/prospecting
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_browser_checks.js
+```
 
 ## Files
 

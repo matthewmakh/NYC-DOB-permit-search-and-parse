@@ -437,6 +437,9 @@ def init_crm_tables():
         cur.execute("SELECT pg_advisory_xact_lock(86753091)")
         for statement in CRM_SCHEMA_STATEMENTS:
             cur.execute(statement)
+        from prospecting_service import SCHEMA as PROSPECTING_SCHEMA
+        for statement in PROSPECTING_SCHEMA:
+            cur.execute(statement)
         conn.commit()
     except Exception:
         conn.rollback()

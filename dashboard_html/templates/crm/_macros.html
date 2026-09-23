@@ -15,6 +15,7 @@
     <a href="/crm/followups" class="crm-sidebar__item{{ ' is-active' if active == 'followups' }}"><i class="far fa-calendar-check"></i> Follow-ups</a>
     <a href="/crm/notifications" class="crm-sidebar__item{{ ' is-active' if active == 'notifications' }}"><i class="far fa-bell"></i> Notifications<span class="crm-count is-alert" data-notification-count {{ 'hidden' if not notification_count }}>{{ notification_count or 0 }}</span></a>
     <div class="crm-sidebar__section">Records</div>
+    <a href="/crm/prospecting" class="crm-sidebar__item{{ ' is-active' if active == 'prospecting' }}"><i class="fas fa-table-cells"></i> Prospecting</a>
     <a href="/crm/buildings" class="crm-sidebar__item{{ ' is-active' if active == 'buildings' }}"><i class="fas fa-building"></i> Buildings</a>
     <a href="/crm/contacts" class="crm-sidebar__item{{ ' is-active' if active == 'contacts' }}"><i class="fas fa-user-group"></i> Contacts</a>
     <a href="/crm/deals" class="crm-sidebar__item{{ ' is-active' if active == 'deals' }}"><i class="fas fa-handshake"></i> Deals</a>

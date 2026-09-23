@@ -1,0 +1,64 @@
+// Run against tests/prospecting_preview.py, never the production site.
+async page => {
+    if (!page.url().startsWith('http://127.0.0.1:5101/')) throw new Error('Use the disposable local preview.');
+    const assert = (ok, message) => { if (!ok) throw new Error(message); };
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setViewportSize({width:1440,height:1000});
+    await page.emulateMedia({colorScheme:'light',reducedMotion:'reduce'});
+    await page.goto('http://127.0.0.1:5101/crm/prospecting');
+    await page.getByRole('button',{name:'Import CSV',exact:true}).click();
+    await page.locator('#prospect-upload-form input[type=file]').setInputFiles('dashboard_html/tests/fixtures/prospecting.csv');
+    await page.getByRole('button',{name:'Preview file',exact:true}).click();
+    await page.locator('#prospect-preview:not([hidden])').waitFor();
+    assert((await page.locator('#prospect-preview-summary').innerText()).includes('2 leads'), 'Preview count');
+    assert(await page.locator('[name=map_name]').inputValue() === 'c0', 'Suggested name mapping');
+    assert(await page.locator('#prospect-preview-table script').count() === 0, 'Preview escapes HTML');
+    await page.getByRole('button',{name:'Create prospect list',exact:true}).click();
+    await page.waitForURL(/prospecting\/[0-9]+$/);
+    await page.locator('#prospect-rows tr').first().waitFor();
+    assert(await page.locator('#prospect-rows tr').count()===2,'Both rows imported');
+    const firstRowId=await page.locator('#prospect-rows tr').first().getAttribute('data-row');
+    const cell=page.locator(`[data-row="${firstRowId}"] [data-cell=c2]`);
+    await cell.click();await page.locator('#prospect-rows textarea').fill('212-555-0199');
+    await page.locator('#prospect-rows textarea').press('Enter');
+    await page.waitForFunction(()=>document.querySelector('#prospect-message').textContent==='Cell saved.');
+    await page.reload();
+    assert(await cell.textContent()==='212-555-0199','Cell persisted');
+    await page.locator(`[data-open="${firstRowId}"]`).click();
+    await page.locator('#prospect-notes-form textarea').fill('Working note saved alongside touch');
+    await page.locator('#prospect-touch-form [name=outcome]').selectOption('meeting_set');
+    await page.locator('#prospect-touch-form [name=note]').fill('Requested a proposal');
+    await page.locator('#prospect-touch-form [name=next_follow_up]').fill('2026-10-01');
+    await page.getByRole('button',{name:'Save touch',exact:true}).click();
+    await page.getByRole('heading',{name:'Touch history · 1',exact:true}).waitFor();
+    assert(await page.locator('#prospect-notes-form textarea').inputValue()==='Working note saved alongside touch','Unsaved working notes preserved');
+    assert(await page.locator('#prospect-notes-form [name=status]').inputValue()==='interested','Outcome updates status');
+    await page.getByText('All imported columns (6)',{exact:true}).click();
+    assert(await page.locator('.prospect-research script').count()===0,'Imported HTML stays text');
+    assert(await page.locator('.prospect-research a').getAttribute('href')==='https://example.test/','Source is linked');
+    await page.getByText('Ready for CRM? Review & add contact',{exact:true}).click();
+    await page.getByRole('button',{name:'Add to CRM',exact:true}).click();
+    await page.getByRole('link',{name:'Open CRM contact',exact:true}).waitFor();
+    await page.locator('#prospect-lead-dialog [data-close]').click();
+    const apiResult = await page.evaluate(async id => (await fetch(`/crm/prospecting/api/rows/${id}`)).json(), firstRowId);
+    assert(apiResult.row.promoted_contact_id && apiResult.row.touch_count===1,'Promoted row retains history');
+    const before=(await page.locator('#prospect-summary').innerText());
+    assert(before.includes('1added to CRM'),'Promotion summary');
+    await page.locator('#prospect-filters [name=status]').selectOption('active');
+    await page.getByRole('button',{name:'Apply',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#prospect-rows tr').length===1);
+    assert((await page.locator('#prospect-rows').innerText()).includes('Other Person'),'Active filter excludes promotion');
+    for (const size of [{width:375,height:812},{width:812,height:375},{width:1440,height:1000}]) {
+        await page.setViewportSize(size);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No outer horizontal overflow');
+    }
+    await page.setViewportSize({width:375,height:812});
+    await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});
+    await page.reload();await page.locator('[data-open]').last().click();
+    assert(await page.locator('#prospect-lead-dialog').evaluate(el=>el.getBoundingClientRect().width<innerWidth),'Mobile dialog fits');
+    await page.keyboard.press('Escape');
+    assert(await page.locator('#prospect-lead-dialog').evaluate(el=>!el.open),'Escape closes dialog');
+    assert(errors.length===0,`Browser errors: ${errors.join('; ')}`);
+    return {passed:18, checks:'CSV preview/import, mapping, HTML escaping, inline edit, notes, touches, source link, promotion, filters, desktop/mobile/dark mode, keyboard dialog'};
+}

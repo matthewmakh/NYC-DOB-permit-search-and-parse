@@ -41,6 +41,8 @@ app.register_blueprint(auth_bp)
 # Register CRM blueprint (namespaced under /crm; crm_* tables only)
 from crm_routes import crm_bp
 app.register_blueprint(crm_bp)
+from prospecting_routes import prospecting_bp
+app.register_blueprint(prospecting_bp)
 
 # Activity logging - try to import, use stubs if not available
 try:

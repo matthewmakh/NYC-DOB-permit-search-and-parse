@@ -1,0 +1,82 @@
+/* Spreadsheet overflow stays inside the workspace, on both desktop and mobile. */
+.crm-main:has(#prospecting) { max-width: none; min-width: 0; }
+#prospecting [hidden], .prospect-dialog [hidden] { display: none !important; }
+#prospecting { min-width: 0; }
+#prospect-back { display: inline-block; margin-bottom: 12px; font-size: 13px; }
+#prospect-message:not(:empty) { padding: 12px 16px; margin-bottom: 16px; background: var(--c-blue-tint); border-radius: 8px; }
+.prospect-summary { display: flex; flex-wrap: wrap; gap: 12px 32px; padding: 16px 0 24px; }
+.prospect-summary strong { font-size: 24px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+.prospect-summary span { color: var(--c-label-2); font-size: 13px; }
+.prospect-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 16px; background: var(--c-surface); border: 1px solid var(--c-hairline); border-radius: 12px; }
+.prospect-toolbar label, .prospect-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; min-width: 0; }
+.prospect-toolbar label:first-child { flex: 1 1 220px; }
+.prospect-toolbar input, .prospect-toolbar select, .prospect-form input, .prospect-form select, .prospect-form textarea { width: 100%; min-width: 0; border: 1px solid var(--c-hairline); border-radius: 7px; background: var(--c-surface); color: var(--c-label); padding: 10px; font: inherit; min-height: 42px; }
+.prospect-check { flex-direction: row !important; align-items: center; min-height: 44px; }
+.prospect-check input { width: 18px; min-height: 18px; }
+.prospect-hint { font-size: 12px; color: var(--c-label-2); margin: 12px 0; }
+.prospect-table-wrap { overflow: auto; max-height: 68vh; border: 1px solid var(--c-hairline); border-radius: 10px; background: var(--c-surface); }
+.prospect-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 13px; }
+.prospect-table th, .prospect-table td { padding: 0; border-bottom: 1px solid var(--c-sep); border-right: 1px solid var(--c-sep); vertical-align: middle; min-width: 160px; max-width: 300px; }
+.prospect-table th { position: sticky; top: 0; z-index: 2; text-align: left; background: var(--c-surface-2); padding: 12px; font-size: 11px; letter-spacing: .025em; text-transform: uppercase; }
+.prospect-table td { height: 56px; background: var(--c-surface); }
+.prospect-table tr:hover td { background: var(--c-surface-2); }
+.prospect-table th:first-child, .prospect-table td:first-child { position: sticky; left: 0; z-index: 1; min-width: 235px; width: 235px; border-right: 2px solid var(--c-hairline); }
+.prospect-table th:first-child { z-index: 3; }
+.prospect-table .prospect-count-col { min-width: 74px; width: 74px; }
+.prospect-table td > span { display: block; padding: 12px; }
+.prospect-cell, .prospect-open { display: block; width: 100%; max-width: 300px; min-height: 55px; padding: 10px 12px; background: transparent; border: 0; text-align: left; color: var(--c-label); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prospect-open { color: var(--c-blue-ink); font-weight: 600; max-width: 235px; }
+.prospect-open small { display: block; font-weight: 400; color: var(--c-label-2); padding-top: 4px; overflow: hidden; text-overflow: ellipsis; }
+.prospect-table select, .prospect-table input { margin: 6px; padding: 9px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--c-label); font: inherit; width: calc(100% - 12px); min-height: 42px; }
+.prospect-table select:hover, .prospect-table input:hover { border-color: var(--c-hairline); }
+.prospect-cell:focus-visible, .prospect-open:focus-visible, #prospecting :focus-visible, .prospect-dialog :focus-visible { outline: 2px solid var(--c-blue-ink); outline-offset: -2px; }
+.prospect-table textarea { width: 280px; min-height: 80px; font: inherit; background: var(--c-surface); color: var(--c-label); }
+.prospect-pagination { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; font-size: 13px; }
+.prospect-pagination > div { display: flex; gap: 8px; }
+.prospect-columns { position: relative; }
+.prospect-columns > div { position: absolute; right: 0; top: 48px; z-index: 5; width: 260px; max-height: 320px; overflow: auto; padding: 12px; background: var(--c-surface); border: 1px solid var(--c-hairline); border-radius: 10px; box-shadow: var(--c-shadow-pop); }
+.prospect-columns label { display: flex; flex-direction: row; padding: 7px; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.prospect-columns input { width: 16px; min-height: 16px; }
+.prospect-list-card { display: flex; align-items: center; gap: 24px; justify-content: space-between; background: var(--c-surface); border: 1px solid var(--c-hairline); padding: 20px; margin-bottom: 12px; border-radius: 12px; text-decoration: none; color: var(--c-label); }
+.prospect-list-card:hover { border-color: var(--c-blue-ink); }
+.prospect-list-card h2 { font-size: 17px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.prospect-list-card p { font-size: 13px; color: var(--c-label-2); margin: 0; }
+.prospect-list-card > span { flex-shrink: 0; font-size: 13px; color: var(--c-blue-ink); }
+.prospect-empty { text-align: center; padding: 64px 24px; background: var(--c-surface); border: 1px dashed var(--c-hairline); border-radius: 12px; }
+.prospect-empty h2 { font-size: 20px; margin-bottom: 12px; }
+.prospect-empty p { color: var(--c-label-2); }
+.prospect-dialog { border: 1px solid var(--c-hairline); border-radius: 16px; background: var(--c-surface); color: var(--c-label); padding: 24px; width: min(760px, calc(100vw - 32px)); max-height: 88dvh; overflow: auto; margin: auto; box-shadow: var(--c-shadow-pop); }
+.prospect-dialog::backdrop { background: rgba(0,0,0,.48); }
+.prospect-dialog-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 18px; }
+.prospect-dialog h2 { font-size: 21px; margin: 0; overflow-wrap: anywhere; }
+.prospect-dialog h3 { font-size: 16px; margin: 24px 0 12px; }
+.prospect-dialog p { font-size: 13px; line-height: 1.6; }
+.prospect-dialog summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.prospect-form { display: grid; gap: 16px; }
+.prospect-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.prospect-form textarea { min-height: 95px; resize: vertical; }
+.prospect-form .cbtn { justify-self: start; }
+.prospect-error { color: var(--c-red-ink); white-space: pre-wrap; }
+.prospect-eyebrow { color: var(--c-label-2); margin: 0 0 4px; font-size: 11px !important; text-transform: uppercase; letter-spacing: .06em; }
+.prospect-preview-table { overflow: auto; max-height: 260px; }
+.prospect-preview-table table { border-collapse: collapse; font-size: 12px; }
+.prospect-preview-table th, .prospect-preview-table td { min-width: 160px; padding: 8px; border: 1px solid var(--c-hairline); text-align: left; max-width: 260px; overflow-wrap: anywhere; }
+.prospect-research { display: grid; grid-template-columns: minmax(110px, 1fr) 3fr; font-size: 13px; }
+.prospect-research dt, .prospect-research dd { padding: 10px 0; border-bottom: 1px solid var(--c-sep); overflow-wrap: anywhere; margin: 0; white-space: pre-wrap; }
+.prospect-research dt { color: var(--c-label-2); padding-right: 12px; }
+.prospect-touch { border-left: 2px solid var(--c-hairline); padding: 0 0 18px 16px; margin-left: 3px; font-size: 13px; }
+.prospect-touch p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0; }
+.prospect-touch small { color: var(--c-label-2); }
+.prospect-promote { margin-top: 24px; padding: 16px; background: var(--c-blue-tint); border-radius: 10px; }
+@media (max-width: 600px) {
+    .prospect-toolbar > label, .prospect-toolbar > label:first-child { flex: 1 1 100%; }
+    .prospect-summary { gap: 12px 20px; }
+    .prospect-summary strong { font-size: 20px; }
+    .prospect-form-grid { grid-template-columns: 1fr; }
+    .prospect-dialog { padding: 18px; }
+    .prospect-list-card { gap: 12px; padding: 16px; }
+    .prospect-list-card > span { max-width: 80px; }
+    .prospect-table th:first-child, .prospect-table td:first-child { position: static; min-width: 200px; }
+    .prospect-columns > div { left: 0; right: auto; }
+    .prospect-pagination { flex-wrap: wrap; }
+}

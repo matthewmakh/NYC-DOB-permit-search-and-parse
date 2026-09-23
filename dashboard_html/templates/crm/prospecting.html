@@ -1,0 +1,62 @@
+{% extends "crm/_layout.html" %}
+{% block title %}Prospecting — NYC Permit Leads{% endblock %}
+{% block extra_css %}{{ super() }}<link rel="stylesheet" href="{{ url_for('static', filename='css/prospecting.css') }}">{% endblock %}
+{% block crm_content %}
+<section id="prospecting" aria-label="Prospecting workspace">
+    <div class="crm-title">
+        <div><a id="prospect-back" href="/crm/prospecting" hidden>All prospect lists</a>
+            <h1 class="crm-large-title" id="prospect-title">Prospecting</h1>
+            <p class="crm-subtitle" id="prospect-subtitle">Work your lead lists. Add the promising contacts to CRM when you’re ready.</p></div>
+        <div class="crm-title-actions"><a id="prospect-export" class="cbtn" hidden>Export CSV</a>
+            <button type="button" class="cbtn cbtn-primary" id="prospect-import">Import CSV</button></div>
+    </div>
+    <div id="prospect-message" role="status" aria-live="polite"></div>
+    <div id="prospect-lists"></div>
+    <div id="prospect-workspace" hidden>
+        <div class="prospect-summary" id="prospect-summary"></div>
+        <form class="prospect-toolbar" id="prospect-filters">
+            <label>Search<input type="search" name="q" placeholder="Search any column or notes" maxlength="200"></label>
+            <label>Status<select name="status"><option value="">All leads</option><option value="active">Not in CRM</option><option value="promoted">Added to CRM</option></select></label>
+            <label>Sort<select name="sort"><option value="position">File order</option><option value="name">Name</option><option value="last_touch">Last touch</option><option value="follow_up">Next follow-up</option><option value="status">Status</option></select></label>
+            <label class="prospect-check"><input type="checkbox" name="due"> Follow-ups due</label>
+            <button class="cbtn" type="submit">Apply</button>
+            <details class="prospect-columns"><summary class="cbtn">Columns</summary><div id="prospect-columns"></div></details>
+        </form>
+        <p class="prospect-hint">Click a cell to edit it. Open a lead to view research, log a touch, or add it to CRM.</p>
+        <div class="prospect-table-wrap" tabindex="0" role="region" aria-label="Lead spreadsheet, scroll horizontally for more columns">
+            <table class="prospect-table"><thead id="prospect-head"></thead><tbody id="prospect-rows"></tbody></table>
+        </div>
+        <div class="prospect-pagination"><span id="prospect-page-label"></span><div>
+            <button class="cbtn" id="prospect-prev" type="button">Previous</button>
+            <button class="cbtn" id="prospect-next" type="button">Next</button></div></div>
+    </div>
+</section>
+
+<dialog class="prospect-dialog prospect-import-dialog" id="prospect-import-dialog" aria-labelledby="prospect-import-title">
+    <div class="prospect-dialog-head"><h2 id="prospect-import-title">Import a prospect list</h2><button class="cbtn" type="button" data-close>Close</button></div>
+    <p>CSV or TSV, up to 10 MB and 10,000 leads. Every column is kept. Nothing is added to CRM during import.</p>
+    <form id="prospect-upload-form" class="prospect-form">
+        <label>File<input type="file" name="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" required></label>
+        <div class="prospect-form-grid"><label>Separator<select name="delimiter"><option value="auto">Detect automatically</option><option value=",">Comma</option><option value=";">Semicolon</option><option value="&#9;">Tab</option><option value="|">Pipe</option></select></label>
+            <label class="prospect-check"><input type="checkbox" name="has_header" checked> First row contains column names</label></div>
+        <button class="cbtn" type="submit">Preview file</button>
+    </form>
+    <div id="prospect-preview" hidden>
+        <p id="prospect-preview-summary"></p>
+        <form id="prospect-import-form" class="prospect-form">
+            <label>List name<input name="name" required maxlength="200"></label>
+            <details open><summary>Match your columns</summary><p class="prospect-hint">Review the suggested matches. Unmatched fields are fine; all original columns remain available.</p><div id="prospect-mapping" class="prospect-form-grid"></div></details>
+            <details><summary>Preview first five rows</summary><div class="prospect-preview-table" id="prospect-preview-table"></div></details>
+            <button class="cbtn cbtn-primary" type="submit">Create prospect list</button>
+        </form>
+    </div>
+    <p class="prospect-error" id="prospect-import-error" role="alert"></p>
+</dialog>
+
+<dialog class="prospect-dialog prospect-lead-dialog" id="prospect-lead-dialog" aria-labelledby="prospect-lead-title">
+    <div class="prospect-dialog-head"><div><p class="prospect-eyebrow">Prospect details</p><h2 id="prospect-lead-title"></h2></div><button class="cbtn" type="button" data-close>Close</button></div>
+    <div id="prospect-lead-body"></div>
+    <p class="prospect-error" id="prospect-lead-error" role="alert"></p>
+</dialog>
+{% endblock %}
+{% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script>{% endblock %}
