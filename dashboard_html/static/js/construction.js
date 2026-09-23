@@ -56,11 +56,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) searchInput.value = initialQuery;
     
     if (typeof L === 'undefined') {
-        showToast('Map library failed to load', 'error');
-        return;
+        showToast('Map unavailable. You can still browse permit results.', 'error');
+        document.getElementById('mapLoadingOverlay')?.classList.add('hidden');
+    } else {
+        initializeMap();
     }
-    
-    initializeMap();
     setupEventListeners();
     setupKeyboardShortcuts();
     loadAllData();
@@ -635,9 +635,9 @@ function displayContractors(contractors) {
     listEl.innerHTML = html;
 }
 
-function switchTab(tabName) {
+function switchTab(tabName, trigger) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    event.target.closest('.tab-btn').classList.add('active');
+    trigger?.classList.add('active');
     
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
     const tabEl = document.getElementById(`${tabName}Tab`);

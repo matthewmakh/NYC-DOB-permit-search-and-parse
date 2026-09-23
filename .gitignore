@@ -49,3 +49,6 @@ postgres_schema.sql
 
 # Proxy auth
 proxy_auth_plugin.zip
+
+# Local browser verification output
+.playwright-cli/

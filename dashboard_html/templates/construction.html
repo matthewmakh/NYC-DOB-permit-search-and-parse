@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Permit Leads — NYC Permit Leads</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/navigation.css') }}">
@@ -595,6 +595,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/static/css/mobile.css">
 </head>
 <body>
     {% from "_site_nav.html" import site_nav with context %}
@@ -611,7 +612,7 @@
                 Search NYC permits by address, permit number, applicant, job type, borough, recency, and contact availability.
             </p>
             
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+            <div class="stats-grid permit-stats-grid">
                 <div class="stat-box">
                     <div class="stat-icon" style="background: linear-gradient(135deg, #3b82f6, #2563eb);">
                         <i class="fas fa-hard-hat"></i>
@@ -655,9 +656,10 @@
         </section>
 
         <!-- Main Grid -->
-        <div class="construction-container">
+        <div class="construction-container" data-mobile-filter-toolbar>
             <!-- Left: Map Section -->
             <div class="map-section">
+                <button type="button" class="mobile-map-toggle btn btn-secondary" aria-expanded="false" aria-controls="constructionMap">Show permit map</button>
                 <div id="constructionMap" style="position: relative;">
                     <div id="mapLoadingOverlay" class="map-loading-overlay">
                         <div class="loading-spinner"></div>
@@ -669,19 +671,19 @@
                 <!-- Bottom Tabs -->
                 <div class="bottom-tabs">
                     <div class="tab-nav">
-                        <button class="tab-btn active" onclick="switchTab('permits')">
+                        <button class="tab-btn active" onclick="switchTab('permits', this)">
                             <i class="fas fa-list"></i> Permits List
                         </button>
-                        <button class="tab-btn" onclick="switchTab('contractors')">
+                        <button class="tab-btn" onclick="switchTab('contractors', this)">
                             <i class="fas fa-users"></i> Top Contractors
                         </button>
-                        <button class="tab-btn" onclick="switchTab('trends')">
+                        <button class="tab-btn" onclick="switchTab('trends', this)">
                             <i class="fas fa-chart-line"></i> Trends
                         </button>
-                        <button class="tab-btn" onclick="switchTab('types')">
+                        <button class="tab-btn" onclick="switchTab('types', this)">
                             <i class="fas fa-th-list"></i> By Type
                         </button>
-                        <button class="tab-btn" onclick="switchTab('boroughs')">
+                        <button class="tab-btn" onclick="switchTab('boroughs', this)">
                             <i class="fas fa-map"></i> By Borough
                         </button>
                     </div>
@@ -777,7 +779,7 @@
             <!-- Right: Sidebar -->
             <div class="sidebar">
                 <!-- Filters -->
-                <div class="filter-panel">
+                <div class="filter-panel" data-mobile-filters>
                     <h3 style="font-size: 1.125rem; font-weight: 700; margin-bottom: var(--spacing-lg); color: var(--text-primary);">
                         <i class="fas fa-filter"></i> Filters
                     </h3>
@@ -889,5 +891,6 @@
     <script src="{{ url_for('static', filename='js/navigation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/loading.js') }}"></script>
     <script src="{{ url_for('static', filename='js/construction.js') }}"></script>
+    <script src="/static/js/mobile.js"></script>
 </body>
 </html>

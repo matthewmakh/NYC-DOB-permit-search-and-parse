@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Permit Participants — NYC Permit Leads</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/mobile.css">
 </head>
 <body>
     {% from "_site_nav.html" import site_nav with context %}
@@ -18,7 +19,7 @@
     <div class="main-container">
         <!-- Sidebar filters — the same set the properties page uses, so a
              filter applies identically whichever page you are on. -->
-        <aside class="sidebar">
+        <aside class="sidebar" data-mobile-filters>
             <div class="sidebar-header">
                 <h2>Filters</h2>
                 <button class="btn-clear" id="clearFiltersBtn">Clear all</button>
@@ -26,13 +27,13 @@
 
             <div class="filter-section">
                 <h3>Search</h3>
-                <input type="text" id="contractorSearch" class="filter-input"
+                <input type="text" id="contractorSearch" aria-label="Search company, person or licence number" class="filter-input"
                     placeholder="Company, person, or licence number">
             </div>
 
             <div class="filter-section">
                 <h3>Participant role</h3>
-                <select id="participantRole" class="filter-input">
+                <select id="participantRole" aria-label="Participant role" class="filter-input">
                     <option value="">All roles</option>
                     <option value="permittee">Permittee</option>
                     <option value="filing_applicant">Filing applicant</option>
@@ -54,14 +55,14 @@
             <div class="filter-section">
                 <h3>Total jobs</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minJobs" class="filter-input" placeholder="Min">
-                    <input type="number" id="maxJobs" class="filter-input" placeholder="Max">
+                    <input type="number" id="minJobs" aria-label="Minimum total jobs" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxJobs" aria-label="Maximum total jobs" class="filter-input" placeholder="Max">
                 </div>
             </div>
 
             <div class="filter-section">
                 <h3>Active jobs</h3>
-                <input type="number" id="minActiveJobs" class="filter-input"
+                <input type="number" id="minActiveJobs" aria-label="Minimum active jobs" class="filter-input"
                     placeholder="Min in last 90 days">
                 <small class="filter-hint">Permits issued in the last 90 days.</small>
             </div>
@@ -69,8 +70,8 @@
             <div class="filter-section">
                 <h3>Properties worked</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minProperties" class="filter-input" placeholder="Min">
-                    <input type="number" id="maxProperties" class="filter-input" placeholder="Max">
+                    <input type="number" id="minProperties" aria-label="Minimum properties worked" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxProperties" aria-label="Maximum properties worked" class="filter-input" placeholder="Max">
                 </div>
                 <small class="filter-hint">Distinct buildings, not permit count.</small>
             </div>
@@ -230,5 +231,6 @@
     <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/contractors.js"></script>
+    <script src="/static/js/mobile.js"></script>
 </body>
 </html>

@@ -133,16 +133,39 @@
         });
     }
 
+    const sheetOpeners = new WeakMap();
+    function syncSheetBackground() {
+        const open = Boolean($('.crm-sheet.is-open'));
+        document.body.classList.toggle('crm-modal-open', open);
+        $all('.site-nav, .crm-app, .crm-tabbar').forEach(node => { node.inert = open; });
+    }
+    document.addEventListener('keydown', event => {
+        const sheet = $('.crm-sheet.is-open');
+        if (!sheet || event.key !== 'Tab') return;
+        const controls = $all('button, input, select, textarea, a[href], [tabindex="0"]', sheet)
+            .filter(node => !node.disabled && node.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    });
     function openSheet(id) {
         const sheet = document.getElementById(id);
         if (!sheet) return null;
         resetButtons(sheet);
+        sheetOpeners.set(sheet, document.activeElement);
         sheet.classList.add('is-open');
+        syncSheetBackground();
+        sheet.querySelector('.js-sheet-close')?.focus({ preventScroll: true });
         const first = $('input:not([type=hidden]):not([type=checkbox]), textarea, select', sheet);
         if (first && window.innerWidth > 860) setTimeout(() => first.focus(), 30);
         return sheet;
     }
-    function closeSheet(sheet) { if (sheet) sheet.classList.remove('is-open'); }
+    function closeSheet(sheet) {
+        if (!sheet) return;
+        sheet.classList.remove('is-open');
+        syncSheetBackground();
+        sheetOpeners.get(sheet)?.focus({ preventScroll: true });
+    }
     function closeAllSheets() { $all('.crm-sheet.is-open').forEach(closeSheet); closePalette(); }
 
     document.addEventListener('click', (e) => {

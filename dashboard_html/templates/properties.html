@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Properties — NYC Permit Leads</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/mobile.css">
 </head>
 <body>
     {% from "_site_nav.html" import site_nav with context %}
@@ -47,7 +48,7 @@
 
     <div class="main-container">
         <!-- Sidebar filters -->
-        <aside class="sidebar">
+        <aside class="sidebar" data-mobile-filters>
             <div class="sidebar-header">
                 <h2>Filters</h2>
                 <button class="btn-clear" id="clearFiltersBtn">Clear all</button>
@@ -55,13 +56,13 @@
 
             <div class="filter-section">
                 <h3>Search</h3>
-                <input type="text" id="universalSearch" class="filter-input"
+                <input type="text" id="universalSearch" aria-label="Search address, BBL, owner or ZIP" class="filter-input"
                     placeholder="Address, BBL, owner, ZIP">
             </div>
 
             <div class="filter-section">
                 <h3>Owner</h3>
-                <input type="text" id="ownerSearch" class="filter-input"
+                <input type="text" id="ownerSearch" aria-label="Owner name" class="filter-input"
                     placeholder="Owner name">
                 <small class="filter-hint">Click a property's owner to see their full portfolio.</small>
             </div>
@@ -69,16 +70,16 @@
             <div class="filter-section">
                 <h3>Sale price</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minSalePrice" class="filter-input" placeholder="Min $">
-                    <input type="number" id="maxSalePrice" class="filter-input" placeholder="Max $">
+                    <input type="number" id="minSalePrice" aria-label="Minimum sale price" class="filter-input" placeholder="Min $">
+                    <input type="number" id="maxSalePrice" aria-label="Maximum sale price" class="filter-input" placeholder="Max $">
                 </div>
             </div>
 
             <div class="filter-section">
                 <h3>Sale date</h3>
                 <div class="range-inputs">
-                    <input type="date" id="saleDateFrom" class="filter-input">
-                    <input type="date" id="saleDateTo" class="filter-input">
+                    <input type="date" id="saleDateFrom" aria-label="Sale date from" class="filter-input">
+                    <input type="date" id="saleDateTo" aria-label="Sale date to" class="filter-input">
                 </div>
             </div>
 
@@ -87,9 +88,9 @@
             <div class="filter-section">
                 <h3>Financing ratio</h3>
                 <div class="range-inputs">
-                    <input type="number" id="financingMin" class="filter-input"
+                    <input type="number" id="financingMin" aria-label="Minimum financing ratio" class="filter-input"
                         placeholder="Min %" min="0" max="100">
-                    <input type="number" id="financingMax" class="filter-input"
+                    <input type="number" id="financingMax" aria-label="Maximum financing ratio" class="filter-input"
                         placeholder="Max %" min="0" max="100">
                 </div>
             </div>
@@ -438,5 +439,6 @@
     <script src="/static/js/multiselect.js"></script>
     <script src="/static/js/filters_common.js"></script>
     <script src="/static/js/properties.js"></script>
+    <script src="/static/js/mobile.js"></script>
 </body>
 </html>

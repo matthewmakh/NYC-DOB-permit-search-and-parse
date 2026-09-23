@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Activity Logs - Admin Panel</title>
     <link rel="stylesheet" href="/static/css/main.css">
     <link rel="stylesheet" href="/static/css/navigation.css">
@@ -506,6 +506,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/static/css/mobile.css">
 </head>
 <body>
     {% from "_site_nav.html" import site_nav with context %}
@@ -1152,5 +1153,6 @@
             return icons[type] || '<i class="fas fa-question device-icon"></i>';
         }
     </script>
+    <script src="/static/js/mobile.js"></script>
 </body>
 </html>

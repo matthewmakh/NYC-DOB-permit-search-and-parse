@@ -585,6 +585,7 @@
         document.body.classList.remove('sr-filters-open');
         el('filterBackdrop').hidden = true;
         el('openFiltersBtn').setAttribute('aria-expanded', 'false');
+        if (window.innerWidth <= 900) el('openFiltersBtn').focus({ preventScroll: true });
     }
 
     function bindEvents() {
@@ -685,7 +686,18 @@
         el('filterBackdrop').addEventListener('click', closeFilters);
         el('applyFiltersBtn').addEventListener('click', closeFilters);
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && document.body.classList.contains('sr-filters-open')) closeFilters();
+            if (!document.body.classList.contains('sr-filters-open')) return;
+            if (event.key === 'Escape') closeFilters();
+            if (event.key === 'Tab') {
+                const controls = [...el('searchFilters').querySelectorAll('button, input, select, a[href], [tabindex="0"]')]
+                    .filter(node => !node.disabled && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+                const first = controls[0], last = controls[controls.length - 1];
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+            }
+        });
+        window.matchMedia('(max-width: 900px)').addEventListener('change', event => {
+            if (!event.matches) closeFilters();
         });
         window.addEventListener('popstate', () => {
             state = readUrlState();

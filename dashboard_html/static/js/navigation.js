@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         toggle.addEventListener('click', () => setOpen(!nav.classList.contains('is-open')));
+        document.addEventListener('click', event => {
+            if (!nav.contains(event.target)) setOpen(false);
+        });
         nav.querySelectorAll('.site-nav__link').forEach(link => {
             link.addEventListener('click', () => setOpen(false));
         });
