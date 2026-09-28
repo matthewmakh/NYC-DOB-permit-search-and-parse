@@ -1,9 +1,9 @@
-"""Refresh daily DOB Safety totals with one complete citywide aggregate sweep."""
+"""Refresh daily DOB Safety totals after a complete, partitioned citywide sweep."""
 import _pipeline_path  # noqa: F401
 import psycopg2
 from psycopg2.extras import execute_values
 from migrate_add_freshness_and_jobs import database_dsn
-from socrata_client import SocrataClient, SocrataError
+from socrata_client import SocrataClient, SocrataError, SocrataTransientError
 from step4_enrich_from_tax_liens import safety_violation_is_open
 
 
@@ -23,13 +23,41 @@ def aggregate_safety(rows):
     return [(bbl, *counts) for bbl, counts in totals.items()]
 
 
+def fetch_safety_snapshot(client):
+    """Bound each aggregation by BBL range instead of regrouping the whole city.
+
+    A slow range can split three times; a sustained outage still fails the run.
+    Failed pages are discarded by get_all, so a split cannot double-count them.
+    Every range must finish before main opens a database connection.
+    """
+    def fetch_range(lower, upper, splits_left=3):
+        try:
+            return client.get_all('dob_safety_violations', page_size=10000, max_rows=2000000, **{
+                '$where': f'bbl >= {lower} AND bbl < {upper}',
+                '$select': 'bbl, violation_status, count(*) AS violation_count',
+                '$group': 'bbl, violation_status', '$order': 'bbl, violation_status',
+            })
+        except SocrataTransientError:
+            if not splits_left:
+                raise
+            midpoint = (lower + upper) // 2
+            print(f'DOB Safety range {lower}–{upper} timed out or unavailable; splitting query', flush=True)
+            return (fetch_range(lower, midpoint, splits_left - 1)
+                    + fetch_range(midpoint, upper, splits_left - 1))
+
+    rows = []
+    for borough in range(1, 6):
+        rows.extend(fetch_range(borough * 1000000000, (borough + 1) * 1000000000))
+        if len(rows) > 2000000:
+            raise SocrataError('Citywide Safety snapshot exceeds the 2000000 row safety limit')
+        print(f'DOB Safety borough {borough}/5 fetched ({len(rows):,} aggregate rows so far)', flush=True)
+    return rows
+
+
 def main():
-    client = SocrataClient()
-    rows = client.get_all('dob_safety_violations', page_size=10000, max_rows=2000000, **{
-        '$where': 'bbl IS NOT NULL AND bbl >= 1000000000 AND bbl < 6000000000',
-        '$select': 'bbl, violation_status, count(*) AS violation_count',
-        '$group': 'bbl, violation_status', '$order': 'bbl, violation_status',
-    })
+    # Citywide aggregates can exceed the shared client's 20-second default.
+    client = SocrataClient(timeout=60, max_retries=3)
+    rows = fetch_safety_snapshot(client)
     totals = aggregate_safety(rows)
     # Fetch completes before any write; outage/truncation cannot erase counts.
     with psycopg2.connect(database_dsn()) as conn:

@@ -318,7 +318,8 @@ class SocrataClient:
             except requests.RequestException as e:
                 last_error = str(e)
                 time.sleep(2 ** attempt)
-        raise SocrataError(f"Request failed after {self.max_retries} attempts ({last_error})")
+        raise SocrataTransientError(
+            f"Request for {dataset} failed after {self.max_retries} attempts ({last_error})")
 
     def get_all(self, dataset, page_size=1000, max_rows=100000, **params):
         """Paginate to completion; raise rather than return truncated data.
@@ -389,6 +390,10 @@ class SocrataClient:
 
 class SocrataError(Exception):
     pass
+
+
+class SocrataTransientError(SocrataError):
+    """A timeout, connection failure, or retryable HTTP error exhausted retries."""
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ import psycopg2.extras
 from dotenv import load_dotenv
 
 import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
-from socrata_client import SocrataClient, where_block_lot, soql_quote, bbl_parts
+from socrata_client import SocrataClient, where_block_lot, soql_quote, bbl_parts, in_clause
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -59,7 +59,7 @@ SIGNALS_MAX_BUILDINGS = max(0, int(os.getenv('SIGNALS_MAX_BUILDINGS', '0')))
 SIGNALS_PROGRESS_EVERY = max(1, int(os.getenv('SIGNALS_PROGRESS_EVERY', '100')))
 # Bump this whenever source mappings or signal semantics change. A building is
 # current only after every source succeeds under this version.
-SIGNALS_ENRICHMENT_VERSION = 3
+SIGNALS_ENRICHMENT_VERSION = 4
 # LL97 broadly covers buildings over 25,000 sqft; the official covered-
 # buildings list is only published as a DOB spreadsheet, so we estimate.
 LL97_SQFT_THRESHOLD = 25000
@@ -83,9 +83,13 @@ def parse_any_date(value):
     if not value:
         return None
     text = str(value).strip()
-    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y%m%d'):
+    if not text:
+        return None
+    # DOB NOW uses strings like "06/18/25  9:43:09 AM", unlike BIS ISO dates.
+    date_text = text.split()[0][:10]
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y%m%d', '%m/%d/%y'):
         try:
-            return datetime.strptime(text[:10], fmt).date()
+            return datetime.strptime(date_text, fmt).date()
         except ValueError:
             continue
     return None
@@ -232,7 +236,48 @@ def fetch_speculation(bbl, bin_number):
     }
 
 
+def _usable_bin(bin_number, bbl):
+    """Borough-wide placeholder BINs (e.g. 3000000) identify no building."""
+    value = str(bin_number or '').strip()
+    if (len(value) == 7 and value.isascii() and value.isdigit()
+            and value[0] in '12345' and value[0] == str(bbl)[:1]
+            and value[1:] != '000000'):
+        return value
+    return None
+
+
+def _dob_parcel_where(columns, bbl):
+    """Match DOB's geocoded BBL or its original borough/block/lot columns.
+
+    Legacy CO lots use five digits; DOB NOW commonly strips the padding.
+    Boroughs are names in both current CO feeds. Raw parcel fields also cover
+    records whose added geocoded BBL is missing.
+    """
+    bbl = str(bbl)
+    if len(bbl) != 10 or not bbl.isascii() or not bbl.isdigit() or bbl[0] not in '12345':
+        raise ValueError('Invalid BBL for DOB parcel lookup')
+    clauses = []
+    if 'bbl' in columns:
+        clauses.append(f'bbl={soql_quote(bbl)}')
+    boro_col = _first_present(columns, ['borough', 'boro'])
+    if boro_col and {'block', 'lot'} <= columns:
+        boro, block, lot, block_p, lot_p = bbl_parts(bbl)
+        borough_names = {'1': 'MANHATTAN', '2': 'BRONX', '3': 'BROOKLYN',
+                         '4': 'QUEENS', '5': 'STATEN ISLAND'}
+        borough_forms = [boro, borough_names[boro]]
+        if boro == '5':
+            borough_forms.append('RICHMOND')
+        clauses.append(
+            f"({in_clause(f'upper({boro_col})', borough_forms)} AND "
+            f"{in_clause('block', sorted({block, block_p}))} AND "
+            f"{in_clause('lot', sorted({lot, lot_p, lot.zfill(5)}))})")
+    if not clauses:
+        raise RuntimeError('DOB source has no usable BBL or borough/block/lot fields')
+    return ' OR '.join(clauses)
+
+
 def fetch_dob_complaints(bbl, bin_number):
+    bin_number = _usable_bin(bin_number, bbl)
     if not bin_number:
         return {
             'dob_complaint_count': None,
@@ -255,15 +300,11 @@ def fetch_dob_complaints(bbl, bin_number):
 def _fetch_cos_from(dataset, bin_number, bbl):
     columns = _get_client().get_columns(dataset)
     bin_col = _first_present(columns, ['bin', 'bin_number', 'bin_num'])
+    bin_number = _usable_bin(bin_number, bbl)
     if bin_col and bin_number:
         where = f"{bin_col}={soql_quote(bin_number)}"
-    elif {'block', 'lot'} <= columns:
-        boro_col = _first_present(columns, ['borough', 'boro'])
-        if not boro_col:
-            raise RuntimeError(f'{dataset} has block/lot but no borough field')
-        where = where_block_lot(boro_col, 'block', 'lot', bbl)
     else:
-        raise RuntimeError(f'{dataset} has no usable BIN or block/lot fields')
+        where = _dob_parcel_where(columns, bbl)
     rows = _get_client().get_all(dataset, page_size=1000, max_rows=2000, **{'$where': where})
     date_col = _first_present(columns, [
         'c_of_o_issuance_date', 'c_of_o_issue_date', 'c_o_issue_date',
@@ -310,15 +351,11 @@ def fetch_certificates_of_occupancy(bbl, bin_number):
 def fetch_fisp(bbl, bin_number):
     columns = _get_client().get_columns('fisp_facades')
     bin_col = _first_present(columns, ['bin', 'bin_number'])
+    bin_number = _usable_bin(bin_number, bbl)
     if bin_col and bin_number:
         where = f"{bin_col}={soql_quote(bin_number)}"
-    elif {'block', 'lot'} <= columns:
-        boro_col = _first_present(columns, ['borough', 'boro'])
-        if not boro_col:
-            raise RuntimeError('FISP Facades has block/lot but no borough field')
-        where = where_block_lot(boro_col, 'block', 'lot', bbl)
     else:
-        raise RuntimeError('FISP Facades has no usable BIN or block/lot fields')
+        where = _dob_parcel_where(columns, bbl)
     rows = _get_client().get_all('fisp_facades', page_size=500, max_rows=1000, **{
         '$where': where,
     })
