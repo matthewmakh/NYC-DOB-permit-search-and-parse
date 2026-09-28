@@ -116,16 +116,19 @@ evidence to the sheet, which then travels with reassignment.
 
 The initial pass checks accessible CRM contacts, public property records, the
 permit contact directory, and the requester's previously unlocked owner data.
-A name plus company/email/phone is required for a CRM identity match; company
-or name-only hits remain unchecked candidates. Ambiguous matches never supply
+A name plus matching email or phone in one accessible CRM record is required
+for field proposals; name-plus-company and company-only hits remain unchecked
+candidates. This is corroboration, not a guarantee of identity. Ambiguous matches never supply
 automatic person-field replacements. No paid provider or billing function is
 called by this feature.
 
 Advanced research reuses read-only fetchers for PLUTO, HPD, historical RPAD,
 ACRIS, lien-sale notices, ECB, DOB/BIS violations, DOB NOW Safety, BIS permits,
 DOB NOW filings/permits, and the NY business registry. It retains source roles:
-agents, applicants and respondents are not asserted to be owners. Geocoded
+agents, applicants and respondents are not asserted to be owners. Geocoded and cached-address
 property candidates require review; a mapped BBL is the strongest parcel key.
+Name-only NY registry matches and previously unlocked contact lookups remain
+unchecked research candidates. Corporate suffix normalization is not legal identity.
 Permit evidence is bounded to 20 recent records per source, and candidate
 searches show at most 20 hits. Source failures are distinct from no matches,
 including partial failures alongside successful findings. This is public-record
@@ -146,6 +149,18 @@ live source labels, queue/progress counts, and filters for ready, active, source
 issues, or reviewed leads. A split lead list and evidence panel avoids expanding
 every lead into the page. Checkbox decisions persist in session storage across
 reloads in the same tab, scoped to the user, list, and research item.
+
+Review groups findings by person/contact, company (DOS ID), and property (BBL),
+then by record type. Each finding captures the match basis, returned adapter fields,
+lookup time, source identifiers and limitations. Lien findings additionally capture
+bounded literal notice-row excerpts and count all returned historical rows, separate
+from the existing recency heuristic. Property findings do not establish a person’s role.
+Old runs receive conservative grouping and remain unchecked; older field replacements
+require a fresh run. Neither grouping nor approval creates ownership/employment links.
+Source activity is persisted per lead (latest 80 source events plus terminal event);
+the run log shows up to 100 events from the 20 most recently active leads. It records
+starts, returns, cache reuse, failures, completion and cancellation without raw provider
+exceptions or CRM contact details. Cancellation stays in the fixed workspace header.
 
 Review shows source links, lookup hints, current versus proposed field values,
 match basis, and per-lead outcomes. Clear additions are checked by default;
@@ -184,6 +199,7 @@ playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecti
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_columns_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_workflows_checks.js
 playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_enrichment_checks.js
+playwright-cli -s=prospecting run-code --filename=dashboard_html/tests/prospecting_evidence_checks.js
 ```
 
 ## Files

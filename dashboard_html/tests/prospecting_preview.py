@@ -42,9 +42,24 @@ def cleanup():
 atexit.register(cleanup)
 crm.get_db_connection=lambda:psycopg2.connect(dsn,options=f'-c search_path={schema}',cursor_factory=RealDictCursor)
 crm.init_crm_tables()
+with crm.get_db_connection() as conn:
+    with conn.cursor() as cur:
+        cur.execute('CREATE TABLE buildings(id INTEGER PRIMARY KEY,bbl TEXT,address TEXT,current_owner_name TEXT,owner_name_hpd TEXT,owner_name_rpad TEXT,sale_buyer_primary TEXT,hpd_agent_name TEXT)')
+        cur.execute("INSERT INTO buildings VALUES(101,'3012980066','123 Fixture Street','Evidence Holdings LLC',NULL,NULL,NULL,'Preview Agent'),(102,'1012980066','456 Other Street','Evidence Holdings LLC',NULL,NULL,NULL,NULL)")
 # All research providers are synthetic in this preview, even for advanced runs.
-research._fetch_property=lambda source,bbl: {}
-research._fetch_permits=lambda dataset,bbl: []
+def fixture_property(source,bbl):
+    if bbl not in ('3012980066','1012980066'):
+        return {}
+    return {
+        'pluto': {'current_owner_name':'Evidence Holdings LLC'},
+        'hpd': {'owner_name_hpd':'Evidence Holdings LLC','hpd_agent_name':'Preview Managing Agent','hpd_open_violations':3},
+        'tax': {'lien_notice_history_count':2,'tax_delinquency_latest_date':'2017-12-01',
+                '_notice_evidence':[{'label':'Notice row excerpt','value':'Synthetic fixture: borough 3, block 1298, lot 66, December 2017, water only YES'}]},
+    }.get(source,{})
+research._fetch_property=fixture_property
+research._fetch_permits=lambda dataset,bbl: ([{'job':('B12345678-I1' if dataset!='dob_permits_bis' else '123456789'),
+    'type':'Alteration','date':'2020-01-01','business':'Evidence Holdings LLC','api_source':dataset}]
+    if bbl in ('3012980066','1012980066') else [])
 research._resolve=lambda address: {'property':None,'error':'Synthetic address has no match.'}
 research_delay=0
 def fixture_sos(company):

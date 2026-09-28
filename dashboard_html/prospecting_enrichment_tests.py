@@ -32,11 +32,14 @@ class EnrichmentTests(unittest.TestCase):
     def result(self, job):
         return e.results(fixtures.REP, self.list_id, job)
 
-    def contact(self, user=2, name='Jane Doe', company='Example', email='new@example.test', dnc=False):
+    def contact(self, user=2, name='Jane Doe', company='Example', email='new@example.test', dnc=False, phone=True):
         with s.transaction() as cur:
             cur.execute("""INSERT INTO crm_contacts(name,company,email,title,team_id,added_by_id,assigned_to_id,do_not_contact)
                 VALUES (%s,%s,%s,'Manager',1,%s,%s,%s) RETURNING id""", (name,company,email,user,user,dnc))
-            return cur.fetchone()['id']
+            contact_id=cur.fetchone()['id']
+            if phone:
+                cur.execute("INSERT INTO crm_phones(contact_id,number,digits,is_primary) VALUES(%s,'212-555-0100','2125550100',true)", (contact_id,))
+            return contact_id
 
     def public_tables(self):
         with s.transaction() as cur:
@@ -99,7 +102,7 @@ class EnrichmentTests(unittest.TestCase):
     def test_private_unlocked_values_only(self):
         self.public_tables()
         result=r.research(fixtures.REP,dict(name='Jane Doe',company='',address='3012980066',phone=''), 'internal', lambda k,f:f())
-        phones=[f['value'] for f in result['findings'] if f.get('field')=='phone']
+        phones=[f['value'] for f in result['findings'] if f['label']=='Phone']
         self.assertEqual(phones,['2125550199'])
         self.assertNotIn('2125550198',str(result))
         self.assertTrue(any('managing agent' in f['label'] for f in result['findings']))
@@ -304,17 +307,115 @@ class EnrichmentTests(unittest.TestCase):
         self.assertTrue(all(f['kind']=='research' and not f['default_selected'] for f in findings))
         self.assertIn('DO NOT CONTACT',findings[0]['value'])
 
-    def test_conflicting_field_sources_need_single_explicit_choice(self):
-        self.public_tables();contact=self.contact(email='same@example.test')
-        with s.transaction() as cur:
-            cur.execute("INSERT INTO crm_phones(contact_id,number,digits,is_primary,status) VALUES(%s,'2125550111','2125550111',true,'good')",(contact,))
-        fields=dict(name='Jane Doe',company='Example',address='3012980066',phone='',email='')
+    def test_unlocked_lookup_never_supplies_automatic_identity_fields(self):
+        self.public_tables();self.contact(email='same@example.test')
+        fields=dict(name='Jane Doe',company='Example',address='3012980066',phone='',email='same@example.test')
         result=r.research(fixtures.REP,fields,'internal',lambda k,f:f())
-        phones=[f for f in result['findings'] if f.get('field')=='phone']
-        self.assertEqual(len(phones),2);self.assertTrue(all(not f['default_selected'] for f in phones))
+        unlocked=[f for f in result['findings'] if f['source']['label']=='Previously unlocked owner lookup']
+        self.assertTrue(unlocked)
+        self.assertTrue(all(f['kind']=='research' and not f['default_selected'] for f in unlocked))
+
+    def test_same_name_company_without_email_or_phone_is_only_candidate(self):
+        self.contact(phone=False);job=self.job();self.drain()
+        item=self.result(job)['items'][0]
+        self.assertEqual(item['status'],'needs_review')
+        self.assertTrue(all(f['kind']=='research' and not f['default_selected'] for f in item['result']['findings']))
+
+    def test_unique_cached_address_is_not_confirmed_or_reused_as_bbl(self):
+        self.public_tables()
+        with patch.object(r,'_resolve',return_value={'error':'No match'}) as resolve, patch.object(r,'_fetch_property') as fetch:
+            result=r.research(fixtures.REP,dict(name='Jason',company='',address='123 Main St'),'advanced',lambda k,f:f())
+        resolve.assert_called_once();fetch.assert_not_called()
+        self.assertFalse(result['matched']);self.assertTrue(all(not f['default_selected'] for f in result['findings']))
+
+    def test_property_evidence_keeps_parcels_separate_and_explains_company_link(self):
+        self.public_tables()
+        with s.transaction() as cur:cur.execute("INSERT INTO buildings(id,bbl,address,current_owner_name) VALUES(102,'1012980066','Other address','Example LLC')")
+        with patch.object(r,'_fetch_sos',return_value={}):
+            result=r.research(fixtures.REP,dict(name='Jason',company='Example LLC',address=''),'advanced',lambda k,f:f())
+        facts=[f for f in result['findings'] if f['label']=='PLUTO recorded owner']
+        self.assertEqual({f['subject']['key'] for f in facts},{'3012980066','1012980066'})
+        self.assertTrue(all('does not link' in f['basis'] for f in facts))
+        self.assertFalse(result['matched'])
+
+    def test_approval_keeps_identical_facts_for_different_properties(self):
+        job=self.job();self.drain();item=self.result(job)['items'][0]
+        facts=[r.finding('HPD registered owner','Same LLC',r.source('HPD','https://hpdonline.nyc.gov/hpdonline/'),'Synthetic',
+                        group=r.subject('property',bbl,bbl,'Different parcel')) for bbl in ('3012980066','1012980066')]
+        with s.transaction() as cur:cur.execute('UPDATE prospect_enrichment_items SET result=%s WHERE id=%s',(Json({'findings':facts}),item['id']))
+        e.approve(fixtures.REP,self.list_id,job,{'items':[{'id':item['id'],'selected':[0,1]}]})
+        saved=s.list_rows(fixtures.REP,self.list_id)['rows'][0]['research']
+        self.assertEqual(len(saved),2);self.assertEqual(len({f['subject']['key'] for f in saved}),2)
+
+    def test_registry_name_match_and_agent_do_not_verify_identity(self):
+        with patch.object(r,'_fetch_sos',return_value={'entity_name':'Example Inc','dos_id':'123','status':'Active','quality':'exact','people':[{'name':'Agent Doe','role':'Registered Agent'}]}):
+            result=r.research(fixtures.REP,dict(name='Jason',company='Example LLC',address=''),'advanced',lambda k,f:f())
+        self.assertFalse(result['matched']);self.assertTrue(all(not f['default_selected'] for f in result['findings']))
+        self.assertTrue(all(f['subject']['key']=='dos:123' for f in result['findings']))
+        self.assertIn('Example LLC',str(result['findings'][0]['evidence']));self.assertIn('Example Inc',str(result['findings'][0]['evidence']))
+
+    def test_activity_records_sources_failures_and_cancellation_without_raw_errors(self):
+        job=self.job('advanced')
+        with patch.object(r,'_fetch_sos',side_effect=RuntimeError('secret provider response')):self.drain()
+        result=self.result(job)
+        self.assertIn('started',{entry['state'] for entry in result['activity']})
+        self.assertIn('error',{entry['state'] for entry in result['activity']})
+        self.assertNotIn('secret provider response',str(result))
+        self.assertTrue(all(i['activity'] for i in result['items']))
+        next_job=self.job();e.cancel(fixtures.REP,self.list_id,next_job)
+        self.assertTrue(all(entry['state']=='cancelled' for entry in self.result(next_job)['activity']))
+        with self.assertRaises(LookupError):e.results(fixtures.OTHER_REP,self.list_id,job)
+
+    def test_cancel_during_source_return_stops_next_request_and_late_activity(self):
+        job=self.job('advanced')
+        def fetch(company):
+            e.cancel(fixtures.REP,self.list_id,job)
+            return {'entity_name':'Unexpected'}
+        with patch.object(r,'_fetch_sos',side_effect=fetch):e.process_one()
+        result=self.result(job)
+        self.assertEqual(result['counts'],{'cancelled':2})
+        self.assertTrue(all(not i['result'].get('findings') for i in result['items']))
+        self.assertEqual(result['items'][0]['activity'][-1]['state'],'cancelled')
+
+    def test_evidence_survives_approval_and_legacy_fields_require_rerun(self):
+        self.contact();job=self.job();self.drain();item=self.result(job)['items'][0]
+        self.assertIn('CRM',str(item['result']['findings'][0]['evidence']))
+        e.approve(fixtures.REP,self.list_id,job,{'items':[{'id':item['id'],'selected':[0]}]})
+        self.assertTrue(s.list_rows(fixtures.REP,self.list_id)['rows'][0]['research'][0]['evidence'])
+        job=self.job();self.drain();item=self.result(job)['items'][0]
+        old={'findings':[dict(kind='field',field='email',label='Email',value='unsafe@example.test',source={'label':'Old','url':'/property/3012980066'},basis='Name/company',default_selected=True)]}
+        with s.transaction() as cur:cur.execute('UPDATE prospect_enrichment_items SET result=%s WHERE id=%s',(Json(old),item['id']))
+        finding=self.result(job)['items'][0]['result']['findings'][0]
+        self.assertTrue(finding['requires_rerun']);self.assertFalse(finding['default_selected']);self.assertEqual(finding['index'],0)
+        with self.assertRaises(s.Conflict):e.approve(fixtures.REP,self.list_id,job,{'items':[{'id':item['id'],'selected':[0]}]})
 
 
 class AdapterTests(unittest.TestCase):
+    def test_lien_notice_history_count_and_literal_excerpts_do_not_claim_current_debt(self):
+        from unittest.mock import MagicMock
+        import os
+        with patch.dict(os.environ, {'DATABASE_URL':'postgresql://unused@localhost:1/unused'}):
+            with patch('dotenv.load_dotenv'):
+                from dashboard_html import step4_enrich_from_tax_liens as tax
+        client=MagicMock()
+        client.get_all.return_value=[{'borough':'3','block':'1298','lot':'66','month':'December 2017','water_debt_only':'YES'},
+                                    {'borough':'3','block':'1298','lot':'66','month':'December 2016','water_debt_only':'NO'}]
+        with patch.object(tax,'_get_client',return_value=client),patch.object(tax.time,'sleep'):
+            data,error=tax.get_tax_delinquency_data('3012980066',include_evidence=True)
+        self.assertIsNone(error);self.assertEqual(data['lien_notice_history_count'],2)
+        self.assertEqual(data['tax_delinquency_count'],0)
+        self.assertIn('December 2017',str(data['_notice_evidence']))
+        facts=r._property_facts({**data,'bbl':'3012980066'},'Explicit parcel')
+        count=next(f for f in facts if f['label']=='Historical lien-sale notice entries')
+        self.assertEqual(count['value'],'2');self.assertIn('personal liability',count['limitations'])
+        self.assertNotIn('Notice entries within configured recency window',[f['label'] for f in facts])
+
+    def test_conflicting_field_proposals_are_unchecked(self):
+        result={'findings':[r.finding('Email',value,r.source('Test','https://example.test'),'Test',field='email')
+                            for value in ('first@example.test','second@example.test')]}
+        r._flag_alternatives(result)
+        self.assertTrue(all(not f['default_selected'] for f in result['findings']))
+
     def test_permit_query_is_parcel_scoped_bounded_and_checks_returned_bbl(self):
         from unittest.mock import MagicMock
         import socrata_client

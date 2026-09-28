@@ -100,7 +100,7 @@ def _parse_cycle_date(value):
     return None
 
 
-def get_tax_delinquency_data(bbl):
+def get_tax_delinquency_data(bbl, include_evidence=False):
     """
     Lien-sale notice status for a property, scoped to the MOST RECENT sale
     cycle. Being on a 2017 notice list says nothing about today — the flag
@@ -120,6 +120,8 @@ def get_tax_delinquency_data(bbl):
             'tax_delinquency_latest_date': None,
         }
         if not data:
+            if include_evidence:
+                empty.update(lien_notice_history_count=0, _notice_evidence=[])
             return empty, None
 
         # Find the cycle column for this dataset vintage and date each row.
@@ -151,6 +153,17 @@ def get_tax_delinquency_data(bbl):
             'tax_delinquency_water_only': is_current and not has_non_water,
             'tax_delinquency_latest_date': latest_date,
         }
+        if include_evidence:
+            result['lien_notice_history_count'] = len(data)
+            result['_notice_evidence'] = [
+                {'label': 'Scope', 'value': f'{len(data)} notice-list rows returned for BBL {bbl}; these are notices, not distinct debts or completed sales.'},
+                {'label': 'Latest publication', 'value': latest_date.isoformat()},
+                {'label': 'Recency rule', 'value': f'{LIEN_RECENCY_MONTHS} months; this is a configured heuristic, not current debt verification.'},
+            ]
+            for row in latest_rows[:3]:
+                excerpt = {k: str(row[k])[:160] for k in
+                           ('borough', 'block', 'lot', cycle_col, 'tax_class', 'water_debt_only') if k and row.get(k) is not None}
+                result['_notice_evidence'].append({'label':'Notice row excerpt', 'value': str(excerpt)})
         return result, None
 
     except Exception as e:

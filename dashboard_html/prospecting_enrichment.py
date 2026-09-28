@@ -39,6 +39,7 @@ SCHEMA = [
     )""",
     """ALTER TABLE prospect_enrichment_items ADD COLUMN IF NOT EXISTS current_source TEXT NOT NULL DEFAULT ''""",
     """ALTER TABLE prospect_enrichment_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ""",
+    """ALTER TABLE prospect_enrichment_items ADD COLUMN IF NOT EXISTS activity JSONB NOT NULL DEFAULT '[]'""",
     """CREATE INDEX IF NOT EXISTS idx_prospect_enrichment_queue ON prospect_enrichment_items(status,lease_until,id)
         WHERE status IN ('queued','running')""",
     """CREATE TABLE IF NOT EXISTS prospect_enrichment_cache (
@@ -213,10 +214,27 @@ def results(ctx, list_id, job_id=None, page=1, view="all"):
             if len(allowed) != len(findings):
                 item['result'] = {**item['result'], 'findings': allowed,
                                   'restriction': 'Some CRM findings are no longer accessible.'}
+        from prospecting_research import present_finding
+        for item in items:
+            item['result']['findings'] = [present_finding(f) for f in item['result'].get('findings', [])]
+        # Bound the feed independently of list size; full per-lead activity is on each item.
+        cur.execute("""SELECT id,input,activity FROM prospect_enrichment_items WHERE job_id=%s
+            AND activity<>'[]'::jsonb ORDER BY updated_at DESC,id DESC LIMIT 20""", (job_id,))
+        activity = []
+        for row in cur.fetchall():
+            fields = row['input']['fields']
+            for event in row['activity']:
+                activity.append({**event, 'item_id':row['id'], 'lead':fields.get('name') or fields.get('company') or f"Lead {row['input']['position']}"})
+        activity.sort(key=lambda event:event['at'], reverse=True)
         cur.execute("SELECT id,row_id,input,current_source,started_at FROM prospect_enrichment_items WHERE job_id=%s AND status='running' ORDER BY id LIMIT %s", (job_id, MAX_PARALLEL))
         active_items = [dict(r) for r in cur.fetchall()]
-        return {'active_items': active_items, 'filtered_total': filtered_total, 'view': view, 'parallel_limit': MAX_PARALLEL, 'jobs': jobs, 'job': job, 'items': items, 'counts': counts, 'reviewed': reviewed, **issues,
+        return {'activity': activity[:100], 'active_items': active_items, 'filtered_total': filtered_total, 'view': view, 'parallel_limit': MAX_PARALLEL, 'jobs': jobs, 'job': job, 'items': items, 'counts': counts, 'reviewed': reviewed, **issues,
                 'total': sum(counts.values()), 'page': page, 'stale': listing['version'] != job['list_version']}
+
+
+def event(source, state, message):
+    return {'at': datetime.now(timezone.utc).isoformat(), 'source': str(source)[:200],
+            'state': state, 'message': str(message)[:500]}
 
 
 def cancel(ctx, list_id, job_id):
@@ -224,7 +242,9 @@ def cancel(ctx, list_id, job_id):
         s.get_list(ctx, list_id, cur, for_update=True)
         _job(cur, ctx, list_id, job_id)
         cur.execute('UPDATE prospect_enrichment_jobs SET cancelled_at=NOW() WHERE id=%s', (job_id,))
-        cur.execute("UPDATE prospect_enrichment_items SET status='cancelled',claim=NULL,lease_until=NULL WHERE job_id=%s AND status IN ('queued','running')", (job_id,))
+        cur.execute("""UPDATE prospect_enrichment_items SET status='cancelled',claim=NULL,lease_until=NULL,
+            updated_at=NOW(),activity=activity || %s::jsonb WHERE job_id=%s AND status IN ('queued','running')""",
+            (Json([event('Run', 'cancelled', 'Cancelled by requester. In-flight requests may finish, but their results will not be saved.')]), job_id))
     return {}
 
 
@@ -267,7 +287,10 @@ def approve(ctx, list_id, job_id, data):
             if any(len(values) > 1 for values in selected_fields.values()):
                 raise ValueError('Choose only one proposed value per mapped field on each lead.')
             for index in selected:
-                finding = findings[index]
+                from prospecting_research import present_finding
+                finding = present_finding(findings[index])
+                if finding.get('evidence_version', 0) < 2 and finding['kind'] == 'field':
+                    raise s.Conflict('This older field proposal needs a new research run under the stricter matching rules.')
                 if not _allowed(cur, ctx, finding, lock=True):
                     raise s.Conflict('A source CRM record is no longer accessible. Reload the findings.')
                 if finding['kind'] == 'field':
@@ -278,7 +301,8 @@ def approve(ctx, list_id, job_id, data):
                 saved = {**finding, 'job_id': job_id, 'approved_by': ctx['user_id'],
                          'approved_at': datetime.now(timezone.utc).isoformat()}
                 row['research'] = [f for f in row['research'] if not (f['label']==finding['label'] and
-                    f['value']==finding['value'] and f['source']['url']==finding['source']['url'])]
+                    f['value']==finding['value'] and f['source']['url']==finding['source']['url'] and
+                    f.get('subject', {}).get('key')==finding.get('subject', {}).get('key'))]
                 row['research'].append(saved)
             if selected:
                 if len(row['research']) > 1000:
@@ -360,6 +384,7 @@ def process_one():
                 cur.execute("UPDATE prospect_enrichment_items SET lease_until=NOW()+INTERVAL '15 minutes' WHERE id=%s AND claim=%s", (item['id'], claim))
                 cur.execute('SELECT result FROM prospect_enrichment_cache WHERE job_id=%s AND cache_key=%s', (item['job_id'], key))
                 cached = cur.fetchone()
+            cache.last_cached = bool(cached)
             if cached:
                 return cached['result']
             result = fetch()
@@ -367,10 +392,13 @@ def process_one():
                 cur.execute('INSERT INTO prospect_enrichment_cache(job_id,cache_key,result) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING',
                             (item['job_id'], key, Json(result)))
             return result
-        def progress(label):
+        def progress(label, state='started', message='Checking source records.'):
             with s.transaction() as cur:
-                cur.execute("""UPDATE prospect_enrichment_items SET current_source=%s,updated_at=NOW()
-                    WHERE id=%s AND claim=%s AND status='running'""", (label[:200], item['id'], claim))
+                cur.execute("""UPDATE prospect_enrichment_items SET current_source=%s,updated_at=NOW(),
+                    activity=(SELECT COALESCE(jsonb_agg(value ORDER BY n),'[]') FROM
+                      jsonb_array_elements(activity || %s::jsonb) WITH ORDINALITY AS a(value,n)
+                      WHERE n>GREATEST(0,jsonb_array_length(activity)+1-80))
+                    WHERE id=%s AND claim=%s AND status='running'""", (label[:200], Json([event(label, state, message)]), item['id'], claim))
                 if not cur.rowcount:
                     raise InterruptedError('Research cancelled.')
         cache.progress = progress
@@ -388,8 +416,8 @@ def process_one():
     finally:
         stop_heartbeat.set()
     with s.transaction() as cur:
-        cur.execute("""UPDATE prospect_enrichment_items SET status=%s,result=%s,claim=NULL,lease_until=NULL,updated_at=NOW()
-            WHERE id=%s AND claim=%s AND status='running'""", (status, Json(result), item['id'], claim))
+        cur.execute("""UPDATE prospect_enrichment_items SET status=%s,result=%s,claim=NULL,lease_until=NULL,updated_at=NOW(),activity=activity || %s::jsonb
+            WHERE id=%s AND claim=%s AND status='running'""", (status, Json(result), Json([event('Lead', status, f"Research ended: {len(result.get('findings', []))} findings, {len(result.get('errors', []))} source issues.")]), item['id'], claim))
     return True
 
 

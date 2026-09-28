@@ -16,10 +16,11 @@ PROPERTY_FACTS = {
     'ecb_respondent_name': ('ecb', 'ECB respondent (not proof of ownership)'),
     'hpd_open_violations': ('hpd', 'Open HPD violations'),
     'hpd_open_complaints': ('hpd', 'Open HPD complaints'),
-    'ecb_open_violations': ('ecb', 'Open ECB violations'),
+    'ecb_open_violations': ('ecb', 'ECB active or balance-due records'),
     'dob_violation_count': ('bis', 'DOB violation records'),
     'dob_safety_open_violations': ('dob_now', 'Open DOB NOW safety violations'),
-    'tax_delinquency_count': ('tax', 'Historical lien-sale notice entries'),
+    'tax_delinquency_count': ('tax', 'Notice entries within configured recency window'),
+    'lien_notice_history_count': ('tax', 'Historical lien-sale notice entries'),
     'tax_delinquency_latest_date': ('tax', 'Most recent lien-sale notice date'),
 }
 
@@ -36,19 +37,62 @@ def source(label, url, hint='', **extra):
     return {'label': label, 'url': url, 'hint': hint, **extra}
 
 
-def finding(label, value, origin, basis, *, safe=True, field=None, current=''):
+def subject(kind, key, label, connection):
+    return {'type': kind, 'key': str(key), 'label': str(label), 'connection': connection}
+
+
+def evidence(**values):
+    return [{'label': key.replace('_', ' ')[:1].upper()+key.replace('_', ' ')[1:], 'value': serial(value)[:1000]}
+            for key, value in values.items() if value not in (None, '')]
+
+
+def finding(label, value, origin, basis, *, safe=True, field=None, current='',
+            group=None, proof=None, category='Records', limitations=''):
+
     return {'kind': 'field' if field else 'research', 'field': field, 'label': label,
             'value': str(value)[:s.MAX_CELL], 'current': current, 'source': origin, 'basis': basis,
-            'default_selected': bool(safe and (not field or not current)), 'conflict': bool(field and current)}
+            'default_selected': bool(safe and (not field or not current)), 'conflict': bool(field and current),
+            'evidence_version': 2, 'subject': group or subject('person', 'lead', 'Contact details', 'Evidence about the imported lead.'),
+            'evidence': proof or evidence(returned_value=value), 'category': category,
+            'limitations': limitations, 'captured_at': datetime.now(timezone.utc).isoformat()}
 
 
-def _property_facts(record, basis, safe=True):
+def _property_facts(record, basis, safe=True, group=None, cached=False):
     links = owner_source_links(record)
     links['tax'] = source('NYC lien-sale notices', 'https://data.cityofnewyork.us/City-Government/Tax-Lien-Sale-Lists/9rz4-mjek/data_preview', 'Search BBL: '+record['bbl'])
-    prefix = f"{record.get('address') or record['bbl']} · "
-    return [finding(prefix+label, record[key], links[kind], basis, safe=safe)
-            for key, (kind, label) in PROPERTY_FACTS.items()
-            if record.get(key) not in (None, '') and kind in links]
+    group = group or subject('property', record['bbl'], record.get('address') or 'BBL '+record['bbl'], basis)
+    facts = []
+    for key, (kind, label) in PROPERTY_FACTS.items():
+        if record.get(key) in (None, '') or kind not in links:
+            continue
+        # This legacy field is a recency-filtered count, not historical evidence.
+        if key == 'tax_delinquency_count' and 'lien_notice_history_count' in record:
+            continue
+        category = 'Lien-sale notices' if kind == 'tax' else 'Violations & complaints' if ('violation' in key or 'complaint' in key) else 'Recorded roles'
+        proof = evidence(BBL=record['bbl'], adapter_field=key, returned_value=record[key], document_ID=record.get('document_id'), HPD_registration_ID=record.get('hpd_registration_id'),
+                         record_date=record.get('sale_date') or record.get('tax_delinquency_latest_date'),
+                         snapshot='Cached in our database; source freshness unknown' if cached else 'Fetched during this research run')
+        calculations = {
+            'hpd_open_violations': 'Count of returned HPD violation rows with violationstatus OPEN.',
+            'hpd_open_complaints': 'Distinct complaint IDs with at least one complaint problem marked OPEN.',
+            'ecb_open_violations': 'Count where the ECB status is ACTIVE or balance_due is greater than zero. This is not an official open-case status.',
+            'dob_violation_count': 'Count of returned DOB violation records, including historical records.',
+            'dob_safety_open_violations': 'Count of DOB Safety rows whose status is ACTIVE or contains PENDING; other statuses are excluded.',
+        }
+        if key in calculations:
+            proof += evidence(calculation=calculations[key])
+        if kind == 'tax':
+            proof += record.get('_notice_evidence', [])
+        limitation = 'This is a record about the property, not evidence that the imported person owns or manages it.'
+        if kind == 'tax':
+            limitation += ' Notice-list entries do not establish unpaid debt today, a completed lien sale, or personal liability.'
+            if cached:
+                limitation += ' The cached count uses a configured recency cutoff; it is not a historical total. Rerun advanced research for notice excerpts.'
+        if kind == 'rpad':
+            limitation += ' Historical assessment data ends in FY2018/19.'
+        facts.append(finding(label, record[key], links[kind], basis, safe=safe and not cached,
+                             group=group, proof=proof, category=category, limitations=limitation))
+    return facts
 
 
 def _has_table(cur, name):
@@ -76,7 +120,6 @@ def _internal(ctx, fields):
         if len(phone) != 10:
             phone = ''
         strong = [c for c in contacts if norm(c['name']) == name and name and (
-            (company and norm(c['company']) == company) or
             (fields.get('email') and norm(c['email']) == norm(fields['email'])) or
             (phone and any(p['digits'] == phone for p in c['phones'])))]
         # Never make field proposals for multiple plausible people or for a
@@ -85,9 +128,14 @@ def _internal(ctx, fields):
         for c in contacts[:20]:
             same = c is contact
             origin = source('CRM contact', f"/crm/contacts/{c['id']}", kind='crm_contact', record_id=c['id'])
-            basis = 'Exact name plus company, email or phone.' if same else 'Company/name candidate only. Verify this is the intended person.'
+            basis = 'Exact name plus matching email or phone in one accessible CRM record.' if same else 'Company/name candidate only. This does not establish the same person or employment.'
+            group = subject('person', 'crm:'+str(c['id']), c['name'], basis)
+            proof = evidence(imported_name=fields.get('name'), imported_company=fields.get('company'),
+                             imported_email=fields.get('email'), imported_phone=fields.get('phone'),
+                             CRM_name=c['name'], CRM_company=c['company'], CRM_email=c['email'],
+                             CRM_phones='; '.join(p['number'] for p in c['phones']))
             findings.append(finding('Existing CRM contact', c['name'] + (' · '+c['company'] if c['company'] else '') +
-                (' · DO NOT CONTACT' if c['do_not_contact'] else ''), origin, basis, safe=same and not c['do_not_contact']))
+                (' · DO NOT CONTACT' if c['do_not_contact'] else ''), origin, basis, safe=same and not c['do_not_contact'], group=group, proof=proof, category='CRM identity'))
             if same and not c['do_not_contact']:
                 matched = True
                 values = {k: c.get(k) for k in ('company', 'title', 'email')}
@@ -96,7 +144,7 @@ def _internal(ctx, fields):
                     values['phone'] = p['number'] + (' ext. '+p['extension'] if p.get('extension') else '')
                 for field, value in values.items():
                     if value and norm(value) != norm(fields.get(field)):
-                        findings.append(finding(s.FIELDS[field], value, origin, basis, field=field, current=fields.get(field, '')))
+                        findings.append(finding(s.FIELDS[field], value, origin, basis, field=field, current=fields.get(field, ''), group=group, proof=proof, category='Contact details'))
         if _has_table(cur, 'buildings'):
             # Public columns only: never select the shared paid-enrichment cache.
             keys = ['id', 'bbl', 'bin', 'address', 'borough', *PROPERTY_FACTS]
@@ -115,14 +163,19 @@ def _internal(ctx, fields):
             for b in buildings[:20]:
                 exact_bbl = bbl and b['bbl'] == bbl
                 exact_address = address and norm(b['address']) == address
-                count_address = sum(norm(x['address']) == address for x in buildings)
-                safe = bool(exact_bbl or exact_address and count_address == 1 and len(buildings)<=20)
+                safe = bool(exact_bbl)  # An address unique in our cache is not unique across NYC.
                 matched = matched or safe
-                basis = ('Exact BBL.' if exact_bbl else 'Exact stored address.' if safe else
-                         'Company or address candidate; verify the property and role.') + ' Cached public record; may be outdated.'
+                matched_roles = [PROPERTY_FACTS[k][1] for k in owners if company and norm(b.get(k)) == company]
+                basis = ('The imported BBL matches this parcel.' if exact_bbl else
+                         'The imported address matches a stored address; borough/parcel still needs verification.' if exact_address else
+                         'The imported company matches these recorded fields: '+', '.join(matched_roles)+'.')
+                basis += ' This does not link the imported person to the property. Cached public record; may be outdated.'
+                group = subject('property', b['bbl'], b['address'] or 'BBL '+b['bbl'], basis)
+                proof = evidence(imported_BBL=bbl, imported_address=fields.get('address'), imported_company=fields.get('company'),
+                                 record_BBL=b['bbl'], record_address=b['address'], matched_roles=', '.join(matched_roles))
                 origin = source('Property in our system', '/property/'+str(b['bbl']), 'BBL: '+str(b['bbl']))
-                findings.append(finding('Property record', b['address'] or b['bbl'], origin, basis, safe=safe))
-                findings.extend(_property_facts(b, basis, safe))
+                findings.append(finding('Property record', b['address'] or b['bbl'], origin, basis, safe=safe, group=group, proof=proof, category='Property match'))
+                findings.extend(_property_facts(b, basis, safe, group=group, cached=True))
                 if safe and name and _has_table(cur, 'user_enrichments'):
                     cur.execute('SELECT owner_name_searched,enriched_phones,enriched_emails,enriched_at FROM user_enrichments WHERE user_id=%s AND building_id=%s',
                                 (ctx['user_id'], b['id']))
@@ -141,7 +194,7 @@ def _internal(ctx, fields):
                             for value in candidates[:5]:
                                 if norm(value) != norm(fields.get(field)):
                                     findings.append(finding(s.FIELDS[field], value, origin, 'Exact owner name and property. Previously unlocked; verify it is still current.',
-                                        field=field if len(candidates)==1 else None, current=fields.get(field, ''), safe=len(candidates)==1))
+                                        field=None, current=fields.get(field, ''), safe=False, group=subject('person', 'lead', 'Previously unlocked contact candidates', 'Name and parcel match a previous lookup; identity and current contact details require review.'), proof=evidence(searched_name=paid['owner_name_searched'], BBL=b['bbl'], lookup_date=paid['enriched_at'], returned_value=value)))
         else:
             checks.append('No local property catalog is installed.')
         if (name or company) and _has_table(cur, 'permit_contact_directory'):
@@ -154,7 +207,7 @@ def _internal(ctx, fields):
             for c in contacts[:20]:
                 origin = permit_source_link(c)
                 basis = f"Name/company match on permit {c['permit_no']}, BBL {c['bbl']}. Verify identity and role. Phone status: {c['verification_status']}."
-                findings.append(finding('Recorded permit '+c['role'], c['name']+(' · '+c['phone'] if c['phone'] else ''), origin, basis, safe=False))
+                findings.append(finding('Recorded permit '+c['role'], c['name']+(' · '+c['phone'] if c['phone'] else ''), origin, basis, safe=False, group=subject('property' if c['bbl'] else 'company', c['bbl'] or 'permits', 'BBL '+c['bbl'] if c['bbl'] else 'Permit contact candidates', basis), proof=evidence(imported_name=fields.get('name'), imported_company=fields.get('company'), recorded_name=c['name'], recorded_role=c['role'], BBL=c['bbl'], permit=c['permit_no'], phone=c['phone'], phone_status=c['verification_status']), category='Permits & filings'))
     return {'findings': findings, 'checks': checks, 'errors': [], 'matched': matched}, buildings[:20], bbl
 
 
@@ -167,7 +220,7 @@ def _fetch_property(source_name, bbl):
         import step4_enrich_from_tax_liens as step
         function = {'tax':'get_tax_delinquency_data', 'ecb':'get_ecb_violations_data',
                     'dob':'get_dob_violations_data', 'safety':'get_dob_safety_violations_data'}[source_name]
-        data, error = getattr(step, function)(bbl)
+        data, error = getattr(step, function)(bbl, include_evidence=True) if source_name == 'tax' else getattr(step, function)(bbl)
     elif source_name == 'acris':
         import step3_enrich_from_acris as step
         history = step.get_acris_full_history(bbl)
@@ -179,7 +232,7 @@ def _fetch_property(source_name, bbl):
         raise ValueError('Unknown source')
     if error:
         raise RuntimeError('Source unavailable')
-    return {k: v if isinstance(v, (str, int, float, bool, type(None))) else serial(v) for k, v in (data or {}).items()}
+    return {k: v if isinstance(v, (str, int, float, bool, list, dict, type(None))) else serial(v) for k, v in (data or {}).items()}
 
 
 def _fetch_sos(company):
@@ -229,13 +282,16 @@ def _fetch_permits(dataset, bbl):
 
 
 def research(ctx, fields, mode, cache):
+    report = getattr(cache, 'progress', lambda *args: None)
+    report('Existing records', 'started', 'Checking accessible CRM, cached properties and permit contacts.')
     result, buildings, bbl = _internal(ctx, fields)
+    report('Existing records', 'returned', f"{len(result['findings'])} findings; company/property records do not verify the person.")
     if mode == 'internal':
         _flag_alternatives(result)
         return result
     checked = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     def fetch(key, fn, label):
-        getattr(cache, "progress", lambda label: None)(label)
+        report(label, 'started', 'Requesting source records.')
         def attempt():
             try:
                 return {'ok': True, 'data': fn()}
@@ -247,35 +303,44 @@ def research(ctx, fields, mode, cache):
                 raise RuntimeError('Source unavailable')
             value = response['data']
             result['checks'].append(label+' checked')
+            size = len(value) if isinstance(value, list) else None
+            summary = f'{size} records returned.' if size is not None else 'Source returned data.' if value else 'No records returned.'
+            if isinstance(value, dict):
+                highlights = evidence(**{k:value[k] for k in ('current_owner_name','owner_name_hpd','hpd_open_violations',
+                    'sale_buyer_primary','lien_notice_history_count','ecb_open_violations','dob_violation_count',
+                    'dob_safety_open_violations','entity_name','dos_id') if k in value})
+                summary += ' ' + '; '.join(e['label']+': '+e['value'] for e in highlights[:3])
+            report(label, 'returned', summary.strip() + (' Reused this run’s cached response.' if getattr(cache, 'last_cached', False) else ''))
             return value
         except InterruptedError:
             raise
         except Exception:
             result['errors'].append(label+' unavailable. Retry with a new run; this is not a no-match result.')
+            report(label, 'error', 'Source unavailable; not a no-match result.')
             return None
     address = fields.get('address', '').strip()
     confirmed = bool(bbl)
-    candidates = [b for b in buildings if address and norm(b['address']) == norm(address)]
-    if not bbl and len(candidates) == 1:
-        bbl = candidates[0]['bbl']; confirmed = True
     lookup = {'bbl': bbl, 'address': address}
     if not bbl and address:
         resolved = fetch('address:'+norm(address), lambda: _resolve(address), 'NYC address search')
         if resolved and resolved.get('property'):
             lookup = resolved['property']; bbl = str(lookup['bbl'])
             result['findings'].append(finding('Possible NYC property', f"{lookup.get('address', address)} · BBL {bbl}",
-                owner_source_links(lookup)['pluto'], 'Geocoder candidate. Verify this is the intended building.', safe=False))
+                owner_source_links(lookup)['pluto'], 'Geocoder candidate. Verify this is the intended building.', safe=False, group=subject('property', bbl, lookup.get('address') or bbl, 'Address search candidate; person-to-property connection unverified.'), proof=evidence(searched_address=address, returned_address=lookup.get('address'), returned_BBL=bbl), category='Property match'))
         elif resolved and resolved.get('error'):
             result['errors'].append(resolved['error'])
     companies = [fields.get('company', '').strip()]
+    company_origins = {norm(companies[0]): 'Imported company column.'}
     if bbl and re.fullmatch(r'[1-5]\d{9}', bbl):
         lookup['bbl'] = bbl
+        parcel_basis = ('Imported BBL matches this parcel.' if confirmed else 'Geocoded property candidate; verify the parcel.') + ' No person-to-property relationship has been established.'
         for source_name in ('pluto', 'hpd', 'rpad', 'acris', 'tax', 'ecb', 'dob', 'safety'):
             record = fetch(source_name+':'+bbl, lambda n=source_name: _fetch_property(n, bbl), source_name.upper())
             if record is None:
                 continue
             record = {**lookup, **record}
-            basis = f"Public records checked {checked}. " + ('Matched property; source roles are not identity verification.' if confirmed else 'Unconfirmed address candidate; verify before saving.')
+            basis = f"Public records checked {checked}. " + ('Imported BBL matches the queried parcel.' if confirmed else 'Unconfirmed address candidate; verify before saving.')
+            basis += ' No person-to-property relationship has been established.'
             facts = _property_facts(record, basis, confirmed)
             if source_name == 'acris':
                 for fact in facts:
@@ -291,6 +356,7 @@ def research(ctx, fields, mode, cache):
                 value = record.get(key)
                 if value and not any(separator in value for separator in (';', ' & ')):
                     companies.append(value)
+                    company_origins.setdefault(norm(value), f'Recorded {key} on BBL {bbl}; '+('explicit parcel supplied.' if confirmed else 'unconfirmed geocoder candidate.'))
         for dataset in ('dob_permits_bis', 'dob_now_filings', 'dob_now_permits'):
             permits = fetch(dataset+':'+bbl, lambda d=dataset: _fetch_permits(d, bbl), dataset.replace('_', ' ').upper())
             if permits is None:
@@ -299,7 +365,7 @@ def research(ctx, fields, mode, cache):
                 origin = permit_source_link({'job_number': permit['job'], 'permit_no': permit['job'], 'api_source': permit['api_source']})
                 value = ' · '.join(str(v) for v in (permit['job'], permit['type'], permit['date'], permit['business']) if v)
                 result['findings'].append(finding(f"{lookup.get('address') or bbl} · permit/filing", value, origin,
-                    f'BBL {bbl}; checked {checked}. Up to 20 recent records per permit source. A filing contact is not proof of current ownership.', safe=confirmed))
+                    f'BBL {bbl}; checked {checked}. Up to 20 recent records per permit source. A filing contact is not proof of current ownership.', safe=confirmed, group=subject('property', bbl, lookup.get('address') or 'BBL '+bbl, parcel_basis), proof=evidence(BBL=bbl, job=permit['job'], work_type=permit['type'], date=permit['date'], recorded_business=permit['business']), category='Permits & filings', limitations='A filing concerns this parcel. It does not prove the imported person owns, works for, or manages it.'))
     elif not address:
         result['checks'].append('Building research needs a mapped NYC address or BBL.')
     seen = set()
@@ -314,19 +380,21 @@ def research(ctx, fields, mode, cache):
         company_data = fetch('sos:'+norm(company), lambda c=company: _fetch_sos(c), 'NY registry: '+company)
         if not company_data:
             continue
-        safe = company_data['quality'] == 'exact' and company == fields.get('company', '').strip()
+        safe = False  # Name-only registry searches lack a corroborating DOS identifier.
         origin = source('NY Secretary of State', 'https://apps.dos.ny.gov/publicInquiry/', 'Search DOS ID: '+company_data['dos_id'])
-        basis = f"Registry match: {company_data['quality']}. Checked {checked}. Corporate roles do not establish building ownership."
-        result['findings'].append(finding('Registered company', company_data['entity_name']+' · '+company_data['status'], origin, basis, safe=safe))
+        basis = company_origins[norm(company)] + f" Searched company: {company}. Registry match: {company_data['quality']} (provider-normalized name, not verified legal identity). Checked {checked}. Corporate roles do not establish building ownership or the imported person's employment."
+        group = subject('company', 'dos:'+company_data['dos_id'], company_data['entity_name'], basis)
+        proof = evidence(search_origin=company_origins[norm(company)], searched_company=company, registered_name=company_data['entity_name'], DOS_ID=company_data['dos_id'], registry_status=company_data['status'], provider_match=company_data['quality'])
+        result['findings'].append(finding('Registered company', company_data['entity_name']+' · '+company_data['status'], origin, basis, safe=safe, group=group, proof=proof, category='Company registration'))
         result['matched'] = result['matched'] or safe
         for person in company_data['people']:
             result['findings'].append(finding(company_data['entity_name']+' · '+person['role'], person['name'], origin,
-                basis + (' Agent for service/registration only; not an owner finding.' if 'agent' in person['role'].lower() else ''), safe=safe))
+                basis + (' Agent for service/registration only; not an owner finding.' if 'agent' in person['role'].lower() else ''), safe=False, group=group, proof=proof+evidence(recorded_name=person['name'], recorded_role=person['role']), category='Registered roles'))
     # Keep sources that disagree visible. Collapse only identical findings from
     # the same source, favoring the fresh finding over a cached one.
     unique = {}
     for f in result['findings']:
-        unique[(f['kind'], f['field'], f['label'], f['value'], f['source']['url'])] = f
+        unique[(f['subject']['type'], f['subject']['key'], f['kind'], f['field'], f['label'], f['value'], f['source']['url'])] = f
     result['findings'] = list(unique.values())
     _flag_alternatives(result)
     return result
@@ -338,3 +406,34 @@ def _flag_alternatives(result):
                 if other['kind'] == 'field' and other['field'] == f['field']}) > 1:
             f['default_selected'] = False
             f['basis'] += ' Sources propose different values; choose one.'
+
+
+def present_finding(value):
+    """Organize old runs without inventing evidence or changing decision indices."""
+    if value.get('evidence_version') == 2:
+        return value
+    f = dict(value)
+    label = f['label']
+    parcel = re.search(r'(?:BBL[: ]+|/property/)([1-5]\d{9})(?!\d)', f.get('basis', '')+' '+f['source'].get('hint', '')+' '+f['source']['url'], re.I)
+    if not parcel and label == 'Possible NYC property':
+        parcel = re.search(r'BBL ([1-5]\d{9})(?!\d)', f['value'])
+    parts = label.split(' · ', 1)
+    property_labels = {v[1] for v in PROPERTY_FACTS.values()} | {'Open ECB violations', 'permit/filing'}
+    if parcel or (len(parts) == 2 and parts[1] in property_labels):
+        key = parcel.group(1) if parcel else parts[0]
+        f['subject'] = subject('property', key, parts[0] if len(parts) == 2 else 'BBL '+key,
+                               'Earlier property candidate. The original run did not capture a structured match trail.')
+        if len(parts) == 2:
+            f['label'] = parts[1]
+    else:
+        f['subject'] = subject('person' if f['kind'] == 'field' else 'legacy', 'earlier',
+                               'Contact proposals' if f['kind'] == 'field' else 'Earlier source records',
+                               'Rerun research for grouped source evidence and stricter match checks.')
+    if 'Historical lien-sale notice entries' in f['label']:
+        f['label'] = 'Legacy recency-filtered notice count'
+    f['default_selected'] = False
+    f['category'] = 'Earlier findings'
+    f['evidence'] = evidence(saved_value=f['value'])
+    f['limitations'] = 'This older run has no captured source excerpt. Its saved explanation is shown below; rerun to verify under the current matching rules.'
+    f['requires_rerun'] = f['kind'] == 'field'
+    return f

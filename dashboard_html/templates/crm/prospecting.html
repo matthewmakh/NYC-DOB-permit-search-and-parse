@@ -165,7 +165,7 @@
     <p class="prospect-error" id="prospect-lead-error" role="alert"></p>
 </dialog>
 <dialog class="prospect-dialog prospect-enrichment-dialog" id="prospect-enrichment-dialog" aria-labelledby="prospect-enrichment-title">
-    <header class="research-header"><div><span class="research-kicker">LEAD INTELLIGENCE</span><h2 id="prospect-enrichment-title">Research your leads</h2></div><button type="button" class="cbtn" data-close aria-label="Close research; active runs continue">Close</button></header>
+    <header class="research-header"><div><span class="research-kicker">LEAD INTELLIGENCE</span><h2 id="prospect-enrichment-title">Research your leads</h2></div><div class="research-header-actions"><button type="button" class="cbtn" id="prospect-enrichment-cancel" hidden>Cancel run</button><button type="button" class="cbtn" data-close aria-label="Close research; active runs continue">Close</button></div></header>
     <div class="research-shell">
         <aside class="research-sidebar" aria-label="Research runs"><button type="button" class="cbtn cbtn-primary" id="research-new">New research</button><p class="research-kicker">YOUR RUNS</p><div id="research-history"></div><p class="research-sidebar-note">Keep working while we research.<br>Every run is saved here.</p></aside>
         <main class="research-main">
@@ -186,9 +186,9 @@
                 <footer class="research-launch"><div><strong id="research-launch-count">Choose leads to begin</strong><small>Runs in the background. You can close this window.</small></div><button type="button" class="cbtn cbtn-primary" id="research-start" disabled>Start research</button></footer>
             </section>
             <section id="research-run" hidden aria-label="Research progress and findings">
-                <div class="research-run-heading"><div><span class="research-kicker" id="research-run-date"></span><h3 id="research-run-title"></h3></div><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-cancel">Stop remaining</button></div>
+                <div class="research-run-heading"><div><span class="research-kicker" id="research-run-date"></span><h3 id="research-run-title"></h3></div></div>
                 <div id="prospect-enrichment-summary" aria-live="polite" role="status"></div>
-                <div id="research-active" aria-label="Leads being researched"></div>
+                <div id="research-active" aria-label="Leads being researched"></div><details class="research-activity"><summary>Research activity <span>Source requests, responses and errors</span></summary><p class="research-caption">Latest 100 events from the 20 most recently active leads. Open a lead for its own history. Source returns do not establish identity.</p><div id="research-activity-body"></div></details>
                 <div class="research-results-heading"><div><h4>Findings</h4><p>Review completed leads while the rest keep running.</p></div><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-unresolved" hidden>Research unresolved</button></div>
                 <div class="research-filters" role="group" aria-label="Filter research results"><button type="button" data-research-view="all" aria-pressed="true">All leads</button><button type="button" data-research-view="ready" aria-pressed="false">Ready to review</button><button type="button" data-research-view="active" aria-pressed="false">In progress</button><button type="button" data-research-view="issues" aria-pressed="false">Source issues</button><button type="button" data-research-view="reviewed" aria-pressed="false">Reviewed</button></div>
                 <div class="research-review"><nav id="research-lead-list" aria-label="Leads in this run"></nav><div id="research-detail"></div></div>

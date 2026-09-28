@@ -10,25 +10,25 @@
     let timer, feedTimer, generation=0, pending=false, initialized=false, candidates=[], picked=new Set(), pickerLimit=50;
     let leadSignature='', detailSignature='', requestKey=null, retryPayload=null, loadError='';
     const selections=new Map();
-    const labels={queued:'Queued',running:'Researching',found:'Match found',needs_review:'Possible match',not_found:'No match',failed:'Source issue',skipped:'Skipped',cancelled:'Stopped'};
+    const labels={queued:'Queued',running:'Researching',found:'Records found',needs_review:'Possible match',not_found:'No match',failed:'Source issue',skipped:'Skipped',cancelled:'Stopped'};
     const date=value=>new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
     const modeName=mode=>mode==='internal'?'Existing records':'Advanced research';
     const running=()=>!!((state?.counts.queued||0)+(state?.counts.running||0));
     const name=item=>item.input.fields.name||item.input.fields.company||item.input.fields.address||`Lead ${item.input.position}`;
-    const choiceKey=id=>`research:${config.userId}:${config.listId}:${id}`;
+    const choiceKey=id=>`research-v2:${config.userId}:${config.listId}:${id}`;
     function choices(item){
         if(['queued','running'].includes(item.status))return new Set();
         if(!selections.has(item.id)){
             let saved;try{saved=JSON.parse(sessionStorage.getItem(choiceKey(item.id)));}catch(_){}
             selections.set(item.id,new Set(Array.isArray(saved)?saved:(item.result.findings||[]).flatMap((f,i)=>f.default_selected?[f.index??i]:[])));
         }
-        const allowed=new Set((item.result.findings||[]).map((f,i)=>f.index??i));
+        const allowed=new Set((item.result.findings||[]).filter(f=>!f.requires_rerun).map(f=>f.index));
         for(const id of selections.get(item.id))if(!allowed.has(id))selections.get(item.id).delete(id);
         return selections.get(item.id);
     }
     function remember(id){try{sessionStorage.setItem(choiceKey(id),JSON.stringify([...selections.get(id)]));}catch(_){} }
     function setHTML(id,html){if($(id).innerHTML!==html)$(id).innerHTML=html;}
-    function switchScreen(next){screen=next;$('research-setup').hidden=next!=='setup';$('research-run').hidden=next!=='run';$('research-new').classList.toggle('is-active',next==='setup');dialog.querySelector('.research-main').scrollTop=0;}
+    function switchScreen(next){screen=next;$('research-setup').hidden=next!=='setup';$('research-run').hidden=next!=='run';$('research-new').classList.toggle('is-active',next==='setup');dialog.querySelector('.research-main').scrollTop=0;$('prospect-enrichment-cancel').hidden=next!=='run'||!running();}
     async function feed(){
         clearTimeout(feedTimer);
         try{
@@ -81,9 +81,22 @@
         if(!item){$('research-detail').innerHTML='<div class="research-empty"><h4>No leads in this view</h4><p>Choose another filter or return as research finishes.</p></div>';return;}
         const findings=item.result.findings||[], chosen=choices(item), disabled=!!item.reviewed_at||state.stale;
         const head=`<div class="research-detail-head"><span class="research-kicker">ROW ${item.input.position} · ${esc(item.reviewed_at?'REVIEWED':labels[item.status].toUpperCase())}</span><h4>${esc(name(item))}</h4><p>${esc(item.input.fields.company||item.input.fields.address||'')}</p></div>`;
-        const body=findings.map((f,index)=>`<article class="research-finding ${f.conflict?'has-conflict':''}"><label><input type="checkbox" data-finding="${index}" ${item.reviewed_at?(item.decision.includes(f.index??index)?'checked':''):(chosen.has(f.index??index)?'checked':'')} ${disabled?'disabled':''}><span><strong>${esc(f.label)}</strong><span class="research-value">${esc(f.value)}</span>${f.kind==='field'?`<small>${f.current?`Replaces: ${esc(f.current)}`:'Adds to an empty column'}</small>`:'<small>Save as research</small>'}${!f.default_selected?'<em>Needs your review</em>':''}</span></label><div class="research-evidence"><a href="${esc(f.source.url)}" target="_blank" rel="noopener noreferrer">${esc(f.source.label)} ↗</a><details><summary>Why this finding?</summary><p>${esc(f.source.hint||'')}</p><p>${esc(f.basis)}</p></details></div></article>`).join('');
+        const groups=new Map();
+        findings.forEach((f,index)=>{
+            const subject=f.subject||{type:'legacy',key:'earlier',label:'Earlier source records',connection:'Rerun research for structured evidence.'};
+            const key=subject.type+':'+subject.key;
+            if(!groups.has(key))groups.set(key,{subject,categories:new Map(),total:0});
+            const group=groups.get(key),category=f.category||'Records';
+            if(!group.categories.has(category))group.categories.set(category,[]);
+            group.categories.get(category).push({f,index});group.total++;
+        });
+        const card=({f,index})=>`<article class="research-finding ${f.conflict?'has-conflict':''}"><label><input type="checkbox" data-finding="${index}" ${item.reviewed_at?(item.decision.includes(f.index??index)?'checked':''):(chosen.has(f.index??index)?'checked':'')} ${disabled||f.requires_rerun?'disabled':''}><span><strong>${esc(f.label)}</strong><span class="research-value">${esc(f.value)}</span>${f.kind==='field'?`<small>${f.current?`Replaces: ${esc(f.current)}`:'Adds to an empty column'}</small>`:'<small>Save as research</small>'}${f.requires_rerun?'<em>New research required before applying this field</em>':!f.default_selected?'<em>Review the connection</em>':''}</span></label><div class="research-evidence"><a href="${esc(f.source.url)}" target="_blank" rel="noopener noreferrer">${esc(f.source.label)} ↗</a><details><summary>Why this finding?</summary><div class="research-proof"><h5>Connection to this lead</h5><p>${esc(f.basis)}</p><h5>Captured evidence</h5><dl>${(f.evidence||[]).map(e=>`<dt>${esc(e.label)}</dt><dd>${esc(e.value)}</dd>`).join('')}</dl>${f.captured_at?`<p class="research-caption">Captured ${esc(date(f.captured_at))}. This is the lookup time, not the record’s publication date.</p>`:''}${f.limitations?`<p class="research-limitation">${esc(f.limitations)}</p>`:''}${f.source.hint?`<p><strong>Verify at source:</strong> ${esc(f.source.hint)}</p>`:''}</div></details></div></article>`;
+        const body=[...groups.values()].map((g,n)=>`<details class="research-group" ${n===0?'open':''}><summary><span class="research-group-type">${esc(g.subject.type==='property'?'PROPERTY':g.subject.type==='company'?'COMPANY':g.subject.type==='person'?'PERSON / CONTACT':'EARLIER RUN')}</span><strong>${esc(g.subject.label)}</strong><span>${g.total} findings</span></summary><div class="research-group-body"><p class="research-connection">${esc(g.subject.connection)}</p>${[...g.categories].map(([category,entries])=>`<details class="research-category" ${g.subject.type==='property'||category==='Permits & filings'?'':'open'}><summary>${esc(category)} <span>${entries.length}</span></summary>${entries.map(card).join('')}</details>`).join('')}</div></details>`).join('');
         const empty=item.status==='running'?`<div class="research-empty"><span class="research-spinner" aria-hidden="true"></span><h4>${esc(item.current_source||'Researching this lead')}</h4><p>We’ll collect the findings here. You can review other leads or close this window.</p></div>`:item.status==='queued'?'<div class="research-empty"><h4>In the research queue</h4><p>This lead will start automatically as a research slot opens.</p></div>':'<div class="research-empty"><h4>No findings to review</h4><p>Add a company, NYC address or BBL to improve the next search.</p></div>';
-        $('research-detail').innerHTML=head+(item.result.restriction?`<p class="prospect-error">${esc(item.result.restriction)}</p>`:'')+(item.result.errors||[]).map(error=>`<p class="research-source-error">${esc(error)}</p>`).join('')+(body||empty)+(item.result.checks?.length?`<details class="research-checked"><summary>${item.result.checks.length} source checks</summary><ul>${item.result.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></details>`:'');
+        $('research-detail').innerHTML=head+'<p class="research-context-note">These are source records and candidates. A company or property record does not verify this person’s ownership, employment or management role.</p>'+ (item.result.restriction?`<p class="prospect-error">${esc(item.result.restriction)}</p>`:'')+(item.result.errors||[]).map(error=>`<p class="research-source-error">${esc(error)}</p>`).join('')+(body||empty)+((item.activity||[]).length?`<details class="research-lead-activity"><summary>Activity for this lead · ${item.activity.length} events</summary>${activityHTML([...item.activity].reverse())}</details>`:'')+(item.result.checks?.length?`<details class="research-checked"><summary>${item.result.checks.length} source checks</summary><ul>${item.result.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></details>`:'');
+    }
+    function activityHTML(events){
+        return `<ol class="research-activity-list">${events.map(e=>`<li class="event-${esc(e.state)}"><time>${esc(new Date(e.at).toLocaleTimeString())}</time><div>${e.lead?`<strong>${esc(e.lead)}</strong> · `:''}<b>${esc(e.source)}</b><span>${esc(e.state)}</span><p>${esc(e.message)}</p></div></li>`).join('')}</ol>`;
     }
     function render(){
         renderHistory();if(!state.job)return;
@@ -91,11 +104,12 @@
         $('research-run-title').textContent=modeName(state.job.mode);
         $('research-run-date').textContent=`${state.total} leads · Started ${date(state.job.created_at)}`;
         $('prospect-enrichment-status').textContent=remaining?`${done} of ${state.total} finished · ${c.running||0} researching in parallel. Runs continue in the background.`:`Research complete · ${c.found||0} matched · ${state.reviewed||0} reviewed`;
-        $('prospect-enrichment-cancel').hidden=!remaining;
+        $('prospect-enrichment-cancel').hidden=!remaining||screen!=='run';
         $('prospect-enrichment-unresolved').hidden=!!remaining||!state.unresolved;
         $('prospect-enrichment-unresolved').textContent=`Research ${state.unresolved||0} unresolved`;
-        setHTML('prospect-enrichment-summary',`<div class="research-progress"><div><span class="research-status-pill ${remaining?'is-live':''}">${remaining?'Researching in background':state.job.cancelled_at?'Run stopped':'Research complete'}</span><strong>${done}<span> / ${state.total} leads finished</span></strong><p>${remaining?`${c.running||0} running in parallel · ${c.queued||0} queued. You can close this window.`:'Your findings are ready. Choose what belongs in your list.'}</p></div><span class="research-percent">${pct}%</span><progress max="${state.total}" value="${done}" aria-label="Research progress"></progress></div><div class="research-metrics"><div><strong>${c.found||0}</strong><span>Matched</span></div><div><strong>${c.needs_review||0}</strong><span>Possible matches</span></div><div><strong>${c.not_found||0}</strong><span>No match</span></div><div><strong>${state.source_issues||0}</strong><span>Source issues</span></div></div>${state.stale?'<p class="prospect-error">The list changed. Start a new run before approving these findings.</p>':''}`);
+        setHTML('prospect-enrichment-summary',`<div class="research-progress"><div><span class="research-status-pill ${remaining?'is-live':''}">${remaining?'Researching in background':state.job.cancelled_at?'Run stopped':'Research complete'}</span><strong>${done}<span> / ${state.total} leads finished</span></strong><p>${remaining?`${c.running||0} running in parallel · ${c.queued||0} queued. You can close this window.`:'Your findings are ready. Choose what belongs in your list.'}</p></div><span class="research-percent">${pct}%</span><progress max="${state.total}" value="${done}" aria-label="Research progress"></progress></div><div class="research-metrics"><div><strong>${c.found||0}</strong><span>Records matched</span></div><div><strong>${c.needs_review||0}</strong><span>Possible matches</span></div><div><strong>${c.not_found||0}</strong><span>No match</span></div><div><strong>${state.source_issues||0}</strong><span>Source issues</span></div></div>${state.stale?'<p class="prospect-error">The list changed. Start a new run before approving these findings.</p>':''}`);
         setHTML('research-active',(state.active_items||[]).map(i=>`<div class="research-active-row"><span class="research-dot is-live"></span><strong>${esc(name(i))}</strong><span>${esc(i.current_source||'Checking records')}…</span></div>`).join(''));
+        setHTML('research-activity-body',state.activity?.length?activityHTML(state.activity):'<p class="research-caption">No recorded events yet. Runs started before this update may not have activity history.</p>');
         document.querySelectorAll('[data-research-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.researchView===view)));
         if(!state.items.some(i=>i.id===focusId))focusId=state.items.find(i=>i.result.findings?.length&&!i.reviewed_at)?.id||state.items[0]?.id||null;
         const leadHTML=state.items.map(i=>`<button type="button" data-research-lead="${i.id}" class="research-lead ${i.id===focusId?'is-active':''}" aria-pressed="${i.id===focusId}"><span class="research-avatar" aria-hidden="true">${esc(name(i).slice(0,1).toUpperCase())}</span><span><strong>${esc(name(i))}</strong><small>${esc(i.input.fields.company||i.input.fields.address||'Lead '+i.input.position)}</small><em class="research-badge status-${i.status}">${esc(i.reviewed_at?'Reviewed':labels[i.status])}${i.result.findings?.length?' · '+i.result.findings.length:''}</em></span></button>`).join('');
@@ -191,7 +205,7 @@
         const result=await api(root,{method:'POST',body:{mode:'advanced',unresolved_job_id:jobId,request_key:crypto.randomUUID()}});
         jobId=result.job_id;page=1;view='all';focusId=null;
     });
-    $('prospect-enrichment-cancel').onclick=()=>act(()=>api(root+`/${jobId}/cancel`,{method:'POST',body:{}}));
+    $('prospect-enrichment-cancel').onclick=()=>act(async()=>{await api(root+`/${jobId}/cancel`,{method:'POST',body:{}});sheet.notice('Run cancelled. Completed findings are kept; unfinished work will not save new results.');});
     $('prospect-enrichment-prev').onclick=()=>{page--;focusId=null;load();};$('prospect-enrichment-next').onclick=()=>{page++;focusId=null;load();};
     dialog.addEventListener('close',()=>{if(running())sheet.notice('Research is still running. Open research to check progress or review findings.');});
     document.addEventListener('prospect:loaded',()=>{

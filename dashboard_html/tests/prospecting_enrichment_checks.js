@@ -41,8 +41,10 @@ async page => {
     await page.locator('[data-research-view=ready]').click();
     await page.locator('.research-finding').first().waitFor();
     assert((await page.locator('#research-detail').innerText()).includes('Registered Agent'),'Agent role retained');
-    assert(await page.locator('#research-detail input[type=checkbox]:checked').count()===2,'Clear findings preselected');
-    await page.locator('#research-detail input[type=checkbox]').last().uncheck();
+    assert(await page.locator('#research-detail input[type=checkbox]:checked').count()===0,'Name-only company and agent findings require review');
+    await page.locator('#research-detail input[type=checkbox]').first().check();
+    await page.locator('.research-evidence details').first().locator('summary').click();
+    assert((await page.locator('.research-proof').first().innerText()).includes('DOS ID'),'Proof includes the registry identifier');
     await page.locator('#prospect-enrichment-dialog [data-close]').click();
     await page.reload();await page.locator('#prospect-enrich').click();
     await page.locator('.research-finding').first().waitFor();
@@ -64,6 +66,7 @@ async page => {
     await page.request.post(base+'/__test/research-delay',{data:{seconds:0}});
     await page.locator('[name=research-mode][value=advanced]').check();await page.locator('#research-start').click();
     await page.waitForFunction(()=>document.querySelector('.research-status-pill')?.textContent==='Research complete' && !document.getElementById('prospect-enrichment-approve-run').disabled);
+    await page.locator('#research-detail input[type=checkbox]').first().check();await page.locator('#research-detail input[type=checkbox]').last().check();
     await page.locator('.research-bulk>summary').click();await page.locator('#prospect-enrichment-approve-run').click();
     await page.waitForFunction(()=>document.querySelector('#research-detail .research-kicker')?.textContent.includes('REVIEWED'));
     const approved=await (await page.request.get(base+`/crm/prospecting/api/lists/${listId}`)).json();
