@@ -107,8 +107,9 @@ continues on the contact; the prospect list remains a historical record.
 
 ### Staged list enrichment
 
-Import can optionally check existing records. **Research & review** also checks
-the whole list or selected leads after import. Archived, promoted, and Do not
+Import can optionally check existing records. **Open research** opens a searchable
+lead picker and a choice of existing-record or advanced research. Sheet selections
+carry into the picker; already-running leads are disabled. Archived, promoted, and Do not
 contact leads are excluded. Pending runs are private to their requester, even
 when another admin can access the sheet. Approval explicitly saves the chosen
 evidence to the sheet, which then travels with reassignment.
@@ -131,11 +132,20 @@ including partial failures alongside successful findings. This is public-record
 research, not unrestricted web research or a refresh of shared building tables.
 
 Jobs/items use database leases, fencing tokens and bounded restart retries.
-Each web process starts one consumer after schema initialization and on enqueue.
+Each web process starts four consumers after schema initialization and on enqueue.
+A database advisory lock around claims enforces a shared maximum of four active
+leads across all processes. Disjoint runs can overlap, with available slots favoring
+runs that have fewer active leads. Duplicate active leads are skipped on enqueue.
 The worker releases database connections during HTTP calls. Public responses
-and source failures are cached per run to avoid repeated calls for the same
-building/company. Cancelling prevents in-flight results from being saved and
+and source failures are cached per run to reduce repeated calls for the same
+building/company (simultaneous first requests can still overlap). Cancelling prevents in-flight results from being saved and
 stops subsequent source calls. Pending jobs recover on worker startup.
+Closing the workspace or navigating away does not cancel work. The prospecting
+research inbox links back to active runs and unreviewed findings. Each run shows
+live source labels, queue/progress counts, and filters for ready, active, source
+issues, or reviewed leads. A split lead list and evidence panel avoids expanding
+every lead into the page. Checkbox decisions persist in session storage across
+reloads in the same tab, scoped to the user, list, and research item.
 
 Review shows source links, lookup hints, current versus proposed field values,
 match basis, and per-lead outcomes. Clear additions are checked by default;

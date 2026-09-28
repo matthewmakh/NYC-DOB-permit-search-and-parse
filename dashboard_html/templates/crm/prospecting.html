@@ -16,9 +16,10 @@
         <select id="prospect-owner-filter"><option value="">All team lists</option></select>
     </label>
     {% endif %}
+    <div id="prospect-research-inbox" hidden aria-label="Your research activity"></div>
     <div id="prospect-lists"></div>
     <div id="prospect-workspace" hidden>
-        <div class="prospect-research-bar"><div><strong>Enrich this list</strong><p id="prospect-enrichment-status" role="status">Check existing records, research unresolved leads, then approve what to keep.</p></div><button type="button" class="cbtn" id="prospect-enrich">Research &amp; review</button></div>
+        <div class="prospect-research-bar"><div><span class="research-kicker">LEAD INTELLIGENCE</span><strong>Turn your list into a clearer picture.</strong><p id="prospect-enrichment-status" role="status">Find the people, companies and property records behind your leads.</p></div><button type="button" class="cbtn" id="prospect-enrich">Open research</button></div>
         <div class="prospect-sheet-tools prospect-view-toolbar">
             <div class="prospect-view-tabs" role="group" aria-label="List view"><button type="button" class="cbtn" data-network-view="people" aria-pressed="true">People</button><button type="button" class="cbtn" data-network-view="company" aria-pressed="false">Companies</button><button type="button" class="cbtn" data-network-view="building" aria-pressed="false">Buildings</button></div>
             <div class="prospect-column-tools"><button type="button" class="cbtn" id="prospect-add-person">Add person</button><button type="button" class="cbtn" id="prospect-append-csv">Add CSV to this list</button><button type="button" class="cbtn" id="prospect-new-profile">Add company / building</button></div>
@@ -164,18 +165,38 @@
     <p class="prospect-error" id="prospect-lead-error" role="alert"></p>
 </dialog>
 <dialog class="prospect-dialog prospect-enrichment-dialog" id="prospect-enrichment-dialog" aria-labelledby="prospect-enrichment-title">
-    <div class="prospect-dialog-head"><div><p class="prospect-eyebrow">Research workspace</p><h2 id="prospect-enrichment-title">Enrich &amp; review</h2></div><button type="button" class="cbtn" data-close>Close</button></div>
-    <p>Start with records we already have. Advanced research checks NYC property, ownership, violations and NY business records. Findings remain proposals until approved.</p>
-    <p class="prospect-hint">No new paid lookups. Existing CRM access and your unlocked contact data are respected. Approved findings become sheet research and travel with its assignment. Ownership, employment and management roles are never inferred from a company name alone.</p>
-    <div class="prospect-research-controls"><label>Research scope<select id="prospect-enrichment-scope"><option value="all">All eligible leads in this list</option><option value="selected">Selected leads</option></select></label><button type="button" class="cbtn cbtn-primary" id="prospect-enrichment-internal">Check existing records</button><button type="button" class="cbtn" id="prospect-enrichment-advanced">Run advanced research</button></div>
-    <p class="prospect-hint">Archived, Do not contact and promoted leads are excluded. Whole-list research includes leads outside the current filters.</p>
-    <label class="prospect-research-history">Your research runs<select id="prospect-enrichment-runs"><option value="">No runs yet</option></select></label>
-    <div id="prospect-enrichment-summary" role="status" aria-live="polite"></div>
-    <div class="prospect-research-controls"><button type="button" class="cbtn" id="prospect-enrichment-unresolved" hidden>Research unresolved leads</button><button type="button" class="cbtn" id="prospect-enrichment-cancel" hidden>Cancel remaining research</button></div>
-    <p class="prospect-error" id="prospect-enrichment-error" role="alert"></p>
-    <div id="prospect-enrichment-items"></div>
-    <div class="prospect-research-footer"><div class="prospect-research-controls"><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-check">Select clear findings on this page</button><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-clear">Uncheck all on this page</button></div><p id="prospect-enrichment-selection"></p><p class="prospect-hint">Across the run: keep your checkbox choices and use clear defaults for unseen pages. Saves in groups of 25 leads; Undo reverses the latest saved group.</p><button type="button" class="cbtn cbtn-primary" id="prospect-enrichment-approve">Approve selected findings</button><button type="button" class="cbtn" id="prospect-enrichment-approve-run">Approve selected across entire run</button><button type="button" class="cbtn" id="prospect-enrichment-dismiss">Dismiss unchecked leads on this page</button></div>
-    <div class="prospect-pagination"><span id="prospect-enrichment-page"></span><div><button type="button" class="cbtn" id="prospect-enrichment-prev">Previous</button><button type="button" class="cbtn" id="prospect-enrichment-next">Next</button></div></div>
+    <header class="research-header"><div><span class="research-kicker">LEAD INTELLIGENCE</span><h2 id="prospect-enrichment-title">Research your leads</h2></div><button type="button" class="cbtn" data-close aria-label="Close research; active runs continue">Close</button></header>
+    <div class="research-shell">
+        <aside class="research-sidebar" aria-label="Research runs"><button type="button" class="cbtn cbtn-primary" id="research-new">New research</button><p class="research-kicker">YOUR RUNS</p><div id="research-history"></div><p class="research-sidebar-note">Keep working while we research.<br>Every run is saved here.</p></aside>
+        <main class="research-main">
+            <p class="prospect-error" id="prospect-enrichment-error" role="alert"></p>
+            <div id="research-loading" class="research-empty" role="status" hidden><span class="research-spinner" aria-hidden="true"></span><p>Loading your research workspace…</p></div>
+            <section id="research-setup" aria-labelledby="research-setup-title">
+                <div class="research-section-head"><span class="research-kicker">START A RUN</span><h3 id="research-setup-title">Who should we research?</h3><p>Choose your leads and how far you want to look.</p></div>
+                <div class="research-step-heading"><span>1</span><h4>Choose leads</h4><strong id="research-picked-count" aria-live="polite"></strong></div>
+                <div class="research-picker-tools"><label class="research-search"><span class="sr-only">Search leads to enrich</span><input type="search" id="research-search" placeholder="Search names, companies or addresses"></label><button type="button" class="cbtn" id="research-pick-all">Select all</button><button type="button" class="cbtn" id="research-pick-none">Clear</button></div>
+                <p class="research-caption" id="research-eligibility"></p>
+                <div id="research-picker" class="research-picker" aria-label="Choose leads to research"></div><button type="button" class="cbtn cbtn-sm" id="research-picker-more" hidden>Show more leads</button>
+                <div class="research-step-heading"><span>2</span><h4>Choose depth</h4></div>
+                <div class="research-methods" role="group" aria-label="Research depth">
+                    <label class="research-method"><input type="radio" name="research-mode" value="internal" checked><span><strong>Check our records</strong><small>Find matches in CRM, property records and contact data you already have.</small><em>Best first step</em></span></label>
+                    <label class="research-method"><input type="radio" name="research-mode" value="advanced"><span><strong>Advanced research</strong><small>Also check NYC ownership, permits, violations and NY business records.</small><em>Deeper public-record research</em></span></label>
+                </div>
+                <details class="research-explainer"><summary>What happens to the findings?</summary><p>Everything comes back for review. Clear additions are selected by default; uncertain matches and replacements need your choice. Nothing changes in your list until you approve. No new paid lookups.</p></details>
+                <footer class="research-launch"><div><strong id="research-launch-count">Choose leads to begin</strong><small>Runs in the background. You can close this window.</small></div><button type="button" class="cbtn cbtn-primary" id="research-start" disabled>Start research</button></footer>
+            </section>
+            <section id="research-run" hidden aria-label="Research progress and findings">
+                <div class="research-run-heading"><div><span class="research-kicker" id="research-run-date"></span><h3 id="research-run-title"></h3></div><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-cancel">Stop remaining</button></div>
+                <div id="prospect-enrichment-summary" aria-live="polite" role="status"></div>
+                <div id="research-active" aria-label="Leads being researched"></div>
+                <div class="research-results-heading"><div><h4>Findings</h4><p>Review completed leads while the rest keep running.</p></div><button type="button" class="cbtn cbtn-sm" id="prospect-enrichment-unresolved" hidden>Research unresolved</button></div>
+                <div class="research-filters" role="group" aria-label="Filter research results"><button type="button" data-research-view="all" aria-pressed="true">All leads</button><button type="button" data-research-view="ready" aria-pressed="false">Ready to review</button><button type="button" data-research-view="active" aria-pressed="false">In progress</button><button type="button" data-research-view="issues" aria-pressed="false">Source issues</button><button type="button" data-research-view="reviewed" aria-pressed="false">Reviewed</button></div>
+                <div class="research-review"><nav id="research-lead-list" aria-label="Leads in this run"></nav><div id="research-detail"></div></div>
+                <div class="research-review-footer"><p id="prospect-enrichment-selection" role="status"></p><div><button type="button" class="cbtn cbtn-primary" id="prospect-enrichment-approve">Save selected findings</button><details class="research-bulk"><summary class="cbtn">More actions</summary><div><button type="button" class="cbtn" id="prospect-enrichment-check">Select clear findings on this page</button><button type="button" class="cbtn" id="prospect-enrichment-clear">Uncheck this page</button><button type="button" class="cbtn" id="prospect-enrichment-approve-run">Approve selected across run</button><button type="button" class="cbtn" id="prospect-enrichment-dismiss">Dismiss unchecked leads on this page</button><small>Whole-run approval keeps your choices and uses clear defaults for unseen leads. Saves 25 leads at a time. Undo reverses the last saved group.</small></div></details></div></div>
+                <div class="prospect-pagination"><span id="prospect-enrichment-page"></span><div><button type="button" class="cbtn" id="prospect-enrichment-prev">Previous</button><button type="button" class="cbtn" id="prospect-enrichment-next">Next</button></div></div>
+            </section>
+        </main>
+    </div>
 </dialog>
 {% endblock %}
 {% block crm_js %}<script>window.PROSPECT_CONFIG = {{ prospect_config|tojson }};</script><script defer src="{{ url_for('static', filename='js/prospecting.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_network.js') }}"></script><script defer src="{{ url_for('static', filename='js/prospecting_enrichment.js') }}"></script>{% endblock %}

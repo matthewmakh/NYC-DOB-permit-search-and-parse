@@ -137,7 +137,19 @@ def import_list():
 @api
 def research_results(list_id):
     job_id = request.args.get('job_id', type=int)
-    return enrichment.results(_ctx(), list_id, job_id, request.args.get('page', 1))
+    return enrichment.results(_ctx(), list_id, job_id, request.args.get('page', 1), request.args.get('view', 'all'))
+
+
+@prospecting_bp.get('/api/enrichment-runs')
+@api
+def research_runs():
+    return enrichment.runs(_ctx())
+
+
+@prospecting_bp.get('/api/lists/<int:list_id>/enrichment/candidates')
+@api
+def research_candidates(list_id):
+    return enrichment.candidates(_ctx(), list_id)
 
 
 @prospecting_bp.post('/api/lists/<int:list_id>/enrichment')

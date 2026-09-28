@@ -235,6 +235,7 @@ def research(ctx, fields, mode, cache):
         return result
     checked = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     def fetch(key, fn, label):
+        getattr(cache, "progress", lambda label: None)(label)
         def attempt():
             try:
                 return {'ok': True, 'data': fn()}

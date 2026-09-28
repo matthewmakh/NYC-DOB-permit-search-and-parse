@@ -20,6 +20,7 @@ import prospecting_service as s
 import prospecting_workflows as w
 
 log = logging.getLogger(__name__)
+MAX_PARALLEL = 4
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS prospect_enrichment_jobs (
         id BIGSERIAL PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES prospect_lists(id) ON DELETE CASCADE,
@@ -36,6 +37,8 @@ SCHEMA = [
         attempts INTEGER NOT NULL DEFAULT 0, lease_until TIMESTAMPTZ, claim UUID,
         decision JSONB, reviewed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(job_id,row_id)
     )""",
+    """ALTER TABLE prospect_enrichment_items ADD COLUMN IF NOT EXISTS current_source TEXT NOT NULL DEFAULT ''""",
+    """ALTER TABLE prospect_enrichment_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ""",
     """CREATE INDEX IF NOT EXISTS idx_prospect_enrichment_queue ON prospect_enrichment_items(status,lease_until,id)
         WHERE status IN ('queued','running')""",
     """CREATE TABLE IF NOT EXISTS prospect_enrichment_cache (
@@ -76,11 +79,6 @@ def start(ctx, list_id, data):
             if prior['list_id'] != list_id or prior['request_hash'] != digest:
                 raise s.Conflict('This request was already used for different research.')
             return {'job_id': prior['id'], 'replayed': True}
-        cur.execute("""SELECT 1 FROM prospect_enrichment_jobs j JOIN prospect_enrichment_items i ON i.job_id=j.id
-            WHERE j.list_id=%s AND j.user_id=%s AND j.cancelled_at IS NULL AND i.status IN ('queued','running') LIMIT 1""",
-                    (list_id, ctx['user_id']))
-        if cur.fetchone():
-            raise s.Conflict('Research is already running for you on this list. Review or cancel that run first.')
         where = ''
         params = [list_id]
         if ids is not None:
@@ -100,6 +98,13 @@ def start(ctx, list_id, data):
         if ids is not None and parent is None and len(all_rows) != len(ids):
             raise LookupError('One or more selected leads are not in this list.')
         rows = [r for r in all_rows if not r['promoted_at'] and not r['archived_at'] and r['status'] != 'do_not_contact']
+        cur.execute("""SELECT DISTINCT i.row_id FROM prospect_enrichment_items i
+            JOIN prospect_enrichment_jobs j ON j.id=i.job_id WHERE j.list_id=%s AND j.user_id=%s
+            AND j.cancelled_at IS NULL AND i.status IN ('queued','running')""", (list_id, ctx['user_id']))
+        busy_ids = {r['row_id'] for r in cur.fetchall()}
+        rows = [r for r in rows if r['id'] not in busy_ids]
+        if not rows and busy_ids:
+            raise s.Conflict('These leads are already being researched. Choose other leads or open the active run.')
         if not rows:
             raise ValueError('No eligible leads. Archived, promoted and Do not contact leads are skipped.')
         cur.execute("""INSERT INTO prospect_enrichment_jobs(list_id,user_id,team_id,list_version,mode,request_key,request_hash)
@@ -131,13 +136,54 @@ def _allowed(cur, ctx, finding, lock=False):
     return True
 
 
-def results(ctx, list_id, job_id=None, page=1):
+def _runs(cur, ctx, list_id=None):
+    cur.execute(f"""WITH recent AS (
+        SELECT j.id,j.list_id,j.mode,j.created_at,j.cancelled_at,l.name AS list_name
+        FROM prospect_enrichment_jobs j JOIN prospect_lists l ON l.id=j.list_id
+        WHERE j.user_id=%(user_id)s AND j.team_id=%(team_id)s AND {s.scope(ctx)}
+        AND (%(list_id)s IS NULL OR l.id=%(list_id)s)
+        ORDER BY EXISTS(SELECT 1 FROM prospect_enrichment_items i WHERE i.job_id=j.id AND i.status IN ('queued','running')) DESC,j.id DESC LIMIT 30)
+        SELECT j.*,COUNT(i.id) AS total,
+          COUNT(i.id) FILTER(WHERE i.status IN ('queued','running')) AS remaining,
+          COUNT(i.id) FILTER(WHERE i.status='running') AS running,
+          COUNT(i.id) FILTER(WHERE i.reviewed_at IS NULL AND jsonb_array_length(COALESCE(i.result->'findings','[]'))>0) AS ready
+        FROM recent j LEFT JOIN prospect_enrichment_items i ON i.job_id=j.id
+        GROUP BY j.id,j.list_id,j.mode,j.created_at,j.cancelled_at,j.list_name
+        ORDER BY (COUNT(i.id) FILTER(WHERE i.status IN ('queued','running'))>0) DESC,j.id DESC""", {**ctx, 'list_id':list_id})
+    return [dict(r) for r in cur.fetchall()]
+
+
+def runs(ctx):
+    with s.transaction() as cur:
+        return {'jobs': _runs(cur, ctx)}
+
+
+def candidates(ctx, list_id):
+    """Small, bounded selection payload; no source findings or working notes."""
+    with s.transaction() as cur:
+        listing = s.get_list(ctx, list_id, cur)
+        cur.execute('SELECT COUNT(*) AS n FROM prospect_rows WHERE list_id=%s', (list_id,))
+        total = cur.fetchone()['n']
+        cur.execute("""SELECT r.id,r.position,r.cells,EXISTS(
+            SELECT 1 FROM prospect_enrichment_items i JOIN prospect_enrichment_jobs j ON j.id=i.job_id
+            WHERE i.row_id=r.id AND j.user_id=%s AND j.cancelled_at IS NULL AND i.status IN ('queued','running')) AS busy
+            FROM prospect_rows r WHERE r.list_id=%s AND r.promoted_at IS NULL AND r.archived_at IS NULL
+            AND r.status<>'do_not_contact' ORDER BY r.position LIMIT %s""", (ctx['user_id'], list_id, s.MAX_ROWS))
+        rows = []
+        for row in cur.fetchall():
+            fields = s.mapped(row, listing)
+            rows.append({'id': row['id'], 'position': row['position'], 'name': fields['name'] or fields['company'] or f"Lead {row['position']}",
+                         'company':fields['company'], 'address':fields['address'], 'busy':row['busy']})
+        return {'rows':rows, 'excluded':total-len(rows), 'list_name':listing['name']}
+
+
+def results(ctx, list_id, job_id=None, page=1, view="all"):
+    if view not in ("all", "ready", "active", "issues", "reviewed"):
+        raise ValueError("Choose a valid research view.")
     page = max(1, int(page))
     with s.transaction() as cur:
         listing = s.get_list(ctx, list_id, cur)
-        cur.execute('SELECT id,mode,created_at FROM prospect_enrichment_jobs WHERE list_id=%s AND user_id=%s AND team_id=%s ORDER BY id DESC LIMIT 30',
-                    (list_id, ctx['user_id'], ctx['team_id']))
-        jobs = [dict(r) for r in cur.fetchall()]
+        jobs = _runs(cur, ctx, list_id)
         if job_id is None:
             job_id = jobs[0]['id'] if jobs else None
         if job_id is None:
@@ -151,7 +197,14 @@ def results(ctx, list_id, job_id=None, page=1):
             COUNT(*) FILTER(WHERE status IN ('not_found','needs_review','failed') OR jsonb_array_length(COALESCE(result->'errors','[]'))>0) AS unresolved
             FROM prospect_enrichment_items WHERE job_id=%s""", (job_id,))
         issues = dict(cur.fetchone())
-        cur.execute('SELECT * FROM prospect_enrichment_items WHERE job_id=%s ORDER BY id LIMIT 25 OFFSET %s', (job_id, (page-1)*25))
+        filters = {'all':'TRUE', 'ready':"reviewed_at IS NULL AND jsonb_array_length(COALESCE(result->'findings','[]'))>0",
+                   'active':"status IN ('queued','running')", 'issues':"status='failed' OR jsonb_array_length(COALESCE(result->'errors','[]'))>0",
+                   'reviewed':'reviewed_at IS NOT NULL'}
+        clause = filters[view]
+        cur.execute(f'SELECT COUNT(*) AS n FROM prospect_enrichment_items WHERE job_id=%s AND ({clause})', (job_id,))
+        filtered_total = cur.fetchone()['n']
+        page = min(page, max(1, (filtered_total+24)//25))
+        cur.execute(f'SELECT * FROM prospect_enrichment_items WHERE job_id=%s AND ({clause}) ORDER BY id LIMIT 25 OFFSET %s', (job_id, (page-1)*25))
         items = [dict(r) for r in cur.fetchall()]
         for item in items:
             findings = item['result'].get('findings', [])
@@ -160,7 +213,9 @@ def results(ctx, list_id, job_id=None, page=1):
             if len(allowed) != len(findings):
                 item['result'] = {**item['result'], 'findings': allowed,
                                   'restriction': 'Some CRM findings are no longer accessible.'}
-        return {'jobs': jobs, 'job': job, 'items': items, 'counts': counts, 'reviewed': reviewed, **issues,
+        cur.execute("SELECT id,row_id,input,current_source,started_at FROM prospect_enrichment_items WHERE job_id=%s AND status='running' ORDER BY id LIMIT %s", (job_id, MAX_PARALLEL))
+        active_items = [dict(r) for r in cur.fetchall()]
+        return {'active_items': active_items, 'filtered_total': filtered_total, 'view': view, 'parallel_limit': MAX_PARALLEL, 'jobs': jobs, 'job': job, 'items': items, 'counts': counts, 'reviewed': reviewed, **issues,
                 'total': sum(counts.values()), 'page': page, 'stale': listing['version'] != job['list_version']}
 
 
@@ -249,18 +304,26 @@ def _fresh_context(cur, user_id):
 def process_one():
     """Claim with a lease, release DB resources for HTTP, save with a fencing token."""
     with s.transaction() as cur:
+        # Serialize only the short claim operation across all web processes.
+        cur.execute('SELECT pg_advisory_xact_lock(72924, 1)')
+        cur.execute("SELECT COUNT(*) AS n FROM prospect_enrichment_items WHERE status='running' AND lease_until>NOW()")
+        if cur.fetchone()['n'] >= MAX_PARALLEL:
+            return False
         cur.execute("""UPDATE prospect_enrichment_items SET status='failed',claim=NULL,lease_until=NULL,
             result='{"findings":[],"errors":["Worker interrupted repeatedly. Run a new check to retry."]}'
             WHERE status='running' AND lease_until<NOW() AND attempts>=3""")
         cur.execute("""SELECT i.*,j.list_id,j.user_id,j.team_id,j.list_version,j.mode FROM prospect_enrichment_items i
-            JOIN prospect_enrichment_jobs j ON j.id=i.job_id WHERE j.cancelled_at IS NULL AND
+            JOIN prospect_enrichment_jobs j ON j.id=i.job_id
+            LEFT JOIN (SELECT job_id,COUNT(*) AS n FROM prospect_enrichment_items
+                       WHERE status='running' AND lease_until>NOW() GROUP BY job_id) active ON active.job_id=j.id
+            WHERE j.cancelled_at IS NULL AND
             (i.status='queued' OR (i.status='running' AND i.lease_until<NOW() AND i.attempts<3))
-            ORDER BY i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1""")
+            ORDER BY COALESCE(active.n,0),i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1""")
         item = cur.fetchone()
         if not item:
             return False
         item = dict(item); claim = str(uuid4())
-        cur.execute("UPDATE prospect_enrichment_items SET status='running',claim=%s,attempts=attempts+1,lease_until=NOW()+INTERVAL '15 minutes' WHERE id=%s", (claim, item['id']))
+        cur.execute("UPDATE prospect_enrichment_items SET status='running',current_source='Checking existing records',started_at=COALESCE(started_at,NOW()),claim=%s,attempts=attempts+1,lease_until=NOW()+INTERVAL '15 minutes' WHERE id=%s", (claim, item['id']))
     stop_heartbeat = threading.Event()
     def heartbeat():
         # A large HPD/ACRIS history can span many HTTP requests. Renew during
@@ -304,6 +367,13 @@ def process_one():
                 cur.execute('INSERT INTO prospect_enrichment_cache(job_id,cache_key,result) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING',
                             (item['job_id'], key, Json(result)))
             return result
+        def progress(label):
+            with s.transaction() as cur:
+                cur.execute("""UPDATE prospect_enrichment_items SET current_source=%s,updated_at=NOW()
+                    WHERE id=%s AND claim=%s AND status='running'""", (label[:200], item['id'], claim))
+                if not cur.rowcount:
+                    raise InterruptedError('Research cancelled.')
+        cache.progress = progress
         result = research(ctx, item['input']['fields'], item['mode'], cache)
         for f in result.get('findings', []):
             if f['kind'] == 'field' and not item['input']['mapping'].get(f['field']):
@@ -324,23 +394,25 @@ def process_one():
 
 
 _worker_lock = threading.Lock()
-_worker = None
+_workers = []
 _wake = threading.Event()
 
 
 def start_worker():
-    """One bounded consumer per web process; DB leases coordinate all workers."""
-    global _worker
+    """Parallel consumers backed by a database-wide four-lead concurrency cap."""
+    global _workers
     with _worker_lock:
-        if not _worker or not _worker.is_alive():
-            def run():
-                while True:
-                    try:
-                        if process_one():
-                            continue
-                    except Exception:
-                        log.exception('Prospecting enrichment worker will retry')
-                    _wake.wait(30); _wake.clear()
-            _worker = threading.Thread(target=run, daemon=True, name='prospect-enrichment')
-            _worker.start()
+        _workers = [worker for worker in _workers if worker.is_alive()]
+        def run():
+            while True:
+                try:
+                    if process_one():
+                        continue
+                except Exception:
+                    log.exception('Prospecting enrichment worker will retry')
+                _wake.wait(3); _wake.clear()
+        while len(_workers) < MAX_PARALLEL:
+            worker = threading.Thread(target=run, daemon=True, name='prospect-enrichment')
+            _workers.append(worker)
+            worker.start()
         _wake.set()

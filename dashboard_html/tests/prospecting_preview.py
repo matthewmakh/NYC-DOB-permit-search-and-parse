@@ -8,12 +8,13 @@ import atexit
 import os
 import sys
 import uuid
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, session, abort
+from flask import Flask, session, abort, request
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -45,8 +46,12 @@ crm.init_crm_tables()
 research._fetch_property=lambda source,bbl: {}
 research._fetch_permits=lambda dataset,bbl: []
 research._resolve=lambda address: {'property':None,'error':'Synthetic address has no match.'}
-research._fetch_sos=lambda company: ({'entity_name':company,'dos_id':'123456','status':'Active','quality':'exact',
-    'people':[{'name':'Test Agent','role':'Registered Agent'}]} if company=='Unknown Co' else {})
+research_delay=0
+def fixture_sos(company):
+    time.sleep(research_delay)
+    return ({'entity_name':company,'dos_id':'123456','status':'Active','quality':'exact',
+        'people':[{'name':'Test Agent','role':'Registered Agent'}]} if company=='Unknown Co' else {})
+research._fetch_sos=fixture_sos
 def fixture_user(token):
     user_id=session.get('preview_user',1)
     return dict(id=user_id,is_admin=user_id==1,is_sponsored=user_id!=1,sponsor_user_id=1,email=f'preview{user_id}@example.test')
@@ -68,6 +73,12 @@ app.add_url_rule('/crm/api/push/config',view_func=lambda:dict(success=True,enabl
 def switch_test_user(user_id):
     if user_id not in (1,2,3):abort(404)
     session['preview_user']=user_id
+    return dict(success=True)
+
+@app.post('/__test/research-delay')
+def test_research_delay():
+    global research_delay
+    research_delay=max(0,min(10,float(request.json.get('seconds',0))))
     return dict(success=True)
 
 if __name__=='__main__':app.run(host='127.0.0.1',port=5101)

@@ -150,6 +150,58 @@ class EnrichmentTests(unittest.TestCase):
         with s.transaction() as cur:
             cur.execute('SELECT attempts FROM prospect_enrichment_items WHERE job_id=%s',(job,));self.assertEqual([r['attempts'] for r in cur.fetchall()],[1,1])
 
+    def test_four_parallel_leads_with_shared_cap_and_live_sources(self):
+        from threading import Event, Lock
+        self.list_id=self.create(parsed=s.parse_csv(('Name,Company\n'+''.join(f'Person {i},Example\n' for i in range(8))).encode()))
+        job=self.job('advanced');release=Event();ready=Event();limited=Event();lock=Lock();entered=[];declined=[]
+        def process():
+            outcome=e.process_one()
+            if not outcome:
+                with lock:
+                    declined.append(True)
+                    if len(declined)==2:limited.set()
+            return outcome
+        def fetch(ctx,fields,mode,cache):
+            cache.progress('HPD records')
+            with lock:
+                entered.append(fields['name'])
+                if len(entered)==4:ready.set()
+            if not release.wait(5):raise RuntimeError('Test must release workers')
+            return {'findings':[],'checks':[],'errors':[]}
+        with patch.object(r,'research',side_effect=fetch),ThreadPoolExecutor(max_workers=6) as pool:
+            futures=[pool.submit(process) for _ in range(6)]
+            try:
+                self.assertTrue(ready.wait(5))
+                self.assertTrue(limited.wait(5))
+                result=self.result(job)
+                self.assertEqual(result['counts'],{'running':4,'queued':4})
+                self.assertEqual(len(result['active_items']),4)
+                self.assertTrue(all(i['current_source']=='HPD records' for i in result['active_items']))
+                self.assertEqual(e.runs(fixtures.REP)['jobs'][0]['running'],4)
+            finally:release.set()
+            outcomes=[future.result(timeout=5) for future in futures]
+        self.assertEqual(outcomes.count(True),4);self.assertEqual(outcomes.count(False),2)
+
+    def test_disjoint_runs_can_overlap_but_same_leads_cannot(self):
+        first=self.job(row_ids=[self.rows[0]['id']]);second=self.job(row_ids=[self.rows[1]['id']])
+        self.assertNotEqual(first,second)
+        with self.assertRaises(s.Conflict):self.job(row_ids=[self.rows[0]['id']])
+        candidates=e.candidates(fixtures.REP,self.list_id)
+        self.assertTrue(all(row['busy'] for row in candidates['rows']))
+        self.assertEqual(len(e.runs(fixtures.REP)['jobs']),2)
+        self.assertEqual(e.runs(fixtures.OTHER_REP)['jobs'],[])
+        self.assertEqual(e.runs(fixtures.ADMIN)['jobs'],[])
+        with self.assertRaises(LookupError):e.candidates(fixtures.OTHER_REP,self.list_id)
+
+    def test_filtered_review_and_selection_exclusions(self):
+        self.contact();job=self.job();self.drain()
+        self.assertEqual(e.results(fixtures.REP,self.list_id,job,view='ready')['filtered_total'],2)
+        self.assertEqual(e.results(fixtures.REP,self.list_id,job,view='active')['filtered_total'],0)
+        self.assertEqual(e.results(fixtures.REP,self.list_id,job,view='issues')['filtered_total'],0)
+        s.update_row(fixtures.REP,self.rows[0]['id'],{'version':1,'status':'do_not_contact'})
+        picker=e.candidates(fixtures.REP,self.list_id)
+        self.assertEqual(picker['excluded'],1);self.assertEqual(len(picker['rows']),1)
+
     def test_unresolved_selection_and_forged_ids(self):
         self.contact();job=self.job();self.drain()
         advanced=self.job('advanced',unresolved_job_id=job)
