@@ -14,6 +14,7 @@ from psycopg2.extras import RealDictCursor
 import json
 import time
 from nameparser import HumanName
+from enrichment_privacy import minimal_match, minimal_result
 
 # Enformion API Configuration (Primary)
 ENFORMION_API_URL = 'https://devapi.enformion.com/Contact/EnrichPlus'
@@ -38,10 +39,8 @@ PROVIDER_APIFY_FALLBACK = 'apify_fallback'          # try Apify, fall back to En
 VALID_PROVIDERS = (PROVIDER_ENFORMION, PROVIDER_APIFY,
                    PROVIDER_ENFORMION_FALLBACK, PROVIDER_APIFY_FALLBACK)
 
-# Default provider for new lookups. Apify (TruePeopleSearch) is now primary
-# because it's ~17x cheaper per lookup and returns richer data (age, DOB,
-# relatives, current+previous addresses, per-phone provider + last-reported
-# dates). Enformion stays as the fallback for cases where Apify misses.
+# Default provider for new lookups. Retain contact metadata and match evidence;
+# other vendor fields are used transiently for matching, never saved.
 DEFAULT_PROVIDER = PROVIDER_APIFY_FALLBACK
 
 # Customer-facing batch rate (same regardless of which provider runs the lookup)
@@ -466,14 +465,14 @@ def call_enformion_api(first_name, last_name, address_line1=None, address_line2=
                 return False, None, 'UNVERIFIED_MATCH: returned identity does not match the supplied name and address'
             return True, data, None
         else:
-            print(f"Enformion error response: {response.text[:500]}")
-            return False, None, f"API error: {response.status_code} - {response.text[:200]}"
+            # Error bodies may echo the query or include personal vendor data.
+            return False, None, f"Enformion API error: {response.status_code}"
             
     except requests.Timeout:
         return False, None, "API request timed out"
     except Exception as e:
-        print(f"Enformion exception: {e}")
-        return False, None, str(e)
+        print(f"Enformion exception: {type(e).__name__}")
+        return False, None, 'Enformion request failed'
 
 
 def _build_apify_name_query(first_name, last_name, middle_name=None, suffix=None,
@@ -646,9 +645,7 @@ def call_apify_truepeoplesearch(first_name, last_name, middle_name=None, suffix=
     if best is None:
         return False, None, f"UNVERIFIED_MATCH: {selection_error}"
 
-    # Persist only the verified selected item. The old code attached every
-    # related-person result (including rejected tenants/relatives) to the raw
-    # database response.
+    # Pass the selected item to extraction; do not persist the vendor payload.
     selected = dict(best)
     selected['_apify_selection'] = selection
     selected['_apify_result_count'] = len(items)
@@ -995,10 +992,7 @@ def extract_apify_contact_info(api_response):
 
 
 def summarize_apify_match(api_response, selection=None):
-    """Pull the human-readable identity fields from an Apify item so we can
-    show the user *who* we matched (their age, county, current address,
-    relatives). Used for match-verification UI and stored alongside the raw
-    response. Safe to call on partial responses — every field is optional."""
+    """Keep the matched name and match flags without personal background data."""
     if not api_response:
         return None
     summary = {
@@ -1006,27 +1000,9 @@ def summarize_apify_match(api_response, selection=None):
             api_response.get('First Name'),
             api_response.get('Last Name'),
         ] if p) or None,
-        'age': api_response.get('Age') or None,
-        'born': api_response.get('Born') or None,
-        'lives_in': api_response.get('Lives in') or None,
-        'current_address': ', '.join(p for p in [
-            api_response.get('Street Address'),
-            api_response.get('Address Locality'),
-            api_response.get('Address Region'),
-            api_response.get('Postal Code'),
-        ] if p) or None,
-        'county': api_response.get('County Name') or None,
-        'previous_addresses': api_response.get('Previous Addresses') or [],
-        'relatives': api_response.get('Relatives') or [],
-        'associates': api_response.get('Associates') or [],
-        'search_option': (api_response.get('Search Option')
-                          or api_response.get('Search Type') or None),
-        'input_given': (api_response.get('Input Given')
-                        or api_response.get('Search Input') or None),
+        'verification': selection,
     }
-    if selection:
-        summary['verification'] = selection
-    return summary
+    return minimal_match(summary)
 
 
 def extract_contact_info(api_response):
@@ -1189,7 +1165,7 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None, bulk_
         if pending:
             if pending['billing_scope'] != billing_scope:
                 return False, None, 'This lookup is awaiting payment in another enrichment job'
-            return True, pending['result'], 'Saved contact information found'
+            return True, minimal_result(pending['result']), 'Saved contact information found'
         # Load authoritative lookup inputs. Access/caching is owner-specific
         # in user_enrichments and is checked by the API/job caller. The old
         # shortcut read buildings.enriched_* (one global slot per property),
@@ -1303,12 +1279,11 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None, bulk_
         # Extract contact info based on source.
         if enrichment_source == 'apify_truepeoplesearch':
             selection = api_response.pop('_apify_selection', None)
-            result_count = api_response.pop('_apify_result_count', None)
+            api_response.pop('_apify_result_count', None)
             phones, emails, person_id = extract_apify_contact_info(api_response)
             match_summary = summarize_apify_match(api_response, selection)
         else:
             selection = None
-            result_count = None
             phones, emails, person_id = extract_contact_info(api_response)
             match_summary = None
 
@@ -1318,23 +1293,15 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None, bulk_
                 return False, None, "No matching records found in our database for this person. They may not be in our data sources."
             return False, None, "No contact information (phone/email) found for this person in our database."
 
-        # Store only the verified selected record. Rejected related-person and
-        # address-resident results are intentionally discarded.
-        if isinstance(api_response, dict):
-            stored_response = dict(api_response)
-            if result_count is not None:
-                stored_response['_returned_result_count'] = result_count
-            stored_response['_match_summary'] = match_summary
-        else:
-            stored_response = api_response
-
+        # Normalized contacts and match flags are sufficient for reuse/payment.
+        # Raw responses may include birth data, relatives and address histories.
         result = {'phones': phones, 'emails': emails, 'person_id': person_id,
                   'match': match_summary, 'source': enrichment_source, 'from_api': True}
         cur.execute("""INSERT INTO owner_enrichment_results
             (user_id,building_id,owner_name,billing_scope,result,raw_response)
             VALUES (%s,%s,%s,%s,%s,%s)""",
             (user_id, building_id, owner_name, billing_scope,
-             json.dumps(result), json.dumps(stored_response)))
+            json.dumps(result), None))
         conn.commit()
         return True, result, 'Contact information found'
 
@@ -1884,7 +1851,7 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
         """, (
             bbl, building_id, permit_id, contact_name, contact_type, license_number,
             license_type, original_phone, json.dumps(phones), json.dumps(emails),
-            person_id, json.dumps(api_response), user_id
+            person_id, None, user_id
         ))
         
         enrichment_id = cur.fetchone()['id']

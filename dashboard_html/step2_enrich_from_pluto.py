@@ -183,8 +183,8 @@ def get_hpd_data_for_bbl(bbl):
             'hpd_total_violations': 0,
             'hpd_open_complaints': 0,
             'hpd_total_complaints': 0,
-            # City-verified mailing address of the registered head officer /
-            # owner — free skip-tracing data we previously discarded.
+            # Source-reported business addresses, paired with individual records.
+            'hpd_owner_contacts': [],
             'hpd_owner_business_address': None,
             'hpd_owner_business_city': None,
             'hpd_owner_business_state': None,
@@ -226,12 +226,26 @@ def get_hpd_data_for_bbl(bbl):
                 name = _contact_name(c)
                 if name and name not in owner_names:
                     owner_names.append(name)
-                if name and result['hpd_owner_business_address'] is None:
-                    result['hpd_owner_business_address'] = _contact_address(c)
-                    result['hpd_owner_business_city'] = (c.get('businesscity') or '').strip() or None
-                    result['hpd_owner_business_state'] = (c.get('businessstate') or '').strip() or None
-                    result['hpd_owner_business_zip'] = (c.get('businesszip') or '').strip() or None
+                if name:
+                    result['hpd_owner_contacts'].append({
+                        'name': name, 'role': c.get('type'),
+                        'registration_id': str(reg_id),
+                        'contact_id': c.get('registrationcontactid'),
+                        'reported_date': result['hpd_last_registration_date'].isoformat()
+                        if result['hpd_last_registration_date'] else None,
+                        'address': _contact_address(c),
+                        'city': (c.get('businesscity') or '').strip() or None,
+                        'state': (c.get('businessstate') or '').strip() or None,
+                        'zip_code': (c.get('businesszip') or '').strip() or None,
+                    })
             result['owner_name_hpd'] = ' & '.join(owner_names) or None
+            # Legacy single-address fields are safe only for one source contact.
+            # With co-owners, every address remains on its own contact above.
+            if len(result['hpd_owner_contacts']) == 1:
+                contact = result['hpd_owner_contacts'][0]
+                for suffix, key in (('address', 'address'), ('city', 'city'),
+                                    ('state', 'state'), ('zip', 'zip_code')):
+                    result[f'hpd_owner_business_{suffix}'] = contact[key]
 
             for c in by_type.get('Agent', []):
                 result['hpd_agent_name'] = _contact_name(c)

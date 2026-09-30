@@ -237,17 +237,13 @@ def backfill_new_fields(conn, apply_changes):
                 'unused_far': pluto['unused_far'],
                 'pluto_owner_type': pluto['pluto_owner_type'],
             })
+        fields = {k: v for k, v in fields.items() if v is not None}
         hpd, _ = get_hpd_data_for_bbl(b['bbl'])
         if hpd:
-            fields.update({
-                'hpd_owner_business_address': hpd['hpd_owner_business_address'],
-                'hpd_owner_business_city': hpd['hpd_owner_business_city'],
-                'hpd_owner_business_state': hpd['hpd_owner_business_state'],
-                'hpd_owner_business_zip': hpd['hpd_owner_business_zip'],
-                'hpd_agent_name': hpd['hpd_agent_name'],
-                'hpd_site_manager_name': hpd['hpd_site_manager_name'],
-            })
-        fields = {k: v for k, v in fields.items() if v is not None}
+            from property_source_refresh import source_fields
+            from psycopg2.extras import Json
+            fields.update(source_fields('hpd', hpd))
+            fields['hpd_owner_contacts'] = Json(fields['hpd_owner_contacts'])
         if fields:
             set_clause = ', '.join(f"{k} = %s" for k in fields)
             cur.execute(f"UPDATE buildings SET {set_clause} WHERE id = %s",

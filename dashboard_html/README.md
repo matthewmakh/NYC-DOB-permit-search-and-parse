@@ -212,3 +212,30 @@ so the next scheduled refresh fills their metadata; failed refreshes retain the
 last successful names and dates and obey the normal retry delay. ECB metadata is
 filled by the next successful tax/violation refresh. No production backfill runs
 as part of the schema migration.
+
+## Reported addresses and enrichment privacy
+
+Address-bearing property/profile APIs require an active authenticated account
+and send `Cache-Control: private, no-store`. Older building endpoints exclude
+globally cached paid enrichment fields; paid contacts remain user-specific.
+
+CSV owner addresses come only from the source record that supplied the exported
+owner name: the primary ACRIS deed's matching grantee, or that owner's HPD
+registration contact. Missing or conflicting pairs export a blank address.
+Selecting the address also includes owner name, address source and reported date.
+SOS agents and ECB respondents are never substituted for the exported owner.
+Owner phone/email exports also require a matching owner name in that user's unlocks.
+
+HPD keeps each owner's name, role, registration/contact IDs, reported date and
+business address in `hpd_owner_contacts`. Its legacy single-address fields are
+populated only for a single contact. Existing HPD checkpoints refresh once to
+populate these pairs, with normal failure backoff.
+
+New owner and permit lookups retain normalized phone/email data, the selected
+person ID and limited match evidence. Raw vendor responses, relatives, birth
+data and address histories are not saved. The existing startup migration (or
+`migrate_enrichment_reliability.py`) runs a transactional, idempotent cleanup of
+previous raw payloads and excess owner match-summary fields. It also clears
+legacy HPD addresses that cannot be attributed to one contact. Saved contacts,
+payment receipts and unlocks are preserved. This cleanup affects the application
+database; existing database backups and vendor-side retention are separate.

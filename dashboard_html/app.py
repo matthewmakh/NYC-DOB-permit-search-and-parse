@@ -20,6 +20,9 @@ from urllib.parse import urlsplit
 from socrata_client import SocrataClient, normalize_pluto_record
 from record_links import owner_source_links, permit_source_link, acris_document_url
 from owner_source_dates import owner_source_dates
+from owner_address_evidence import (
+    OWNER_EXPORT_COLUMNS_SQL, OWNER_ADDRESS_FIELDS, address_export_fields, populate_export_addresses)
+from enrichment_privacy import public_building_record, migrate_privacy
 
 # Load environment variables
 load_dotenv()
@@ -187,6 +190,7 @@ def init_db_pool():
                         cur.execute('SELECT pg_advisory_xact_lock(72108,0)')
                         cur.execute(property_schema)
                         cur.execute(BUILDING_COLUMNS_SQL)
+                        migrate_privacy(cur)
             finally:
                 db_pool.putconn(conn)
             bulk_enrich_service.resume_orphaned_jobs()
@@ -434,6 +438,11 @@ PAGE_NAMES = {
 
 # Endpoints to skip logging (health checks, static files, etc.)
 SKIP_LOGGING_ENDPOINTS = {'static', 'api_health', 'get_stats'}
+PRIVATE_PROPERTY_ENDPOINTS = {
+    'get_buildings', 'get_building_detail', 'get_building_contacts', 'get_seller_leads',
+    'api_property_detail', 'api_building_profile', 'api_get_building_enriched_contacts',
+    'api_properties_export', 'api_properties_export_with_enrichment',
+}
 
 
 @app.before_request
@@ -445,6 +454,8 @@ def before_request_logging():
 @app.after_request
 def after_request_logging(response):
     """Log page views and API calls after each request"""
+    if request.endpoint in PRIVATE_PROPERTY_ENDPOINTS:
+        response.headers['Cache-Control'] = 'private, no-store'
     try:
         # Skip if no endpoint or if it's a static file
         if not request.endpoint or request.endpoint in SKIP_LOGGING_ENDPOINTS:
@@ -1249,6 +1260,7 @@ def permit_detail(permit_id):
 
 
 @app.route('/api/buildings')
+@login_required
 def get_buildings():
     """Get all buildings with owner and enrichment data"""
     try:
@@ -1270,7 +1282,7 @@ def get_buildings():
         
         return jsonify({
             'success': True,
-            'buildings': buildings,
+            'buildings': [public_building_record(b) for b in buildings],
             'count': len(buildings)
         })
         
@@ -1283,6 +1295,7 @@ def get_buildings():
 
 
 @app.route('/api/buildings/<int:building_id>')
+@login_required
 def get_building_detail(building_id):
     """Get detailed building information including all permits and contacts"""
     try:
@@ -1311,7 +1324,7 @@ def get_building_detail(building_id):
         
             return jsonify({
                 'success': True,
-                'building': building,
+                'building': public_building_record(building),
                 'permits': permits,
                 'contacts': contacts
             })
@@ -1325,6 +1338,7 @@ def get_building_detail(building_id):
 
 
 @app.route('/api/buildings/<int:building_id>/contacts')
+@login_required
 def get_building_contacts(building_id):
     """Get all contacts for a building"""
     try:
@@ -1346,6 +1360,7 @@ def get_building_contacts(building_id):
 
 
 @app.route('/api/seller-leads')
+@login_required
 def get_seller_leads():
     """Get previous property owners (sellers) with addresses for outreach campaign"""
     try:
@@ -3749,6 +3764,7 @@ def api_market_stats():
 
 
 @app.route('/api/property/<bbl>')
+@login_required
 def api_property_detail(bbl):
     """Get comprehensive property data"""
     try:
@@ -3766,7 +3782,7 @@ def api_property_detail(bbl):
                 return jsonify({'success': False, 'error': 'Property not found'}), 404
             
             # Get permits
-                cur.execute("""
+            cur.execute("""
                 SELECT *
                 FROM permits
                 WHERE bbl = %s
@@ -3835,7 +3851,7 @@ def api_property_detail(bbl):
         
             return jsonify({
                 'success': True,
-                'building': dict(building),
+                'building': public_building_record(building),
                 'permits': [dict(p) for p in permits],
                 'transactions': [dict(t) for t in transactions],
                 'parties': [dict(p) for p in parties],
@@ -5304,11 +5320,13 @@ def api_properties_export():
             order_by_sql = _order_by_sql(
                 request.args, sort_columns, 'sale_date', sort_order)
             
-            # Get user's unlocked building IDs
+            # Paid contacts must match both this user and the exported owner.
             cur.execute("""
-                SELECT building_id FROM user_enrichments WHERE user_id = %s
+                SELECT building_id, owner_name_searched, enriched_phones, enriched_emails
+                FROM user_enrichments WHERE user_id = %s
             """, (user_id,))
-            unlocked_building_ids = set(r['building_id'] for r in cur.fetchall())
+            owner_contacts = {(r['building_id'], ' '.join((r['owner_name_searched'] or '').upper().split())): r
+                              for r in cur.fetchall()}
             
             # Query properties (max 10,000)
             query = f"""
@@ -5320,15 +5338,11 @@ def api_properties_export():
                     b.building_class,
                     b.year_built,
                     COALESCE(b.total_units, 0) as units,
-                    COALESCE(b.sale_buyer_primary, b.current_owner_name,
-                             b.owner_name_hpd, b.owner_name_rpad) as owner_name,
-                    COALESCE(b.sos_principal_street, b.ecb_respondent_address) as owner_address,
+                    {OWNER_EXPORT_COLUMNS_SQL},
                     b.assessed_total_value,
                     b.sale_price,
                     b.sale_date,
                     b.is_cash_purchase,
-                    b.enriched_phones,
-                    b.enriched_emails,
                     COALESCE(b.hpd_total_violations, 0) as violation_count,
                     (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
                 FROM buildings b
@@ -5339,6 +5353,10 @@ def api_properties_export():
             
             cur.execute(query, params)
             properties = cur.fetchall()
+
+            requested_fields = address_export_fields(requested_fields)
+            if 'owner_address' in requested_fields:
+                populate_export_addresses(cur, properties)
             
             # Batch query contacts for all BBLs (for all_contacts field)
             bbls = [p['bbl'] for p in properties if p.get('bbl')]
@@ -5406,18 +5424,16 @@ def api_properties_export():
             
             # Helper to extract ALL phones from JSON (semicolon separated)
             def get_all_phones(p):
-                if p['id'] not in unlocked_building_ids:
-                    return ''
-                phones = p.get('enriched_phones')
+                contact = owner_contacts.get((p['id'], ' '.join((p.get('owner_name') or '').upper().split())), {})
+                phones = contact.get('enriched_phones')
                 if phones and isinstance(phones, list) and len(phones) > 0:
                     return '; '.join([ph.get('number', '') for ph in phones if ph.get('number')])
                 return ''
             
             # Helper to extract ALL emails from JSON (semicolon separated)
             def get_all_emails(p):
-                if p['id'] not in unlocked_building_ids:
-                    return ''
-                emails = p.get('enriched_emails')
+                contact = owner_contacts.get((p['id'], ' '.join((p.get('owner_name') or '').upper().split())), {})
+                emails = contact.get('enriched_emails')
                 if emails and isinstance(emails, list) and len(emails) > 0:
                     return '; '.join([em.get('email', '') for em in emails if em.get('email')])
                 return ''
@@ -5463,7 +5479,7 @@ def api_properties_export():
                 'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
                 'owner_phone': ('Enriched Owner Phone', get_all_phones),
                 'owner_email': ('Enriched Owner Email', get_all_emails),
-                'owner_address': ('Owner Address', lambda p: p['owner_address'] or ''),
+                **OWNER_ADDRESS_FIELDS,
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
                 'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
@@ -5780,9 +5796,9 @@ def api_properties_export_with_enrichment():
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
             
             query = f"""
-                SELECT b.id, b.bbl, b.address, b.borough_code, b.building_class,
+                SELECT b.id, b.bbl, b.address, LEFT(b.bbl, 1) AS borough_code, b.building_class,
                        b.year_built, b.residential_units as units,
-                       b.current_owner_name as owner_name,
+                       {OWNER_EXPORT_COLUMNS_SQL},
                        b.assessed_total_value, b.sale_price, b.sale_date
                 FROM buildings b
                 WHERE {where_clause}
@@ -5794,6 +5810,10 @@ def api_properties_export_with_enrichment():
             properties = cur.fetchall()
             
             print(f"[Bulk Export] Found {len(properties)} properties to export with enrichment")
+
+            requested_fields = address_export_fields(requested_fields)
+            if 'owner_address' in requested_fields:
+                populate_export_addresses(cur, properties)
             
             # Track enrichment results and charges
             enriched_contacts_by_bbl = {}
@@ -5924,6 +5944,7 @@ def api_properties_export_with_enrichment():
                 'units': ('Units', lambda p: p['units'] or ''),
                 'owner_name': ('Owner Name', lambda p: p['owner_name'] or ''),
                 'assessed_value': ('Assessed Value', lambda p: p['assessed_total_value'] or ''),
+                **OWNER_ADDRESS_FIELDS,
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
                 'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
                 'enriched_permit_contacts': ('Enriched Permit Contacts', get_enriched_contacts_str),
@@ -6771,6 +6792,7 @@ def api_license_permits(license_number):
 # ============================================================================
 
 @app.route('/api/building-profile/<bbl>')
+@login_required
 def api_building_profile(bbl):
     """
     Get complete building intelligence profile with ALL data sources
@@ -7953,6 +7975,7 @@ def api_enrich_permit_contact():
 
 
 @app.route('/api/building/<bbl>/enriched-contacts')
+@login_required
 def api_get_building_enriched_contacts(bbl):
     """
     Get all enriched contacts for a building (for Contacts tab).

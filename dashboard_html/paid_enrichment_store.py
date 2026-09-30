@@ -30,7 +30,7 @@ def grant_result(cur, user_id, building_id, owner_name, payment_id):
             (user_id, building_id, owner_name_searched, enriched_phones,
              enriched_emails, enriched_person_id, enriched_at, raw_api_response)
         SELECT user_id, building_id, owner_name, result->'phones', result->'emails',
-               result->>'person_id', created_at, raw_response
+               result->>'person_id', created_at, NULL
         FROM owner_enrichment_results
         WHERE user_id=%s AND building_id=%s AND owner_name=UPPER(TRIM(%s))
         ON CONFLICT (user_id, building_id, owner_name_searched) DO UPDATE SET
@@ -56,4 +56,3 @@ def grant_owner_access(user_id, building_id, owner_name, payment_id):
                 grant_result(cur, user_id, building_id, owner_name, payment_id)
     finally:
         conn.close()
-

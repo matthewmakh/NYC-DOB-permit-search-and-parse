@@ -174,7 +174,7 @@ class DatabaseRegressionTests(unittest.TestCase):
             'sos_principal_city','sos_principal_state','sos_principal_zip'])
         with self.conn.cursor() as cur:
             cur.execute('CREATE TABLE users(id INTEGER PRIMARY KEY,is_admin BOOLEAN DEFAULT FALSE)')
-            cur.execute('CREATE TABLE buildings(id INTEGER PRIMARY KEY,bbl TEXT,property_last_attempted TIMESTAMP,property_last_enriched TIMESTAMP,property_last_error TEXT,'+','.join(f'{f} TEXT' for f in sorted(fields))+')')
+            cur.execute('CREATE TABLE buildings(id INTEGER PRIMARY KEY,bbl TEXT,property_last_attempted TIMESTAMP,property_last_enriched TIMESTAMP,property_last_error TEXT,'+','.join(f'{f} JSONB' if f == 'hpd_owner_contacts' else f'{f} TEXT' for f in sorted(fields))+')')
             cur.execute("INSERT INTO users VALUES(1,FALSE)")
             cur.execute("INSERT INTO buildings(id,bbl,current_owner_name,owner_name_rpad,address,borough,zip_code) VALUES(1,'3012980066','OLD LLC','FORMER OWNER','123 MAIN ST','3','11201')")
             cur.execute('''CREATE TABLE user_enrichments(user_id INTEGER,building_id INTEGER,
@@ -251,12 +251,52 @@ class DatabaseRegressionTests(unittest.TestCase):
 
     def test_lookup_does_not_unlock_until_receipt_is_saved(self):
         self.assertTrue(self.lookup()[0])
+        self.assertIsNone(self.scalar('SELECT raw_response FROM owner_enrichment_results'))
         self.assertEqual(self.scalar('SELECT COUNT(*) FROM user_enrichments'),0)
         with patch.object(contacts,'call_enformion_api',side_effect=AssertionError('paid provider called twice')):
             self.assertTrue(contacts.enrich_owner(1,'JOHN SMITH','',1)[0])
         paid.grant_owner_access(1,1,'John Smith','pi_confirmed')
         paid.grant_owner_access(1,1,'John Smith','pi_confirmed')
         self.assertEqual(self.scalar('SELECT COUNT(*) FROM user_enrichments'),1)
+        self.assertIsNone(self.scalar('SELECT raw_api_response FROM user_enrichments'))
+
+    def test_apify_lookup_and_legacy_cache_do_not_return_or_save_background_data(self):
+        response = {'First Name':'John','Last Name':'Smith','Phone-1':'2125550100',
+            'Age':60,'Relatives':['PRIVATE RELATIVE'],'Previous Addresses':['PRIVATE HISTORY'],
+            'Street Address':'PRIVATE HOME','_apify_selection':{'street_match':True,'score':99}}
+        with patch.object(contacts,'_best_owner_search_location',return_value=(('123 Main St','Brooklyn','NY','11201'),'property')), \
+                patch.object(contacts,'call_apify_truepeoplesearch',return_value=(True,response,None)):
+            success,result,message=contacts.enrich_owner(1,'John Smith','',1,provider='apify')
+        self.assertTrue(success,message)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertIsNone(self.scalar('SELECT raw_response FROM owner_enrichment_results'))
+        self.assertNotIn('PRIVATE',json.dumps(self.scalar('SELECT result FROM owner_enrichment_results')))
+        with self.conn.cursor() as cur:
+            cur.execute("""UPDATE owner_enrichment_results SET result=jsonb_set(result,
+                '{match,relatives}','["PRIVATE LEGACY"]'::jsonb)""")
+        self.conn.commit()
+        with patch.object(contacts,'call_apify_truepeoplesearch',side_effect=AssertionError('lookup repeated')):
+            success,result,message=contacts.enrich_owner(1,'John Smith','',1,provider='apify')
+        self.assertTrue(success,message)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_permit_lookup_saves_contacts_without_vendor_payload(self):
+        with self.conn.cursor() as cur:
+            cur.execute('''CREATE TABLE permit_contact_enrichments(id SERIAL PRIMARY KEY,bbl TEXT,
+                building_id INTEGER,permit_id INTEGER,contact_name TEXT,contact_type TEXT,
+                license_number TEXT,license_type TEXT,original_phone TEXT,enriched_phones JSONB,
+                enriched_emails JSONB,enriched_person_id TEXT,enriched_raw_response JSONB,first_enriched_by INTEGER,
+                UNIQUE(bbl,contact_name,contact_type))''')
+        self.conn.commit()
+        response={'person':{'personId':'selected','phones':[{'phone':'2125550100'}],
+                            'relatives':['PRIVATE RELATIVE'],'addresses':['PRIVATE HISTORY']}}
+        with patch.object(contacts,'check_permit_contact_enrichment',return_value=(False,None,False)), \
+                patch.object(contacts,'call_enformion_api',return_value=(True,response,None)):
+            success,result,message=contacts.enrich_permit_contact('3012980066',1,1,'John Smith',
+                'owner',None,None,None,1)
+        self.assertTrue(success,message)
+        self.assertIsNone(self.scalar('SELECT enriched_raw_response FROM permit_contact_enrichments'))
+        self.assertEqual(self.scalar('SELECT enriched_phones FROM permit_contact_enrichments')[0]['number'],'2125550100')
 
     def test_pending_result_cannot_be_billed_by_another_job(self):
         self.assertTrue(self.lookup(job=123)[0])
