@@ -2374,3 +2374,78 @@
    outranks the browser's `[hidden] { display: none }`, so without this the
    "Hide full record" button changed its label and nothing else. */
 .building-facts-groups[hidden] { display: none; }
+
+/* Owner research uses the dossier's existing spacing and color tokens. */
+.owner-research { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+.owner-research-heading, .research-person-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.owner-research h4 { margin: 0 0 6px; font-size: 17px; }
+.owner-research-heading p, .research-muted { color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
+.owner-research-heading p { margin: 0; max-width: 52ch; }
+.research-button, button.truepeople-search-link { font: inherit; cursor: pointer; }
+.research-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 12.5px; font-weight: 600; text-decoration: none; text-align: center; line-height: 1.4; }
+.research-button:hover { border-color: var(--accent); }
+.research-button-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.research-button:disabled, .research-button[aria-disabled="true"], button.truepeople-search-link:disabled { opacity: .55; cursor: not-allowed; }
+.research-button:focus-visible, .research-dialog :focus-visible, button.truepeople-search-link:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.research-feedback { font-size: 13px; line-height: 1.5; }
+.research-feedback:empty, .research-error:empty { display: none; }
+.research-error { color: var(--red, #bc2727) !important; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.research-conflicts { margin: 16px 0; padding: 13px 15px; border-left: 3px solid var(--amber, #a56b16); background: var(--amber-soft, #fff7e8); border-radius: 6px; font-size: 12.5px; line-height: 1.55; }
+.research-conflicts ul { margin: 8px 0; padding-left: 19px; }
+.research-conflicts p { margin: 8px 0 0; }
+.research-person { border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-top: 14px; min-width: 0; overflow-wrap: anywhere; }
+.research-person h5 { font-size: 15px; margin: 0 0 4px; line-height: 1.4; }
+.research-person-head p { font-size: 12px; color: var(--ink-2); margin: 0; }
+.research-status, .research-match { display: inline-block; border-radius: 6px; background: var(--surface-2); padding: 4px 7px; font-size: 11.5px; font-weight: 600; line-height: 1.4; }
+.research-status { flex-shrink: 0; }
+.research-status-blocked, .research-match-wrong_person { background: var(--red-soft, #fceceb); color: var(--red, #bc2727); }
+.research-match-possible_match { background: var(--amber-soft, #fff7e8); color: var(--amber, #a56b16); }
+.research-match-confirmed_match { background: var(--green-soft, #e9f4ec); color: var(--green, #29774b); }
+.research-evidence { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 8px; font-size: 12px; }
+.research-evidence li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 3px 12px; }
+.research-evidence span { color: var(--ink-2); }
+.research-locations { padding-top: 11px; border-top: 1px solid var(--line); font-size: 12.5px; line-height: 1.55; }
+.research-locations > strong { font-size: 11.5px; color: var(--ink-2); }
+.research-locations p { margin: 6px 0; color: var(--ink-2); }
+.research-locations ul { list-style: none; padding: 0; margin: 7px 0; display: grid; gap: 8px; }
+.research-locations li > span { display: block; font-size: 11.5px; color: var(--ink-2); }
+.research-review-summary { margin-top: 12px; font-size: 12.5px; line-height: 1.55; }
+.research-review-summary p { margin: 6px 0; }
+.research-note { white-space: pre-wrap; }
+.research-dnc-note { font-size: 12.5px; color: var(--red, #bc2727); line-height: 1.55; }
+.research-actions, .research-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.research-sources-disclosure { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+.research-sources-disclosure > summary { min-height: 44px; cursor: pointer; font-size: 13px; font-weight: 600; padding: 10px 0; }
+.research-source-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.research-source-row > div { min-width: 0; }
+.research-source-row span { display: block; color: var(--ink-2); font-size: 11.5px; margin-top: 4px; }
+.research-source-row .research-button { flex-shrink: 0; }
+#owner-research-history > h5 { margin: 22px 0 10px; font-size: 13px; }
+.research-history-item { border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; padding: 5px 0; }
+.research-history-item summary { cursor: pointer; padding: 9px 0; min-height: 44px; }
+.research-history-item summary > span { color: var(--ink-2); margin-left: 8px; }
+.research-history-change { margin: 12px 0; padding-left: 10px; border-left: 2px solid var(--line); }
+.research-history-change p { margin: 4px 0; }
+.research-history-change p > span { color: var(--ink-2); }
+.research-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); box-sizing: border-box; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); padding: 24px; box-shadow: 0 20px 80px #0003; overscroll-behavior: contain; }
+.research-dialog::backdrop { background: #11182780; }
+.research-dialog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.research-dialog-head h2 { font-size: 20px; margin: 6px 0; line-height: 1.3; overflow-wrap: anywhere; }
+.research-dialog-close { display: inline-flex; justify-content: center; align-items: center; width: 44px; height: 44px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink-2); font-size: 25px; cursor: pointer; }
+.research-form label { display: block; margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; }
+.research-form input, .research-form select, .research-form textarea { width: 100%; box-sizing: border-box; padding: 10px; min-height: 44px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; }
+.research-form textarea { resize: vertical; }
+.research-form .research-url { font-family: var(--mono, monospace); font-size: 11px; background: var(--surface-2); }
+.research-form-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.research-form [hidden] { display: none !important; }
+@media (max-width: 640px) {
+    .owner-research-heading, .research-person-head { flex-wrap: wrap; gap: 10px; }
+    .owner-research-heading > .research-button { width: 100%; }
+    .research-person { padding: 14px; }
+    .research-actions > *, .research-dialog-actions > * { flex: 1 1 100%; }
+    .research-dialog { padding: 16px; width: calc(100vw - 20px); max-height: calc(100dvh - 24px); }
+    .research-dialog-head h2 { font-size: 18px; }
+    .research-form-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .research-form input, .research-form select, .research-form textarea { font-size: 16px; }
+    .research-history-item summary > span { display: block; margin-left: 0; }
+}

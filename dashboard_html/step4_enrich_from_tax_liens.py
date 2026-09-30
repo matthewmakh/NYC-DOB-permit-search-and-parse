@@ -406,6 +406,7 @@ def enrich_building(building_id, bbl, include_safety=True):
     if not any((tax_error, ecb_error, dob_error)):
         result['tax_lien_last_checked'] = datetime.now()
     result['_errors'] = errors
+    result['_ecb_error'] = ecb_error
     result['tax_last_attempted'] = datetime.now()
     result['tax_last_error'] = '; '.join(errors)[:2000] if errors else None
     
@@ -414,6 +415,19 @@ def enrich_building(building_id, bbl, include_safety=True):
 
 def update_building_tax_lien_data(cursor, building_id, data):
     """Update only sources that returned successfully."""
+    from owner_source_history import (capture_source_snapshot, record_source_snapshot,
+                                      source_revision_matches)
+    before = (capture_source_snapshot(cursor, building_id, 'ecb')
+              if 'ecb_last_checked' in data or data.get('_ecb_error') else None)
+    stale = ('_source_revision' in data and before is not None and not
+             source_revision_matches(cursor, building_id, 'ecb', data['_source_revision']))
+    if data.get('_ecb_error') and not stale:
+        cursor.execute("""INSERT INTO building_source_refresh
+            (building_id,source,attempted_at,next_attempt_at,error)
+            VALUES (%s,'ecb',NOW(),NOW()+INTERVAL '6 hours',%s)
+            ON CONFLICT (building_id,source) DO UPDATE SET attempted_at=NOW(),
+            next_attempt_at=EXCLUDED.next_attempt_at,error=EXCLUDED.error""",
+            (building_id, str(data['_ecb_error'])[:1000]))
     allowed = {
         'has_tax_delinquency', 'tax_delinquency_count',
         'tax_delinquency_water_only',
@@ -428,7 +442,7 @@ def update_building_tax_lien_data(cursor, building_id, data):
         'dob_safety_last_checked',
         'tax_last_attempted', 'tax_last_error',
     }
-    updates = {k: v for k, v in data.items() if k in allowed}
+    updates = {k: v for k, v in data.items() if k in allowed and not (stale and k.startswith('ecb_'))}
     if not updates:
         return
     assignments = ', '.join(f'{column} = %s' for column in updates)
@@ -436,6 +450,8 @@ def update_building_tax_lien_data(cursor, building_id, data):
         f"UPDATE buildings SET {assignments} WHERE id = %s",
         [*updates.values(), building_id],
     )
+    if before is not None and 'ecb_last_checked' in updates:
+        record_source_snapshot(cursor, building_id, 'ecb', before)
     if 'tax_delinquency_latest_date' in data:
         cursor.execute("SAVEPOINT lien_date")
         try:
@@ -466,9 +482,12 @@ def process_single_building(building, position, total):
             print(f"   📍 {address}")
         
         # Enrich the building
+        from owner_source_history import source_revisions
+        revision = source_revisions(conn, [building_id], 'ecb')[building_id]
         data = enrich_building(building_id, bbl, include_safety=False)
         
         if data:
+            data['_source_revision'] = revision
             # Update database
             update_building_tax_lien_data(cur, building_id, data)
             conn.commit()

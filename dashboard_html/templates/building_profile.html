@@ -123,6 +123,21 @@
                                 <span class="owner-name">&hellip;</span>
                             </div>
                         </div>
+                        <section class="owner-research" id="owner-research" aria-labelledby="owner-research-heading">
+                            <div class="owner-research-heading">
+                                <div><h4 id="owner-research-heading">Owner research</h4><p>Review people, compare reported locations, and keep your team’s findings together.</p></div>
+                                <button type="button" class="research-button" data-research-action="reload">Reload research</button>
+                            </div>
+                            <p id="owner-research-feedback" class="research-feedback" role="status" aria-live="polite"></p>
+                            <div id="owner-research-conflicts"></div>
+                            <div id="owner-research-people"><p class="research-muted">Loading people and saved reviews…</p></div>
+                            <details class="research-sources-disclosure">
+                                <summary>Source refresh &amp; change history</summary>
+                                <p class="research-muted">Refresh one source at a time. History starts when this feature first observes a source; a check date is separate from its reported date.</p>
+                                <div id="owner-research-sources"><p class="research-muted">Loading source status…</p></div>
+                                <div id="owner-research-history"></div>
+                            </details>
+                        </section>
                         <div id="owners-content" class="owner-history" style="display: none;">Loading&hellip;</div>
                     </div>
                 </section>

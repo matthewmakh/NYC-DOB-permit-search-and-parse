@@ -3,6 +3,7 @@ Run: uv run --with flask python dashboard_html/tests/mobile_preview.py
 """
 from datetime import date, datetime
 from pathlib import Path
+from time import monotonic
 from flask import Flask, g, jsonify, render_template, request, send_from_directory
 from jinja2 import ChainableUndefined
 
@@ -32,6 +33,102 @@ DEAL = dict(id=1, name='Building access and security modernization', stage='new'
 CONTRACTOR = dict(name=PERMIT['applicant'], contractor_name=PERMIT['applicant'], total_jobs=124, total_permits=124,
     active_jobs=12, total_buildings=32, total_units=250, total_value=1250000, phone='212-555-0100', work_mix=[])
 
+# Synthetic owner research examples. These in-memory edits disappear on restart.
+def demo_review(**overrides):
+    return dict(version=0, status='not_researched', match_status='unreviewed', result_url='',
+                phones=[], emails=[], notes='', reviewed_at=None, reviewed_by=None, **overrides)
+
+
+def demo_source(key, label, reported='2026-09-23'):
+    return dict(key=key, label=label, record_id='synthetic-' + key, reported_date=reported,
+                date_label='Reported', period=None, url=None)
+
+
+RESEARCH_PEOPLE = [
+    dict(id='demo-jordan-deed', name='DAVIS, JORDAN', role='Deed grantee · Registered owner', is_person=True,
+         historical=False, sources=[demo_source('acris', 'ACRIS deed grantee', '2025-03-01'), demo_source('hpd', 'HPD registered owner')],
+         locations=[dict(id='demo-hpd-location', label='Fort Lee, NJ', city='Fort Lee', state='NJ', zip_code='07024', source='HPD registered owner',
+                         source_key='hpd', reported_date='2026-09-23', kind='Reported business location', is_property=False),
+                    dict(id='demo-acris-location', label='Brooklyn, NY', city='Brooklyn', state='NY', zip_code='11225', source='ACRIS deed grantee',
+                         source_key='acris', reported_date='2025-03-01', kind='Reported deed mailing location', is_property=False)],
+         default_location_id='demo-hpd-location', research=demo_review()),
+    dict(id='demo-jordan-respondent', name='Jordan Davis', role='Violation respondent', is_person=True,
+         historical=False, sources=[demo_source('ecb', 'ECB violation respondent', '2024-05-11')],
+         locations=[], default_location_id='property', research=demo_review()),
+    dict(id='demo-alex', name='Alex Smith', role='Registered owner', is_person=True, historical=False,
+         sources=[demo_source('hpd', 'HPD registered owner')], locations=[], default_location_id='property',
+         research={**demo_review(), 'version': 1, 'status': 'contact_found', 'match_status': 'confirmed_match',
+                   'result_url': 'https://www.truepeoplesearch.com/results?name=Alex%20Smith&citystatezip=10027',
+                   'phones': ['+12125550100'], 'emails': ['alex@example.test'], 'notes': 'Synthetic reviewed contact for UI testing.',
+                   'reviewed_at': '2026-09-30T15:00:00Z', 'reviewed_by': {'id': 1, 'name': 'Demo reviewer'}}),
+    dict(id='demo-morgan', name='Morgan Lee', role='Former deed grantee', is_person=True, historical=True,
+         sources=[demo_source('acris', 'ACRIS historical deed', '2011-04-13')], locations=[], default_location_id='property',
+         research={**demo_review(), 'version': 1, 'status': 'do_not_contact', 'match_status': 'possible_match',
+                   'notes': 'Synthetic do-not-contact example.', 'reviewed_at': '2026-09-29T15:00:00Z',
+                   'reviewed_by': {'id': 1, 'name': 'Demo reviewer'}}),
+]
+RESEARCH_SOURCES = [dict(key=key, label=label, status='current', checked_at='2026-09-30T15:00:00Z',
+                         error=None, can_refresh=True, next_attempt_at=None)
+                    for key, label in [('hpd', 'HPD registration'), ('acris', 'ACRIS deeds'), ('pluto', 'NYC PLUTO'),
+                                       ('rpad', 'Historical RPAD'), ('ecb', 'ECB violations'), ('sos', 'NY Secretary of State')]]
+RESEARCH_HISTORY = [dict(id=1, source='hpd', kind='baseline', reported_date='2026-09-23', observed_at='2026-09-30T15:00:00Z',
+                        before=None, after={'records': [{'name': 'Jordan Davis', 'role': 'IndividualOwner', 'city': 'Fort Lee', 'state': 'NJ'}]}, changes=[])]
+RESEARCH_JOBS = {}
+
+
+@app.route('/api/property/<bbl>/owner-research', methods=['GET'])
+def demo_owner_research(bbl):
+    return jsonify(success=True, synthetic=True, people=RESEARCH_PEOPLE,
+                   property_location=dict(id='property', label='Property location (fallback)', city='New York', state='NY',
+                                          zip_code='10027', kind='Property location', is_property=True),
+                   conflicts=[dict(kind='unconfirmed_identity', person_ids=['demo-jordan-deed', 'demo-jordan-respondent'],
+                                   message='Jordan Davis appears in separate source records. A shared name does not confirm they are the same person.'),
+                              dict(kind='reported_locations', person_ids=['demo-jordan-deed'],
+                                   message='Jordan Davis has different reported locations. The more recent HPD location is selected for searching.')])
+
+
+@app.route('/api/property/<bbl>/owner-research/<person_id>', methods=['POST'])
+def demo_save_review(bbl, person_id):
+    person = next((person for person in RESEARCH_PEOPLE if person['id'] == person_id), None)
+    if not person:
+        return jsonify(success=False, error='Synthetic person not found'), 404
+    if request.headers.get('X-Owner-Research') != '1' or not request.is_json:
+        return jsonify(success=False, error='JSON review header required'), 400
+    payload = request.get_json()
+    if payload.get('version') != person['research']['version']:
+        return jsonify(success=False, error='Another teammate updated this review'), 409
+    person['research'] = {**payload, 'version': payload['version'] + 1, 'reviewed_at': datetime.now().isoformat(),
+                          'reviewed_by': {'id': 1, 'name': 'Demo reviewer'}}
+    return jsonify(success=True, synthetic=True, person=person)
+
+
+@app.route('/api/property/<bbl>/owner-sources', methods=['GET'])
+def demo_source_status(bbl):
+    for key, due in list(RESEARCH_JOBS.items()):
+        if monotonic() < due:
+            continue
+        source = next(source for source in RESEARCH_SOURCES if source['key'] == key)
+        source.update(status='current', checked_at=datetime.now().isoformat(), can_refresh=True)
+        RESEARCH_JOBS.pop(key)
+        before = {'records': [{'name': 'Jordan Davis', 'city': 'Brooklyn', 'state': 'NY'}]}
+        after = {'records': [{'name': 'Jordan Davis', 'city': 'Fort Lee', 'state': 'NJ'}]}
+        RESEARCH_HISTORY.insert(0, dict(id=len(RESEARCH_HISTORY) + 1, source=key, kind='change', reported_date='2026-09-30',
+                                       observed_at=datetime.now().isoformat(), before=before, after=after,
+                                       changes=[dict(field='Reported contacts', before=before['records'], after=after['records'])]))
+    return jsonify(success=True, synthetic=True, sources=RESEARCH_SOURCES, history=RESEARCH_HISTORY)
+
+
+@app.route('/api/property/<bbl>/owner-sources/<key>/refresh', methods=['POST'])
+def demo_source_refresh(bbl, key):
+    source = next((source for source in RESEARCH_SOURCES if source['key'] == key), None)
+    if not source:
+        return jsonify(success=False, error='Unknown synthetic source'), 404
+    if request.headers.get('X-Owner-Research') != '1' or not request.is_json:
+        return jsonify(success=False, error='JSON review header required'), 400
+    source.update(status='queued', can_refresh=False)
+    RESEARCH_JOBS[key] = monotonic() + 2
+    return jsonify(success=True, synthetic=True, status='queued', message='Synthetic refresh queued; no external source will be contacted.')
+
 @app.route('/crm/service-worker.js')
 def service_worker():
     return send_from_directory(ROOT / 'static/js', 'crm-service-worker.js')
@@ -55,6 +152,16 @@ def api(path):
             sample_addresses=[BUILDING['address']])],
         alerts=[dict(project_key='DOBNOW:M01234567', address=BUILDING['address'], owner_name=BUILDING['owner_name'],
             alert_type='new_filing', job_type='A2', initial_cost=1250000, description=PERMIT['work_description'])])
+    if path.startswith('building-profile/'):
+        data['building'] = {**BUILDING, 'zip_code': '10027', 'sale_buyer_primary': 'DAVIS, JORDAN', 'owner_name_hpd': 'Jordan Davis; Alex Smith',
+                            'ecb_respondent_name': 'Jordan Davis', 'owner_name_rpad': 'Morgan Lee'}
+        data['owners'] = {'acris': 'DAVIS, JORDAN', 'pluto': BUILDING['current_owner_name'], 'rpad': 'Morgan Lee', 'ecb': 'Jordan Davis'}
+        data['owner_source_dates'] = {key: dict(reported_date='2026-09-23', date_label='Last reported', checked_at='2026-09-30', period=None)
+                                      for key in ('acris', 'hpd', 'ecb')}
+        data['owner_source_dates'].update(pluto=dict(period='PLUTO 26v2', checked_at='2026-09-30'), rpad=dict(period='FY 2018/19 · Final roll', checked_at='2026-09-30'))
+        data['enrichment'] = dict(logged_in=True, cost=0, batch_cost=0, already_enriched=False,
+                                  available_owners=[dict(name='DAVIS, JORDAN', source='ACRIS Latest Deed Grantee', recommended=True),
+                                                    dict(name='Morgan Lee', source='Historical RPAD Assessment', recommended=False)], enriched_owners=[])
     return jsonify(data)
 
 @app.route('/')
@@ -84,7 +191,10 @@ def page(path=''):
         deal_funnel={}, report=dict(no_next_step=0, overdue=0), touches=[dict(n=1,day=date(2026,9,23))],
         form_values={}, listing=dict(id=1,name='Prospects'), summary={})
     if path == 'crm/buildings': ctx['counts'] = {'all':3}
-    return render_template(template, **ctx)
+    rendered = render_template(template, **ctx)
+    if path.startswith('property/'):
+        rendered = rendered.replace('<div class="dossier">', '<div class="dossier"><p style="padding:12px 24px;background:#fff2cc;color:#624b00;margin:0">Synthetic local UI demo — sample people and in-memory reviews. No production data or external lookups.</p>', 1)
+    return rendered
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5099)

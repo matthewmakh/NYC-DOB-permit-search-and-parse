@@ -22,6 +22,7 @@ import step2_enrich_from_pluto as property_api
 from enrichment_privacy import minimal_result, migrate_privacy
 from owner_address_evidence import resolve_export_address
 from paid_enrichment_store import SCHEMA_SQL, grant_result
+from owner_research import SCHEMA as OWNER_RESEARCH_SCHEMA
 
 
 class AddressEvidenceTests(unittest.TestCase):
@@ -194,6 +195,8 @@ class DatabasePrivacyTests(unittest.TestCase):
             cur.execute("INSERT INTO acris_parties VALUES(1,'buyer','Jordan Davis','10 Example St',NULL,'Albany','NY','12201')")
             cur.execute(SCHEMA_SQL)
             cur.execute(refresh.SCHEMA_SQL)
+            for statement in OWNER_RESEARCH_SCHEMA:
+                cur.execute(statement)
         self.conn.commit()
 
     def tearDown(self):
@@ -269,6 +272,38 @@ class DatabasePrivacyTests(unittest.TestCase):
             self.assertEqual(cur.fetchone(), (None,result['emails']))
             cur.execute('SELECT enriched_raw_response,hpd_owner_business_address FROM buildings')
             self.assertEqual(cur.fetchone(), (None,None))
+
+    def test_do_not_contact_suppresses_export_contact_details_only_for_own_team(self):
+        with self.conn.cursor() as cur:
+            cur.execute('''INSERT INTO user_enrichments(user_id,building_id,owner_name_searched,
+                enriched_phones,enriched_emails) VALUES(1,1,'Jordan Davis',
+                '[{"number":"2125550199"}]','[{"email":"jordan@example.test"}]')''')
+            cur.execute('''INSERT INTO crm_owner_research(team_id,bbl,person_id,source_snapshot,name_key,status)
+                VALUES(2,'3012980066','synthetic-review','{}','JORDAN A DAVIS','do_not_contact')''')
+        client = app.app.test_client()
+
+        def export(enriched=False):
+            with patch.object(auth_service, 'validate_session', return_value={'id':1,'is_admin':True}), \
+                    patch.object(app, 'DatabaseConnection', self.database), patch.object(app, 'log_api_call'), \
+                    patch.object(enrichment, 'get_enrichable_permit_contacts', return_value=[]):
+                path = '/api/properties/export-with-enrichment' if enriched else '/api/properties/export'
+                response = client.open(path + '?fields=address,owner_address,owner_phone,owner_email',
+                                       method='POST' if enriched else 'GET')
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            return next(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
+
+        self.assertEqual(export()['Enriched Owner Phone'], '2125550199')
+        with self.conn.cursor() as cur:
+            cur.execute('UPDATE crm_owner_research SET team_id=1')
+        row = export()
+        self.assertEqual(row['Enriched Owner Phone'], '')
+        self.assertEqual(row['Enriched Owner Email'], '')
+        for row in (row, export(enriched=True)):
+            self.assertEqual(row['Reported Owner Mailing Address'], '')
+            self.assertEqual(row['Owner Address Source'], '')
+            self.assertEqual(row['Owner Address Reported Date'], '')
+            self.assertEqual(row['Owner Name'], 'Jordan Davis')
+            self.assertEqual(row['Address'], 'Property address')
 
     def test_enriched_export_uses_the_same_address_provenance_without_any_lookup(self):
         client = app.app.test_client()

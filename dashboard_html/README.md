@@ -239,3 +239,54 @@ previous raw payloads and excess owner match-summary fields. It also clears
 legacy HPD addresses that cannot be attributed to one contact. Saved contacts,
 payment receipts and unlocks are preserved. This cleanup affects the application
 database; existing database backups and vendor-side retention are separate.
+
+## Owner research and source history
+
+The Ownership section includes person cards with source roles, reported dates,
+and attributed search localities. Cross-source grouping requires a complete name
+and matching full reported address. A shared name or ZIP alone never establishes
+identity. Older reviews remain visible as historical records when their original
+source disappears. Source differences are review flags, not ownership conclusions.
+
+People searches open an editable preview before sending a name and city/state or
+ZIP to TruePeopleSearch. The newest available reported locality is selected;
+the property location is explicitly a fallback. Users can correct the search name,
+select another reported locality, enter a locality, or search by name only.
+The application does not scrape or automatically import the manual search result.
+
+Users can save a reviewed result link, selected phones/emails, match assessment,
+notes and research status. Reviews are stored in `crm_owner_research`, strictly
+scoped to the active user's team, with reviewer/time and optimistic save versions.
+Conflicting edits return 409 and keep the browser draft. Do-not-contact applies
+to that team/property/name, including accepted name variants: it blocks lookup
+actions and suppresses paid contact output and contact addresses in exports.
+It does not delete the underlying public source evidence or prior review.
+
+Each of HPD, ACRIS, PLUTO, historical RPAD, ECB and NY SOS can be refreshed
+individually through `/api/property/<bbl>/owner-sources/<source>/refresh`.
+Requests are authenticated, same-origin JSON with `X-Owner-Research: 1`, and
+queue only free public-source work. Jobs deduplicate per property/source, allow
+12 pending jobs per user, and enforce a five-minute success cooldown. Failures
+preserve successful facts, retry after six hours, and stop after three attempts;
+abandoned jobs recover after their 20-minute lease when no worker still owns them.
+
+`owner_source_snapshots` and `owner_source_history` save an initial baseline and
+subsequent name/address/role changes in the source update's transaction. Reported
+dates and observation times remain distinct; date-only refreshes do not create
+duplicate change events. History starts when the feature observes a source,
+with the most recent 100 events shown. Revision guards discard overlapping stale
+responses. Automatic pipeline updates use the same history hooks.
+
+Web startup and `migrate_enrichment_reliability.py` install these idempotent
+schemas; migrate before running individual enrichment scripts on a fresh database.
+The source worker starts per web worker and PostgreSQL coordinates job claims.
+Railway's forwarded HTTPS scheme is trusted only when its environment marker is
+present; local proxy deployments can explicitly set the Flask config
+`OWNER_RESEARCH_TRUST_PROXY_PROTO`. Forwarded host values are never trusted.
+
+Focused verification: `python -m unittest owner_research_tests
+owner_source_history_tests owner_source_dates_tests owner_privacy_tests
+enrichment_reliability_tests`, plus `node owner_research_ui_tests.js` and
+`node building_profile_permit_tests.js`. Database tests use disposable schemas
+under `OWNER_RESEARCH_TEST_DATABASE_URL` / `ENRICHMENT_TEST_DATABASE_URL`.
+`dashboard_html/tests/mobile_preview.py` provides synthetic in-memory UI fixtures.

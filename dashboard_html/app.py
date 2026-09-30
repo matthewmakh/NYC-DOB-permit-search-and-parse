@@ -47,6 +47,10 @@ from crm_routes import crm_bp
 app.register_blueprint(crm_bp)
 from prospecting_routes import prospecting_bp
 app.register_blueprint(prospecting_bp)
+from owner_research_routes import owner_research_bp
+from owner_source_routes import create_blueprint as owner_source_blueprint, start_owner_source_worker
+app.register_blueprint(owner_research_bp)
+app.register_blueprint(owner_source_blueprint(lambda: psycopg2.connect(**DB_CONFIG)))
 
 # Activity logging - try to import, use stubs if not available
 try:
@@ -183,6 +187,7 @@ def init_db_pool():
             import bulk_enrich_service
             bulk_enrich_service.init_bulk_enrich_jobs_table()
             from property_source_refresh import SCHEMA_SQL as property_schema, BUILDING_COLUMNS_SQL
+            from owner_research import SCHEMA as owner_research_schema
             conn = db_pool.getconn()
             try:
                 with conn:
@@ -191,11 +196,14 @@ def init_db_pool():
                         cur.execute(property_schema)
                         cur.execute(BUILDING_COLUMNS_SQL)
                         migrate_privacy(cur)
+                        for statement in owner_research_schema:
+                            cur.execute(statement)
             finally:
                 db_pool.putconn(conn)
             bulk_enrich_service.resume_orphaned_jobs()
             from property_lookup import start_property_job_recovery
             start_property_job_recovery(lambda: psycopg2.connect(**DB_CONFIG))
+            start_owner_source_worker(lambda: psycopg2.connect(**DB_CONFIG))
         except Exception as e:
             print(f"⚠️  bulk_enrich_service init skipped: {e}", flush=True)
         try:
@@ -2333,7 +2341,9 @@ def api_property_peek(bbl):
     Every optional section is best-effort so a slow portfolio count or a
     missing table never blanks the panel.
     """
-    from enrichment_service import classify_party_name, split_candidate_names
+    from enrichment_service import classify_party_name, split_candidate_names, contact_name_is_suppressed
+    from crm_service import crm_context
+    from owner_research import suppressed_owner_names
     import streetview
     try:
         with DatabaseConnection() as cur:
@@ -2386,17 +2396,20 @@ def api_property_peek(bbl):
             unlocked = []
             try:
                 cur.execute("SAVEPOINT peek_unlocked")
+                suppressed = suppressed_owner_names(cur, crm_context(g.user)['team_id'], [bbl]).get(str(bbl), set())
                 cur.execute("""
                     SELECT owner_name_searched, enriched_phones, enriched_emails
                     FROM user_enrichments WHERE user_id = %s AND building_id = %s
                 """, (g.user['id'], b['id']))
                 for r in cur.fetchall():
-                    if r['enriched_phones'] or r['enriched_emails']:
+                    if (not contact_name_is_suppressed(r['owner_name_searched'], suppressed)
+                            and (r['enriched_phones'] or r['enriched_emails'])):
                         unlocked.append({'owner_name': r['owner_name_searched'],
                                          'phones': r['enriched_phones'] or [],
                                          'emails': r['enriched_emails'] or []})
                 cur.execute("RELEASE SAVEPOINT peek_unlocked")
             except Exception as e:
+                unlocked = []
                 cur.execute("ROLLBACK TO SAVEPOINT peek_unlocked")
                 print(f"peek: unlocked contacts skipped: {e}", flush=True)
 
@@ -2422,7 +2435,7 @@ def api_property_peek(bbl):
             lat, lng = coords if coords else (None, None)
             sv = streetview.payload(b.get('address') or f'BBL {bbl}', lat, lng, b.get('borough'), 'permit', bbl=bbl)
 
-        return jsonify({
+        response = jsonify({
             'success': True,
             'building': {k: v for k, v in b.items()
                          if k not in ('owner_display', 'owner_kind', 'owner_is_person', 'owner_reach')},
@@ -2440,6 +2453,8 @@ def api_property_peek(bbl):
                            'map_url': sv['map_url']},
             'profile_url': f'/property/{bbl}',
         })
+        response.headers['Cache-Control'] = 'private, no-store'
+        return response
     except Exception as e:
         print(f"Property peek failed for {bbl}: {e}", flush=True)
         import traceback
@@ -2456,21 +2471,28 @@ def api_enrichment_unlocked_status():
     users, and this answer is different for every one of them.
     """
     raw = request.args.get('bbls', '')
+    from crm_service import crm_context
+    from owner_research import suppressed_owner_names
+    from enrichment_service import contact_name_is_suppressed
     bbls = [v.strip() for v in raw.split(',') if v.strip()][:200]
     if not bbls:
         return jsonify({'success': True, 'unlocked': {}})
     try:
         with DatabaseConnection() as cur:
+            suppressed = suppressed_owner_names(cur, crm_context(g.user)['team_id'], bbls)
             cur.execute("""
-                SELECT b.bbl, ue.enriched_phones, ue.enriched_emails
+                SELECT b.bbl, ue.owner_name_searched, ue.enriched_phones, ue.enriched_emails
                 FROM user_enrichments ue JOIN buildings b ON b.id = ue.building_id
                 WHERE ue.user_id = %s AND b.bbl = ANY(%s)
             """, (g.user['id'], bbls))
             unlocked = {}
             for r in cur.fetchall():
-                if r['enriched_phones'] or r['enriched_emails']:
+                if (not contact_name_is_suppressed(r['owner_name_searched'], suppressed.get(str(r['bbl']), set()))
+                        and (r['enriched_phones'] or r['enriched_emails'])):
                     unlocked[r['bbl']] = True
-        return jsonify({'success': True, 'unlocked': unlocked})
+        response = jsonify({'success': True, 'unlocked': unlocked})
+        response.headers['Cache-Control'] = 'private, no-store'
+        return response
     except Exception as e:
         print(f"unlocked-status failed: {e}", flush=True)
         return jsonify({'success': True, 'unlocked': {}})
@@ -5361,6 +5383,18 @@ def api_properties_export():
             # Batch query contacts for all BBLs (for all_contacts field)
             bbls = [p['bbl'] for p in properties if p.get('bbl')]
             contacts_by_bbl = {}
+            from crm_service import crm_context
+            from owner_research import suppressed_owner_names
+            from enrichment_service import contact_name_is_suppressed
+            suppressed = suppressed_owner_names(cur, crm_context(g.user)['team_id'], bbls)
+
+            def contact_blocked(bbl, name):
+                return contact_name_is_suppressed(name, suppressed.get(str(bbl), set()))
+
+            for prop in properties:
+                if contact_blocked(prop.get('bbl'), prop.get('owner_name')):
+                    for field in OWNER_ADDRESS_FIELDS:
+                        prop[field] = ''
             
             if bbls and ('all_contacts' in requested_fields or 'all_contact_phones' in requested_fields or 'contact_names' in requested_fields):
                 # Get contacts from contacts table via permit_contacts
@@ -5375,6 +5409,8 @@ def api_properties_export():
                 
                 for row in cur.fetchall():
                     bbl = row['bbl']
+                    if contact_blocked(bbl, row['name']):
+                        continue
                     if bbl not in contacts_by_bbl:
                         contacts_by_bbl[bbl] = []
                     contacts_by_bbl[bbl].append({
@@ -5420,10 +5456,15 @@ def api_properties_export():
                             })
             
             # Build CSV
+            for bbl, contacts in contacts_by_bbl.items():
+                contacts_by_bbl[bbl] = [contact for contact in contacts
+                                        if not contact_blocked(bbl, contact['name'])]
             output = StringIO()
             
             # Helper to extract ALL phones from JSON (semicolon separated)
             def get_all_phones(p):
+                if contact_blocked(p.get('bbl'), p.get('owner_name')):
+                    return ''
                 contact = owner_contacts.get((p['id'], ' '.join((p.get('owner_name') or '').upper().split())), {})
                 phones = contact.get('enriched_phones')
                 if phones and isinstance(phones, list) and len(phones) > 0:
@@ -5432,6 +5473,8 @@ def api_properties_export():
             
             # Helper to extract ALL emails from JSON (semicolon separated)
             def get_all_emails(p):
+                if contact_blocked(p.get('bbl'), p.get('owner_name')):
+                    return ''
                 contact = owner_contacts.get((p['id'], ' '.join((p.get('owner_name') or '').upper().split())), {})
                 emails = contact.get('enriched_emails')
                 if emails and isinstance(emails, list) and len(emails) > 0:
@@ -5624,7 +5667,7 @@ def api_properties_export_enrichment_estimate():
                 bbl = prop['bbl']
                 
                 # Get enrichable contacts for this property
-                enrichable = get_enrichable_permit_contacts(bbl)
+                enrichable = get_enrichable_permit_contacts(bbl, user_id)
                 
                 prop_contacts = 0
                 for contact in enrichable:
@@ -5814,6 +5857,16 @@ def api_properties_export_with_enrichment():
             requested_fields = address_export_fields(requested_fields)
             if 'owner_address' in requested_fields:
                 populate_export_addresses(cur, properties)
+
+            from crm_service import crm_context
+            from owner_research import suppressed_owner_names
+            from enrichment_service import contact_name_is_suppressed
+            suppressed = suppressed_owner_names(cur, crm_context(g.user)['team_id'],
+                                                [prop['bbl'] for prop in properties if prop.get('bbl')])
+            for prop in properties:
+                if contact_name_is_suppressed(prop.get('owner_name'), suppressed.get(str(prop.get('bbl')), set())):
+                    for field in OWNER_ADDRESS_FIELDS:
+                        prop[field] = ''
             
             # Track enrichment results and charges
             enriched_contacts_by_bbl = {}
@@ -5830,7 +5883,7 @@ def api_properties_export_with_enrichment():
                 enriched_contacts_by_bbl[bbl] = []
                 
                 # Get enrichable contacts for this property
-                enrichable = get_enrichable_permit_contacts(bbl)
+                enrichable = get_enrichable_permit_contacts(bbl, user_id)
                 
                 for contact in enrichable:
                     contact_name = contact.get('name')
@@ -7445,7 +7498,7 @@ def api_enrich_owner():
         from enrichment_service import (
             enrich_owner, check_user_enrichment_access,
             classify_party_name, canonical_name_key, names_compatible,
-            get_available_owners_for_enrichment,
+            get_available_owners_for_enrichment, is_owner_contact_suppressed,
         )
         from stripe_service import charge_enrichment_fee, ensure_usage_billing_ready
         
@@ -7471,6 +7524,9 @@ def api_enrich_owner():
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
         should_charge = g.user.get('should_charge_usage', not is_admin)
+
+        if is_owner_contact_suppressed(user_id, owner_name, building_id=building_id):
+            return jsonify(success=False, error='Your team marked this person do not contact.'), 409
         
         # Check if user already has access for THIS SPECIFIC OWNER
         has_access, existing_data_list, enriched_names = check_user_enrichment_access(user_id, building_id, owner_name)
@@ -7878,7 +7934,7 @@ def api_enrich_permit_contact():
         from enrichment_service import (
             enrich_permit_contact, 
             check_permit_contact_enrichment,
-            classify_party_name,
+            classify_party_name, is_owner_contact_suppressed,
         )
         
         data = request.get_json()
@@ -7905,6 +7961,9 @@ def api_enrich_permit_contact():
         
         user_id = g.user['id']
         is_admin = g.user.get('is_admin', False)
+
+        if is_owner_contact_suppressed(user_id, contact_name, bbl=bbl):
+            return jsonify(success=False, error='Your team marked this person do not contact.'), 409
         
         from enrichment_service import get_enrichable_permit_contacts
         source_contact = next((c for c in get_enrichable_permit_contacts(bbl, user_id)
@@ -7983,7 +8042,9 @@ def api_get_building_enriched_contacts(bbl):
     Only shows full data for unlocked contacts.
     """
     try:
-        from enrichment_service import get_enriched_contacts_for_building
+        from enrichment_service import get_enriched_contacts_for_building, contact_name_is_suppressed
+        from crm_service import crm_context
+        from owner_research import suppressed_owner_names
         
         # Get user ID if logged in
         user_id = None
@@ -8002,6 +8063,7 @@ def api_get_building_enriched_contacts(bbl):
                 building = cur.fetchone()
                 
                 if building:
+                    suppressed = suppressed_owner_names(cur, crm_context(g.user)['team_id'], [bbl]).get(str(bbl), set())
                     # Get user's owner enrichments
                     cur.execute("""
                         SELECT owner_name_searched, enriched_phones, enriched_emails, enriched_at
@@ -8010,6 +8072,8 @@ def api_get_building_enriched_contacts(bbl):
                     """, (user_id, building['id']))
                     
                     for row in cur.fetchall():
+                        if contact_name_is_suppressed(row['owner_name_searched'], suppressed):
+                            continue
                         owner_enrichments.append({
                             'name': row['owner_name_searched'],
                             'type': 'owner',

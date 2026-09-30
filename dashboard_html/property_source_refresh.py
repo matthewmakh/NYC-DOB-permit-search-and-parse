@@ -2,6 +2,8 @@
 import os
 
 import psycopg2.extras
+from owner_source_history import (SCHEMA_SQL as OWNER_HISTORY_SCHEMA,
+                                  capture_source_snapshot, record_source_snapshot)
 
 SOURCE_DAYS = {'pluto': 30, 'rpad': 365, 'hpd': 14}
 SOURCE_VERSIONS = {'pluto': 1, 'rpad': 1, 'hpd': 2}
@@ -29,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_building_source_refresh_due
     ON building_source_refresh (source, next_attempt_at);
 ALTER TABLE building_source_refresh
     ADD COLUMN IF NOT EXISTS owner_dates_version INTEGER NOT NULL DEFAULT 0;
-"""
+""" + OWNER_HISTORY_SCHEMA
 
 
 BUILDING_COLUMNS_SQL = """
@@ -93,10 +95,12 @@ def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
                     raise RuntimeError(error)
                 fields = source_fields(source, data)
                 with conn.cursor(cursor_factory=psycopg2.extensions.cursor) as cur:
+                    before = capture_source_snapshot(cur, building_id, source)
                     cur.execute('UPDATE buildings SET ' + ', '.join(f'{k}=%s' for k in fields)
                                 + ' WHERE id=%s', [
                                     psycopg2.extras.Json(value) if key == 'hpd_owner_contacts' else value
                                     for key, value in fields.items()] + [building_id])
+                    record_source_snapshot(cur, building_id, source, before)
                     cur.execute("""INSERT INTO building_source_refresh
                         (building_id,source,attempted_at,checked_at,next_attempt_at,error,owner_dates_version)
                         VALUES (%s,%s,NOW(),NOW(),NOW() + %s * INTERVAL '1 day',NULL,%s)

@@ -650,10 +650,59 @@ def update_buildings_table(cur, building_id, transactions, primary_deed,
 def enrich_building_from_acris(conn, building_id, bbl):
     """Fetch + persist ACRIS data for one building. Returns the number of
     transactions stored (0 if none found)."""
+    from owner_source_history import source_revisions
+    revision = source_revisions(conn, [building_id], 'acris')[building_id]
+    try:
+        return _apply_acris_observation(conn, building_id, bbl, revision)
+    except Exception as exc:
+        conn.rollback()
+        if _record_acris_failure(conn, building_id, revision, exc):
+            raise
+        # A successful overlapping refresh superseded this failed request.
+        with conn.cursor() as cur:
+            cur.execute('SELECT count(*) FROM acris_transactions WHERE building_id=%s', (building_id,))
+            row = cur.fetchone()
+            count = next(iter(row.values())) if isinstance(row, dict) else row[0]
+        conn.commit()
+        return count
+
+
+def _record_acris_failure(conn, building_id, revision, error):
+    """The revision check and diagnostics write share one property lock/commit."""
+    from owner_source_history import source_revision_matches
+    with conn.cursor() as cur:
+        cur.execute('SELECT id FROM buildings WHERE id=%s FOR UPDATE', (building_id,))
+        if not source_revision_matches(cur, building_id, 'acris', revision):
+            conn.commit()
+            return False
+        if table_has_column(cur, 'buildings', 'acris_last_attempted'):
+            cur.execute('''UPDATE buildings SET acris_last_attempted=NOW(),
+                acris_last_error=%s WHERE id=%s''', (str(error)[:1000], building_id))
+        cur.execute("""INSERT INTO building_source_refresh
+            (building_id,source,attempted_at,next_attempt_at,error)
+            VALUES (%s,'acris',NOW(),NOW()+INTERVAL '6 hours',%s)
+            ON CONFLICT (building_id,source) DO UPDATE SET attempted_at=NOW(),
+            next_attempt_at=EXCLUDED.next_attempt_at,error=EXCLUDED.error""",
+            (building_id, str(error)[:1000]))
+    conn.commit()
+    return True
+
+
+def _apply_acris_observation(conn, building_id, bbl, revision):
+    from owner_source_history import (capture_source_snapshot, record_source_snapshot,
+                                      source_revision_matches)
     history = get_acris_full_history(bbl)
     transactions = history['transactions']
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
+        before = capture_source_snapshot(cur, building_id, 'acris')
+        if not source_revision_matches(cur, building_id, 'acris', revision):
+            # A newer overlapping refresh already committed. Never replace it
+            # with this older response, even if its reported facts look different.
+            cur.execute('SELECT count(*) AS count FROM acris_transactions WHERE building_id=%s', (building_id,))
+            count = cur.fetchone()['count']
+            conn.commit()
+            return count
         if transactions:
             status = derive_mortgage_status(transactions, history['references'])
             primary_mortgage = find_primary_mortgage(
@@ -677,6 +726,7 @@ def enrich_building_from_acris(conn, building_id, bbl):
                     acris_logic_version = %s
                 WHERE id = %s
             """, (ACRIS_LOGIC_VERSION, building_id))
+        record_source_snapshot(cur, building_id, 'acris', before)
         conn.commit()
     finally:
         cur.close()
@@ -705,22 +755,8 @@ def _process_acris_building(building):
     except Exception as exc:
         if conn is not None:
             conn.rollback()
-        # Never advance acris_last_enriched on failure. The next execution
-        # selects this row again; diagnostics explain persistent poison rows.
-        if conn is not None:
-            try:
-                cur = conn.cursor()
-                if table_has_column(cur, 'buildings', 'acris_last_attempted'):
-                    cur.execute("""
-                        UPDATE buildings
-                        SET acris_last_attempted = CURRENT_TIMESTAMP,
-                            acris_last_error = %s
-                        WHERE id = %s
-                    """, (str(exc)[:1000], building_id))
-                conn.commit()
-                cur.close()
-            except Exception:
-                conn.rollback()
+        # The adapter records guarded diagnostics. Writing again here would
+        # reopen a race with a newer success after the adapter released its lock.
         return {
             'status': 'failed',
             'count': 0,

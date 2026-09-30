@@ -130,7 +130,8 @@ const manualLookup = vm.runInContext(
     "buildEnrichButton(missingId, 'Nayan Soni', 'applicant')", context);
 assert.match(manualLookup, /truepeoplesearch\.com\/results/);
 assert.doesNotMatch(manualLookup, /data-enrich-permit-contact/);
-assert.match(enrichButton, /target="_blank" rel="noopener noreferrer"/);
+assert.match(enrichButton, /type="button" class="truepeople-search-link"/);
+assert.match(enrichButton, /data-people-search=/);
 
 // Source names, encoding, and location fallbacks must produce usable searches.
 vm.runInContext("buildingData = { building: { borough: '3', zip_code: '11225' } };", context);

@@ -368,9 +368,15 @@ def update_buildings_with_sos(conn, updates: List[Dict]):
     """Bulk update buildings with SOS data."""
     if not updates:
         return
+    from owner_source_history import (capture_source_snapshot, record_source_snapshot,
+                                      source_revision_matches)
     
     with conn.cursor() as cur:
         for update in updates:
+            before = capture_source_snapshot(cur, update['building_id'], 'sos')
+            if ('_source_revision' in update and not source_revision_matches(
+                    cur, update['building_id'], 'sos', update['_source_revision'])):
+                continue
             cur.execute("""
                 UPDATE buildings SET
                     sos_principal_name = %(sos_principal_name)s,
@@ -390,6 +396,7 @@ def update_buildings_with_sos(conn, updates: List[Dict]):
                     sos_last_error_at = NULL
                 WHERE id = %(building_id)s
             """, update)
+            record_source_snapshot(cur, update['building_id'], 'sos', before)
         
         conn.commit()
 
@@ -403,16 +410,24 @@ def sos_result_needs_retry(result: SOSBusinessResult) -> bool:
 def record_sos_failures(conn, failures: List[Dict]):
     """Persist diagnostics without advancing the successful-refresh clock."""
     if not failures:
-        return
+        return 0
+    from owner_source_history import capture_source_snapshot, source_revision_matches
+    applied = 0
     with conn.cursor() as cur:
         for failure in failures:
+            if '_source_revision' in failure:
+                capture_source_snapshot(cur, failure['building_id'], 'sos')
+                if not source_revision_matches(cur, failure['building_id'], 'sos', failure['_source_revision']):
+                    continue
             cur.execute("""
                 UPDATE buildings
                 SET sos_last_error = %s,
                     sos_last_error_at = NOW()
                 WHERE id = %s
             """, (failure['error'][:4000], failure['building_id']))
+            applied += 1
     conn.commit()
+    return applied
 
 
 def main():
@@ -460,6 +475,8 @@ def main():
     skipped_individual = 0
     skipped_no_owner = 0
     clear_updates = []
+    from owner_source_history import source_revisions
+    revisions = source_revisions(conn, [b['id'] for b in buildings], 'sos') if not args.dry_run else {}
     
     for b in buildings:
         llc_name, source = get_best_llc_name(b)
@@ -469,7 +486,7 @@ def main():
             llc_buildings.append(b)
         else:
             cleared = process_sos_result(SOSBusinessResult(query_name='', normalized_name=''))
-            cleared.update(building_id=b['id'], lookup_source='')
+            cleared.update(building_id=b['id'], lookup_source='', _source_revision=revisions.get(b['id']))
             clear_updates.append(cleared)
             # Figure out why skipped
             any_owner = (
@@ -525,6 +542,7 @@ def main():
     
     for i in range(0, len(llc_buildings), BATCH_SIZE):
         batch = llc_buildings[i:i + BATCH_SIZE]
+        revisions = source_revisions(conn, [b['id'] for b in batch], 'sos')
         batch_num = i // BATCH_SIZE + 1
         total_batches = (len(llc_buildings) + BATCH_SIZE - 1) // BATCH_SIZE
         
@@ -573,6 +591,7 @@ def main():
                 failures.append({
                     'building_id': building['id'],
                     'error': result.error,
+                    '_source_revision': revisions[building['id']],
                 })
                 continue
             
@@ -586,6 +605,7 @@ def main():
             sos_data = process_sos_result(result)
             sos_data['building_id'] = building['id']
             sos_data['lookup_source'] = building['llc_source']
+            sos_data['_source_revision'] = revisions[building['id']]
             updates.append(sos_data)
         
         # Save to database

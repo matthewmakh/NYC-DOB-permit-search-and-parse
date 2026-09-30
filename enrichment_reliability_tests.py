@@ -132,6 +132,7 @@ class PaymentRouteTests(unittest.TestCase):
         import app
         import inspect
         with app.app.test_request_context('/api/enrichment/enrich',method='POST',json={'building_id':1,'owner_name':'John Smith'}), \
+                patch.object(contacts,'is_owner_contact_suppressed',return_value=False), \
                 patch.object(contacts,'check_user_enrichment_access',return_value=(False,[],[])), \
                 patch.object(contacts,'get_available_owners_for_enrichment',return_value=[{'name':'John Smith'}]), \
                 patch.object(contacts,'enrich_owner',return_value=(True,{'phones':['private']},'found')), \
@@ -148,6 +149,7 @@ class PaymentRouteTests(unittest.TestCase):
         import app
         import inspect
         with app.app.test_request_context('/api/enrichment/permit-contact',method='POST',json={'bbl':'3012980066','contact_name':'John Smith'}), \
+                patch.object(contacts,'is_owner_contact_suppressed',return_value=False), \
                 patch.object(contacts,'get_enrichable_permit_contacts',return_value=[]), \
                 patch.object(contacts,'enrich_permit_contact') as lookup:
             app.g.user={'id':1,'is_admin':False}
@@ -182,9 +184,14 @@ class DatabaseRegressionTests(unittest.TestCase):
                 enriched_person_id TEXT,enriched_at TIMESTAMPTZ,raw_api_response JSONB,
                 UNIQUE(user_id,building_id,owner_name_searched))''')
             cur.execute(refresh.SCHEMA_SQL);cur.execute(paid.SCHEMA_SQL)
+            from owner_research import SCHEMA as OWNER_RESEARCH_SCHEMA
+            for statement in OWNER_RESEARCH_SCHEMA:
+                cur.execute(statement)
         self.conn.commit()
         self.patches=[patch.object(contacts,'get_db_connection',side_effect=lambda:self.connect(True)),
-                      patch.object(bulk,'_get_conn',side_effect=self.connect)]
+                      patch.object(bulk,'_get_conn',side_effect=self.connect),
+                      patch('team_service.get_access_context', side_effect=lambda user_id=None, **kwargs:
+                            dict(id=user_id, has_access=True, is_sponsored=False, is_admin=False))]
         for p in self.patches:p.start()
         bulk.init_bulk_enrich_jobs_table()
 

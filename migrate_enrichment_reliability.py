@@ -7,6 +7,7 @@ import psycopg2
 from migrate_add_freshness_and_jobs import database_dsn
 from property_source_refresh import SCHEMA_SQL, BUILDING_COLUMNS_SQL
 from enrichment_privacy import migrate_privacy
+from owner_research import SCHEMA as OWNER_RESEARCH_SCHEMA
 
 
 def main():
@@ -16,6 +17,8 @@ def main():
             cur.execute(SCHEMA_SQL)
             cur.execute(BUILDING_COLUMNS_SQL)
             migrate_privacy(cur)
+            for statement in OWNER_RESEARCH_SCHEMA:
+                cur.execute(statement)
     print('Enrichment reliability schema and privacy cleanup ready')
 
 

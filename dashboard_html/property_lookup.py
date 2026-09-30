@@ -441,23 +441,20 @@ def _run_permits(conn, building_id, bbl):
 
 
 def _run_acris(conn, building_id, bbl):
-    try:
-        count = enrich_building_from_acris(conn, building_id, bbl)
-        return f'{count} transactions' if count else 'no transactions'
-    except Exception as exc:
-        conn.rollback()
-        with conn.cursor() as cur:
-            cur.execute("""UPDATE buildings SET acris_last_attempted=NOW(),
-                acris_last_error=%s WHERE id=%s""", (str(exc)[:1000],building_id))
-        conn.commit()
-        raise
+    # The adapter records diagnostics under its revision guard. Outer callers
+    # must not rewrite them after that transaction releases the property lock.
+    count = enrich_building_from_acris(conn, building_id, bbl)
+    return f'{count} transactions' if count else 'no transactions'
 
 
 def _run_tax_liens(conn, building_id, bbl):
+    from owner_source_history import source_revisions
+    revision = source_revisions(conn, [building_id], 'ecb')[building_id]
     data = fetch_tax_lien_data(building_id, bbl)
     if not data:
         return 'no data'
     cur = conn.cursor()
+    data['_source_revision'] = revision
     update_building_tax_lien_data(cur, building_id, data)
     conn.commit()
     cur.close()
@@ -467,6 +464,8 @@ def _run_tax_liens(conn, building_id, bbl):
 
 
 def _run_sos(conn, building_id, bbl):
+    from owner_source_history import source_revisions
+    revision = source_revisions(conn, [building_id], 'sos')[building_id]
     from ny_sos_lookup import lookup_businesses, SOSBusinessResult
     from step5_enrich_from_sos import (
         sos_result_needs_retry, update_buildings_with_sos, record_sos_failures)
@@ -481,12 +480,15 @@ def _run_sos(conn, building_id, bbl):
         result = lookup_businesses([name], concurrency=1, timeout=20).get(name)
         if result is None or sos_result_needs_retry(result):
             error = getattr(result, 'error', '') or 'No SOS result returned'
-            record_sos_failures(conn, [{'building_id': building_id, 'error': error}])
+            applied = record_sos_failures(conn, [{'building_id': building_id, 'error': error,
+                                                  '_source_revision': revision}])
+            if not applied:
+                return 'newer refresh retained'
             return f'error: {error}'
     else:
         result = SOSBusinessResult(query_name='', normalized_name='')
     fields = process_sos_result(result)
-    fields.update(building_id=building_id, lookup_source=source)
+    fields.update(building_id=building_id, lookup_source=source, _source_revision=revision)
     update_buildings_with_sos(conn, [fields])
     return 'updated' if result.found else 'no entity match'
 

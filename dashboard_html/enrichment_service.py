@@ -92,6 +92,59 @@ def get_db_connection():
     )
 
 
+def _user_owner_suppression_names(user_id, bbls=None, building_ids=None, connection=None):
+    """Read current team suppression without falling back to a global cache.
+
+    Missing migrations or inaccessible scope deliberately raise: returning an
+    empty set on failure would silently re-enable paid lookups for DNC records.
+    """
+    from crm_service import crm_context
+    from owner_research import suppressed_owner_names
+    from team_service import get_access_context
+    owns_connection = connection is None
+    conn = connection or get_db_connection()
+    try:
+        user = get_access_context(user_id=user_id, connection=conn)
+        if not user or not user.get('has_access'):
+            raise PermissionError('An active account is required for contact research')
+        ctx = crm_context(user)
+        with conn.cursor() as cur:
+            wanted_bbls = {str(bbl) for bbl in (bbls or []) if bbl}
+            if building_ids:
+                cur.execute('SELECT bbl FROM buildings WHERE id=ANY(%s)', (list(building_ids),))
+                wanted_bbls.update(str(row['bbl']) for row in cur.fetchall() if row.get('bbl'))
+            return suppressed_owner_names(cur, ctx['team_id'], sorted(wanted_bbls))
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+def contact_name_is_suppressed(owner_name, suppressed_names):
+    """Pure DNC predicate shared by paid lookups and contact/address exports."""
+    from owner_research import name_key
+    wanted = name_key(owner_name)
+    if wanted in suppressed_names:
+        return True
+    # Candidate selection already tolerates omitted middle names/suffixes.
+    # Those aliases cannot be used to bypass a DNC set on a fuller spelling.
+    key = canonical_name_key(owner_name)
+    return bool(key and any(names_compatible(key, canonical_name_key(name)) for name in suppressed_names))
+
+
+def is_owner_contact_suppressed(user_id, owner_name, building_id=None, bbl=None, connection=None):
+    """True when this user's active team marked a matching property contact DNC.
+
+    Both supplied property identifiers are checked so a mismatched caller input
+    cannot hide an existing suppression. Database/scope errors propagate.
+    """
+    if not building_id and not bbl:
+        raise ValueError('A property is required for the do-not-contact check')
+    names_by_bbl = _user_owner_suppression_names(
+        user_id, bbls=[bbl] if bbl else [], building_ids=[building_id] if building_id else [],
+        connection=connection)
+    return any(contact_name_is_suppressed(owner_name, names) for names in names_by_bbl.values())
+
+
 # Business-entity rejection lists. Tuned for NYC government data quirks
 # (e.g. "CHURCH" is allowed as a last name when in "CHURCH, CHARLOTTE" form).
 # Kept here because generic name-parser libraries don't know about these.
@@ -1155,6 +1208,8 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None, bulk_
 
     try:
         owner_name = owner_name.strip().upper()
+        if is_owner_contact_suppressed(user_id, owner_name, building_id=building_id, connection=conn):
+            return False, None, 'This contact is marked do not contact for your team'
         billing_scope = f'bulk:{bulk_job_id}' if bulk_job_id else 'single'
         # Serialize lookup/cache creation across web workers for this user/property.
         cur.execute('SELECT pg_advisory_lock(hashtextextended(%s,72107))', (f'{int(user_id)}:{int(building_id)}',))
@@ -1293,6 +1348,9 @@ def enrich_owner(building_id, owner_name, address, user_id, provider=None, bulk_
                 return False, None, "No matching records found in our database for this person. They may not be in our data sources."
             return False, None, "No contact information (phone/email) found for this person in our database."
 
+        # A review may have changed while the external lookup was running.
+        if is_owner_contact_suppressed(user_id, owner_name, building_id=building_id, connection=conn):
+            return False, None, 'This contact is marked do not contact for your team'
         # Normalized contacts and match flags are sufficient for reuse/payment.
         # Raw responses may include birth data, relatives and address histories.
         result = {'phones': phones, 'emails': emails, 'person_id': person_id,
@@ -1326,13 +1384,18 @@ def check_user_enrichment_access(user_id, building_id, owner_name=None):
     cur = conn.cursor()
     
     try:
+        suppressed = set().union(*_user_owner_suppression_names(
+            user_id, building_ids=[building_id], connection=conn).values())
+        if owner_name and contact_name_is_suppressed(owner_name, suppressed):
+            return False, [], []
         # Get all enrichments for this building by this user WITH their data
         cur.execute("""
             SELECT owner_name_searched, enriched_phones, enriched_emails, enriched_at
             FROM user_enrichments
             WHERE user_id = %s AND building_id = %s
         """, (user_id, building_id))
-        enrichments = cur.fetchall()
+        enrichments = [row for row in cur.fetchall()
+                       if not contact_name_is_suppressed(row.get('owner_name_searched'), suppressed)]
         
         enriched_owners = [r['owner_name_searched'].upper() for r in enrichments if r['owner_name_searched']]
         
@@ -1572,6 +1635,8 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
     cur = conn.cursor()
     
     try:
+        suppressed = set().union(*_user_owner_suppression_names(
+            user_id, building_ids=[building_id], connection=conn).values()) if user_id else set()
         # Pull every enrichment this user has done on this building so we can
         # flag duplicates as already_enriched. We canonicalize and use
         # names_compatible(), so "JIN PEI XIE" enriched earlier will match a
@@ -1660,7 +1725,7 @@ def get_available_owners_for_enrichment(building_id, user_id=None):
                     'already_enriched': _is_already_enriched(key),
                 })
 
-        return owners
+        return [owner for owner in owners if not contact_name_is_suppressed(owner['name'], suppressed)]
 
     finally:
         cur.close()
@@ -1682,6 +1747,8 @@ def check_permit_contact_enrichment(bbl, contact_name, contact_type, user_id=Non
     cur = conn.cursor()
     
     try:
+        if user_id and is_owner_contact_suppressed(user_id, contact_name, bbl=bbl, connection=conn):
+            return False, None, False
         # Check if this contact has been enriched
         cur.execute("""
             SELECT id, enriched_phones, enriched_emails, first_enriched_by, first_enriched_at
@@ -1750,7 +1817,7 @@ def grant_permit_contact_access(user_id, enrichment_id, charge_amount=None, stri
         conn.close()
 
 
-def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_type, 
+def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_type,
                           license_number, license_type, original_phone, user_id, 
                           grant_access=False):
     """
@@ -1776,6 +1843,8 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
     cur = conn.cursor()
     
     try:
+        if is_owner_contact_suppressed(user_id, contact_name, building_id=building_id, bbl=bbl, connection=conn):
+            return False, None, 'This contact is marked do not contact for your team'
         # Check if already enriched
         already_enriched, existing_data, user_has_access = check_permit_contact_enrichment(
             bbl, contact_name, contact_type, user_id
@@ -1834,6 +1903,8 @@ def enrich_permit_contact(bbl, building_id, permit_id, contact_name, contact_typ
                 return False, None, "No matching records found for this person."
             return False, None, "No contact information found for this person."
         
+        if is_owner_contact_suppressed(user_id, contact_name, building_id=building_id, bbl=bbl, connection=conn):
+            return False, None, 'This contact is marked do not contact for your team'
         # Store enrichment
         cur.execute("""
             INSERT INTO permit_contact_enrichments 
@@ -1901,6 +1972,7 @@ def get_enriched_contacts_for_building(bbl, user_id=None):
     cur = conn.cursor()
     
     try:
+        suppressed = _user_owner_suppression_names(user_id, bbls=[bbl], connection=conn).get(str(bbl), set()) if user_id else set()
         # Check if user is admin
         is_admin = False
         if user_id:
@@ -1933,6 +2005,8 @@ def get_enriched_contacts_for_building(bbl, user_id=None):
         
         contacts = []
         for e in enrichments:
+            if contact_name_is_suppressed(e['contact_name'], suppressed):
+                continue
             # Check if user has access
             has_access = is_admin or e['unlocked_by_user'] is not None
             
@@ -1976,6 +2050,7 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
     cur = conn.cursor()
     
     try:
+        suppressed = _user_owner_suppression_names(user_id, bbls=[bbl], connection=conn).get(str(bbl), set()) if user_id else set()
         # Get already enriched contacts for this building
         cur.execute("""
             SELECT UPPER(contact_name) as name, contact_type
@@ -2097,7 +2172,7 @@ def get_enrichable_permit_contacts(bbl, user_id=None):
                     })
                     seen_names.add(name_upper)
 
-        return contacts
+        return [contact for contact in contacts if not contact_name_is_suppressed(contact['name'], suppressed)]
 
     finally:
         cur.close()
@@ -2133,7 +2208,7 @@ def filter_owners_by_strategy(owners, strategy):
     people = []
     for owner in owners:
         classification = classify_party_name(owner.get('name'))
-        if classification['is_person']:
+        if classification['is_person'] and not owner.get('do_not_contact'):
             people.append({**owner, **classification})
     if not people:
         return []
@@ -2182,7 +2257,7 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
 
         cur.execute(
             """
-            SELECT id, address,
+            SELECT id, bbl, address,
                    current_owner_name, owner_name_rpad, owner_name_hpd,
                    sos_principal_name, sos_principal_title, sos_entity_name,
                    sale_buyer_primary
@@ -2192,6 +2267,8 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
             (list(building_ids),),
         )
         rows = cur.fetchall()
+        suppressed_by_bbl = _user_owner_suppression_names(
+            user_id, bbls=[row['bbl'] for row in rows], connection=conn)
     finally:
         cur.close()
         conn.close()
@@ -2213,6 +2290,7 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
 
     for row in rows:
         bid = row['id']
+        suppressed = suppressed_by_bbl.get(str(row['bbl']), set())
         enriched_keys = enriched_by_building.get(bid, [])
         sos_title = row['sos_principal_title']
         sos_match, _ = owner_entity_match_quality(row)
@@ -2240,7 +2318,7 @@ def estimate_owners_for_buildings(building_ids, user_id, owner_strategy):
                     'recommended': is_sos,
                     'already_enriched': already,
                 })
-        available = [o for o in owners if not o['already_enriched']]
+        available = [o for o in owners if not o['already_enriched'] and not contact_name_is_suppressed(o['name'], suppressed)]
         chosen = filter_owners_by_strategy(available, owner_strategy)
         if chosen:
             properties_with_owners += 1

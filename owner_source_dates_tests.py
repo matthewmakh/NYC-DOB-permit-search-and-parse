@@ -70,7 +70,9 @@ class OwnerSourceTests(unittest.TestCase):
         self.assertEqual(data['ecb_respondent_issue_date'], date(2026, 9, 1))
         self.assertIsInstance(data['ecb_last_checked'], datetime)
         cursor = Mock()
-        tax.update_building_tax_lien_data(cursor, 1, data)
+        with patch('owner_source_history.capture_source_snapshot', return_value={'records': []}), \
+                patch('owner_source_history.record_source_snapshot'):
+            tax.update_building_tax_lien_data(cursor, 1, data)
         self.assertIn('ecb_respondent_issue_date = %s', cursor.execute.call_args.args[0])
         self.assertIn(date(2026, 9, 1), cursor.execute.call_args.args[1])
 

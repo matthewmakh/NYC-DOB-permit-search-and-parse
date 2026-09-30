@@ -113,11 +113,7 @@ function truePeopleSearchUrl(name, person = {}) {
     if (!isPerson || !String(name || '').trim()) return null;
 
     // ACRIS/RPAD use LAST, FIRST; keep suffixes in FIRST LAST, JR order.
-    const parts = String(name).trim().replace(/\s+/g, ' ').split(',').map(part => part.trim()).filter(Boolean);
-    const suffix = /^(?:JR\.?|SR\.?|II|III|IV|V)$/i;
-    const searchName = parts.length > 1 && !suffix.test(parts[1])
-        ? [parts[1], parts[0], ...parts.slice(2)].join(' ')
-        : parts.join(' ');
+    const searchName = normalizePeopleSearchName(name);
 
     // Prefer this person's recorded city/state; otherwise use the property area.
     const building = buildingData?.building || {};
@@ -133,18 +129,16 @@ function truePeopleSearchUrl(name, person = {}) {
             ? `${/^manhattan$/i.test(area) ? 'New York' : area}, NY` : 'NY');
     }
 
-    const url = new URL('https://www.truepeoplesearch.com/results');
-    url.searchParams.set('name', searchName);
-    url.searchParams.set('citystatezip', location);
-    return url.href;
+    return buildPeopleSearchUrl(searchName, location);
 }
 
 function renderTruePeopleSearchLink(name, person = {}) {
     const url = truePeopleSearchUrl(name, person);
     if (!url) return '';
-    const label = `Enrich ${name} on TruePeopleSearch (opens in a new tab)`;
-    return `<a class="truepeople-search-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
-        aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">Enrich via TruePeopleSearch <span aria-hidden="true">↗</span></a>`;
+    const label = `Preview search for ${name} on TruePeopleSearch`;
+    const payload = {name, is_person: true, city: person.city, state: person.state, zip_code: person.zip_code || person.zip};
+    return `<button type="button" class="truepeople-search-link" data-preview-url="${escapeHtml(url)}"
+        data-people-search="${escapeHtml(JSON.stringify(payload))}" ${researchPersonBlocked({name, ...person}) ? 'disabled' : ''} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">Enrich via TruePeopleSearch <span aria-hidden="true">↗</span></button>`;
 }
 
 /**
@@ -257,6 +251,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // record one clear action away on every screen size.
     setupBuildingFactsDisclosure();
     setupSourceCopyButtons();
+    setupOwnerResearch();
     
     // Load building data
     await loadBuildingProfile();
@@ -292,6 +287,8 @@ async function loadBuildingProfile() {
         renderActivityTab();
         renderContactsTab();
         renderDataSourceDirectory();
+        loadOwnerResearch();
+        loadOwnerSourceStatus();
 
         // Update tab badges
         updateTabBadges();
@@ -905,8 +902,8 @@ function showEnrichModal(buildingId) {
     }
     
     // Auto-select first recommended or first available
-    const firstRecommendedIdx = availableOwners.findIndex(o => o.recommended);
-    const autoSelectIdx = firstRecommendedIdx >= 0 ? firstRecommendedIdx : 0;
+    const firstRecommendedIdx = availableOwners.findIndex(o => o.recommended && !researchPersonBlocked(o));
+    const autoSelectIdx = firstRecommendedIdx >= 0 ? firstRecommendedIdx : availableOwners.findIndex(o => !researchPersonBlocked(o));
     
     modal.innerHTML = `
         <div class="modal-content enrich-modal-content">
@@ -921,12 +918,13 @@ function showEnrichModal(buildingId) {
                 ${availableOwners.map((owner, idx) => `
                     <div class="owner-option ${owner.recommended ? 'recommended' : ''}">
                         <label class="owner-option-choice">
-                            <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
+                            <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''} ${researchPersonBlocked(owner) ? 'disabled' : ''}>
                             <span class="owner-option-content">
                                 <span class="owner-option-name">${escapeHtml(owner.name)}</span>
                                 <span class="owner-option-source">${escapeHtml(owner.source)}</span>
                                 ${ownerSourceKey(owner.source) ? renderOwnerSourceDate(ownerSourceKey(owner.source)) : ''}
                                 <span class="real-person-badge">PERSON</span>
+                                ${researchPersonBlocked(owner) ? '<span class="research-status research-status-blocked">Do not contact</span>' : ''}
                                 ${owner.recommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                                 ${owner.reason ? `<span class="owner-option-reason">${escapeHtml(owner.reason)}</span>` : ''}
                             </span>
@@ -939,7 +937,7 @@ function showEnrichModal(buildingId) {
             
             <div class="enrich-footer">
                 <p class="enrich-cost-display">Contact unlock: <strong>${cost}</strong></p>
-                <button class="btn btn-primary enrich-confirm-btn" onclick="confirmEnrich(${buildingId})">
+                <button class="btn btn-primary enrich-confirm-btn" onclick="confirmEnrich(${buildingId})" ${autoSelectIdx < 0 ? 'disabled' : ''}>
                     Unlock Contact Info
                 </button>
             </div>
@@ -968,6 +966,10 @@ async function confirmEnrich(buildingId) {
     
     const ownerIdx = parseInt(selectedRadio.value);
     const owner = window.enrichOwners[ownerIdx];
+    if (researchPersonBlocked(owner)) {
+        alert('Do not contact is set for this name. Change its review status before enriching.');
+        return;
+    }
     
     const btn = document.querySelector('.enrich-confirm-btn');
     btn.disabled = true;
@@ -2482,6 +2484,7 @@ function buildEnrichButton(permit, contactName, contactType, licenseNumber = nul
     return `
         <div class="enrich-contact-section" id="enrich-section-${contactType}-${permitId}">
             <button type="button" class="enrich-contact-btn" id="${escapeHtml(buttonId)}"
+                ${researchPersonBlocked({name: contactName}) ? 'disabled title="Do not contact is set for this name on this property."' : ''}
                 data-enrich-permit-contact
                 data-bbl="${escapeHtml(bbl)}"
                 data-building-id="${escapeHtml(buildingId || '')}"
@@ -2521,6 +2524,11 @@ function bindPermitEnrichButtons(container) {
  * Enrich a permit contact (called from the enrich button)
  */
 async function enrichPermitContact(bbl, buildingId, permitId, contactName, contactType, licenseNumber, licenseType, existingPhone, button) {
+    if (researchPersonBlocked({name: contactName})) {
+        button.disabled = true;
+        button.textContent = 'Do not contact';
+        return;
+    }
     // Disable button and show loading
     button.disabled = true;
     button.innerHTML = '<span class="loading-spinner"></span> Enriching...';
@@ -3671,4 +3679,473 @@ function showError(message) {
     document.getElementById('building-address').textContent = 'Error Loading Property';
     document.getElementById('risk-score-value').textContent = '!';
     document.getElementById('risk-score-label').textContent = 'ERROR';
+}
+
+// ============================================================================
+// OWNER RESEARCH — evidence, manual review, and source refresh
+// ============================================================================
+
+const ownerResearchState = {
+    data: null, sources: null, loading: false, sequence: 0,
+    sourceSequence: 0, pollTimer: null, pollCount: 0, pendingSources: new Set(),
+};
+const RESEARCH_STATUSES = {
+    not_researched: 'Not researched', needs_review: 'Needs review',
+    contact_found: 'Contact found', do_not_contact: 'Do not contact',
+};
+const RESEARCH_MATCHES = {
+    unreviewed: 'Unreviewed', confirmed_match: 'Confirmed match',
+    possible_match: 'Possible match', wrong_person: 'Wrong person',
+};
+
+function normalizePeopleSearchName(name) {
+    const parts = String(name || '').trim().replace(/\s+/g, ' ').split(',').map(part => part.trim()).filter(Boolean);
+    const suffix = /^(?:JR\.?|SR\.?|II|III|IV|V)$/i;
+    return parts.length > 1 && !suffix.test(parts[1])
+        ? [parts[1], parts[0], ...parts.slice(2)].join(' ') : parts.join(' ');
+}
+
+function buildPeopleSearchUrl(name, location = '') {
+    if (!String(name || '').trim()) return null;
+    const url = new URL('https://www.truepeoplesearch.com/results');
+    url.searchParams.set('name', String(name).trim());
+    if (String(location || '').trim()) url.searchParams.set('citystatezip', String(location).trim());
+    return url.href;
+}
+
+function researchLocationText(location = {}) {
+    const city = String(location.city || '').trim();
+    const state = String(location.state || '').trim();
+    const zip = String(location.zip_code || location.zip || '').match(/^\d{5}\b/)?.[0];
+    return city ? [city, state].filter(Boolean).join(', ') : zip || state;
+}
+
+function propertyResearchLocation() {
+    if (ownerResearchState.data?.property_location) return ownerResearchState.data.property_location;
+    const building = buildingData?.building || {};
+    const borough = String(building.borough_name || building.borough || '').trim();
+    const area = /^[1-5]$/.test(borough) ? getBoroughName(borough) : borough;
+    return {id: 'property', label: 'Property location', is_property: true,
+        zip_code: building.zip_code,
+        city: building.zip_code ? '' : /^manhattan$/i.test(area) ? 'New York' : area,
+        state: 'NY'};
+}
+
+function ownerSearchOptions(person = {}) {
+    const locations = Array.isArray(person.locations) ? person.locations : [];
+    const options = locations.filter(location => !location.is_property && researchLocationText(location)).map((location, index) => ({
+        id: String(location.id || `reported-${index}`), value: researchLocationText(location),
+        label: `${researchLocationText(location)} — ${location.source || location.label || 'Reported location'}${location.reported_date ? ` · ${formatDate(location.reported_date)}` : ' · date unavailable'}`,
+        note: `${location.kind || 'Source-reported location'}. This is not confirmation of a current home address.`,
+    }));
+    if (!options.length && researchLocationText(person)) {
+        options.push({id: 'reported-contact', value: researchLocationText(person),
+            label: `${researchLocationText(person)} — reported contact location`, note: 'Reported contact location; date unavailable.'});
+    }
+    const property = propertyResearchLocation();
+    const propertyText = property.zip_code ? String(property.zip_code).match(/^\d{5}\b/)?.[0] : researchLocationText(property);
+    if (propertyText) options.push({id: 'property', value: propertyText,
+        label: `${propertyText} — property location (fallback)`,
+        note: 'Property location fallback. The person may live or receive mail elsewhere.'});
+    options.push({id: 'custom', value: '', label: 'Enter another city/state or ZIP', note: 'Use a city/state or ZIP, not a street address.'});
+    options.push({id: 'name-only', value: '', label: 'Search by name only', note: 'Search without a location filter.'});
+    return options;
+}
+
+function researchNameKey(name) {
+    return normalizePeopleSearchName(name).toLocaleUpperCase('en-US').replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function researchPersonBlocked(person) {
+    if (person?.do_not_contact || person?.research?.status === 'do_not_contact') return true;
+    const key = researchNameKey(person?.name);
+    return Boolean(key && ownerResearchState.data?.people?.some(candidate =>
+        (candidate.do_not_contact || candidate.research?.status === 'do_not_contact') && researchNameKey(candidate.name) === key));
+}
+
+function researchFeedback(message, isError = false) {
+    const node = document.getElementById('owner-research-feedback');
+    if (!node) return;
+    node.textContent = message;
+    node.classList.toggle('research-error', isError);
+}
+
+async function researchRequest(url, options = {}) {
+    const response = await fetch(url, {credentials: 'same-origin', ...options});
+    let data;
+    try { data = await response.json(); } catch (_error) {
+        throw new Error(response.status === 401 || response.redirected
+            ? 'Your session has expired. Sign in again, then reload research.' : 'The server returned an unreadable response. Please try again.');
+    }
+    if (!response.ok || !data.success) {
+        const error = new Error(data.error || data.message || (response.status === 401 ? 'Please sign in again.' : 'Unable to complete this request.'));
+        error.status = response.status;
+        throw error;
+    }
+    return data;
+}
+
+async function loadOwnerResearch() {
+    if (!document.getElementById('owner-research-people')) return false;
+    const sequence = ++ownerResearchState.sequence;
+    ownerResearchState.loading = true;
+    try {
+        const data = await researchRequest(`/api/property/${encodeURIComponent(BBL)}/owner-research`);
+        if (sequence !== ownerResearchState.sequence) return false;
+        ownerResearchState.data = data;
+        renderOwnerResearch();
+        return true;
+    } catch (error) {
+        if (sequence === ownerResearchState.sequence) {
+            researchFeedback(error.message, true);
+            if (!ownerResearchState.data) document.getElementById('owner-research-people').innerHTML =
+                '<p class="research-muted">Research could not be loaded. Use Reload research to try again.</p>';
+        }
+        return false;
+    } finally {
+        if (sequence === ownerResearchState.sequence) ownerResearchState.loading = false;
+    }
+}
+
+function renderResearchSource(source) {
+    const href = safeHttpHref(source.url);
+    const label = escapeHtml(source.label || source.key || 'Source');
+    const date = source.reported_date ? `${source.date_label || 'Reported'}: ${formatDate(source.reported_date)}` : source.period || 'Reported date unavailable';
+    return `<li>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label} ↗</a>` : `<strong>${label}</strong>`}
+        <span>${escapeHtml(date)}${source.reported_date && source.period ? ` · ${escapeHtml(source.period)}` : ''}</span></li>`;
+}
+
+function renderResearchPerson(person) {
+    const review = person.research || {};
+    const blocked = researchPersonBlocked(person);
+    const locations = Array.isArray(person.locations) ? person.locations : [];
+    const reviewer = typeof review.reviewed_by === 'object' ? review.reviewed_by?.name : review.reviewed_by;
+    const phones = (review.phones || []).map(value => escapeHtml(value)).join(' · ');
+    const emails = (review.emails || []).map(value => escapeHtml(value)).join(' · ');
+    const resultUrl = safeHttpHref(review.result_url);
+    return `<article class="research-person${blocked ? ' research-person-blocked' : ''}" data-research-person="${escapeHtml(person.id)}">
+        <div class="research-person-head"><div><h5>${escapeHtml(person.name)}</h5><p>${escapeHtml(person.role || 'Reported person')}${person.historical ? ' · Historical record' : ''}</p></div>
+            <span class="research-status${blocked ? ' research-status-blocked' : ''}">${escapeHtml(blocked ? RESEARCH_STATUSES.do_not_contact : RESEARCH_STATUSES[review.status] || RESEARCH_STATUSES.not_researched)}</span></div>
+        <ul class="research-evidence">${(person.sources || []).map(renderResearchSource).join('')}</ul>
+        <div class="research-locations"><strong>Reported search locations</strong>${locations.length ? `<ul>${locations.map(location =>
+            `<li>${escapeHtml(researchLocationText(location) || 'Location unavailable')}<span>${escapeHtml(location.source || location.label || 'Source-reported')}${location.reported_date ? ` · ${escapeHtml(formatDate(location.reported_date))}` : ' · date unavailable'}${location.kind ? ` · ${escapeHtml(location.kind)}` : ''}</span></li>`).join('')}</ul>`
+            : '<p>No matched owner locality available. Search can use the property location as a fallback.</p>'}</div>
+        <div class="research-review-summary"><span class="research-match research-match-${Object.hasOwn(RESEARCH_MATCHES, review.match_status) ? review.match_status : 'unreviewed'}">${escapeHtml(RESEARCH_MATCHES[review.match_status] || RESEARCH_MATCHES.unreviewed)}</span>
+            ${review.match_status === 'wrong_person' ? '<p>This saved result was marked as a different person.</p>' : ''}
+            ${review.match_status === 'possible_match' ? '<p>Match still needs confirmation.</p>' : ''}
+            ${phones ? `<p><strong>Saved phone:</strong> ${phones}</p>` : ''}${emails ? `<p><strong>Saved email:</strong> ${emails}</p>` : ''}
+            ${resultUrl ? blocked ? '<p class="research-muted">Reviewed result retained. External lookup is disabled while do not contact is set.</p>' : `<p><a href="${escapeHtml(resultUrl)}" target="_blank" rel="noopener noreferrer">Reviewed result ↗</a></p>` : ''}
+            ${review.notes ? `<p class="research-note">${escapeHtml(review.notes)}</p>` : ''}
+            ${review.reviewed_at ? `<p class="research-muted">Reviewed ${escapeHtml(formatDate(review.reviewed_at))}${reviewer ? ` by ${escapeHtml(reviewer)}` : ''}</p>` : ''}</div>
+        ${blocked ? '<p class="research-dnc-note">Do not contact. People searches and enrichment are disabled for this name on this property.</p>' : ''}
+        <div class="research-actions"><button type="button" class="research-button research-button-primary" data-research-action="search" ${blocked || person.is_person === false ? 'disabled' : ''}>Preview people search</button>
+            <button type="button" class="research-button" data-research-action="review">${review.reviewed_at ? 'Edit review' : 'Save a reviewed result'}</button></div>
+    </article>`;
+}
+
+function renderOwnerResearch() {
+    const data = ownerResearchState.data;
+    if (!data) return;
+    const people = document.getElementById('owner-research-people');
+    if (people) people.innerHTML = data.people?.length ? data.people.map(renderResearchPerson).join('')
+        : '<p class="research-muted">No individual people found in the saved ownership sources yet. Refresh a source below to check for newer records.</p>';
+    const conflicts = document.getElementById('owner-research-conflicts');
+    if (conflicts) conflicts.innerHTML = data.conflicts?.length ? `<div class="research-conflicts"><strong>Review these differences</strong><ul>${data.conflicts.map(conflict =>
+        `<li>${escapeHtml(conflict.message)}</li>`).join('')}</ul><p>Roles and reporting dates can explain differences. These flags do not establish who owns the property.</p></div>` : '';
+    // Disable the older manual entry points too, without merging same-named records.
+    document.querySelectorAll('[data-people-search]').forEach(button => {
+        try {
+            const person = JSON.parse(button.dataset.peopleSearch);
+            button.disabled = researchPersonBlocked(person);
+            button.title = button.disabled ? 'Do not contact is set for this name on this property.' : `Preview search for ${person.name}`;
+        } catch (_error) { button.disabled = true; }
+    });
+}
+
+function openResearchDialog(title, body) {
+    document.getElementById('owner-research-dialog')?.close();
+    const previousFocus = document.activeElement;
+    const dialog = document.createElement('dialog');
+    dialog.id = 'owner-research-dialog';
+    dialog.className = 'research-dialog';
+    dialog.setAttribute('aria-labelledby', 'research-dialog-title');
+    dialog.innerHTML = `<div class="research-dialog-head"><h2 id="research-dialog-title">${escapeHtml(title)}</h2><button type="button" class="research-dialog-close" aria-label="Close dialog">×</button></div>${body}`;
+    dialog.querySelector('.research-dialog-close').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => {
+        dialog.remove();
+        if (previousFocus?.isConnected) previousFocus.focus();
+    }, {once: true});
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) {
+            const rect = dialog.getBoundingClientRect();
+            if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
+        }
+    });
+    document.body.appendChild(dialog);
+    dialog.showModal(); // Native modal dialog supplies focus containment and Escape handling.
+    return dialog;
+}
+
+function openPeopleSearchPreview(person) {
+    if (researchPersonBlocked(person)) {
+        researchFeedback('Do not contact is set for this name. Change its review status before searching.', true);
+        return;
+    }
+    const options = ownerSearchOptions(person);
+    const selected = options.find(option => option.id === person.default_location_id)?.id || options[0].id;
+    const dialog = openResearchDialog('Preview people search', `
+        <p class="research-muted">Choose the name and location to send to TruePeopleSearch. Results open in a new tab; return here to save your reviewed match.</p>
+        <div class="research-form"><label for="research-search-name">Name</label><input id="research-search-name" maxlength="200" value="${escapeHtml(normalizePeopleSearchName(person.name))}" autocomplete="off">
+        <label for="research-search-location">Search location</label><select id="research-search-location">${options.map(option => `<option value="${escapeHtml(option.id)}" ${option.id === selected ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>
+        <div id="research-custom-location" hidden><label for="research-search-custom">City and state, or ZIP</label><input id="research-search-custom" maxlength="120" placeholder="e.g. Fort Lee, NJ or 07024" autocomplete="off"></div>
+        <p id="research-location-note" class="research-muted"></p>
+        <p id="research-search-error" class="research-error" role="alert"></p>
+        <label for="research-search-url">Search link</label><input id="research-search-url" class="research-url" readonly>
+        <div class="research-dialog-actions"><a id="research-search-open" class="research-button research-button-primary" target="_blank" rel="noopener noreferrer">Open TruePeopleSearch ↗</a>${person.id ? '<button type="button" class="research-button" id="research-search-save">Save a reviewed result</button>' : ''}</div></div>`);
+    const name = dialog.querySelector('#research-search-name');
+    const select = dialog.querySelector('#research-search-location');
+    const custom = dialog.querySelector('#research-search-custom');
+    const open = dialog.querySelector('#research-search-open');
+    const update = () => {
+        const option = options.find(item => item.id === select.value) || options[0];
+        dialog.querySelector('#research-custom-location').hidden = option.id !== 'custom';
+        dialog.querySelector('#research-location-note').textContent = option.note;
+        const location = option.id === 'custom' ? custom.value : option.value;
+        const invalidStreet = option.id === 'custom' && /\d+\s+\S/.test(location.trim()) && !/^\d{5}(?:-\d{4})?$/.test(location.trim());
+        const blocked = researchPersonBlocked(person) || researchPersonBlocked({name: name.value});
+        const error = blocked ? 'Do not contact is set for this name. People search is disabled.' : !name.value.trim() ? 'Enter a name to search.' : invalidStreet ? 'Use a city/state or ZIP instead of a street address.' : option.id === 'custom' && !location.trim() ? 'Enter a city/state or ZIP, or choose Search by name only.' : '';
+        const url = error ? null : buildPeopleSearchUrl(name.value, location);
+        dialog.querySelector('#research-search-error').textContent = error;
+        dialog.querySelector('#research-search-url').value = url || '';
+        if (url) open.href = url; else open.removeAttribute('href');
+        open.setAttribute('aria-disabled', String(!url));
+    };
+    [name, select, custom].forEach(input => input.addEventListener('input', update));
+    select.addEventListener('change', update);
+    open.addEventListener('click', event => {
+        update();
+        if (open.getAttribute('aria-disabled') === 'true' || researchPersonBlocked(person) || researchPersonBlocked({name: name.value})) event.preventDefault();
+    });
+    dialog.querySelector('#research-search-save')?.addEventListener('click', () => {
+        dialog.close();
+        openOwnerReview(person);
+    });
+    update();
+    name.focus();
+}
+
+function researchSelectOptions(values, selected) {
+    return Object.entries(values).map(([value, label]) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function researchContactLines(value) {
+    return [...new Set(String(value || '').split(/[\n;,]+/).map(item => item.trim()).filter(Boolean))];
+}
+
+function validResearchResultUrl(value) {
+    if (!value) return true;
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' && ['truepeoplesearch.com', 'www.truepeoplesearch.com'].includes(url.hostname)
+            && !url.username && !url.password && (!url.port || url.port === '443') && !/[\s\\]/.test(value);
+    } catch (_error) { return false; }
+}
+
+function openOwnerReview(person) {
+    const review = person.research || {};
+    const dialog = openResearchDialog(`Review ${person.name}`, `
+        <form id="owner-review-form" class="research-form">
+            <p class="research-muted">Save only contact details you reviewed for this person. The match label records your assessment, not an automatic identity verification.</p>
+            <label for="research-review-status">Research status</label><select id="research-review-status" name="status">${researchSelectOptions(RESEARCH_STATUSES, review.status || 'not_researched')}</select>
+            <label for="research-review-match">Result match</label><select id="research-review-match" name="match_status">${researchSelectOptions(RESEARCH_MATCHES, review.match_status || 'unreviewed')}</select>
+            <label for="research-review-url">TruePeopleSearch result link <span class="research-muted">(optional)</span></label><input type="url" id="research-review-url" name="result_url" value="${escapeHtml(review.result_url || '')}" maxlength="2048" placeholder="https://www.truepeoplesearch.com/…">
+            <div class="research-form-columns"><div><label for="research-review-phones">Phones <span class="research-muted">(one per line)</span></label><textarea id="research-review-phones" name="phones" rows="3" maxlength="2000">${escapeHtml((review.phones || []).join('\n'))}</textarea></div>
+            <div><label for="research-review-emails">Emails <span class="research-muted">(one per line)</span></label><textarea id="research-review-emails" name="emails" rows="3" maxlength="3000">${escapeHtml((review.emails || []).join('\n'))}</textarea></div></div>
+            <label for="research-review-notes">Review notes</label><textarea id="research-review-notes" name="notes" rows="3" maxlength="4000" placeholder="Why this looks like a match, or what needs another look">${escapeHtml(review.notes || '')}</textarea>
+            <p class="research-muted">Do not contact disables people searches and enrichment for this name on this property. To mark a wrong person, clear their phone and email first. Saved reviews are shared with your team.</p>
+            <p id="research-review-error" class="research-error" role="alert"></p>
+            <div class="research-dialog-actions"><button type="submit" class="research-button research-button-primary">Save review</button><button type="button" id="research-review-cancel" class="research-button">Cancel</button></div>
+        </form>`);
+    const form = dialog.querySelector('#owner-review-form');
+    dialog.querySelector('#research-review-cancel').addEventListener('click', () => dialog.close());
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const save = form.querySelector('button[type="submit"]');
+        if (save.disabled) return;
+        const fields = form.elements;
+        const payload = {version: review.version || 0, status: fields.status.value,
+            match_status: fields.match_status.value, result_url: fields.result_url.value.trim(),
+            phones: researchContactLines(fields.phones.value), emails: researchContactLines(fields.emails.value),
+            notes: fields.notes.value.trim()};
+        const errorNode = dialog.querySelector('#research-review-error');
+        if (!validResearchResultUrl(payload.result_url)) {
+            errorNode.textContent = 'Use an HTTPS TruePeopleSearch result link.';
+            return;
+        }
+        save.disabled = true;
+        save.textContent = 'Saving…';
+        errorNode.textContent = '';
+        try {
+            const data = await researchRequest(`/api/property/${encodeURIComponent(BBL)}/owner-research/${encodeURIComponent(person.id)}`, {
+                method: 'POST', headers: {'Content-Type': 'application/json', 'X-Owner-Research': '1'}, body: JSON.stringify(payload),
+            });
+            if (data.person && ownerResearchState.data) {
+                const index = ownerResearchState.data.people.findIndex(item => item.id === person.id);
+                if (index >= 0) ownerResearchState.data.people[index] = data.person;
+                renderOwnerResearch();
+            }
+            dialog.close();
+            researchFeedback(`Review saved for ${person.name}.`);
+            loadOwnerResearch();
+        } catch (error) {
+            errorNode.textContent = error.status === 409
+                ? 'Another teammate updated this review. Your edits remain here. Copy any notes you need, close this dialog, and reload research before saving again.' : error.message;
+        } finally {
+            save.disabled = false;
+            save.textContent = 'Save review';
+        }
+    });
+}
+
+function researchHistoryValue(value) {
+    if (value === null || value === undefined || value === '') return 'Not reported';
+    if (Array.isArray(value)) return value.length ? value.map(researchHistoryValue).join('; ') : 'None';
+    if (typeof value === 'object') return Object.entries(value).filter(([, item]) => item !== null && item !== '' && item !== undefined)
+        .map(([key, item]) => `${key.replace(/_/g, ' ')}: ${researchHistoryValue(item)}`).join(' · ') || 'Not reported';
+    return String(value);
+}
+
+function researchRetryScheduled(source) {
+    return source.status === 'queued' && Boolean(source.error) && source.next_attempt_at
+        && new Date(source.next_attempt_at).getTime() > Date.now();
+}
+
+function renderOwnerSourceStatus() {
+    const data = ownerResearchState.sources;
+    if (!data) return;
+    const node = document.getElementById('owner-research-sources');
+    if (node) node.innerHTML = (data.sources || []).map(source => {
+        const pending = ['queued', 'running'].includes(source.status) || ownerResearchState.pendingSources.has(source.key);
+        const retryScheduled = researchRetryScheduled(source);
+        return `<div class="research-source-row"><div><strong>${escapeHtml(source.label || source.key)}</strong>
+            <span>${escapeHtml(retryScheduled ? 'Retry scheduled' : pending ? 'Refresh in progress' : source.status === 'failed' ? 'Last refresh failed' : source.checked_at ? `Last checked ${formatDate(source.checked_at)}` : 'Not checked yet')}</span>
+            ${source.error ? `<span class="research-error">${escapeHtml(source.error)}</span>` : ''}
+            ${retryScheduled || (!pending && !source.can_refresh && source.next_attempt_at) ? `<span>${retryScheduled ? 'Next retry' : 'Refresh available after'} ${escapeHtml(new Date(source.next_attempt_at).toLocaleString('en-US'))}</span>` : ''}</div>
+            <button type="button" class="research-button" data-research-action="refresh" data-research-source="${escapeHtml(source.key)}" ${pending || !source.can_refresh ? 'disabled' : ''}>${retryScheduled ? 'Retry scheduled' : pending ? 'Refreshing…' : 'Refresh'}</button></div>`;
+    }).join('') || '<p class="research-muted">Source refresh is not available for this property yet.</p>';
+    const historyNode = document.getElementById('owner-research-history');
+    if (historyNode) historyNode.innerHTML = `<h5>Observed changes</h5>${data.history?.length ? data.history.map(entry => {
+        const source = data.sources?.find(item => item.key === entry.source)?.label || entry.source;
+        const changes = entry.changes || [];
+        return `<details class="research-history-item"><summary>${escapeHtml(source || 'Source')} · ${entry.kind === 'baseline' ? 'First saved snapshot' : 'Record changed'} <span>${escapeHtml(formatDate(entry.observed_at))}</span></summary>
+            <p class="research-muted">Observed ${escapeHtml(formatDate(entry.observed_at))}${entry.reported_date ? ` · Source reported ${escapeHtml(formatDate(entry.reported_date))}` : ' · Source report date unavailable'}</p>
+            ${entry.kind === 'baseline' ? `<p>${escapeHtml(researchHistoryValue(entry.after))}</p>` : changes.length ? changes.map(change =>
+                `<div class="research-history-change"><strong>${escapeHtml(String(change.field || 'Record').replace(/_/g, ' '))}</strong><p><span>Before:</span> ${escapeHtml(researchHistoryValue(change.before))}</p><p><span>After:</span> ${escapeHtml(researchHistoryValue(change.after))}</p></div>`).join('')
+                : `<p><strong>Before:</strong> ${escapeHtml(researchHistoryValue(entry.before))}</p><p><strong>After:</strong> ${escapeHtml(researchHistoryValue(entry.after))}</p>`}</details>`;
+    }).join('') : '<p class="research-muted">No saved source changes yet. The first successful refresh establishes a baseline.</p>'}`;
+}
+
+async function loadOwnerSourceStatus({poll = false} = {}) {
+    if (!document.getElementById('owner-research-sources')) return;
+    const sequence = ++ownerResearchState.sourceSequence;
+    clearTimeout(ownerResearchState.pollTimer);
+    try {
+        const data = await researchRequest(`/api/property/${encodeURIComponent(BBL)}/owner-sources`);
+        if (sequence !== ownerResearchState.sourceSequence) return;
+        const previouslyPending = new Set(ownerResearchState.pendingSources);
+        ownerResearchState.sources = data;
+        ownerResearchState.pendingSources = new Set((data.sources || []).filter(source => ['queued', 'running'].includes(source.status)).map(source => source.key));
+        const finished = [...previouslyPending].some(key => !ownerResearchState.pendingSources.has(key));
+        renderOwnerSourceStatus();
+        if (finished) {
+            await loadOwnerResearch();
+            // Keep the original ownership summary in step with the research
+            // cards without replacing an open review dialog or its draft.
+            await refreshOwnerProfileSummary();
+            const failed = (data.sources || []).some(source => previouslyPending.has(source.key) && source.status === 'failed');
+            researchFeedback(failed ? 'A source refresh failed. Showing the last saved records; your reviews are unchanged.' : 'Source refresh complete. People and reported locations have been updated.', failed);
+        }
+        const activeSources = (data.sources || []).filter(source => ['queued', 'running'].includes(source.status) && !researchRetryScheduled(source));
+        if (activeSources.length) {
+            if (!poll) ownerResearchState.pollCount = 0;
+            if (++ownerResearchState.pollCount <= 20) ownerResearchState.pollTimer = setTimeout(() => loadOwnerSourceStatus({poll: true}), 3000);
+            else researchFeedback('The source is still refreshing. Use Reload research to check again; your open review stays intact.');
+        } else if (ownerResearchState.pendingSources.size) {
+            researchFeedback('A source retry is scheduled. Previously saved records remain available; check the next retry time below.');
+        }
+        return true;
+    } catch (error) {
+        researchFeedback(error.message, true);
+        if (!ownerResearchState.sources) document.getElementById('owner-research-sources').innerHTML = '<p class="research-muted">Source status could not be loaded. Use Reload research to try again.</p>';
+        return false;
+    }
+}
+
+async function refreshOwnerProfileSummary() {
+    try {
+        const data = await researchRequest(`/api/building-profile/${encodeURIComponent(BBL)}`);
+        buildingData = data;
+        renderHeroSection();
+        renderOwnersTab();
+        renderOwnerResearch();
+        updateTabBadges();
+    } catch (_error) {
+        // Research remains usable even if the broader profile is unavailable.
+        // Its independent reload action retries the ownership summary too.
+    }
+}
+
+async function refreshOwnerResearchSource(key) {
+    if (ownerResearchState.pendingSources.has(key)) return;
+    ownerResearchState.pendingSources.add(key);
+    renderOwnerSourceStatus();
+    try {
+        const data = await researchRequest(`/api/property/${encodeURIComponent(BBL)}/owner-sources/${encodeURIComponent(key)}/refresh`, {
+            method: 'POST', headers: {'Content-Type': 'application/json', 'X-Owner-Research': '1'}, body: '{}',
+        });
+        researchFeedback(data.message || (data.status === 'failed' ? 'Refresh failed. Showing the last saved record.' : 'Refresh requested.'), data.status === 'failed');
+        await loadOwnerSourceStatus();
+    } catch (error) {
+        ownerResearchState.pendingSources.delete(key);
+        renderOwnerSourceStatus();
+        researchFeedback(error.message, true);
+    }
+}
+
+function setupOwnerResearch() {
+    document.addEventListener('click', async event => {
+        const manual = event.target?.closest?.('[data-people-search]');
+        if (manual) {
+            event.preventDefault();
+            if (manual.disabled) return;
+            if (!ownerResearchState.data && !await loadOwnerResearch()) return;
+            try {
+                const supplied = JSON.parse(manual.dataset.peopleSearch);
+                // A legacy row carries only its own reported locality. A shared
+                // name cannot establish which research identity it belongs to.
+                openPeopleSearchPreview(supplied);
+            } catch (_error) { researchFeedback('Unable to prepare this people search. Reload research and try again.', true); }
+            return;
+        }
+        const button = event.target?.closest?.('[data-research-action]');
+        if (!button || button.disabled) return;
+        const action = button.dataset.researchAction;
+        if (action === 'reload') {
+            button.disabled = true;
+            researchFeedback('Checking saved research and source status…');
+            const loaded = await loadOwnerResearch();
+            const sourcesLoaded = await loadOwnerSourceStatus();
+            if (loaded && sourcesLoaded) await refreshOwnerProfileSummary();
+            if (loaded && sourcesLoaded) researchFeedback('Research reloaded. Any open review edits are unchanged.');
+            button.disabled = false;
+            return;
+        }
+        if (action === 'refresh') { refreshOwnerResearchSource(button.dataset.researchSource); return; }
+        const id = button.closest('[data-research-person]')?.dataset.researchPerson;
+        const person = ownerResearchState.data?.people?.find(item => item.id === id);
+        if (!person) return;
+        if (action === 'search') openPeopleSearchPreview(person);
+        if (action === 'review') openOwnerReview(person);
+    });
+    window.addEventListener('pagehide', () => clearTimeout(ownerResearchState.pollTimer));
 }
