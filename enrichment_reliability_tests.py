@@ -42,20 +42,19 @@ class SourceRegressionTests(unittest.TestCase):
 
     def test_hpd_complaint_outage_is_not_zero(self):
         client = Mock()
-        client.get.return_value=[]
-        client.get_all.side_effect=[[],socrata.SocrataError('offline')]
+        client.get_all.side_effect=[[],[],socrata.SocrataError('offline')]
         with patch.object(property_api,'_get_client',return_value=client), patch.object(property_api.time,'sleep'):
             result,error=property_api.get_hpd_data_for_bbl('3012980066')
         self.assertIsNone(result)
         self.assertIn('complaints',error)
 
     def test_hpd_without_registration_still_checks_complaints(self):
-        client=Mock();client.get.return_value=[];client.get_all.side_effect=[[],[]]
+        client=Mock();client.get_all.side_effect=[[],[],[]]
         with patch.object(property_api,'_get_client',return_value=client),patch.object(property_api.time,'sleep'):
             result,error=property_api.get_hpd_data_for_bbl('3012980066')
         self.assertIsNone(error)
         self.assertEqual(result['hpd_total_complaints'],0)
-        self.assertEqual(client.get_all.call_count,2)
+        self.assertEqual(client.get_all.call_count,3)
 
     def test_current_individual_does_not_resurrect_previous_company(self):
         self.assertEqual(sos.get_best_llc_name({'sale_buyer_primary':'JOHN SMITH',
@@ -169,7 +168,7 @@ class DatabaseRegressionTests(unittest.TestCase):
         self.admin=psycopg2.connect(os.environ['ENRICHMENT_TEST_DATABASE_URL']);self.admin.autocommit=True
         with self.admin.cursor() as cur:cur.execute(f'CREATE SCHEMA {self.schema}')
         self.conn=self.connect()
-        fields=set(refresh.PLUTO_FIELDS+refresh.HPD_FIELDS+['owner_name_rpad','assessed_land_value',
+        fields=set(refresh.PLUTO_FIELDS+refresh.HPD_FIELDS+refresh.RPAD_FIELDS+['owner_name_rpad','assessed_land_value',
             'assessed_total_value','current_owner_name','address','bin','latitude','longitude','zip_code',
             'borough','sale_buyer_primary','sos_principal_name','sos_principal_street',
             'sos_principal_city','sos_principal_state','sos_principal_zip'])
@@ -222,6 +221,33 @@ class DatabaseRegressionTests(unittest.TestCase):
         self.assertIsNone(self.scalar('SELECT current_owner_name FROM buildings'))
         self.assertEqual(self.scalar('SELECT address FROM buildings'),'123 MAIN ST')
         self.assertEqual(self.scalar('SELECT count(checked_at) FROM building_source_refresh'),1)
+
+    def test_old_checkpoint_refreshes_owner_dates_once(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO building_source_refresh(building_id,source,checked_at,next_attempt_at)
+                VALUES(1,'rpad',NOW(),NOW()+INTERVAL '365 days')""")
+        self.conn.commit()
+        with patch.object(property_api,'get_rpad_data_for_bbl',return_value=({
+                'owner_name_rpad':'Latest Final Owner','rpad_assessment_year':'2018/19',
+                'rpad_assessment_period':'FINAL'},None)) as fetch:
+            refresh.refresh_property_sources(self.conn,1,'3012980066',sources=['rpad'])
+            refresh.refresh_property_sources(self.conn,1,'3012980066',sources=['rpad'])
+            self.assertEqual(fetch.call_count,1)
+        self.assertEqual(self.scalar('SELECT rpad_assessment_year FROM buildings'),'2018/19')
+        self.assertEqual(self.scalar('SELECT owner_name_rpad FROM buildings'),'Latest Final Owner')
+        self.assertEqual(self.scalar('SELECT owner_dates_version FROM building_source_refresh'),1)
+
+    def test_date_backfill_failure_preserves_name_and_honors_retry(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO building_source_refresh(building_id,source,checked_at,next_attempt_at)
+                VALUES(1,'rpad',NOW(),NOW()+INTERVAL '365 days')""")
+        self.conn.commit()
+        with patch.object(property_api,'get_rpad_data_for_bbl',return_value=(None,'offline')) as fetch:
+            refresh.refresh_property_sources(self.conn,1,'3012980066',sources=['rpad'])
+            refresh.refresh_property_sources(self.conn,1,'3012980066',sources=['rpad'])
+            self.assertEqual(fetch.call_count,1)
+        self.assertEqual(self.scalar('SELECT owner_name_rpad FROM buildings'),'FORMER OWNER')
+        self.assertEqual(self.scalar('SELECT owner_dates_version FROM building_source_refresh'),0)
 
     def test_lookup_does_not_unlock_until_receipt_is_saved(self):
         self.assertTrue(self.lookup()[0])

@@ -126,10 +126,61 @@ const enrichButton = vm.runInContext(
     "buildEnrichButton(enrichable, 'Nayan Soni', 'applicant')", context);
 assert.match(enrichButton, /data-enrich-permit-contact/);
 assert.doesNotMatch(enrichButton, /onclick=/);
-assert.equal(vm.runInContext(
-    "buildEnrichButton(missingId, 'Nayan Soni', 'applicant')", context), '');
+const manualLookup = vm.runInContext(
+    "buildEnrichButton(missingId, 'Nayan Soni', 'applicant')", context);
+assert.match(manualLookup, /truepeoplesearch\.com\/results/);
+assert.doesNotMatch(manualLookup, /data-enrich-permit-contact/);
+assert.match(enrichButton, /target="_blank" rel="noopener noreferrer"/);
 
-console.log('building profile permit cards: 17 checks passed');
+// Source names, encoding, and location fallbacks must produce usable searches.
+vm.runInContext("buildingData = { building: { borough: '3', zip_code: '11225' } };", context);
+let searchUrl = new URL(vm.runInContext("truePeopleSearchUrl('BROOK, SCHNEUR')", context));
+assert.equal(searchUrl.origin, 'https://www.truepeoplesearch.com');
+assert.equal(searchUrl.pathname, '/results');
+assert.equal(searchUrl.searchParams.get('name'), 'SCHNEUR BROOK');
+assert.equal(searchUrl.searchParams.get('citystatezip'), '11225');
+searchUrl = new URL(vm.runInContext(
+    `truePeopleSearchUrl("O'NEIL, JOSÉ", {city: 'Fort Lee', state: 'NJ'})`, context));
+assert.equal(searchUrl.searchParams.get('name'), "JOSÉ O'NEIL");
+assert.equal(searchUrl.searchParams.get('citystatezip'), 'Fort Lee, NJ');
+searchUrl = new URL(vm.runInContext(
+    "truePeopleSearchUrl('Smith, John, Jr.', {zip_code: '07024-1234'})", context));
+assert.equal(searchUrl.searchParams.get('name'), 'John Smith Jr.');
+assert.equal(searchUrl.searchParams.get('citystatezip'), '07024');
+assert.equal(new URL(vm.runInContext("truePeopleSearchUrl('John Smith, Jr.')", context)).searchParams.get('name'), 'John Smith Jr.');
+assert.equal(vm.runInContext("renderTruePeopleSearchLink('ZB 521 LLC')", context), '');
+assert.equal(vm.runInContext("renderTruePeopleSearchLink('Community Housing', {is_person: false})", context), '');
+assert.equal(vm.runInContext("renderTruePeopleSearchLink('')", context), '');
+assert.equal(vm.runInContext("renderTruePeopleSearchLink('Jordan Davis', {entity_kind: 'organization'})", context), '');
+const escapedLink = vm.runInContext(`renderTruePeopleSearchLink('Jane "JJ" Davis')`, context);
+assert.match(escapedLink, /Jane &quot;JJ&quot; Davis/);
+assert.match(escapedLink, /&amp;citystatezip=/);
+vm.runInContext("buildingData = { building: { borough: '1' } };", context);
+assert.equal(new URL(vm.runInContext("truePeopleSearchUrl('Jordan Davis')", context)).searchParams.get('citystatezip'), 'New York, NY');
+vm.runInContext("buildingData = { building: { borough: '3' } };", context);
+assert.equal(new URL(vm.runInContext("truePeopleSearchUrl('Jordan Davis')", context)).searchParams.get('citystatezip'), 'Brooklyn, NY');
+
+console.log('building profile permit cards and manual people search: passed');
+
+vm.runInContext(`buildingData.owner_source_dates = {
+    acris: {reported_date: '2026-09-01', date_label: 'Deed recorded', checked_at: '2026-09-30T12:00:00'},
+    rpad: {period: 'FY 2018/19 · Final'},
+    pluto: {period: 'PLUTO 26v2', checked_at: '2026-09-30T12:00:00', refresh_failed: true},
+    sos: {checked_at: '2026-09-30T12:00:00', note: 'A "quoted" note'},
+};`, context);
+const deedDate = vm.runInContext("renderOwnerSourceDate('acris')", context);
+assert.match(deedDate, /Deed recorded: Sep 1, 2026/);
+assert.match(deedDate, /Last checked: Sep 30, 2026/);
+assert.match(vm.runInContext("renderOwnerSourceDate('rpad')", context), /FY 2018\/19 · Final/);
+const plutoDate = vm.runInContext("renderOwnerSourceDate('pluto')", context);
+assert.match(plutoDate, /PLUTO 26v2/);
+assert.match(plutoDate, /Refresh unavailable/);
+assert.doesNotMatch(plutoDate, /Last reported: Sep 30/);
+const sosDate = vm.runInContext("renderOwnerSourceDate('sos')", context);
+assert.match(sosDate, /Last reported: date unavailable/);
+assert.match(sosDate, /A &quot;quoted&quot; note/);
+assert.equal(vm.runInContext("ownerSourceKey('Historical Tax Records (RPAD)')", context), 'rpad');
+console.log('owner source report dates, fiscal periods, and separate refresh dates: passed');
 
 // Disclosure navigation, persistence, and lazy loading without a browser.
 const storage = new Map();

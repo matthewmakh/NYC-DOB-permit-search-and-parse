@@ -603,6 +603,36 @@
 .enrich-success { color: var(--green); font-size: 13px; margin-top: 8px; }
 .enrich-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
+.owner-person-actions { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.owner-source-date { display: block; color: var(--ink-2); font-size: 12px; font-weight: 400; line-height: 1.5; margin-top: 3px; }
+.owner-person-actions .owner-source-date { text-align: right; }
+.owner-source-checked { display: block; color: var(--ink-3); font-size: 11px; }
+.owner-source-warning { display: block; color: var(--amber); font-size: 11px; }
+@media (max-width: 600px) {
+    .owner-person-actions { align-items: flex-start; width: 100%; }
+    .owner-person-actions .owner-source-date { text-align: left; }
+}
+.truepeople-search-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    max-width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-decoration: none;
+    margin-top: 6px;
+}
+.truepeople-search-link:hover { background: var(--accent-soft); }
+.truepeople-search-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.enrich-contact-section { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
 .enrich-modal-content { max-width: 480px; padding: 22px; }
 .enrich-modal-content h2 { font-size: 16px; font-weight: 650; margin-bottom: 8px; }
 .modal-subtitle { font-size: 13px; color: var(--ink-2); margin-bottom: 12px; }
@@ -611,6 +641,7 @@
 
 .owner-option {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     align-items: flex-start;
     background: var(--surface);
@@ -621,6 +652,8 @@
     font-size: 13px;
 }
 .owner-option:hover { background: var(--surface-2); }
+.owner-option-choice { display: flex; align-items: flex-start; gap: 10px; width: 100%; cursor: pointer; }
+.owner-option-content { min-width: 0; overflow-wrap: anywhere; }
 .owner-option-name { font-weight: 600; }
 .owner-option-source, .owner-option-reason { font-size: 12px; color: var(--ink-3); }
 

@@ -193,3 +193,22 @@ Proprietary - Smart Installers Project
 ## Contact
 
 For issues or questions, contact the development team.
+
+## Ownership source dates
+
+The building profile keeps each source's owner name paired with its evidence:
+ACRIS uses the latest recorded deed, HPD uses the latest processed registration
+(not its expiration date), RPAD selects the latest fiscal year and prefers the
+final roll over the tentative roll, and ECB uses the latest dated violation
+that names a respondent. An ECB respondent is not necessarily an owner.
+
+PLUTO reports its release version; the SOS contact response does not provide a
+contact-report date. Neither the app's refresh time nor the entity's formation
+date is presented as an owner-report date. The UI shows “Last checked” separately.
+
+`migrate_enrichment_reliability.py` and the dashboard's existing startup migration
+add the source-date columns. Existing PLUTO/RPAD/HPD checkpoints become due once
+so the next scheduled refresh fills their metadata; failed refreshes retain the
+last successful names and dates and obey the normal retry delay. ECB metadata is
+filled by the next successful tax/violation refresh. No production backfill runs
+as part of the schema migration.

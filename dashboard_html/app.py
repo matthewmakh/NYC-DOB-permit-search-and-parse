@@ -19,6 +19,7 @@ import requests
 from urllib.parse import urlsplit
 from socrata_client import SocrataClient, normalize_pluto_record
 from record_links import owner_source_links, permit_source_link, acris_document_url
+from owner_source_dates import owner_source_dates
 
 # Load environment variables
 load_dotenv()
@@ -6824,6 +6825,15 @@ def api_building_profile(bbl):
                 sos_principal_name, sos_principal_title, sos_principal_street, sos_principal_city,
                 sos_principal_state, sos_principal_zip, sos_entity_name, sos_entity_status,
                 sos_dos_id, sos_formation_date, sos_last_enriched, sos_lookup_source,
+                -- Optional source-date columns remain readable during a rolling deployment.
+                jsonb_build_object(
+                    'pluto_version', to_jsonb(buildings)->'pluto_version',
+                    'rpad_assessment_year', to_jsonb(buildings)->'rpad_assessment_year',
+                    'rpad_assessment_period', to_jsonb(buildings)->'rpad_assessment_period',
+                    'hpd_last_registration_date', to_jsonb(buildings)->'hpd_last_registration_date',
+                    'ecb_respondent_issue_date', to_jsonb(buildings)->'ecb_respondent_issue_date',
+                    'ecb_last_checked', to_jsonb(buildings)->'ecb_last_checked'
+                ) AS owner_source_fields,
                 -- Metadata
                 last_updated
             FROM buildings
@@ -6899,6 +6909,19 @@ def api_building_profile(bbl):
                 'hpd': building['owner_name_hpd'],
                 'ecb': building['ecb_respondent_name']
             }
+            # A source refresh time is not the date that source reported a name.
+            # Preserve the profile even if the checkpoint table is unavailable.
+            cur.execute('SAVEPOINT owner_freshness')
+            try:
+                cur.execute('SELECT source, checked_at, error FROM building_source_refresh WHERE building_id=%s',
+                            (building_id,))
+                source_refresh_states = cur.fetchall()
+            except psycopg2.Error:
+                cur.execute('ROLLBACK TO SAVEPOINT owner_freshness')
+                source_refresh_states = []
+            finally:
+                cur.execute('RELEASE SAVEPOINT owner_freshness')
+            owner_dates = owner_source_dates(building, source_refresh_states)
             try:
                 from enrichment_service import classify_party_name
                 owner_classifications = {
@@ -7299,6 +7322,7 @@ def api_building_profile(bbl):
                 'building': building_dict,
                 'building_class_description': building_class_desc,
                 'owners': owners,
+                'owner_source_dates': owner_dates,
                 'owner_source_links': owner_source_links(building, transactions),
                 'owner_classifications': owner_classifications,
                 'sos_data': sos_data,

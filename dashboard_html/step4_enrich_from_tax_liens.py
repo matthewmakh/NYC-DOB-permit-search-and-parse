@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, local
 
 from socrata_client import SocrataClient, where_block_lot
+from owner_source_dates import source_date
 
 # Force unbuffered output for Railway logging
 sys.stdout.reconfigure(line_buffering=True)
@@ -194,6 +195,8 @@ def get_ecb_violations_data(bbl):
                 'ecb_most_recent_hearing_date': None,
                 'ecb_most_recent_hearing_status': None,
                 'ecb_respondent_name': None,
+                'ecb_respondent_issue_date': None,
+                'ecb_last_checked': datetime.now(),
                 'ecb_respondent_address': None,
                 'ecb_respondent_city': None,
                 'ecb_respondent_zip': None
@@ -209,6 +212,13 @@ def get_ecb_violations_data(bbl):
         respondent_address = None
         respondent_city = None
         respondent_zip = None
+        respondent_issue_date = None
+
+        # Missing dates must not sort ahead of dated public records. Use the
+        # issue date belonging to the selected respondent, never a hearing date.
+        data.sort(key=lambda row: (
+            source_date(row.get('issue_date')) or date.min,
+            str(row.get('ecb_violation_number') or '')), reverse=True)
         
         for i, record in enumerate(data):
             balance = float(record.get('balance_due', 0) or 0)
@@ -230,15 +240,16 @@ def get_ecb_violations_data(bbl):
                 if hearing_date and len(hearing_date) >= 8:
                     # Parse YYYYMMDD format
                     try:
-                        from datetime import datetime
                         most_recent_hearing_date = datetime.strptime(hearing_date[:8], '%Y%m%d').date()
                     except:
                         pass
                 
                 most_recent_hearing_status = record.get('hearing_status')
                 
-                # Capture respondent info (owner/manager)
-                respondent_name = record.get('respondent_name')
+            # Newest record that actually identifies a respondent.
+            if respondent_name is None and str(record.get('respondent_name') or '').strip():
+                respondent_name = record['respondent_name'].strip()
+                respondent_issue_date = source_date(record.get('issue_date'))
                 house_num = record.get('respondent_house_number', '')
                 street = record.get('respondent_street', '')
                 respondent_address = f"{house_num} {street}".strip() if house_num or street else None
@@ -254,6 +265,8 @@ def get_ecb_violations_data(bbl):
             'ecb_most_recent_hearing_date': most_recent_hearing_date,
             'ecb_most_recent_hearing_status': most_recent_hearing_status,
             'ecb_respondent_name': respondent_name,
+            'ecb_respondent_issue_date': respondent_issue_date,
+            'ecb_last_checked': datetime.now(),
             'ecb_respondent_address': respondent_address,
             'ecb_respondent_city': respondent_city,
             'ecb_respondent_zip': respondent_zip
@@ -408,6 +421,7 @@ def update_building_tax_lien_data(cursor, building_id, data):
         'ecb_total_penalty', 'ecb_amount_paid',
         'ecb_most_recent_hearing_date', 'ecb_most_recent_hearing_status',
         'ecb_respondent_name', 'ecb_respondent_address',
+        'ecb_respondent_issue_date', 'ecb_last_checked',
         'ecb_respondent_city', 'ecb_respondent_zip',
         'dob_violation_count', 'dob_open_violations', 'tax_lien_last_checked',
         'dob_safety_violation_count', 'dob_safety_open_violations',

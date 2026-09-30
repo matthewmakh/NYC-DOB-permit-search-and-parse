@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 from socrata_client import (
     SocrataClient, soql_quote, bbl_parts, normalize_pluto_record,
 )
+from owner_source_dates import latest_hpd_registration, latest_rpad_record, source_date
 
 # Force unbuffered output for Railway logging
 sys.stdout.reconfigure(line_buffering=True)
@@ -115,25 +116,29 @@ def get_rpad_data_for_bbl(bbl):
         params = {
             "$where": (f"boro={soql_quote(boro)} AND block={soql_quote(block)} "
                        f"AND lot={soql_quote(lot)}"),
-            "$limit": 1,
         }
         # The valuation dataset can carry multiple assessment years per
-        # parcel; order by the year column (whatever it's called in this
-        # vintage of the dataset) so $limit 1 returns the latest.
+        # parcel. Compare the year and roll period locally so FINAL wins
+        # over TENTATIVE without relying on alphabetical API ordering.
         columns = client.get_columns('rpad')
+        year_column = None
         for year_col in ('year', 'yr4', 'yr', 'fin_yr'):
             if year_col in columns:
-                params['$order'] = f'{year_col} DESC'
+                year_column = year_col
                 break
+        if not year_column:
+            raise ValueError('RPAD assessment year is unavailable; cannot select newest owner')
 
-        data = client.get('rpad', **params)
+        data = client.get_all('rpad', page_size=1000, max_rows=10000, **params)
         time.sleep(API_DELAY)
         if not data:
             return None, None  # Not found, but not an error
 
-        record = data[0]
+        record = latest_rpad_record(data, year_column)
         result = {
             'owner_name_rpad': record.get('owner'),
+            'rpad_assessment_year': record.get(year_column),
+            'rpad_assessment_period': record.get('period'),
             'assessed_land_value': _num(record.get('avland'), int),
             'assessed_total_value': _num(record.get('avtot'), int),
         }
@@ -173,6 +178,7 @@ def get_hpd_data_for_bbl(bbl):
         result = {
             'owner_name_hpd': None,
             'hpd_registration_id': None,
+            'hpd_last_registration_date': None,
             'hpd_open_violations': 0,
             'hpd_total_violations': 0,
             'hpd_open_complaints': 0,
@@ -188,13 +194,14 @@ def get_hpd_data_for_bbl(bbl):
         }
 
         # 1. Most recent HPD registration for the lot
-        registration = client.get('hpd_registrations', **{
+        registrations = client.get_all('hpd_registrations', page_size=1000, max_rows=10000, **{
             'boroid': boro, 'block': block, 'lot': lot,
-            '$order': 'registrationenddate DESC', '$limit': 1,
         })
         time.sleep(API_DELAY)
-        reg_id = registration[0].get('registrationid') if registration else None
+        registration = latest_hpd_registration(registrations) or {}
+        reg_id = registration.get('registrationid')
         result['hpd_registration_id'] = reg_id
+        result['hpd_last_registration_date'] = source_date(registration.get('lastregistrationdate'))
 
         # 2. All contacts for the registration in one call. Explicit owner
         # contact types outrank officers: a HeadOfficer is a corporate role,

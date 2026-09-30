@@ -332,7 +332,7 @@ def _instrument_date(t):
 
 def find_primary_deed(transactions):
     deeds = [t for t in transactions if is_deed(t['doc_type']) and _txn_date(t)]
-    return max(deeds, key=_txn_date) if deeds else None
+    return max(deeds, key=lambda t: (_txn_date(t), str(t['document_id']))) if deeds else None
 
 
 def find_primary_mortgage(transactions, open_ids=None):

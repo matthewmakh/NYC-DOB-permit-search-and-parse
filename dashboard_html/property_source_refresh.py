@@ -6,11 +6,13 @@ import psycopg2.extras
 SOURCE_DAYS = {'pluto': 30, 'rpad': 365, 'hpd': 14}
 PLUTO_FIELDS = ('building_class land_use residential_units total_units num_floors '
                 'building_sqft lot_sqft year_built year_altered zoning_district built_far max_resid_far max_comm_far '
-                'unused_far pluto_owner_type').split()
+                'unused_far pluto_owner_type pluto_version').split()
 HPD_FIELDS = ('owner_name_hpd hpd_registration_id hpd_open_violations hpd_total_violations '
               'hpd_open_complaints hpd_total_complaints hpd_owner_business_address '
               'hpd_owner_business_city hpd_owner_business_state hpd_owner_business_zip '
-              'hpd_agent_name hpd_site_manager_name').split()
+              'hpd_agent_name hpd_site_manager_name hpd_last_registration_date').split()
+RPAD_FIELDS = ('owner_name_rpad assessed_land_value assessed_total_value '
+               'rpad_assessment_year rpad_assessment_period').split()
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS building_source_refresh (
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS building_source_refresh (
 );
 CREATE INDEX IF NOT EXISTS idx_building_source_refresh_due
     ON building_source_refresh (source, next_attempt_at);
+ALTER TABLE building_source_refresh
+    ADD COLUMN IF NOT EXISTS owner_dates_version INTEGER NOT NULL DEFAULT 0;
 """
 
 
@@ -31,7 +35,13 @@ BUILDING_COLUMNS_SQL = """
 ALTER TABLE buildings
     ADD COLUMN IF NOT EXISTS signals_last_attempted TIMESTAMP,
     ADD COLUMN IF NOT EXISTS tax_last_attempted TIMESTAMP,
-    ADD COLUMN IF NOT EXISTS tax_last_error TEXT;
+    ADD COLUMN IF NOT EXISTS tax_last_error TEXT,
+    ADD COLUMN IF NOT EXISTS pluto_version TEXT,
+    ADD COLUMN IF NOT EXISTS rpad_assessment_year TEXT,
+    ADD COLUMN IF NOT EXISTS rpad_assessment_period TEXT,
+    ADD COLUMN IF NOT EXISTS hpd_last_registration_date DATE,
+    ADD COLUMN IF NOT EXISTS ecb_respondent_issue_date DATE,
+    ADD COLUMN IF NOT EXISTS ecb_last_checked TIMESTAMP;
 ALTER TABLE buildings ALTER COLUMN is_cash_purchase DROP NOT NULL;
 ALTER TABLE buildings ALTER COLUMN dob_complaint_count DROP NOT NULL;
 ALTER TABLE buildings ALTER COLUMN dob_active_complaint_count DROP NOT NULL;
@@ -49,8 +59,7 @@ def source_fields(source, data):
                 fields[key] = data[key]
         return fields
     if source == 'rpad':
-        return {key: data.get(key) for key in (
-            'owner_name_rpad', 'assessed_land_value', 'assessed_total_value')}
+        return {key: data.get(key) for key in RPAD_FIELDS}
     return {key: data.get(key) for key in HPD_FIELDS}
 
 
@@ -68,7 +77,7 @@ def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
     try:
         for source in sources or SOURCE_DAYS:
             with conn.cursor(cursor_factory=psycopg2.extensions.cursor) as cur:
-                cur.execute('SELECT next_attempt_at > NOW(), error FROM building_source_refresh '
+                cur.execute('SELECT next_attempt_at > NOW() AND (owner_dates_version >= 1 OR error IS NOT NULL), error FROM building_source_refresh '
                             'WHERE building_id=%s AND source=%s', (building_id, source))
                 state = cur.fetchone()
                 if not force and state and state[0]:
@@ -85,11 +94,11 @@ def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
                     cur.execute('UPDATE buildings SET ' + ', '.join(f'{k}=%s' for k in fields)
                                 + ' WHERE id=%s', [*fields.values(), building_id])
                     cur.execute("""INSERT INTO building_source_refresh
-                        (building_id,source,attempted_at,checked_at,next_attempt_at,error)
-                        VALUES (%s,%s,NOW(),NOW(),NOW() + %s * INTERVAL '1 day',NULL)
+                        (building_id,source,attempted_at,checked_at,next_attempt_at,error,owner_dates_version)
+                        VALUES (%s,%s,NOW(),NOW(),NOW() + %s * INTERVAL '1 day',NULL,1)
                         ON CONFLICT (building_id,source) DO UPDATE SET
                         attempted_at=NOW(),checked_at=NOW(),
-                        next_attempt_at=EXCLUDED.next_attempt_at,error=NULL""",
+                        next_attempt_at=EXCLUDED.next_attempt_at,error=NULL,owner_dates_version=1""",
                         (building_id, source, SOURCE_DAYS[source]))
                 conn.commit()
                 report[source] = 'updated' if data else 'no source record'
@@ -133,7 +142,8 @@ def run_property_refresh(connect):
                 CROSS JOIN (VALUES ('pluto'),('rpad'),('hpd')) AS sources(source)
                 LEFT JOIN building_source_refresh s
                     ON s.building_id=b.id AND s.source=sources.source
-                WHERE b.bbl IS NOT NULL AND (s.next_attempt_at IS NULL OR s.next_attempt_at<=NOW())
+                WHERE b.bbl IS NOT NULL AND (s.next_attempt_at IS NULL OR s.next_attempt_at<=NOW()
+                    OR (s.owner_dates_version < 1 AND s.error IS NULL))
                 GROUP BY b.id,b.bbl ORDER BY min(s.attempted_at) ASC NULLS FIRST,b.id LIMIT %s""", (limit,))
             rows = cur.fetchall()
     finally:

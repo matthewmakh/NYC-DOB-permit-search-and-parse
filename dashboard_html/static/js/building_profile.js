@@ -106,6 +106,47 @@ function safeHttpHref(value) {
     }
 }
 
+// Manual people lookup: opening this link never calls the paid enrichment API.
+function truePeopleSearchUrl(name, person = {}) {
+    const isPerson = person.is_person ?? (person.entity_kind
+        ? person.entity_kind === 'person' : looksLikeHumanName(name));
+    if (!isPerson || !String(name || '').trim()) return null;
+
+    // ACRIS/RPAD use LAST, FIRST; keep suffixes in FIRST LAST, JR order.
+    const parts = String(name).trim().replace(/\s+/g, ' ').split(',').map(part => part.trim()).filter(Boolean);
+    const suffix = /^(?:JR\.?|SR\.?|II|III|IV|V)$/i;
+    const searchName = parts.length > 1 && !suffix.test(parts[1])
+        ? [parts[1], parts[0], ...parts.slice(2)].join(' ')
+        : parts.join(' ');
+
+    // Prefer this person's recorded city/state; otherwise use the property area.
+    const building = buildingData?.building || {};
+    const city = String(person.city || '').trim();
+    const state = String(person.state || '').trim();
+    const zip = String(person.zip_code || person.zip || '').match(/^\d{5}\b/)?.[0];
+    let location = city ? [city, state].filter(Boolean).join(', ') : zip || state;
+    if (!location) {
+        const borough = String(building.borough_name || building.borough || '').trim();
+        const area = /^[1-5]$/.test(borough) ? getBoroughName(borough) : borough;
+        const propertyZip = String(building.zip_code || '').trim().match(/^\d{5}\b/)?.[0];
+        location = propertyZip || (area && !/^unknown$/i.test(area)
+            ? `${/^manhattan$/i.test(area) ? 'New York' : area}, NY` : 'NY');
+    }
+
+    const url = new URL('https://www.truepeoplesearch.com/results');
+    url.searchParams.set('name', searchName);
+    url.searchParams.set('citystatezip', location);
+    return url.href;
+}
+
+function renderTruePeopleSearchLink(name, person = {}) {
+    const url = truePeopleSearchUrl(name, person);
+    if (!url) return '';
+    const label = `Enrich ${name} on TruePeopleSearch (opens in a new tab)`;
+    return `<a class="truepeople-search-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
+        aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">Enrich via TruePeopleSearch <span aria-hidden="true">↗</span></a>`;
+}
+
 /**
  * Format phone number to (XXX) XXX-XXXX format
  */
@@ -385,6 +426,31 @@ function ownerSourceName(source, name) {
     return renderSourceName(name, buildingData.owner_source_links?.[source]);
 }
 
+function renderOwnerSourceDate(source) {
+    const info = buildingData.owner_source_dates?.[source] || {};
+    const reported = info.reported_date ? formatDate(info.reported_date) : null;
+    const hasReportedDate = reported && reported !== 'Unknown';
+    const reportText = hasReportedDate
+        ? `${info.date_label || 'Last reported'}: ${reported}`
+        : info.period || 'Last reported: date unavailable';
+    const checked = info.checked_at ? formatDate(info.checked_at) : null;
+    return `<span class="owner-source-date"${info.note ? ` title="${escapeHtml(info.note)}"` : ''}>
+        ${escapeHtml(reportText)}${hasReportedDate && info.period ? ` · ${escapeHtml(info.period)}` : ''}
+        ${checked && checked !== 'Unknown' ? `<span class="owner-source-checked">Last checked: ${escapeHtml(checked)}</span>` : ''}
+        ${info.refresh_failed ? '<span class="owner-source-warning">Refresh unavailable · showing last saved record</span>' : ''}
+    </span>`;
+}
+
+function ownerSourceKey(label) {
+    if (/secretary/i.test(label)) return 'sos';
+    if (/acris/i.test(label)) return 'acris';
+    if (/pluto/i.test(label)) return 'pluto';
+    if (/rpad|historical tax/i.test(label)) return 'rpad';
+    if (/hpd/i.test(label)) return 'hpd';
+    if (/ecb/i.test(label)) return 'ecb';
+    return null;
+}
+
 function transactionSourceName(transaction) {
     return renderSourceName(transaction.document_id, {
         url: transaction.source_url, label: 'View recorded document in ACRIS'
@@ -465,7 +531,7 @@ function renderHeroSection() {
     const sourceLabels = {
         'acris': 'ACRIS Latest Deed Grantee',
         'pluto': 'NYC PLUTO Database',
-        'rpad': 'Historical RPAD Assessment (through FY2018/19)',
+        'rpad': 'Historical RPAD Assessment',
         'hpd': 'HPD Registered Owner',
         'ecb': 'ECB Violation Respondent'
     };
@@ -498,6 +564,8 @@ function renderHeroSection() {
                 ${isMismatch ? '<span class="mismatch-badge" title="The registered company does not match any owner name on record for this property">UNVERIFIED</span>' : ''}
             </span>
             <span class="owner-name sos-name">${ownerSourceName('sos', sos_data.principal_name)}</span>
+            ${renderOwnerSourceDate('sos')}
+            ${isRealPerson ? renderTruePeopleSearchLink(sos_data.principal_name, sos_data.principal_address || {}) : ''}
             ${sos_data.principal_title ? `<span class="sos-title">${sos_data.principal_title}</span>` : ''}
             <span class="sos-entity">Behind: ${sos_data.entity_name || 'LLC'} (${sos_data.entity_status || 'Unknown'})</span>
             ${sos_data.lookup_source ? `<span class="sos-provenance">Looked up from ${sos_data.lookup_source}</span>` : ''}
@@ -515,7 +583,11 @@ function renderHeroSection() {
             ownerItem.className = 'owner-item';
             ownerItem.innerHTML = `
                 <span class="owner-source">${sourceLabels[source]}</span>
-                <span class="owner-name">${ownerSourceName(source, name)}</span>
+                <span class="owner-person-actions">
+                    <span class="owner-name">${ownerSourceName(source, name)}</span>
+                    ${renderOwnerSourceDate(source)}
+                    ${renderTruePeopleSearchLink(name, buildingData.owner_classifications?.[source] || {})}
+                </span>
             `;
             ownerSourcesEl.appendChild(ownerItem);
         }
@@ -820,9 +892,11 @@ function showEnrichModal(buildingId) {
                 ${enrichedOwners.map(owner => `
                     <div class="owner-option enriched disabled">
                         <div class="owner-option-content">
-                            <span class="owner-option-name">${owner.name}</span>
-                            <span class="owner-option-source">${owner.source}</span>
+                            <span class="owner-option-name">${escapeHtml(owner.name)}</span>
+                            <span class="owner-option-source">${escapeHtml(owner.source)}</span>
+                            ${ownerSourceKey(owner.source) ? renderOwnerSourceDate(ownerSourceKey(owner.source)) : ''}
                             <span class="enriched-badge">Unlocked</span>
+                            ${renderTruePeopleSearchLink(owner.name, owner)}
                         </div>
                     </div>
                 `).join('')}
@@ -845,21 +919,26 @@ function showEnrichModal(buildingId) {
             <div class="owner-selection">
                 <h4>Human candidates (${availableOwners.length})</h4>
                 ${availableOwners.map((owner, idx) => `
-                    <label class="owner-option ${owner.recommended ? 'recommended' : ''}">
-                        <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
-                        <div class="owner-option-content">
-                            <span class="owner-option-name">${owner.name}</span>
-                            <span class="owner-option-source">${owner.source}</span>
-                            <span class="real-person-badge">PERSON</span>
-                            ${owner.recommended ? '<span class="recommended-badge">Recommended</span>' : ''}
-                            ${owner.reason ? `<span class="owner-option-reason">${owner.reason}</span>` : ''}
-                        </div>
-                    </label>
+                    <div class="owner-option ${owner.recommended ? 'recommended' : ''}">
+                        <label class="owner-option-choice">
+                            <input type="radio" name="owner" value="${idx}" ${idx === autoSelectIdx ? 'checked' : ''}>
+                            <span class="owner-option-content">
+                                <span class="owner-option-name">${escapeHtml(owner.name)}</span>
+                                <span class="owner-option-source">${escapeHtml(owner.source)}</span>
+                                ${ownerSourceKey(owner.source) ? renderOwnerSourceDate(ownerSourceKey(owner.source)) : ''}
+                                <span class="real-person-badge">PERSON</span>
+                                ${owner.recommended ? '<span class="recommended-badge">Recommended</span>' : ''}
+                                ${owner.reason ? `<span class="owner-option-reason">${escapeHtml(owner.reason)}</span>` : ''}
+                            </span>
+                        </label>
+                        ${renderTruePeopleSearchLink(owner.name, owner)}
+                    </div>
                 `).join('')}
             </div>
+            <p class="enrich-note">TruePeopleSearch opens a name and location search in a new tab. Results are not saved automatically.</p>
             
             <div class="enrich-footer">
-                <p class="enrich-cost-display">Cost: <strong>${cost}</strong> per lookup</p>
+                <p class="enrich-cost-display">Contact unlock: <strong>${cost}</strong></p>
                 <button class="btn btn-primary enrich-confirm-btn" onclick="confirmEnrich(${buildingId})">
                     Unlock Contact Info
                 </button>
@@ -1663,6 +1742,8 @@ function renderOwnersTab() {
             <div class="sos-card">
                 <div class="sos-main">
                     <div class="sos-principal-name">${ownerSourceName('sos', sos_data.principal_name)}</div>
+                    ${renderOwnerSourceDate('sos')}
+                    ${isRealPerson ? renderTruePeopleSearchLink(sos_data.principal_name, sos_data.principal_address || {}) : ''}
                     ${sos_data.principal_title ? `<div class="sos-principal-title">${sos_data.principal_title}</div>` : ''}
                     ${isRealPerson ? '<span class="real-person-badge-large">REAL PERSON IDENTIFIED</span>' : ''}
                     ${isAgent ? '<span class="agent-badge-large" title="Designated for service of process — not the property owner">AGENT — not the owner</span>' : ''}
@@ -1698,13 +1779,13 @@ function renderOwnersTab() {
     }
     
     // Current Owners (All Sources)
-    html += '<h4>Current Owner Information</h4>';
+    html += '<h4>Latest record by source</h4>';
     html += '<div class="current-owners">';
     
     const sourceInfo = {
         'acris': { label: 'ACRIS Latest Deed Grantee', icon: '' },
         'pluto': { label: 'NYC PLUTO Database', icon: '' },
-        'rpad': { label: 'Historical RPAD Assessment (through FY2018/19)', icon: '' },
+        'rpad': { label: 'Historical RPAD Assessment', icon: '' },
         'hpd': { label: 'HPD Registered Owner', icon: '' },
         'ecb': { label: 'ECB Violation Respondent', icon: '' }
     };
@@ -1721,7 +1802,9 @@ function renderOwnersTab() {
                 <div class="owner-source-info">
                     <div class="owner-source-label">${info.label}</div>
                     <div class="owner-source-name">${ownerSourceName(source, name)}</div>
+                    ${renderOwnerSourceDate(source)}
                     <span class="entity-kind-badge entity-${kind}">${kind === 'person' ? 'Person' : kind === 'organization' ? 'Organization' : kind === 'multiple' ? 'Multiple parties' : 'Unclassified'}</span>
+                    ${renderTruePeopleSearchLink(name, classification)}
                 </div>
             </div>`;
         }
@@ -1813,6 +1896,7 @@ function renderPriorDeedOwners() {
                 </div>
                 ${owner.recorded_date ? `<div class="ho-date">Deed recorded: ${formatDate(owner.recorded_date)}</div>` : ''}
                 ${address ? `<div class="ho-address">${address}</div>` : ''}
+                ${renderTruePeopleSearchLink(owner.party_name, owner)}
             </div>`;
     }).join('');
 }
@@ -2389,7 +2473,8 @@ function buildEnrichButton(permit, contactName, contactType, licenseNumber = nul
     const bbl = buildingData?.building?.bbl || BBL;
     const buildingId = buildingData?.building?.id;
     const permitId = permit.id;
-    if (!permitId) return '';
+    const peopleSearchLink = renderTruePeopleSearchLink(contactName);
+    if (!permitId) return peopleSearchLink;
     
     // Create unique button ID
     const buttonId = `enrich-btn-${contactType}-${permitId}`;
@@ -2409,6 +2494,7 @@ function buildEnrichButton(permit, contactName, contactType, licenseNumber = nul
                 Get Contact Info
                 <span class="enrich-cost">$0.50</span>
             </button>
+            ${peopleSearchLink}
         </div>
     `;
 }
@@ -3358,6 +3444,7 @@ function renderContactsTab() {
                             <div class="contact-locked">
                                 Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
                             </div>
+                            ${renderTruePeopleSearchLink(contact.name, contact)}
                         </div>
                     `;
                 }
@@ -3375,7 +3462,7 @@ function renderContactsTab() {
         }
     } else {
         // Filter to only contacts with phone numbers or useful info
-        const usefulContacts = contacts.filter(c => c.phone || c.permit_count);
+        const usefulContacts = contacts.filter(c => c.phone || c.permit_count || truePeopleSearchUrl(c.name, c));
         
         if (usefulContacts.length > 0) {
             html += '<div class="contacts-section permit-contacts-section">';
@@ -3399,6 +3486,7 @@ function renderContactsTab() {
                     ${contact.carrier ? `<div class="contact-carrier">Carrier: ${contact.carrier}</div>` : ''}
                     ${contact.license || contact.license_number ? `<div class="contact-license">License: ${[contact.license, contact.license_number].filter(Boolean).join(' ')}</div>` : ''}
                     ${contact.permit_count ? `<div class="contact-permits">${formatNumber(contact.permit_count)} permit(s) filed</div>` : ''}
+                    ${renderTruePeopleSearchLink(contact.name, contact)}
                 </div>`;
             });
             
@@ -3471,6 +3559,7 @@ function renderEnrichedContactCard(contact, roleLabel) {
         const date = new Date(contact.enriched_at);
         html += `<div class="contact-enriched-date">Enriched: ${date.toLocaleDateString()}</div>`;
     }
+    html += renderTruePeopleSearchLink(contact.name, contact);
     
     html += '</div>';
     return html;
