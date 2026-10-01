@@ -363,11 +363,20 @@
         el('mobileResultCount').textContent = formatNumber(total) + ' results';
 
         if (!results.length) {
+            const query = (new URLSearchParams(window.location.search).get('q') || '').trim();
+            const looksLikeName = query.length >= 3 && !/^\d/.test(query) && /[A-Za-z]{2}/.test(query);
+            const publicRecords = looksLikeName
+                ? '<p class="search-public-fallback">Not in our data? <a href="/entity/research?' +
+                  new URLSearchParams({ name: query, source: 'search' }).toString() + '">Search NYC public records for “' +
+                  query.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) +
+                  '”</a> as a person or company.</p>'
+                : '';
             el('resultsContainer').innerHTML =
                 '<div class="sr-empty"><i class="fas fa-filter-circle-xmark" aria-hidden="true"></i>' +
                 '<strong>No results match this combination</strong>' +
                 '<p>Remove one or two filters, or broaden where the search term is allowed to match.</p>' +
-                '<button type="button" class="btn btn-secondary" data-clear-results>Clear filters</button></div>';
+                '<button type="button" class="btn btn-secondary" data-clear-results>Clear filters</button>' +
+                publicRecords + '</div>';
             el('pagination').innerHTML = '';
             return;
         }

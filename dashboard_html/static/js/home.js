@@ -18,6 +18,7 @@ const state = {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeSearch();
+    initializeSearchMode();
     loadMarketStats();
     initializeExamples();
 });
@@ -93,7 +94,19 @@ async function performSearch() {
     
     // Normalize the query for address searches
     query = normalizeAddressInput(query);
-    
+
+    // Public-records mode: research the name across NYC open data instead of
+    // our own tables. Addresses and BBLs still belong to the property search.
+    if (state.searchMode === 'public') {
+        if (looksLikePropertyQuery(query) || /^\d{1}-?\d{5}-?\d{4}$/.test(query)) {
+            showNotification('That looks like an address or BBL. Public-records research is by person or company name; switching to our data.', 'warning');
+            setSearchMode('internal');
+        } else {
+            window.location.href = `/entity/research?${new URLSearchParams({name: query, source: 'home'}).toString()}`;
+            return;
+        }
+    }
+
     // Check if BBL format (e.g., 1-00234-0056 or 1002340056)
     const bblPatternDash = /^\d{1}-\d{5}-\d{4}$/;
     const bblPatternNoDash = /^\d{10}$/;
@@ -133,6 +146,8 @@ async function performSearch() {
             // qualify — there's nothing to look up.
             if (looksLikePropertyQuery(query)) {
                 offerAutoAddProperty(query);
+            } else if (looksLikeNameQuery(query)) {
+                offerPublicRecordsSearch(query);
             } else {
                 showNotification('No results found. Try a different search term or check your spelling.', 'info');
             }
@@ -160,6 +175,86 @@ function looksLikePropertyQuery(query) {
     if (!query) return false;
     const trimmed = query.trim();
     return /^\d+[A-Z0-9\-]*\s+\S+/i.test(trimmed);
+}
+
+/** Person or company name: letters, not led by a house number. */
+function looksLikeNameQuery(query) {
+    const trimmed = (query || '').trim();
+    return trimmed.length >= 3 && !/^\d/.test(trimmed) && /[A-Za-z]{2}/.test(trimmed);
+}
+
+// =========================
+// PUBLIC RECORDS MODE
+// =========================
+
+const SEARCH_MODE_HINTS = {
+    internal: '',
+    public: 'Researches a person or company across ACRIS deeds, HPD registrations, DOB permits, ECB violations and NY Department of State filings, then matches it against our data.',
+};
+
+function setSearchMode(mode) {
+    state.searchMode = mode;
+    document.querySelectorAll('[data-search-mode]').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.searchMode === mode));
+    });
+    const hint = document.getElementById('searchModeHint');
+    if (hint) hint.textContent = SEARCH_MODE_HINTS[mode] || '';
+    const input = document.getElementById('universalSearch');
+    if (input) {
+        input.placeholder = mode === 'public'
+            ? 'Person or company name, e.g. ABC Realty LLC'
+            : 'Address, BBL (e.g. 1-00234-0056), or owner name';
+    }
+    const suggestions = document.getElementById('searchSuggestions');
+    if (suggestions && mode === 'public') suggestions.classList.remove('active');
+    try { localStorage.setItem('home-search-mode', mode); } catch (e) { /* no storage */ }
+}
+
+function initializeSearchMode() {
+    let saved = 'internal';
+    try { saved = localStorage.getItem('home-search-mode') || 'internal'; } catch (e) { /* no storage */ }
+    document.querySelectorAll('[data-search-mode]').forEach(button => {
+        button.addEventListener('click', () => {
+            setSearchMode(button.dataset.searchMode);
+            document.getElementById('universalSearch').focus();
+        });
+    });
+    setSearchMode(saved === 'public' ? 'public' : 'internal');
+}
+
+/**
+ * Nothing in our tables matched a name-shaped query: offer the public-records
+ * research instead of a dead end. Nothing is stored until the user confirms.
+ */
+function offerPublicRecordsSearch(query) {
+    const existing = document.getElementById('publicRecordsModal');
+    if (existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = 'publicRecordsModal';
+    modal.className = 'modal';
+    modal.style.display = 'block';
+    modal.innerHTML = `
+        <div class="modal-content autoadd-modal-content">
+            <h3>Not in our data yet</h3>
+            <p>
+                We can research <strong>${escapeHtml(query)}</strong> across NYC public records:
+                ACRIS deeds and mortgages, HPD registrations, DOB permits, ECB violations and
+                NY Department of State filings, then link anything we already hold.
+            </p>
+            <p class="fineprint">
+                Free &mdash; nothing is added to the property database unless you choose to add a lot.
+                Unsaved research is deleted after 60 days.
+            </p>
+            <div class="autoadd-actions">
+                <button id="publicRecordsCancel" class="btn btn-secondary">Cancel</button>
+                <button id="publicRecordsConfirm" class="btn btn-primary">Research public records</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    document.getElementById('publicRecordsCancel').addEventListener('click', () => modal.remove());
+    document.getElementById('publicRecordsConfirm').addEventListener('click', () => {
+        window.location.href = `/entity/research?${new URLSearchParams({name: query, source: 'home'}).toString()}`;
+    });
 }
 
 /**

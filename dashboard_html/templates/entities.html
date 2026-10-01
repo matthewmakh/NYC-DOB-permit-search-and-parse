@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Entity research{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/entity.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="dossier entity-page entity-index">
+    <div class="dossier-head">
+        <div class="dossier-head-inner">
+            <div class="dossier-head-row">
+                <div class="dossier-title-block">
+                    <div class="dossier-crumbs"><a href="/">&larr; Home</a></div>
+                    <h1>Entity research</h1>
+                    <p class="entity-lede">Look up a person or company across NYC public records and see what we already hold on them.</p>
+                </div>
+            </div>
+            <form class="entity-search" action="/entity/research" method="get" role="search">
+                <input type="search" name="name" id="entitySearchInput" placeholder="Person or company name, e.g. ABC Realty LLC"
+                       value="{{ query or '' }}" minlength="3" maxlength="160" required autocomplete="off">
+                <button type="submit" class="btn btn-primary">Research</button>
+            </form>
+            {% if error %}<p class="entity-notice error" role="alert">{{ error }}</p>{% endif %}
+        </div>
+    </div>
+
+    <div class="dossier-body">
+        <section class="dossier-card">
+            <div class="dossier-card-head">
+                <h3>Saved and recent research <span class="head-count" id="dossierCount">0</span></h3>
+                <span class="entity-card-note">Unsaved research is deleted 60 days after it was last opened</span>
+            </div>
+            <div class="dossier-card-body" id="dossierList"><p class="entity-muted">Loading&hellip;</p></div>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function when(v) { if (!v) return ''; const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString(); }
+    fetch('/api/entities').then(r => r.json()).then(data => {
+        const list = document.getElementById('dossierList');
+        const items = (data && data.dossiers) || [];
+        document.getElementById('dossierCount').textContent = items.length;
+        if (!items.length) {
+            list.innerHTML = '<p class="entity-muted">No research yet. Search a name above, or click any owner, buyer or contact name on a property profile.</p>';
+            return;
+        }
+        list.innerHTML = '<div class="entity-table">' + items.map(d => {
+            const s = d.summary || {};
+            const tiers = s.by_tier || {};
+            return '<a class="entity-table-row" href="/entity/' + d.id + '">' +
+                '<span class="entity-table-name">' + esc(d.display_name) + '<small>' + esc(d.entity_kind) + '</small></span>' +
+                '<span>' + (s.lots || 0) + ' lots</span>' +
+                '<span>' + ((tiers.strong || 0) + (tiers.exact || 0)) + ' name matches</span>' +
+                '<span>' + (d.permanent ? '<span class="tier-badge tier-strong">Kept</span>' : 'Expires ' + esc(when(d.expires_at))) + '</span>' +
+                '<span class="entity-muted">Opened ' + esc(when(d.last_viewed_at)) + '</span>' +
+                '</a>';
+        }).join('') + '</div>';
+    }).catch(() => {
+        document.getElementById('dossierList').innerHTML = '<p class="entity-notice error">Could not load saved research.</p>';
+    });
+})();
+</script>
+{% endblock %}

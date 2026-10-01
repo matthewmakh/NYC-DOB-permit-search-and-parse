@@ -419,8 +419,44 @@ function renderSourceName(name, source, showHint = true) {
     return `<a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(source.label || 'View source')} (opens in a new tab)">${escapeHtml(name)} <span aria-hidden="true">↗</span></a>${showHint ? renderSourceHelp(source) : ''}`;
 }
 
+const OWNER_ROLE_LABELS = {
+    acris: 'Deed grantee', pluto: 'Tax-lot owner', rpad: 'Assessment owner',
+    hpd: 'HPD registered owner', ecb: 'ECB respondent', sos: 'Registered entity principal',
+};
+
+/**
+ * Link a name to entity research, carrying this property as click context
+ * (the BBL and address help corroborate matches on the research page).
+ */
+function entityResearchHref(name, extra = {}) {
+    // Built by hand so the profile script also runs in the Node test harness.
+    const params = { name: String(name).trim() };
+    const building = buildingData?.building || {};
+    if (building.bbl) params.bbl = building.bbl;
+    if (building.address) params.address = building.address;
+    Object.entries(extra).forEach(([key, value]) => { if (value) params[key] = String(value); });
+    const query = Object.entries(params)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .join('&');
+    return `/entity/research?${query}`;
+}
+
+function entityNameLink(name, extra = {}) {
+    const text = String(name || '').trim();
+    if (text.length < 3 || /^\d+$/.test(text)) return escapeHtml(text);
+    const title = `Research ${text} across NYC public records and our data`;
+    return `<a class="entity-link" href="${escapeHtml(entityResearchHref(text, extra))}" title="${escapeHtml(title)}">${escapeHtml(text)}</a>`;
+}
+
 function ownerSourceName(source, name) {
-    return renderSourceName(name, buildingData.owner_source_links?.[source]);
+    // The name opens entity research; the arrow still opens the public source record.
+    const link = buildingData.owner_source_links?.[source];
+    const url = safeHttpHref(link?.url);
+    const label = link?.label || 'View source';
+    const sourceAnchor = url
+        ? ` <a class="record-source-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(label)} (opens in a new tab)" aria-label="${escapeHtml(label)}"><span aria-hidden="true">↗</span></a>${renderSourceHelp(link)}`
+        : '';
+    return `${entityNameLink(name, { role: OWNER_ROLE_LABELS[source] || source, source })}${sourceAnchor}`;
 }
 
 function renderOwnerSourceDate(source) {
@@ -776,7 +812,7 @@ function renderEnrichedDataPerOwner(dataList) {
     dataList.forEach((ownerData, index) => {
         const ownerName = ownerData.owner_name || 'Unknown Owner';
         html += `<div class="owner-contacts-group ${index > 0 ? 'owner-divider' : ''}">`;
-        html += `<div class="owner-name-header">${ownerName}</div>`;
+        html += `<div class="owner-name-header">${entityNameLink(ownerName, { role: 'Owner' })}</div>`;
         html += '<div class="enriched-contacts">';
         
         if (ownerData.phones && ownerData.phones.length > 0) {
@@ -1893,7 +1929,7 @@ function renderPriorDeedOwners() {
         return `
             <div class="historical-owner-card">
                 <div class="ho-main">
-                    <div class="ho-name">${owner.party_name}</div>
+                    <div class="ho-name">${entityNameLink(owner.party_name, { role: 'Deed grantor', source: 'acris' })}</div>
                     <span class="entity-kind-badge entity-${owner.entity_kind}">${kindLabel}</span>
                 </div>
                 ${owner.recorded_date ? `<div class="ho-date">Deed recorded: ${formatDate(owner.recorded_date)}</div>` : ''}
@@ -1977,22 +2013,22 @@ function renderTransactionsTab() {
         
         // Show parties
         if (buyers.length > 0) {
-            html += '<div class="txn-parties"><strong>Buyers:</strong> ' + buyers.map(b => b.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Buyers:</strong> ' + buyers.map(b => entityNameLink(b.party_name, { role: 'Buyer', source: 'acris' })).join(', ') + '</div>';
         }
         if (sellers.length > 0) {
-            html += '<div class="txn-parties"><strong>Sellers:</strong> ' + sellers.map(s => s.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Sellers:</strong> ' + sellers.map(s => entityNameLink(s.party_name, { role: 'Seller', source: 'acris' })).join(', ') + '</div>';
         }
         if (lenders.length > 0) {
-            html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => l.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => entityNameLink(l.party_name, { role: 'Lender', source: 'acris' })).join(', ') + '</div>';
         }
         if (borrowers.length > 0) {
-            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => entityNameLink(p.party_name, { role: 'Borrower', source: 'acris' })).join(', ') + '</div>';
         }
         if (assignors.length > 0) {
-            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => entityNameLink(p.party_name, { role: 'Assignor', source: 'acris' })).join(', ') + '</div>';
         }
         if (assignees.length > 0) {
-            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => entityNameLink(p.party_name, { role: 'Assignee', source: 'acris' })).join(', ') + '</div>';
         }
         
         html += '</div>';
@@ -2071,22 +2107,22 @@ function filterTransactions() {
         
         // Show parties
         if (buyers.length > 0) {
-            html += '<div class="txn-parties"><strong>Buyers:</strong> ' + buyers.map(b => b.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Buyers:</strong> ' + buyers.map(b => entityNameLink(b.party_name, { role: 'Buyer', source: 'acris' })).join(', ') + '</div>';
         }
         if (sellers.length > 0) {
-            html += '<div class="txn-parties"><strong>Sellers:</strong> ' + sellers.map(s => s.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Sellers:</strong> ' + sellers.map(s => entityNameLink(s.party_name, { role: 'Seller', source: 'acris' })).join(', ') + '</div>';
         }
         if (lenders.length > 0) {
-            html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => l.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Lenders:</strong> ' + lenders.map(l => entityNameLink(l.party_name, { role: 'Lender', source: 'acris' })).join(', ') + '</div>';
         }
         if (borrowers.length > 0) {
-            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Borrowers:</strong> ' + borrowers.map(p => entityNameLink(p.party_name, { role: 'Borrower', source: 'acris' })).join(', ') + '</div>';
         }
         if (assignors.length > 0) {
-            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Assignors:</strong> ' + assignors.map(p => entityNameLink(p.party_name, { role: 'Assignor', source: 'acris' })).join(', ') + '</div>';
         }
         if (assignees.length > 0) {
-            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => p.party_name).join(', ') + '</div>';
+            html += '<div class="txn-parties"><strong>Assignees:</strong> ' + assignees.map(p => entityNameLink(p.party_name, { role: 'Assignee', source: 'acris' })).join(', ') + '</div>';
         }
         
         html += '</div>';
@@ -2381,7 +2417,7 @@ function showPermitDetails(index) {
         html += `
             <div class="detail-section">
                 <h3>Applicant</h3>
-                ${addRow('Name', permit.applicant)}
+                ${permit.applicant ? `<div class="detail-row"><span class="detail-label">Name:</span><span class="detail-value">${entityNameLink(permit.applicant, { role: 'Applicant', source: 'dob' })}</span></div>` : ''}
                 <div id="applicant-enriched-data-${permit.id}"></div>
                 ${applicantEnrichBtn}
             </div>`;
@@ -2404,7 +2440,7 @@ function showPermitDetails(index) {
         html += `
             <div class="detail-section">
                 <h3>Permittee</h3>
-                ${addRow('Business Name', permit.permittee_business_name)}
+                ${permit.permittee_business_name ? `<div class="detail-row"><span class="detail-label">Business Name:</span><span class="detail-value">${entityNameLink(permit.permittee_business_name, { role: 'Permittee', source: 'dob' })}</span></div>` : ''}
                 ${addRow('License Type', permit.permittee_license_type)}
                 ${permit.permittee_license_number ? `<div class="detail-row"><span>License #</span><span>${licenseDisplay}</span></div>` : ''}
                 ${addRow('Phone', permit.permittee_phone ? formatPhoneNumber(permit.permittee_phone) : null)}
@@ -3447,7 +3483,7 @@ function renderContactsTab() {
                     // Show locked card
                     html += `
                         <div class="contact-card locked-contact">
-                            <div class="contact-name">${contact.name}</div>
+                            <div class="contact-name">${entityNameLink(contact.name, { role: getContactTypeLabel(contact.type) })}</div>
                             <div class="contact-role">${getContactTypeLabel(contact.type)}</div>
                             <div class="contact-locked">
                                 Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
@@ -3480,7 +3516,7 @@ function renderContactsTab() {
             usefulContacts.forEach(contact => {
                 html += `
                 <div class="contact-card">
-                    <div class="contact-name">${contact.name}</div>
+                    <div class="contact-name">${entityNameLink(contact.name, { role: contact.role })}</div>
                     <div class="contact-role">${contact.role}</div>
                     ${contact.phone ? `
                         <div class="contact-phone">
@@ -3524,7 +3560,7 @@ function renderEnrichedContactCard(contact, roleLabel) {
     let html = `
         <div class="contact-card enriched-contact-card">
             <div class="contact-header">
-                <div class="contact-name">${contact.name}</div>
+                <div class="contact-name">${entityNameLink(contact.name, { role: roleLabel })}</div>
                 <span class="verified-badge">Verified</span>
             </div>
             <div class="contact-role">${roleLabel}</div>
@@ -3824,7 +3860,7 @@ function renderResearchPerson(person) {
     const emails = (review.emails || []).map(value => escapeHtml(value)).join(' · ');
     const resultUrl = safeHttpHref(review.result_url);
     return `<article class="research-person${blocked ? ' research-person-blocked' : ''}" data-research-person="${escapeHtml(person.id)}">
-        <div class="research-person-head"><div><h5>${escapeHtml(person.name)}</h5><p>${escapeHtml(person.role || 'Reported person')}${person.historical ? ' · Historical record' : ''}</p></div>
+        <div class="research-person-head"><div><h5>${entityNameLink(person.name, { role: person.role })}</h5><p>${escapeHtml(person.role || 'Reported person')}${person.historical ? ' · Historical record' : ''}</p></div>
             <span class="research-status${blocked ? ' research-status-blocked' : ''}">${escapeHtml(blocked ? RESEARCH_STATUSES.do_not_contact : RESEARCH_STATUSES[review.status] || RESEARCH_STATUSES.not_researched)}</span></div>
         <ul class="research-evidence">${(person.sources || []).map(renderResearchSource).join('')}</ul>
         <div class="research-locations"><strong>Reported search locations</strong>${locations.length ? `<ul>${locations.map(location =>

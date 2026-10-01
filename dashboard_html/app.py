@@ -51,6 +51,9 @@ from owner_research_routes import owner_research_bp
 from owner_source_routes import create_blueprint as owner_source_blueprint, start_owner_source_worker
 app.register_blueprint(owner_research_bp)
 app.register_blueprint(owner_source_blueprint(lambda: psycopg2.connect(**DB_CONFIG)))
+# Entity research: name-driven dossiers over our data plus NYC public records.
+from entity_routes import create_blueprint as entity_blueprint
+app.register_blueprint(entity_blueprint(lambda: psycopg2.connect(**DB_CONFIG)))
 
 # Activity logging - try to import, use stubs if not available
 try:
@@ -206,6 +209,16 @@ def init_db_pool():
             start_owner_source_worker(lambda: psycopg2.connect(**DB_CONFIG))
         except Exception as e:
             print(f"⚠️  bulk_enrich_service init skipped: {e}", flush=True)
+        try:
+            import entity_research
+            conn = psycopg2.connect(**DB_CONFIG)
+            try:
+                entity_research.init_tables(conn)
+            finally:
+                conn.close()
+            entity_research.start_worker(lambda: psycopg2.connect(**DB_CONFIG))
+        except Exception as e:
+            print(f"⚠️  entity research init skipped: {e}", flush=True)
         try:
             import team_service
             team_service.init_team_tables()

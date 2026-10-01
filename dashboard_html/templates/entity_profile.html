@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}{{ dossier.display_name }} — Entity research{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/entity.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="dossier entity-page" id="entityPage" data-dossier-id="{{ dossier.id }}" data-kind="{{ dossier.entity_kind }}">
+
+    <div class="dossier-head">
+        <div class="dossier-head-inner">
+            <div class="dossier-head-row">
+                <div class="dossier-title-block">
+                    <div class="dossier-crumbs"><a href="/entities">&larr; Entity research</a></div>
+                    <h1 id="entityName">{{ dossier.display_name }}</h1>
+                    <div class="dossier-chips">
+                        <span class="id-chip accent" id="kindChip">{{ dossier.entity_kind|capitalize }}</span>
+                        <span class="id-chip" id="statusChip">Loading&hellip;</span>
+                        <span class="id-chip" id="freshChip" hidden></span>
+                        <span class="id-chip" id="expiryChip" hidden></span>
+                    </div>
+                </div>
+                <div class="entity-head-actions">
+                    <button type="button" class="btn btn-secondary" id="keepBtn" disabled>Keep permanently</button>
+                    <button type="button" class="btn btn-secondary" id="refreshBtn" disabled title="Re-run the public-record searches now instead of using the cached results">Refresh sources</button>
+                    <button type="button" class="btn btn-primary" id="expandBtn" disabled title="Follow the strongest connected names (registered principals, co-owners, owning companies) one hop out">Expand connections</button>
+                </div>
+            </div>
+            <p id="entityNotice" class="entity-notice" role="status" aria-live="polite" hidden></p>
+            <ol id="entitySteps" class="entity-steps" aria-label="Research progress"></ol>
+        </div>
+    </div>
+
+    <div class="dossier-body">
+
+        <div class="glance-strip entity-glance">
+            <div class="glance-tile clickable" data-jump="propertiesCard">
+                <span class="glance-label">Properties <span class="glance-sub" id="glanceLotsSub">lots named on records</span></span>
+                <span class="glance-value" id="glanceLots">&ndash;</span>
+            </div>
+            <div class="glance-tile clickable" data-jump="transactionsCard">
+                <span class="glance-label">Deeds &amp; mortgages <span class="glance-sub">ACRIS documents</span></span>
+                <span class="glance-value" id="glanceAcris">&ndash;</span>
+            </div>
+            <div class="glance-tile clickable" data-jump="permitsCard">
+                <span class="glance-label">Permits &amp; jobs <span class="glance-sub">DOB records</span></span>
+                <span class="glance-value" id="glanceDob">&ndash;</span>
+            </div>
+            <div class="glance-tile clickable" data-jump="complianceCard">
+                <span class="glance-label">Registrations &amp; cases <span class="glance-sub">HPD, ECB, litigation</span></span>
+                <span class="glance-value" id="glanceCompliance">&ndash;</span>
+            </div>
+            <div class="glance-tile clickable" data-jump="connectionsCard">
+                <span class="glance-label">Connections <span class="glance-sub">names on the same records</span></span>
+                <span class="glance-value" id="glanceConnections">&ndash;</span>
+            </div>
+            <div class="glance-tile clickable" data-jump="dbCard">
+                <span class="glance-label">In our database <span class="glance-sub">records we already hold</span></span>
+                <span class="glance-value" id="glanceDb">&ndash;</span>
+            </div>
+        </div>
+
+        <div class="dossier-columns">
+            <div class="dossier-main">
+
+                <section class="dossier-card" id="dbCard">
+                    <div class="dossier-card-head">
+                        <h3>In our database <span class="head-count" id="dbCount">0</span></h3>
+                        <span class="entity-card-note">Buildings, permits and contacts we already track for this name</span>
+                    </div>
+                    <div class="dossier-card-body" id="dbBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card" id="propertiesCard">
+                    <div class="dossier-card-head">
+                        <h3>Properties <span class="head-count" id="propertiesCount">0</span></h3>
+                        <div class="entity-filter" role="group" aria-label="Filter properties by match confidence">
+                            <button type="button" data-tier-filter="sure" aria-pressed="true">Name matches</button>
+                            <button type="button" data-tier-filter="all" aria-pressed="false">Include partial matches</button>
+                        </div>
+                    </div>
+                    <div class="dossier-card-body">
+                        <p class="entity-legend">
+                            <span class="tier-badge tier-strong">Corroborated</span> name plus a matching address or lot &middot;
+                            <span class="tier-badge tier-exact">Name match</span> complete name agrees &middot;
+                            <span class="tier-badge tier-candidate">Partial</span> name is contained in a longer name.
+                            A shared name alone does not confirm identity.
+                        </p>
+                        <div id="propertiesBody"><p class="entity-muted">Loading&hellip;</p></div>
+                    </div>
+                </section>
+
+                <section class="dossier-card" id="transactionsCard">
+                    <div class="dossier-card-head">
+                        <h3>Deeds &amp; mortgages <span class="head-count" id="transactionsCount">0</span></h3>
+                        <span class="entity-card-note">ACRIS documents naming this party</span>
+                    </div>
+                    <div class="dossier-card-body" id="transactionsBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card" id="permitsCard">
+                    <div class="dossier-card-head">
+                        <h3>Permits &amp; jobs <span class="head-count" id="permitsCount">0</span></h3>
+                        <span class="entity-card-note">DOB BIS and DOB NOW records as owner, applicant, permittee or filing representative</span>
+                    </div>
+                    <div class="dossier-card-body" id="permitsBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card" id="complianceCard">
+                    <div class="dossier-card-head">
+                        <h3>Registrations, violations &amp; cases <span class="head-count" id="complianceCount">0</span></h3>
+                        <span class="entity-card-note">HPD registration contacts, ECB respondents, housing litigation</span>
+                    </div>
+                    <div class="dossier-card-body" id="complianceBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card" id="entitiesCard">
+                    <div class="dossier-card-head">
+                        <h3>Registered entity <span class="head-count" id="entitiesCount">0</span></h3>
+                        <span class="entity-card-note">NY Department of State filing and the people on it</span>
+                    </div>
+                    <div class="dossier-card-body" id="entitiesBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card" id="expansionCard" hidden>
+                    <div class="dossier-card-head">
+                        <h3>Expanded connections <span class="head-count" id="expansionCount">0</span></h3>
+                        <span class="entity-card-note">Records found by following connected names one hop out. These describe the connected name, not this subject.</span>
+                    </div>
+                    <div class="dossier-card-body" id="expansionBody"></div>
+                </section>
+
+            </div>
+
+            <div class="dossier-rail">
+                <section class="dossier-card rail-card" id="connectionsCard">
+                    <div class="dossier-card-head"><h3>Connections <span class="head-count" id="connectionsCount">0</span></h3></div>
+                    <div class="dossier-card-body" id="connectionsBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card rail-card" id="crmCard">
+                    <div class="dossier-card-head"><h3>Your team's CRM</h3></div>
+                    <div class="dossier-card-body" id="crmBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card rail-card" id="sourcesCard">
+                    <div class="dossier-card-head"><h3>Sources</h3></div>
+                    <div class="dossier-card-body" id="sourcesBody"><p class="entity-muted">Loading&hellip;</p></div>
+                </section>
+
+                <section class="dossier-card rail-card" id="aboutCard">
+                    <div class="dossier-card-head"><h3>About this research</h3></div>
+                    <div class="dossier-card-body entity-about">
+                        <p>Public records are searched by name across ACRIS, HPD, DOB, ECB and the NY Department of State, then matched against what we already hold.</p>
+                        <p>Nothing here is added to the property database unless you choose <strong>Add permanently</strong> on a lot. Unsaved research is deleted automatically after <span id="retentionDays">60</span> days; <strong>Keep permanently</strong> turns that off.</p>
+                        <p>Public-record results are cached for <span id="cacheHours">24</span> hours. Paid contact lookups never run from this page.</p>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/entity_profile.js') }}"></script>
+{% endblock %}

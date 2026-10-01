@@ -3080,3 +3080,30 @@ button { font-family: inherit; }
 .peek-log__note:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .peek-log__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+/* Home search: our data vs public records */
+.search-mode {
+    display: inline-flex;
+    margin: 10px auto 0;
+    border: 1px solid var(--line-2);
+    border-radius: 99px;
+    overflow: hidden;
+    background: var(--surface);
+}
+.search-mode button {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 5px 13px;
+    cursor: pointer;
+}
+.search-mode button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
+.search-mode-hint { font-size: 12px; color: var(--ink-3); margin-top: 6px; min-height: 1.2em; }
+.search-public-fallback {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.search-public-fallback a { color: var(--accent); }
