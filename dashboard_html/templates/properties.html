@@ -11,42 +11,52 @@
     <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="/static/css/mobile.css">
+    <link rel="stylesheet" href="/static/css/property-workspace.css">
 </head>
-<body>
+<body class="property-explorer">
     {% from "_site_nav.html" import site_nav with context %}
     {% call site_nav('properties', g.user if g.user is defined else none) %}
-        <div class="saved-search" id="savedSearch">
-            <button class="btn btn-secondary saved-search__btn" id="savedSearchBtn" type="button"
-                    aria-haspopup="true" aria-expanded="false" aria-controls="savedSearchMenu"
-                    title="Saved searches">
-                <i class="fas fa-bookmark" aria-hidden="true"></i>
-                <span class="saved-search__label" id="savedSearchLabel">Saved searches</span>
-                <span class="saved-search__dirty" id="savedSearchDirty" hidden title="Changed since it was saved">&bull;</span>
-                <i class="fas fa-chevron-down saved-search__caret" aria-hidden="true"></i>
-            </button>
-            <div class="saved-search__menu" id="savedSearchMenu" hidden>
-                <div class="saved-search__head">
-                    <h3>Saved searches</h3>
-                    <span class="saved-search__count" id="savedSearchCount"></span>
-                </div>
-                <div class="saved-search__find" id="savedSearchFindWrap" hidden>
-                    <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
-                    <input type="search" id="savedSearchFind" placeholder="Find a saved search"
-                           autocomplete="off" aria-label="Find a saved search">
-                </div>
-                <div class="saved-search__list" id="savedSearchList" role="list"></div>
-                <div class="saved-search__foot" id="savedSearchFoot"></div>
-            </div>
-        </div>
-        <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
-            <i class="fas fa-phone" aria-hidden="true"></i> Bulk enrich
-        </button>
-        <button class="btn btn-primary" id="exportBtn">
-            <i class="fas fa-download" aria-hidden="true"></i> Export
-        </button>
     {% endcall %}
 
     <div class="main-container">
+        <header class="explorer-heading">
+            <div>
+                <span class="workspace-eyebrow">NYC property intelligence</span>
+                <h1>Find your next opportunity.</h1>
+                <p>Explore buildings, follow ownership, and turn public records into your next conversation.</p>
+            </div>
+            <div class="explorer-actions">
+                <div class="saved-search" id="savedSearch">
+                    <button class="btn btn-secondary saved-search__btn" id="savedSearchBtn" type="button"
+                            aria-haspopup="true" aria-expanded="false" aria-controls="savedSearchMenu"
+                            title="Saved searches">
+                        <i class="fas fa-bookmark" aria-hidden="true"></i>
+                        <span class="saved-search__label" id="savedSearchLabel">Saved searches</span>
+                        <span class="saved-search__dirty" id="savedSearchDirty" hidden title="Changed since it was saved">&bull;</span>
+                        <i class="fas fa-chevron-down saved-search__caret" aria-hidden="true"></i>
+                    </button>
+                    <div class="saved-search__menu" id="savedSearchMenu" hidden>
+                        <div class="saved-search__head">
+                            <h3>Saved searches</h3>
+                            <span class="saved-search__count" id="savedSearchCount"></span>
+                        </div>
+                        <div class="saved-search__find" id="savedSearchFindWrap" hidden>
+                            <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+                            <input type="search" id="savedSearchFind" placeholder="Find a saved search"
+                                   autocomplete="off" aria-label="Find a saved search">
+                        </div>
+                        <div class="saved-search__list" id="savedSearchList" role="list"></div>
+                        <div class="saved-search__foot" id="savedSearchFoot"></div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary" id="bulkEnrichBtn" onclick="showBulkEnrichModal()">
+                    <i class="fas fa-phone" aria-hidden="true"></i> Bulk enrich
+                </button>
+                <button class="btn btn-primary" id="exportBtn">
+                    <i class="fas fa-download" aria-hidden="true"></i> Export
+                </button>
+            </div>
+        </header>
         <!-- Sidebar filters -->
         <aside class="sidebar" data-mobile-filters>
             <div class="sidebar-header">

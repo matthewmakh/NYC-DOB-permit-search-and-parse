@@ -14,7 +14,7 @@
     /* Ink */
     --ink: #1a1a17;
     --ink-2: #55554f;
-    --ink-3: #8b8b83;
+    --ink-3: #687067;
 
     /* Lines */
     --line: #e5e5e0;
@@ -67,7 +67,7 @@ html[data-theme="dark"] {
 
     --ink: #f5f5f7;
     --ink-2: rgba(235, 235, 245, 0.64);
-    --ink-3: rgba(235, 235, 245, 0.38);
+    --ink-3: #a9adb8;
 
     --line: rgba(84, 84, 88, 0.5);
     --line-2: rgba(84, 84, 88, 0.7);

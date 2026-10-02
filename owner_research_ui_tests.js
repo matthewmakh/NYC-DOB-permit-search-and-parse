@@ -126,6 +126,45 @@ assert.equal(dialog.querySelector('#research-search-url').value, '');
 dialog.close();
 assert.equal(document.activeElement.focused, true, 'dialog restores prior focus');
 
+// Missing financing stays absent, and source violation totals match the section count.
+nodes.set('property-stats', fakeNode());
+nodes.set('quick-metrics', fakeNode());
+evaluate("buildingData = {building: {hpd_total_violations:4, ecb_violation_count:14}, stats:{total_violations:0}}; renderOverviewTab()");
+assert.match(nodes.get('property-stats').innerHTML, /stat-value">18</);
+assert.doesNotMatch(nodes.get('quick-metrics').innerHTML, /Financing Ratio|NaN/);
+
+// Work queues preserve separate identities and exclude DNC records from outreach work.
+nodes.set('owner-research-toolbar', fakeNode());
+context.queueRecords = [context.person,
+    {...context.person, id: 'entity', name: 'Example LLC', is_person: false},
+    {...context.person, id: 'saved', name: 'Reviewed Person', research: {status:'contact_found'}},
+    {...context.person, id: 'blocked', name: 'Blocked Person', do_not_contact: true},
+];
+evaluate("ownerResearchState.data = {people: queueRecords, conflicts: []}; ownerResearchState.filter = 'pending'; renderOwnerResearch()");
+assert.match(nodes.get('owner-research-people').innerHTML, /person-1/);
+assert.doesNotMatch(nodes.get('owner-research-people').innerHTML, /Example LLC|Reviewed Person|Blocked Person/);
+evaluate("ownerResearchState.filter = 'entities'; renderOwnerResearch()");
+assert.match(nodes.get('owner-research-people').innerHTML, /Example LLC/);
+assert.doesNotMatch(nodes.get('owner-research-people').innerHTML, /data-research-action="search"/);
+evaluate("ownerResearchState.filter = 'saved'; renderOwnerResearch()");
+assert.match(nodes.get('owner-research-people').innerHTML, /Reviewed Person/);
+assert.doesNotMatch(nodes.get('owner-research-people').innerHTML, /Blocked Person/);
+context.datedPerson = {...context.person, sources:[
+    {label:'Older deed', reported_date:'2024-01-01'},
+    {label:'New registration', reported_date:'2026-09-23'},
+    {label:'Bad date', reported_date:'unknown'},
+]};
+assert.match(evaluate('renderResearchPerson(datedPerson)'), /New registration · Last reported: Sep 23, 2026/);
+evaluate("ownerResearchState.data = {people: [person], conflicts: []}; ownerResearchState.filter = 'all'");
+
+nodes.set('glance-strip', fakeNode());
+evaluate("buildingData = {building: {sale_date:'Wed, 26 Aug 2026 00:00:00 GMT', hpd_open_violations:0}}; renderGlanceStrip()");
+assert.match(nodes.get('glance-strip').innerHTML, /Last sale · 2026/);
+assert.match(nodes.get('glance-strip').innerHTML, /glance-value ok">0</);
+evaluate("buildingData = {building: {sale_date:'invalid'}}; renderGlanceStrip()");
+assert.doesNotMatch(nodes.get('glance-strip').innerHTML, /NaN|Invalid|glance-value ok/);
+evaluate("buildingData = {building: {borough:'3', zip_code:'11225'}}");
+
 (async () => {
     // Same name alone must never attach a legacy source/contact to another
     // source's address or saved review identity.

@@ -299,7 +299,7 @@ async function loadPlays() {
         }
         if (!data.plays || !data.plays.length) {
             status.className = 'plays-status plays-status-warning';
-            status.textContent = 'No prebuilt filters are available. The signal migrations may not have run yet.';
+            status.textContent = 'No prebuilt filters are available yet. Use the filters to build your search.';
             return;
         }
         state.plays = data.plays;

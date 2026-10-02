@@ -525,14 +525,15 @@ function renderHeroSection() {
         addressParts.push('NY ' + building.zip_code);
     }
     
+    const displayBorough = building.borough_name || getBoroughName(String(building.bbl || '').slice(0, 1));
     document.getElementById('building-address').innerHTML = `
-        <span class="address-street">${building.address || 'Address Unknown'}</span>
-        ${building.borough_name || building.zip_code ? `<span class="address-city">${building.borough_name || ''}${building.borough_name && building.zip_code ? ', ' : ''}${building.zip_code ? 'NY ' + building.zip_code : ''}</span>` : ''}
+        <span class="address-street">${escapeHtml(building.address || 'Address Unknown')}</span>
+        <span class="address-city">${escapeHtml(displayBorough === 'Unknown' ? 'New York City' : displayBorough)}${building.zip_code ? ', NY ' + escapeHtml(building.zip_code) : ''}</span>
     `;
     document.getElementById('bbl-display').textContent = building.bbl;
 
     const crumb = document.getElementById('crumb-borough');
-    if (crumb) crumb.textContent = building.borough_name || 'NYC';
+    if (crumb) crumb.textContent = displayBorough === 'Unknown' ? 'NYC' : displayBorough;
 
     // BIN and building-class chips only render when we actually have them.
     const binDisplay = document.getElementById('bin-display');
@@ -644,15 +645,14 @@ function renderGlanceStrip() {
     const strip = document.getElementById('glance-strip');
     if (!strip) return;
 
-    const openViolations = (building.hpd_open_violations || 0) +
-                           (building.ecb_open_violations || 0) +
-                           (building.dob_open_violations || 0) +
-                           (building.dob_safety_open_violations || 0);
+    const violationCounts = ['hpd_open_violations', 'ecb_open_violations', 'dob_open_violations', 'dob_safety_open_violations']
+        .map(key => building[key]).filter(value => value != null && Number.isFinite(Number(value)));
+    const openViolations = violationCounts.reduce((sum, value) => sum + Number(value), 0);
 
     const tiles = [
         { label: 'Assessed value',
           value: building.assessed_total_value ? formatLargeNumber(building.assessed_total_value) : '—' },
-        { label: building.sale_date ? `Last sale · ${String(building.sale_date).slice(0, 4)}` : 'Last sale',
+        { label: building.sale_date && !Number.isNaN(new Date(building.sale_date).getTime()) ? `Last sale · ${new Date(building.sale_date).getUTCFullYear()}` : 'Last sale',
           value: building.sale_price ? formatLargeNumber(building.sale_price) : '—' },
         { label: 'Financing',
           value: building.is_cash_purchase ? 'Likely cash'
@@ -660,8 +660,8 @@ function renderGlanceStrip() {
                    ? `${(building.financing_ratio * 100).toFixed(1)}%` : '—' },
         { label: 'Units', value: building.total_units ? formatNumber(building.total_units) : '—' },
         { label: 'Year built', value: building.year_built || '—' },
-        { label: 'Open violations', value: formatNumber(openViolations),
-          tone: openViolations > 0 ? 'warn' : 'ok' },
+        { label: 'Open violations', value: violationCounts.length ? openViolations.toLocaleString('en-US') : '—',
+          tone: violationCounts.length ? openViolations > 0 ? 'warn' : 'ok' : '' },
     ];
 
     strip.innerHTML = tiles.map(t => `
@@ -1575,6 +1575,11 @@ function renderOverviewTab() {
     const { building, stats } = buildingData;
     renderBuildingFacts(building);
     
+    // Use the same saved source totals as the Violations section. The legacy
+    // stats field can be zero even when individual sources contain records.
+    const reportedViolationCounts = ['hpd_total_violations', 'ecb_violation_count', 'dob_violation_count', 'dob_safety_violation_count']
+        .map(key => building[key]).filter(value => value != null && Number.isFinite(Number(value)));
+    const recordedViolations = reportedViolationCounts.length ? reportedViolationCounts.reduce((sum, value) => sum + Number(value), 0) : stats.total_violations;
     // Property Stats
     const statsEl = document.getElementById('property-stats');
     statsEl.innerHTML = `
@@ -1587,7 +1592,7 @@ function renderOverviewTab() {
             <div class="stat-label">Transactions</div>
         </div>
         <div class="stat-item">
-            <div class="stat-value">${stats.total_violations ? formatNumber(stats.total_violations) : 0}</div>
+            <div class="stat-value">${recordedViolations == null ? '—' : Number(recordedViolations).toLocaleString('en-US')}</div>
             <div class="stat-label">Violations</div>
         </div>
         <div class="stat-item">
@@ -1612,7 +1617,7 @@ function renderOverviewTab() {
         });
     }
     
-    if (building.financing_ratio !== null) {
+    if (building.financing_ratio != null && Number.isFinite(Number(building.financing_ratio))) {
         metrics.push({
             label: 'Financing Ratio',
             value: `${(building.financing_ratio * 100).toFixed(1)}%`,
@@ -3723,7 +3728,7 @@ function showError(message) {
 
 const ownerResearchState = {
     data: null, sources: null, loading: false, sequence: 0,
-    sourceSequence: 0, pollTimer: null, pollCount: 0, pendingSources: new Set(),
+    filter: 'all', sourceSequence: 0, pollTimer: null, pollCount: 0, pendingSources: new Set(),
 };
 const RESEARCH_STATUSES = {
     not_researched: 'Not researched', needs_review: 'Needs review',
@@ -3859,13 +3864,22 @@ function renderResearchPerson(person) {
     const phones = (review.phones || []).map(value => escapeHtml(value)).join(' · ');
     const emails = (review.emails || []).map(value => escapeHtml(value)).join(' · ');
     const resultUrl = safeHttpHref(review.result_url);
+    const sources = Array.isArray(person.sources) ? person.sources : [];
+    const newest = sources.filter(source => source.reported_date && !Number.isNaN(new Date(source.reported_date).getTime()))
+        .sort((a, b) => new Date(b.reported_date) - new Date(a.reported_date))[0];
+    const locality = locations.find(location => location.id === person.default_location_id) || locations[0];
+    const kind = person.is_person === false ? 'Entity' : person.historical ? 'Historical person' : 'Person';
     return `<article class="research-person${blocked ? ' research-person-blocked' : ''}" data-research-person="${escapeHtml(person.id)}">
-        <div class="research-person-head"><div><h5>${entityNameLink(person.name, { role: person.role })}</h5><p>${escapeHtml(person.role || 'Reported person')}${person.historical ? ' · Historical record' : ''}</p></div>
+        <div class="research-person-head"><div><span class="research-kind">${kind}</span><h5>${entityNameLink(person.name, { role: person.role })}</h5><p>${escapeHtml(person.role || 'Reported person')}${person.historical ? ' · Historical record' : ''}</p></div>
             <span class="research-status${blocked ? ' research-status-blocked' : ''}">${escapeHtml(blocked ? RESEARCH_STATUSES.do_not_contact : RESEARCH_STATUSES[review.status] || RESEARCH_STATUSES.not_researched)}</span></div>
-        <ul class="research-evidence">${(person.sources || []).map(renderResearchSource).join('')}</ul>
+        <div class="research-snapshot"><span><i class="fas fa-location-dot" aria-hidden="true"></i> ${escapeHtml(locality ? researchLocationText(locality) || 'Location unavailable' : person.is_person === false ? 'No reported locality' : 'Property location fallback')}</span>
+            <span>${newest ? `${escapeHtml(newest.label || newest.key || 'Source')} · ${escapeHtml(newest.date_label || 'Last reported')}: ${escapeHtml(formatDate(newest.reported_date))}` : 'Reported date unavailable'}</span></div>
+        <details class="research-evidence-disclosure"><summary>Evidence &amp; locations <span>${sources.length} source${sources.length === 1 ? '' : 's'}</span></summary>
+        <ul class="research-evidence">${sources.map(renderResearchSource).join('')}</ul>
         <div class="research-locations"><strong>Reported search locations</strong>${locations.length ? `<ul>${locations.map(location =>
             `<li>${escapeHtml(researchLocationText(location) || 'Location unavailable')}<span>${escapeHtml(location.source || location.label || 'Source-reported')}${location.reported_date ? ` · ${escapeHtml(formatDate(location.reported_date))}` : ' · date unavailable'}${location.kind ? ` · ${escapeHtml(location.kind)}` : ''}</span></li>`).join('')}</ul>`
             : '<p>No matched owner locality available. Search can use the property location as a fallback.</p>'}</div>
+        </details>
         <div class="research-review-summary"><span class="research-match research-match-${Object.hasOwn(RESEARCH_MATCHES, review.match_status) ? review.match_status : 'unreviewed'}">${escapeHtml(RESEARCH_MATCHES[review.match_status] || RESEARCH_MATCHES.unreviewed)}</span>
             ${review.match_status === 'wrong_person' ? '<p>This saved result was marked as a different person.</p>' : ''}
             ${review.match_status === 'possible_match' ? '<p>Match still needs confirmation.</p>' : ''}
@@ -3874,7 +3888,7 @@ function renderResearchPerson(person) {
             ${review.notes ? `<p class="research-note">${escapeHtml(review.notes)}</p>` : ''}
             ${review.reviewed_at ? `<p class="research-muted">Reviewed ${escapeHtml(formatDate(review.reviewed_at))}${reviewer ? ` by ${escapeHtml(reviewer)}` : ''}</p>` : ''}</div>
         ${blocked ? '<p class="research-dnc-note">Do not contact. People searches and enrichment are disabled for this name on this property.</p>' : ''}
-        <div class="research-actions"><button type="button" class="research-button research-button-primary" data-research-action="search" ${blocked || person.is_person === false ? 'disabled' : ''}>Preview people search</button>
+        <div class="research-actions">${person.is_person === false ? '<span class="research-entity-note">People search is available for individuals.</span>' : `<button type="button" class="research-button research-button-primary" data-research-action="search" ${blocked ? 'disabled' : ''}>Preview people search <span aria-hidden="true">↗</span></button>`}
             <button type="button" class="research-button" data-research-action="review">${review.reviewed_at ? 'Edit review' : 'Save a reviewed result'}</button></div>
     </article>`;
 }
@@ -3882,12 +3896,25 @@ function renderResearchPerson(person) {
 function renderOwnerResearch() {
     const data = ownerResearchState.data;
     if (!data) return;
+    const records = data.people || [];
+    const filters = {
+        all: {label: 'All records', matches: () => true},
+        people: {label: 'People', matches: person => person.is_person !== false},
+        entities: {label: 'Entities', matches: person => person.is_person === false},
+        pending: {label: 'To research', matches: person => person.is_person !== false && !researchPersonBlocked(person) && (!person.research?.status || ['not_researched', 'needs_review'].includes(person.research.status))},
+        saved: {label: 'Contact found', matches: person => !researchPersonBlocked(person) && person.research?.status === 'contact_found'},
+    };
+    const active = Object.hasOwn(filters, ownerResearchState.filter) ? ownerResearchState.filter : 'all';
+    const toolbar = document.getElementById('owner-research-toolbar');
+    if (toolbar) toolbar.innerHTML = Object.entries(filters).map(([key, filter]) =>
+        `<button type="button" class="research-filter" data-research-action="filter" data-research-filter="${key}" aria-pressed="${active === key}">${filter.label}<span>${records.filter(filter.matches).length}</span></button>`).join('');
+    const filtered = records.filter(filters[active].matches);
     const people = document.getElementById('owner-research-people');
-    if (people) people.innerHTML = data.people?.length ? data.people.map(renderResearchPerson).join('')
-        : '<p class="research-muted">No individual people found in the saved ownership sources yet. Refresh a source below to check for newer records.</p>';
+    if (people) people.innerHTML = filtered.length ? filtered.map(renderResearchPerson).join('')
+        : `<p class="research-empty">${records.length ? 'No records in this view. Choose another filter to continue.' : 'No ownership records saved yet. Refresh a source below to get started.'}</p>`;
     const conflicts = document.getElementById('owner-research-conflicts');
-    if (conflicts) conflicts.innerHTML = data.conflicts?.length ? `<div class="research-conflicts"><strong>Review these differences</strong><ul>${data.conflicts.map(conflict =>
-        `<li>${escapeHtml(conflict.message)}</li>`).join('')}</ul><p>Roles and reporting dates can explain differences. These flags do not establish who owns the property.</p></div>` : '';
+    if (conflicts) conflicts.innerHTML = data.conflicts?.length ? `<details class="research-conflicts"><summary><i class="fas fa-triangle-exclamation" aria-hidden="true"></i> ${data.conflicts.length} source differences to review <span>Compare evidence</span></summary><ul>${data.conflicts.map(conflict =>
+        `<li>${escapeHtml(conflict.message)}</li>`).join('')}</ul><p>Roles and reporting dates can explain differences. These flags do not establish who owns the property.</p></details>` : '';
     // Disable the older manual entry points too, without merging same-named records.
     document.querySelectorAll('[data-people-search]').forEach(button => {
         try {
@@ -4166,6 +4193,12 @@ function setupOwnerResearch() {
         const button = event.target?.closest?.('[data-research-action]');
         if (!button || button.disabled) return;
         const action = button.dataset.researchAction;
+        if (action === 'filter') {
+            ownerResearchState.filter = button.dataset.researchFilter;
+            renderOwnerResearch();
+            document.querySelector(`[data-research-filter="${ownerResearchState.filter}"]`)?.focus();
+            return;
+        }
         if (action === 'reload') {
             button.disabled = true;
             researchFeedback('Checking saved research and source status…');
