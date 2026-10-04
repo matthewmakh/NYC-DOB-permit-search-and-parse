@@ -26,7 +26,6 @@ import os
 import sys
 import time
 from datetime import datetime, date
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Lock, local
 
 import psycopg2
@@ -34,6 +33,7 @@ import psycopg2.extras
 from dotenv import load_dotenv
 
 import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
+from enrichment_batch import run_checkpointed_batch
 from socrata_client import SocrataClient, where_block_lot, soql_quote, bbl_parts, in_clause
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -511,80 +511,88 @@ def enrich_signals_for_building(bbl, bin_number, building_sqft):
     return fields, errors
 
 
+def _write_signal_fields(building, fields, errors):
+    """Retry idempotent writes with fresh connections, retaining fetched data."""
+    for attempt in range(3):
+        conn = None
+        try:
+            conn = psycopg2.connect(DATABASE_URL, connect_timeout=10,
+                                   options='-c statement_timeout=30000')
+            with conn.cursor() as cur:
+                assignments = ', '.join(f"{col} = %s" for col in fields)
+                values = list(fields.values())
+                if errors:
+                    error_text = ' | '.join(errors)[:4000]
+                    if assignments:
+                        cur.execute(
+                            f"""UPDATE buildings SET {assignments},
+                                signals_last_attempted = NOW(), signals_last_error = %s,
+                                signals_last_error_at = NOW()
+                                WHERE id = %s""",
+                            values + [error_text, building['id']])
+                    else:
+                        cur.execute(
+                            """UPDATE buildings
+                               SET signals_last_attempted = NOW(), signals_last_error = %s,
+                                   signals_last_error_at = NOW()
+                               WHERE id = %s""",
+                            (error_text, building['id']))
+                elif assignments:
+                    cur.execute(
+                        f"""UPDATE buildings SET {assignments},
+                            signals_last_attempted = NOW(), signals_last_enriched = NOW(),
+                            signals_enrichment_version = %s,
+                            signals_last_error = NULL,
+                            signals_last_error_at = NULL
+                            WHERE id = %s""",
+                        values + [SIGNALS_ENRICHMENT_VERSION, building['id']])
+                else:
+                    cur.execute(
+                        """UPDATE buildings
+                           SET signals_last_attempted = NOW(), signals_last_enriched = NOW(),
+                               signals_enrichment_version = %s,
+                               signals_last_error = NULL,
+                               signals_last_error_at = NULL
+                           WHERE id = %s""",
+                        (SIGNALS_ENRICHMENT_VERSION, building['id']))
+            conn.commit()
+            return
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            if attempt == 2:
+                raise
+        finally:
+            # Closing also rolls back failed transactions, even if the server
+            # has gone away. Do not call rollback on a broken connection.
+            if conn is not None:
+                conn.close()
+        time.sleep(2 ** attempt)
+
+
 def _process_building(building, position, total):
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        # Slow external requests must not hold a database connection open.
         fields, errors = enrich_signals_for_building(
             building['bbl'], building['bin'], building['building_sqft'])
-        cur = conn.cursor()
-        assignments = ', '.join(f"{col} = %s" for col in fields)
-        values = list(fields.values())
-        if errors:
-            error_text = ' | '.join(errors)[:4000]
-            if assignments:
-                cur.execute(
-                    f"""UPDATE buildings SET {assignments},
-                        signals_last_attempted = NOW(), signals_last_error = %s,
-                        signals_last_error_at = NOW()
-                        WHERE id = %s""",
-                    values + [error_text, building['id']])
-            else:
-                cur.execute(
-                    """UPDATE buildings
-                       SET signals_last_attempted = NOW(), signals_last_error = %s,
-                           signals_last_error_at = NOW()
-                       WHERE id = %s""",
-                    (error_text, building['id']))
-        elif assignments:
-            cur.execute(
-                f"""UPDATE buildings SET {assignments},
-                    signals_last_attempted = NOW(), signals_last_enriched = NOW(),
-                    signals_enrichment_version = %s,
-                    signals_last_error = NULL,
-                    signals_last_error_at = NULL
-                    WHERE id = %s""",
-                values + [SIGNALS_ENRICHMENT_VERSION, building['id']])
-        else:
-            cur.execute(
-                """UPDATE buildings
-                   SET signals_last_attempted = NOW(), signals_last_enriched = NOW(),
-                       signals_enrichment_version = %s,
-                       signals_last_error = NULL,
-                       signals_last_error_at = NULL
-                   WHERE id = %s""",
-                (SIGNALS_ENRICHMENT_VERSION, building['id']))
-        conn.commit()
-        cur.close()
-
+        _write_signal_fields(building, fields, errors)
         if errors:
             with _print_lock:
                 print(f"[{position}/{total}] BBL {building['bbl']}: "
                       f"⚠️ partial ({len(errors)} source errors; will retry)")
             return False
-
         return True
-    except Exception as e:
-        if conn is not None:
-            conn.rollback()
-            try:
-                with conn.cursor() as error_cur:
-                    error_cur.execute("""UPDATE buildings SET signals_last_attempted=NOW(),
-                        signals_last_error=%s,signals_last_error_at=NOW() WHERE id=%s""",
-                        (str(e)[:4000],building['id']))
-                conn.commit()
-            except Exception:
-                conn.rollback()
+    except Exception as exc:
+        try:
+            _write_signal_fields(building, {}, [str(exc)])
+        except Exception:
+            # The failed record remains due if the database is unavailable.
+            pass
         with _print_lock:
-            print(f"[{position}/{total}] BBL {building['bbl']}: ❌ {e}")
+            print(f"[{position}/{total}] BBL {building['bbl']}: ❌ {exc}")
         return False
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def main():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=10, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
 
     # Hard requirement: the version/error columns make failure distinguishable
@@ -632,51 +640,17 @@ def main():
         print("   ✅ All up to date.")
         return
 
-    ok = failed = 0
     started = time.time()
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        # A first backfill can exceed 100k buildings. Submitting every future
-        # up front consumes substantial memory during a multi-day cron run, so
-        # keep only a small bounded window in flight.
-        work = iter(enumerate(buildings, 1))
-        pending = set()
-        max_in_flight = max(MAX_WORKERS * 4, MAX_WORKERS)
-
-        def fill_window():
-            while len(pending) < max_in_flight:
-                try:
-                    position, building = next(work)
-                except StopIteration:
-                    break
-                pending.add(pool.submit(
-                    _process_building, building, position, len(buildings)))
-
-        fill_window()
-        while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                if future.result():
-                    ok += 1
-                else:
-                    failed += 1
-                # Keep Railway logs useful without emitting 100k success rows.
-                # Failures are still printed immediately by the worker.
-                completed_count = ok + failed
-                if (completed_count % SIGNALS_PROGRESS_EVERY == 0
-                        or completed_count == len(buildings)):
-                    elapsed = max(time.time() - started, 0.001)
-                    rate = completed_count / elapsed
-                    remaining = len(buildings) - completed_count
-                    eta_hours = remaining / rate / 3600 if rate else 0
-                    with _print_lock:
-                        print(
-                            f"Progress {completed_count:,}/{len(buildings):,} · "
-                            f"{rate:.2f} buildings/s · ETA {eta_hours:.1f}h · "
-                            f"failures {failed:,}")
-            fill_window()
+    result = run_checkpointed_batch(
+        list(enumerate(buildings, 1)),
+        lambda item, retry: _process_building(item[1], item[0], len(buildings)),
+        workers=MAX_WORKERS, label='Signal refresh',
+        progress_every=SIGNALS_PROGRESS_EVERY,
+        error_limit=max(1, int(os.getenv('SIGNALS_ERROR_LIMIT', '100'))))
+    ok, failed = result.succeeded, result.failed
 
     duration_minutes = (time.time() - started) / 60
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
     cur = conn.cursor()
     cur.execute(f"""
         SELECT COUNT(*)

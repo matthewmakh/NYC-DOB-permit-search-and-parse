@@ -68,13 +68,20 @@ def run_script(script_name, description, extra_env=None):
     start_time = time.time()
     
     try:
+        timeout = max(60, int(os.getenv('PIPELINE_STEP_TIMEOUT_SECONDS', '14400')))
+        child_env = {**os.environ, **(extra_env or {})}
+        # Leave at least 25% of the hard limit to drain active source requests.
+        # The two checkpointed passes stop admitting work before this budget.
+        child_env['ENRICHMENT_BATCH_SECONDS'] = str(min(
+            max(1, float(child_env.get('ENRICHMENT_BATCH_SECONDS', '10800'))),
+            timeout * 0.75))
         # Stream output directly instead of capturing (for Railway logs)
         result = subprocess.run(
             [sys.executable, '-u', script_name],  # -u for unbuffered Python output
             text=True,
             check=False,
-            timeout=max(60, int(os.getenv('PIPELINE_STEP_TIMEOUT_SECONDS', '14400'))),
-            env={**os.environ, **(extra_env or {})},
+            timeout=timeout,
+            env=child_env,
             # Note: No capture_output, so stdout/stderr go directly to console
         )
         

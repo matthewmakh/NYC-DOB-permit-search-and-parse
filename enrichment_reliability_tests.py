@@ -222,6 +222,16 @@ class DatabaseRegressionTests(unittest.TestCase):
         self.assertEqual(report['pluto'],'current')
         self.assertIn('error:',report['rpad'])
 
+        # A bounded retry pass can bypass the failed source's cooldown, but
+        # must not fetch healthy sources again or rewrite their history.
+        with patch.object(property_api,'get_pluto_data_for_bbl',side_effect=AssertionError('healthy source re-fetched')),patch.object(property_api,'get_hpd_data_for_bbl',side_effect=AssertionError('healthy source re-fetched')),patch.object(property_api,'get_rpad_data_for_bbl',return_value=({'owner_name_rpad':'RECOVERED OWNER'},None)):
+            report=refresh.refresh_property_sources(self.conn,1,'3012980066',retry_errors=True)
+        self.assertEqual(report['pluto'],'current')
+        self.assertEqual(report['hpd'],'current')
+        self.assertEqual(report['rpad'],'updated')
+        self.assertEqual(self.scalar('SELECT owner_name_rpad FROM buildings'),'RECOVERED OWNER')
+        self.assertIsNone(self.scalar('SELECT property_last_error FROM buildings'))
+
     def test_authoritative_empty_clears_old_facts_preserves_address(self):
         with patch.object(property_api,'get_pluto_data_for_bbl',return_value=(None,None)):
             refresh.refresh_property_sources(self.conn,1,'3012980066',sources=['pluto'])

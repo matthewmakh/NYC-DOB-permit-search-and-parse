@@ -130,10 +130,21 @@ NYC_GEOCLIENT_SUBSCRIPTION_KEY=your_v2_subscription_key
 
 # Optional Performance Tuning
 BUILDING_BATCH_SIZE=500  # Buildings per enrichment run
+STEP2_BATCH_LIMIT=16000  # Upper row limit; property refresh may stop earlier on time
+ENRICHMENT_BATCH_SECONDS=10800 # Soft budget for property and signal cron passes
+PIPELINE_STEP_TIMEOUT_SECONDS=14400 # Hard timeout; soft budget capped at 75% of this
 API_DELAY=0.1            # Seconds between API calls
 GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
 
 ```
+
+The property and signal passes stop admitting new records after 90% of their
+soft budget, finish active records, then retry failed records once within the
+remaining budget. Unstarted records stay due for the next run. Successful
+property sources keep their individual checkpoints during retries. Logs report
+succeeded, unresolved, and deferred counts separately; unresolved errors still
+fail the cron. `PROPERTY_REFRESH_ERROR_LIMIT` and `SIGNALS_ERROR_LIMIT` (both
+default 100) stop new work during widespread outages.
 
 ### Running Scripts Locally
 

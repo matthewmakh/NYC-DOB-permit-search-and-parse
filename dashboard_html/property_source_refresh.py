@@ -67,7 +67,8 @@ def source_fields(source, data):
     return {key: data.get(key) for key in HPD_FIELDS}
 
 
-def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
+def refresh_property_sources(conn, building_id, bbl, sources=None, force=False,
+                             retry_errors=False):
     from step2_enrich_from_pluto import (
         get_pluto_data_for_bbl, get_rpad_data_for_bbl, get_hpd_data_for_bbl)
     fetchers = dict(zip(SOURCE_DAYS, (
@@ -84,7 +85,8 @@ def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
                 cur.execute('SELECT next_attempt_at > NOW() AND (owner_dates_version >= %s OR error IS NOT NULL), error FROM building_source_refresh '
                             'WHERE building_id=%s AND source=%s', (SOURCE_VERSIONS[source], building_id, source))
                 state = cur.fetchone()
-                if not force and state and state[0]:
+                if (not force and state and state[0]
+                        and not (retry_errors and state[1])):
                     report[source] = f'error: awaiting retry: {state[1]}' if state[1] else 'current'
                     continue
             # End read transactions before waiting on outside services.
@@ -139,7 +141,7 @@ def refresh_property_sources(conn, building_id, bbl, sources=None, force=False):
 
 
 def run_property_refresh(connect):
-    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    from enrichment_batch import run_checkpointed_batch
     limit = max(1, int(os.getenv('STEP2_BATCH_LIMIT', '16000')))
     workers = max(1, int(os.getenv('PROPERTY_REFRESH_WORKERS', '6')))
     conn = connect()
@@ -157,38 +159,18 @@ def run_property_refresh(connect):
             rows = cur.fetchall()
     finally:
         conn.close()
-    def process(row):
+    def process(row, retry):
         connection = connect()
         try:
-            report = refresh_property_sources(connection, row[0], row[1])
+            report = refresh_property_sources(connection, row[0], row[1], retry_errors=retry)
             errors = [value for value in report.values() if value.startswith('error:')]
             if errors:
                 print(f'Property {row[0]}: {"; ".join(errors)}', flush=True)
             return not errors
         finally:
             connection.close()
-    failed = done = 0
     error_limit = max(1, int(os.getenv('PROPERTY_REFRESH_ERROR_LIMIT', '100')))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        remaining = iter(rows)
-        pending = set()
-        while True:
-            while failed < error_limit and len(pending) < workers * 2:
-                row = next(remaining, None)
-                if row is None:
-                    break
-                pending.add(pool.submit(process, row))
-            if not pending:
-                break
-            completed, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in completed:
-                try:
-                    failed += not future.result()
-                except Exception as exc:
-                    print(f'Property refresh failed: {exc}', flush=True)
-                    failed += 1
-                done += 1
-            if done % 100 == 0 or done == len(rows):
-                print(f'Property refresh: {done}/{len(rows)}; failures={failed}', flush=True)
-    if failed:
+    result = run_checkpointed_batch(rows, process, workers=workers,
+                                   label='Property refresh', error_limit=error_limit)
+    if result.failed:
         raise SystemExit(1)
