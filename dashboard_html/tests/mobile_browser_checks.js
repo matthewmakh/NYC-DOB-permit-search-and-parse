@@ -21,21 +21,21 @@ async page => {
         }
     }
     await page.setViewportSize({ width: 375, height: 812 });
-    for (const [path, input] of [['/properties', '#universalSearch'], ['/contractors', '#contractorSearch'], ['/permits', '#searchInput']]) {
+    for (const [path, input, value] of [['/properties', '#universalSearch', 'West'], ['/contractors', '#minJobs', '3'], ['/permits', '#searchInput', 'West']]) {
         await page.goto('http://127.0.0.1:5099' + path);
         const trigger = page.locator('.mobile-filter-trigger');
         await trigger.click();
         check(await page.locator('.mobile-filter-dialog').evaluate(e => e.open), `${path}: filter drawer did not open`);
-        await page.locator(input).fill('West');
+        await page.locator(input).fill(value);
         await page.keyboard.press('Escape');
         check(await trigger.evaluate(e => document.activeElement === e), `${path}: focus did not return`);
         await trigger.click();
-        check(await page.locator(input).inputValue() === 'West', `${path}: filter value lost`);
+        check(await page.locator(input).inputValue() === value, `${path}: filter value lost`);
         await page.getByRole('button', { name: 'Show results', exact: true }).click();
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.locator(input).waitFor({ state: 'visible' });
         check(await page.locator(input).isVisible(), `${path}: desktop filter not restored`);
-        check(await page.locator(input).inputValue() === 'West', `${path}: resize lost filter value`);
+        check(await page.locator(input).inputValue() === value, `${path}: resize lost filter value`);
         await page.setViewportSize({ width: 375, height: 812 });
     }
     await page.goto('http://127.0.0.1:5099/permits');

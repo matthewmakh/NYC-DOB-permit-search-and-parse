@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Permit Participants — NYC Permit Leads</title>
+    <title>Contractors &amp; participants — NYC Permit Leads</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
@@ -11,12 +11,22 @@
     <link rel="stylesheet" href="/static/css/navigation.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="/static/css/mobile.css">
+    <link rel="stylesheet" href="/static/css/property-workspace.css">
+    <link rel="stylesheet" href="/static/css/contractor-workspace.css">
 </head>
-<body>
+<body class="property-explorer contractor-explorer">
     {% from "_site_nav.html" import site_nav with context %}
     {% call site_nav('contractors', g.user if g.user is defined else none) %}{% endcall %}
 
     <div class="main-container">
+        <header class="explorer-heading">
+            <div>
+                <span class="workspace-eyebrow">NYC construction intelligence</span>
+                <h1>Find the people behind the projects.</h1>
+                <p>Explore contractors and permit participants by their work, properties, and recent activity.</p>
+            </div>
+            <a class="btn btn-secondary" href="/permits"><i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i> Explore permits</a>
+        </header>
         <!-- Sidebar filters — the same set the properties page uses, so a
              filter applies identically whichever page you are on. -->
         <aside class="sidebar" data-mobile-filters>
@@ -26,13 +36,7 @@
             </div>
 
             <div class="filter-section">
-                <h3>Search</h3>
-                <input type="text" id="contractorSearch" aria-label="Search company, person or licence number" class="filter-input"
-                    placeholder="Company, person, or licence number">
-            </div>
-
-            <div class="filter-section">
-                <h3>Participant role</h3>
+                <label class="filter-label" for="participantRole">Participant role</label>
                 <select id="participantRole" aria-label="Participant role" class="filter-input">
                     <option value="">All roles</option>
                     <option value="permittee">Permittee</option>
@@ -47,22 +51,22 @@
                     <input type="checkbox" id="probableGcOnly">
                     Probable general contractors only
                 </label>
-                <small class="filter-hint">Based on an explicit permittee role and GC licence type—not the generic applicant field.</small>
+                <small class="filter-hint">Identified from the permit role and general contractor license. Other roles may include designers, owners, and filing representatives.</small>
             </div>
 
             {% with page = 'contractors' %}{% include "_filter_sections.html" %}{% endwith %}
 
             <div class="filter-section">
-                <h3>Total jobs</h3>
+                <h3>Matching permits</h3>
                 <div class="range-inputs">
-                    <input type="number" id="minJobs" aria-label="Minimum total jobs" class="filter-input" placeholder="Min">
-                    <input type="number" id="maxJobs" aria-label="Maximum total jobs" class="filter-input" placeholder="Max">
+                    <input type="number" id="minJobs" aria-label="Minimum matching permits" class="filter-input" placeholder="Min">
+                    <input type="number" id="maxJobs" aria-label="Maximum matching permits" class="filter-input" placeholder="Max">
                 </div>
             </div>
 
             <div class="filter-section">
-                <h3>Active jobs</h3>
-                <input type="number" id="minActiveJobs" aria-label="Minimum active jobs" class="filter-input"
+                <h3>Recent permits</h3>
+                <input type="number" id="minActiveJobs" aria-label="Minimum permits issued in the last 90 days" class="filter-input"
                     placeholder="Min in last 90 days">
                 <small class="filter-hint">Permits issued in the last 90 days.</small>
             </div>
@@ -78,35 +82,40 @@
         </aside>
 
         <main class="content">
-            <div class="page-head">
-                <div class="page-head-row">
-                    <div>
-                        <h1>Permit participants</h1>
-                        <p>Role-aware permittees, filing applicants, owners, and filing representatives. Use “probable GC” when you need a defensible contractor list.</p>
-                    </div>
-                    <div class="head-metric">
-                        <div class="stat-value" id="totalContractors">&ndash;</div>
-                        <div class="stat-label">Matching participants</div>
-                    </div>
+            <section class="directory-intro" aria-labelledby="directoryTitle">
+                <div>
+                    <h2 id="directoryTitle">Contractors &amp; participants</h2>
+                    <p>Start with a company or narrow the list using the filters.</p>
+                </div>
+                <div class="directory-total">
+                    <strong id="totalContractors">&ndash;</strong>
+                    <span>matching participants</span>
+                </div>
+            </section>
+            <div class="directory-search">
+                <label for="contractorSearch">Search the directory</label>
+                <div class="search-bar">
+                    <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+                    <input type="search" id="contractorSearch" placeholder="Company, person, or license number" autocomplete="off">
                 </div>
             </div>
-
+            <div data-mobile-filter-toolbar></div>
             <div class="controls-bar">
                 <div class="results-info">
-                    <span id="resultsCount"></span>
+                    <span id="resultsCount" role="status" aria-live="polite">Loading participants&hellip;</span>
                 </div>
                 <div class="controls-right">
                     <label for="sortBy">Sort</label>
                     <select id="sortBy" class="control-select" multiple
-                        data-multiselect data-compact data-placeholder="Total jobs">
-                        <option value="total_jobs">Total jobs</option>
-                        <option value="active_jobs">Active jobs</option>
-                        <option value="total_value">Total project value</option>
-                        <option value="largest_project">Largest project</option>
+                        data-multiselect data-compact data-placeholder="Matching permits">
+                        <option value="total_jobs">Matching permits</option>
+                        <option value="active_jobs">Recent permits (90 days)</option>
+                        <option value="total_value">Total assessed value</option>
+                        <option value="largest_project">Largest property value</option>
                         <option value="unique_properties">Properties worked</option>
                         <option value="most_recent_job">Most recent job</option>
                     </select>
-                    <select id="sortOrder" class="control-select"
+                    <select id="sortOrder" aria-label="Sort direction" class="control-select"
                         data-multiselect data-compact data-placeholder="High to low">
                         <option value="desc">High to low</option>
                         <option value="asc">Low to high</option>
@@ -121,99 +130,18 @@
                 </div>
             </div>
 
-        <div id="contractorsGrid" class="contractors-grid">
-            <!-- Skeleton placeholders shown while the first page loads -->
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
+            <p class="directory-scope">Permit counts and work shown reflect your current filters. A permit participant is not always the contractor.</p>
+            <div id="contractorsGrid" class="contractors-grid" aria-busy="true" aria-label="Permit participants">
+                {% for _ in range(6) %}
+                <div class="skeleton-card" aria-hidden="true">
+                    <div class="skeleton-header">
+                        <div class="skeleton-avatar"></div>
+                        <div class="skeleton-info"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
                     </div>
+                    <div class="skeleton-stats">{% for _ in range(3) %}<div class="skeleton-stat"></div>{% endfor %}</div>
                 </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
+                {% endfor %}
             </div>
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
-            </div>
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
-            </div>
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
-            </div>
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
-            </div>
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton-avatar"></div>
-                    <div class="skeleton-info">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-                <div class="skeleton-stats">
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                    <div class="skeleton-stat"></div>
-                </div>
-            </div>
-        </div>
 
         <div id="pagination" class="pagination" style="display: none;">
             <button id="prevPage" class="btn-pagination">

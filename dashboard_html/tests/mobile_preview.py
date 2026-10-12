@@ -33,6 +33,50 @@ DEAL = dict(id=1, name='Building access and security modernization', stage='new'
 CONTRACTOR = dict(name=PERMIT['applicant'], contractor_name=PERMIT['applicant'], total_jobs=124, total_permits=124,
     active_jobs=12, total_buildings=32, total_units=250, total_value=1250000, phone='212-555-0100', work_mix=[])
 
+# Synthetic directory records exercise long names, roles, trades, and missing data.
+DIRECTORY = [
+    dict(contractor_name='Metropolitan Construction and Engineering Associates', license='GC-012345',
+         license_type='GC', participant_roles='permittee', probable_gc=True, total_jobs=124,
+         active_jobs=12, unique_properties=32, most_recent_job='2026-10-09',
+         work_mix=[dict(label='General construction', count=82), dict(label='Structural', count=42)]),
+    dict(contractor_name='T&S Mechanical / Building Services', license='MP-002468',
+         license_type='MP', participant_roles='permit_applicant', probable_gc=False, total_jobs=86,
+         active_jobs=8, unique_properties=24, most_recent_job='2026-10-08',
+         work_mix=[dict(label='Plumbing', count=64), dict(label='Mechanical', count=22)]),
+    dict(contractor_name='Hudson Design Studio', participant_roles='filing_applicant',
+         total_jobs=42, active_jobs=5, unique_properties=18, most_recent_job='2026-10-02',
+         work_mix=[dict(label='Alteration', count=42)]),
+    dict(contractor_name='Borough Permit Services', participant_roles='filing_representative',
+         total_jobs=18, active_jobs=0, unique_properties=9, work_mix=[]),
+]
+
+
+@app.get('/api/contractors/search')
+def directory_preview():
+    search = request.args.get('search', '').lower()
+    if search == 'preview:error':
+        return jsonify(success=False), 503
+    rows = [row for row in DIRECTORY if search in (row['contractor_name'] + row.get('license', '')).lower()]
+    if request.args.get('probable_gc') == 'true':
+        rows = [row for row in rows if row.get('probable_gc')]
+    if request.args.get('role'):
+        rows = [row for row in rows if row['participant_roles'] == request.args['role']]
+    minimum = request.args.get('min_jobs', type=int)
+    if minimum is not None:
+        rows = [row for row in rows if row['total_jobs'] >= minimum]
+    return jsonify(success=True, contractors=rows,
+                   pagination=dict(total=len(rows), page=1, pages=1, per_page=50))
+
+
+@app.get('/api/permits/facets')
+def permit_facets_preview():
+    return jsonify(success=True, facets={
+        'work_type': [dict(value='GC', label='General construction'), dict(value='PL', label='Plumbing')],
+        'job_type': [dict(value='NB', label='New building'), dict(value='A2', label='Alteration')],
+        'permit_type': [dict(value='EQ', label='Equipment'), dict(value='PL', label='Plumbing')],
+        'license_type': [dict(value='GC', label='General contractor'), dict(value='MP', label='Master plumber')],
+    })
+
 # Synthetic owner research examples. These in-memory edits disappear on restart.
 def demo_review(**overrides):
     return dict(version=0, status='not_researched', match_status='unreviewed', result_url='',

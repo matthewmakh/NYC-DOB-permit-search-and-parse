@@ -1,0 +1,62 @@
+/* Directory-specific layout; palette and page chrome come from the property workspace. */
+.contractor-explorer .explorer-heading > .btn { flex-shrink: 0; min-height: 44px; }
+.contractor-explorer .content { min-width: 0; }
+.directory-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.directory-intro h2 { font-size: 20px; line-height: 1.3; letter-spacing: -.03em; }
+.directory-intro p { color: var(--ink-2); font-size: 13px; margin-top: 6px; }
+.directory-total { flex-shrink: 0; border-left: 1px solid var(--line); padding-left: 24px; }
+.directory-total strong { display: block; color: var(--accent); font-size: 28px; line-height: 1.2; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.directory-total span { font-size: 12px; color: var(--ink-3); }
+.directory-search { margin-top: 22px; }
+.directory-search label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.directory-search .search-bar { min-width: 0; border-radius: 8px; }
+.directory-search input { min-height: 46px; font-size: 14px; }
+.contractor-explorer .controls-bar { gap: 12px; margin: 16px 0 12px; }
+.directory-scope { font-size: 12px; color: var(--ink-3); margin-bottom: 18px; max-width: 75ch; }
+.contractor-explorer .content .contractors-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+.contractor-explorer .contractor-card { position: relative; display: flex; flex-direction: column; border-radius: 10px; padding: 22px; box-shadow: var(--shadow-1); }
+.contractor-explorer .contractor-card:hover { border-color: var(--accent); box-shadow: var(--shadow-2); }
+.contractor-explorer .contractor-header { align-items: flex-start; gap: 12px; }
+.contractor-explorer .contractor-avatar { background: var(--accent-soft); color: var(--accent); width: 42px; height: 42px; border-radius: 9px; }
+.contractor-explorer .contractor-info h3 { display: block; overflow: visible; font-size: 16px; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.contractor-explorer .contractor-info h3 a { color: var(--ink); }
+.contractor-explorer .contractor-info h3 a::after { content: ''; position: absolute; inset: 0; border-radius: 10px; }
+.contractor-explorer .contractor-info h3 a:focus-visible { outline: none; }
+.contractor-explorer .contractor-card:has(a:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
+.contractor-explorer .contractor-license { margin-top: 5px; font-size: 12px; overflow-wrap: anywhere; }
+.participant-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+.participant-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; font-size: 11px; font-weight: 500; color: var(--ink-2); background: var(--surface-2); border-radius: 5px; }
+.participant-badge--gc { background: var(--accent-soft); color: var(--accent); }
+.contractor-explorer .contractor-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 16px 0; margin: 0; gap: 12px; }
+.contractor-explorer .contractor-stat-value { font-size: 22px; line-height: 1.3; letter-spacing: -.035em; }
+.contractor-explorer .contractor-stat-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.contractor-explorer .contractor-work { margin: 0 0 18px; }
+.contractor-explorer .contractor-meta { margin-top: auto; justify-content: space-between; gap: 8px; }
+.participant-profile-link { color: var(--accent); font-weight: 600; }
+.directory-state { grid-column: 1 / -1; padding: 52px 24px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.directory-state > i { color: var(--accent); font-size: 24px; margin-bottom: 16px; }
+.directory-state h3 { font-size: 18px; margin-bottom: 8px; }
+.directory-state p { color: var(--ink-2); max-width: 45ch; margin: 0 auto 20px; }
+.directory-state .btn { min-height: 44px; }
+.contractor-explorer .skeleton-card { border-radius: 10px; min-height: 260px; }
+.contractor-explorer .skeleton-stats { grid-template-columns: repeat(3, 1fr); }
+.contractor-explorer .filter-checkbox { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer; }
+.contractor-explorer .filter-checkbox input { margin-top: 4px; accent-color: var(--accent); }
+.contractor-explorer .btn-pagination { min-height: 44px; }
+@media (min-width: 861px) and (max-width: 960px) {
+    .contractor-explorer .main-container { flex-direction: row; }
+    .contractor-explorer .sidebar { width: 248px; }
+    .contractor-explorer .content { width: auto; }
+}
+@media (max-width: 640px) {
+    .directory-intro { padding: 18px; align-items: flex-start; flex-direction: column; gap: 12px; }
+    .directory-intro p { display: none; }
+    .directory-total { display: flex; align-items: baseline; gap: 10px; padding: 0; border: 0; }
+    .contractor-explorer .contractor-card { padding: 18px; }
+    .contractor-explorer .controls-right { gap: 8px; }
+    .contractor-explorer .controls-right label { width: auto; }
+    .contractor-explorer .contractor-stat-value { font-size: 21px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .contractor-explorer *, .contractor-explorer *::before, .contractor-explorer *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

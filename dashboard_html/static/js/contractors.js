@@ -9,6 +9,7 @@ let currentSearch = '';
 let currentSort = [];   // Sort keys in pick order; empty means the API default
 let currentOrder = 'desc';
 let contractorData = null;
+let directoryRequest = 0;
 
 // Filters this page owns. The rest — borough, property type, building class,
 // units, value, kind of work, recency, violations — live in SharedFilters and
@@ -126,25 +127,21 @@ function initializeDirectoryPage() {
 async function loadContractors() {
     const grid = document.getElementById('contractorsGrid');
     
-    // Show skeleton loading
+    const requestId = ++directoryRequest;
+    grid.setAttribute('aria-busy', 'true');
+    document.getElementById('resultsCount').textContent = 'Loading participants…';
+    document.getElementById('totalContractors').textContent = '–';
+    document.getElementById('pagination').style.display = 'none';
     grid.innerHTML = Array(6).fill(0).map(() => `
-        <div class="skeleton-card">
+        <div class="skeleton-card" aria-hidden="true">
             <div class="skeleton-header">
                 <div class="skeleton-avatar"></div>
-                <div class="skeleton-info">
-                    <div class="skeleton-line"></div>
-                    <div class="skeleton-line short"></div>
-                </div>
+                <div class="skeleton-info"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
             </div>
-            <div class="skeleton-stats">
-                <div class="skeleton-stat"></div>
-                <div class="skeleton-stat"></div>
-                <div class="skeleton-stat"></div>
-                <div class="skeleton-stat"></div>
-            </div>
+            <div class="skeleton-stats">${'<div class="skeleton-stat"></div>'.repeat(3)}</div>
         </div>
     `).join('');
-    
+
     try {
         const params = new URLSearchParams({
             page: currentPage,
@@ -166,26 +163,30 @@ async function loadContractors() {
         if (ownFilters.probableGcOnly) params.set('probable_gc', 'true');
         
         const response = await fetch(`/api/contractors/search?${params}`);
+        if (!response.ok) throw new Error('Search request failed');
         const data = await response.json();
-        
+        // A slower, earlier search must not replace the current filters' results.
+        if (requestId !== directoryRequest) return;
+
         if (data.success) {
             displayContractors(data.contractors);
             updatePagination(data.pagination);
             updateHeaderStats(data.pagination.total);
-            // The hero metric already carries the total; the toolbar only
-            // says which page of it you are looking at.
             const count = document.getElementById('resultsCount');
-            if (count) {
-                count.textContent = data.pagination.pages > 1
-                    ? `Page ${data.pagination.page} of ${formatNumber(data.pagination.pages)}`
-                    : '';
-            }
+            const first = (data.pagination.page - 1) * currentPerPage + 1;
+            const last = first + data.contractors.length - 1;
+            count.textContent = data.contractors.length
+                ? `${first.toLocaleString()}–${last.toLocaleString()} of ${Number(data.pagination.total).toLocaleString()} participants`
+                : 'No matching participants';
         } else {
-            showError(grid, data.error || 'Failed to load contractors');
+            showDirectoryError();
         }
     } catch (error) {
-        console.error('Error loading contractors:', error);
-        showError(grid, 'Network error. Please try again.');
+        if (requestId !== directoryRequest) return;
+        console.error('Error loading participants:', error);
+        showDirectoryError();
+    } finally {
+        if (requestId === directoryRequest) grid.setAttribute('aria-busy', 'false');
     }
 }
 
@@ -220,84 +221,62 @@ function renderWorkMix(contractor) {
     `;
 }
 
+function showDirectoryError() {
+    document.getElementById('resultsCount').textContent = 'Search unavailable';
+    document.getElementById('contractorsGrid').innerHTML = `
+        <div class="directory-state" role="alert">
+            <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
+            <h3>We couldn’t load the directory</h3>
+            <p>Your filters are still here. Try the search again.</p>
+            <button class="btn btn-primary" type="button" id="retryDirectory">Try again</button>
+        </div>`;
+    document.getElementById('retryDirectory').addEventListener('click', loadContractors);
+}
+
 function displayContractors(contractors) {
     const grid = document.getElementById('contractorsGrid');
-    
     if (contractors.length === 0) {
         grid.innerHTML = `
-            <div class="grid-empty">
-                <i class="fas fa-search"></i>
-                <h3>No permit participants found</h3>
-                <p>Try adjusting your search criteria</p>
-            </div>
-        `;
+            <div class="directory-state">
+                <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+                <h3>No participants match this search</h3>
+                <p>Try a broader time window, another work type, or fewer filters.</p>
+                <button class="btn btn-secondary" type="button" id="resetDirectory">Clear filters</button>
+            </div>`;
+        document.getElementById('resetDirectory').addEventListener('click', clearFilters);
         return;
     }
-
-    grid.innerHTML = contractors.map(contractor => `
-        <div class="contractor-card" data-contractor-name="${escapeHtml(contractor.contractor_name)}">
+    const number = value => value == null ? '–' : Number(value).toLocaleString();
+    grid.innerHTML = contractors.map(contractor => {
+        const roles = (contractor.participant_roles || '').split(',').map(role => role.trim()).filter(Boolean);
+        const profileUrl = `/contractor/${encodeURIComponent(contractor.contractor_name)}`;
+        return `
+        <article class="contractor-card">
             <div class="contractor-header">
-                <div class="contractor-avatar">
-                    <i class="fas fa-hard-hat"></i>
-                </div>
+                <div class="contractor-avatar" aria-hidden="true"><i class="fas fa-building"></i></div>
                 <div class="contractor-info">
-                    <h3>${escapeHtml(contractor.contractor_name)}</h3>
-                    ${contractor.license ? `
-                        <div class="contractor-license">License ${escapeHtml(contractor.license)}</div>
-                    ` : ''}
-                    ${contractor.participant_roles ? `
-                        <div class="contractor-license">${escapeHtml(contractor.participant_roles.replaceAll('_', ' '))}</div>
-                    ` : ''}
-                    ${contractor.role_confidence != null ? `
-                        <div class="contractor-license">Role confidence ${Math.round(Number(contractor.role_confidence) * 100)}%${
-                            contractor.contractor_confidence != null
-                                ? ` · contractor confidence ${Math.round(Number(contractor.contractor_confidence) * 100)}%`
-                                : ''}</div>
-                    ` : ''}
+                    <h3><a href="${escapeHtml(profileUrl)}">${escapeHtml(contractor.contractor_name)}</a></h3>
+                    <div class="contractor-license">${contractor.license
+                        ? `License ${escapeHtml(contractor.license)}` : 'License not listed'}${contractor.license_type ? ` · ${escapeHtml(contractor.license_type)}` : ''}</div>
                 </div>
             </div>
-
+            <div class="participant-badges">
+                ${contractor.probable_gc ? '<span class="participant-badge participant-badge--gc"><i class="fas fa-helmet-safety" aria-hidden="true"></i> Probable GC</span>' : ''}
+                ${roles.map(role => `<span class="participant-badge">${escapeHtml(role.replaceAll('_', ' '))}</span>`).join('')}
+                ${!roles.length ? '<span class="participant-badge">Role not listed</span>' : ''}
+            </div>
             <div class="contractor-stats">
-                <div class="contractor-stat">
-                    <div class="contractor-stat-value">${contractor.total_jobs}</div>
-                    <div class="contractor-stat-label">Total jobs</div>
-                </div>
-                <div class="contractor-stat">
-                    <div class="contractor-stat-value">${contractor.active_jobs}</div>
-                    <div class="contractor-stat-label">Active</div>
-                </div>
-                <div class="contractor-stat">
-                    <div class="contractor-stat-value">${contractor.unique_properties}</div>
-                    <div class="contractor-stat-label">Properties</div>
-                </div>
-                <div class="contractor-stat">
-                    <div class="contractor-stat-value">${formatCurrency(contractor.largest_project)}</div>
-                    <div class="contractor-stat-label">Largest</div>
-                </div>
+                <div><div class="contractor-stat-value">${number(contractor.total_jobs)}</div><div class="contractor-stat-label">Matching permits</div></div>
+                <div><div class="contractor-stat-value">${number(contractor.active_jobs)}</div><div class="contractor-stat-label">Issued in 90 days</div></div>
+                <div><div class="contractor-stat-value">${number(contractor.unique_properties)}</div><div class="contractor-stat-label">Properties</div></div>
             </div>
-
             ${renderWorkMix(contractor)}
-
             <div class="contractor-meta">
-                <span>
-                    <i class="fas fa-calendar"></i>
-                    Last permit ${formatDate(contractor.most_recent_job)}
-                </span>
-                ${contractor.license_type ? `<span>
-                    <i class="fas fa-id-card"></i>
-                    ${escapeHtml(contractor.license_type)}
-                </span>` : ''}
+                <span><i class="fas fa-calendar" aria-hidden="true"></i> ${contractor.most_recent_job ? `Last permit ${formatDate(contractor.most_recent_job)}` : 'No issue date listed'}</span>
+                <span class="participant-profile-link" aria-hidden="true">View profile <i class="fas fa-arrow-right"></i></span>
             </div>
-        </div>
-    `).join('');
-    
-    // Add click listeners to contractor cards
-    document.querySelectorAll('.contractor-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const contractorName = card.dataset.contractorName;
-            navigateToContractor(contractorName);
-        });
-    });
+        </article>`;
+    }).join('');
 }
 
 function clearFilters() {
@@ -335,7 +314,6 @@ function updatePagination(pagination) {
 
 function updateHeaderStats(total) {
     document.getElementById('totalContractors').textContent = formatNumber(total);
-    // Active contractors would need a separate API call or be included in the response
 }
 
 function navigateToContractor(contractorName) {
@@ -691,14 +669,15 @@ function formatNumber(value) {
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    // Permit dates are calendar dates, including Flask's midnight-GMT encoding.
+    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[char]));
 }
 
 function truncate(text, maxLength) {

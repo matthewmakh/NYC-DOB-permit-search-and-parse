@@ -18,6 +18,11 @@ property/permit/participant/buyer/deal lists and profiles, plus CRM forms and em
 states. Financial and enrichment actions should not be verified against live data
 as part of this UI test.
 
+The contractor directory fixture has distinct sample roles and work types. Search
+by company/license, filter by role or probable GC, or set a minimum permit count.
+Search for an unmatched name to check the empty state; `preview:error` simulates
+a failed request for checking the retry state. All these records are synthetic.
+
 Existing regression checks:
 
 ```sh
