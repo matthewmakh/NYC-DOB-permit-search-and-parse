@@ -93,6 +93,16 @@ class ContractorDirectoryTests(PermitWorkflowTests):
         self.assertTrue(self.refresh())
         self.assertEqual(11, self.get('/contractors?search=Alpha')['contractors'][0]['total_jobs'])
 
+    def test_background_refresh_accepts_the_apps_plain_connection(self):
+        import os
+        import psycopg2
+        connection = psycopg2.connect(os.environ['PROSPECTING_TEST_DATABASE_URL'],
+                                      options=f'-c search_path={self.schema}')
+        try:
+            self.assertTrue(directory.refresh(connection, force=True))
+        finally:
+            connection.close()
+
     def test_unrelated_building_enrichment_does_not_rebuild_directory(self):
         before = self.state()['source_version']
         with self.connect() as connection:

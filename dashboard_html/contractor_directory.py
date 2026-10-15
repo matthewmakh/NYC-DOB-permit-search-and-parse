@@ -10,6 +10,8 @@ import logging
 import re
 import threading
 
+from psycopg2.extras import RealDictCursor
+
 log = logging.getLogger(__name__)
 SOURCE = '''FROM permit_participants pp
             JOIN permits p ON p.id = pp.permit_id
@@ -120,7 +122,7 @@ def refresh(connection, force=False):
     model dirty, so the following pass catches up. Activity counts age daily.
     """
     with connection:
-        with connection.cursor() as cur:
+        with connection.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute('SELECT pg_try_advisory_xact_lock(72119, 0) AS acquired')
             if not cur.fetchone()['acquired']:
                 return False
