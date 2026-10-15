@@ -4,6 +4,8 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
+    "cronSchedule": "0 1 * * *",
+    "startCommand": "python -u run_permit_intelligence_cron.py",
     "restartPolicyType": "NEVER"
   }
 }

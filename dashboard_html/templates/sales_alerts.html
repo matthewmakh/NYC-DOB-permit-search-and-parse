@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Project Alerts — NYC Permit Leads{% endblock %}
+
+{% block extra_css %}
+<style>
+    .alerts-shell { max-width: 1440px; margin: 0 auto; padding: 36px 24px 64px; }
+    .alerts-head { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }
+    .alerts-head h1 { margin: 0 0 8px; }
+    .alerts-head p { margin: 0; color: var(--ink-3); max-width: 720px; }
+    .alert-tools { display: flex; gap: 10px; flex-wrap: wrap; }
+    .alert-tools input, .alert-tools select { min-height: 44px; border: 1px solid var(--line-2); background: var(--surface); border-radius: 8px; padding: 9px 12px; color: var(--ink); font: inherit; }
+    .alert-tools input { min-width: 260px; }
+    .alert-list { display: grid; gap: 12px; }
+    .alert-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-1); }
+    .alert-card-head { display: flex; justify-content: space-between; gap: 16px; }
+    .alert-card h3 { margin: 0 0 7px; font-size: 17px; }
+    .alert-card p { margin: 0; color: var(--ink-2); line-height: 1.5; }
+    .alert-badge { white-space: nowrap; align-self: flex-start; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 650; }
+    .alert-details { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13px; }
+    .alert-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .alert-actions a { min-height: 44px; display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); padding: 8px 11px; text-decoration: none; }
+    .alert-actions .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .alerts-empty { text-align: center; color: var(--ink-3); padding: 60px 20px; background: var(--surface); border: 1px dashed var(--line-2); border-radius: 12px; }
+    @media (max-width: 720px) { .alerts-head { align-items: start; flex-direction: column; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="alerts-shell">
+    <div class="alerts-head">
+        <div>
+            <h1>DOB project alerts</h1>
+            <p>Search new projects, status movement, and issued permits at the consolidated project level, with owners, cost, team members, and proposed building changes attached.</p>
+        </div>
+        <div class="alert-tools">
+            <input id="alertSearch" type="search" aria-label="Search project alerts" placeholder="Owner, address, job number…">
+            <select id="alertType" aria-label="Alert type">
+                <option value="">All alert types</option>
+                <option value="new_filing">New filings</option>
+                <option value="status_change">Status changes</option>
+                <option value="permit_issued">Permits issued</option>
+            </select>
+        </div>
+    </div>
+    <div id="alertList" class="alert-list"><div class="alerts-empty">Loading project alerts…</div></div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const money = value => value ? new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 0}).format(value) : null;
+const safe = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+let alertTimer;
+
+async function loadAlerts() {
+    const list = document.getElementById('alertList');
+    list.innerHTML = '<div class="alerts-empty">Loading project alerts…</div>';
+    const query = document.getElementById('alertSearch').value.trim();
+    const type = document.getElementById('alertType').value;
+    const response = await fetch(`/api/sales-alerts?status=all&type=${encodeURIComponent(type)}&q=${encodeURIComponent(query)}&limit=200`);
+    const data = await response.json();
+    if (!data.success) { list.innerHTML = `<div class="alerts-empty">${safe(data.error || 'Could not load alerts')}</div>`; return; }
+    if (!data.alerts.length) { list.innerHTML = '<div class="alerts-empty">No project alerts match this search.</div>'; return; }
+    list.innerHTML = data.alerts.map(alert => {
+        const storyDelta = alert.proposed_stories_count != null && alert.existing_stories_count != null
+            ? `${alert.existing_stories_count} → ${alert.proposed_stories_count} stories` : null;
+        const unitDelta = alert.proposed_dwelling_units != null && alert.existing_dwelling_units != null
+            ? `${alert.existing_dwelling_units} → ${alert.proposed_dwelling_units} units` : null;
+        const details = [alert.job_number && `Job ${alert.job_number}`, alert.initial_cost && money(alert.initial_cost), storyDelta, unitDelta,
+            alert.has_electrical_filing && `Electrical filing${alert.electrical_new_meters ? ` · ${alert.electrical_new_meters} new meters` : ''}`,
+            alert.electrical_scope_categories && `Electrical scope: ${alert.electrical_scope_categories}`,
+            alert.has_elevator_filing && `Elevator: ${alert.elevator_device_types || 'filing'}${alert.elevator_work_types ? ` · ${alert.elevator_work_types}` : ''}`,
+            alert.applicant_business_name && `Applicant: ${alert.applicant_business_name}`,
+            alert.owner_business_name && `Owner: ${alert.owner_business_name}`,
+            (alert.design_professional_business_name || alert.design_professional_person_name) && `Design professional: ${alert.design_professional_business_name || alert.design_professional_person_name}`,
+            alert.filing_representative_business_name && `Filing rep: ${alert.filing_representative_business_name}`].filter(Boolean);
+        return `<article class="alert-card">
+            <div class="alert-card-head"><div><h3>${safe(alert.title)}</h3><p>${safe(alert.summary)}</p></div><span class="alert-badge">${safe(alert.alert_type.replaceAll('_', ' '))}</span></div>
+            <div class="alert-details">${details.map(item => `<span>${safe(item)}</span>`).join('')}</div>
+            <div class="alert-actions">
+                ${alert.bbl ? `<a class="primary" href="/property/${encodeURIComponent(alert.bbl)}">View property</a>` : ''}
+                <a href="/permits?q=${encodeURIComponent(alert.job_number || alert.address || '')}">Find permits</a>
+                ${alert.owner_business_name ? `<a href="/properties?owner=${encodeURIComponent(alert.owner_business_name)}">Owner properties</a>` : ''}
+            </div>
+        </article>`;
+    }).join('');
+}
+const initialAlertQuery = new URLSearchParams(window.location.search).get('q') || '';
+document.getElementById('alertSearch').value = initialAlertQuery;
+document.getElementById('alertSearch').addEventListener('input', () => {
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(loadAlerts, 250);
+});
+document.getElementById('alertType').addEventListener('change', loadAlerts);
+loadAlerts();
+</script>
+{% endblock %}

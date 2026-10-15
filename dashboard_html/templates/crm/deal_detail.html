@@ -1,0 +1,24 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import stage_dot, followup_cell, avatar, event %}
+{% block title %}{{ deal.name }} — CRM{% endblock %}
+{% block crm_content %}
+<div class="crm-detail-head">
+    <span class="crm-avatar crm-avatar--building crm-avatar-lg"><i class="fas fa-handshake"></i></span>
+    <div class="crm-detail-head__body"><h1>{{ deal.name }}</h1><div class="crm-detail-head__meta">{{ stage_dot(deal.stage, stage_labels) }}{% if deal.service_type %}<span class="crm-tag">{{ deal.service_type }}</span>{% endif %}{% if deal.assigned_to_name %}<span class="crm-tag tag-blue"><i class="far fa-user"></i> {{ deal.assigned_to_name }}</span>{% endif %}</div></div>
+    <div class="crm-detail-head__actions"><a class="cbtn" href="/crm/deals/{{ deal.id }}/edit"><i class="fas fa-pen"></i> Edit</a>{% if crm_ctx.is_admin %}<button type="button" class="cbtn cbtn-icon js-deal-delete" data-id="{{ deal.id }}"><i class="fas fa-trash-can"></i></button>{% endif %}</div>
+</div>
+<div class="crm-stepper crm-deal-stepper" role="group" aria-label="Deal stage">{% for s in stages %}<button type="button" class="crm-stepper__step js-deal-stage{{ ' is-current' if deal.stage == s }}" data-id="{{ deal.id }}" data-stage="{{ s }}"><div class="crm-stepper__bar"></div><div class="crm-stepper__label">{{ stage_labels[s] }}</div></button>{% endfor %}</div>
+{% if deal.stage not in ('won','lost','client') and not deal.next_step_at %}<div class="crm-next is-none"><div class="crm-next__icon"><i class="fas fa-flag"></i></div><div class="crm-next__body"><div class="crm-next__eyebrow">Next step required</div><div class="crm-next__title">Nothing scheduled</div><div class="crm-next__sub">Add a dated action so this deal stays in the queue.</div></div><a class="cbtn cbtn-tinted" href="/crm/deals/{{ deal.id }}/edit">Set one</a></div>{% endif %}
+<div class="crm-quick"><button type="button" class="is-primary js-followup" data-deal-id="{{ deal.id }}" data-entity="{{ deal.name }}"><i class="far fa-calendar-plus"></i>Follow up</button>{% if deal.contact_id %}<a href="/crm/contacts/{{ deal.contact_id }}"><i class="fas fa-user"></i>Contact</a>{% endif %}{% if deal.building_id %}<a href="/crm/buildings/{{ deal.building_id }}"><i class="fas fa-building"></i>Building</a>{% endif %}</div>
+<div class="crm-columns"><div class="crm-col-main">
+    <div class="crm-group"><div class="crm-group__head"><h3>Deal details</h3></div>
+        <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Estimated value</div><div class="crm-cell__title">{{ '$' ~ '{:,.0f}'.format(deal.estimated_value) if deal.estimated_value is not none else 'Not set' }}</div></div></div>
+        <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Expected close</div><div class="crm-cell__title">{{ deal.expected_close_date|crm_date if deal.expected_close_date else 'Not set' }}</div></div></div>
+        <div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Next step</div><div class="crm-cell__title">{{ deal.next_step or 'Not set' }}</div>{% if deal.next_step_at %}<div class="crm-cell__sub">{{ deal.next_step_at|crm_nydt }}</div>{% endif %}</div></div>
+        {% if deal.stage == 'lost' %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Lost reason</div><div class="crm-cell__title">{{ deal.lost_reason }}</div></div></div>{% endif %}
+    </div>
+    {% if deal.follow_ups %}<div class="crm-group"><div class="crm-group__head"><h3>Open follow-ups</h3></div>{% for f in deal.follow_ups %}{{ followup_cell(f, today_ny, show_assignee=crm_ctx.is_admin) }}{% endfor %}</div>{% endif %}
+    {% if timeline %}<div class="crm-group"><div class="crm-group__head"><h3>Activity</h3></div>{% for a in timeline %}{{ event(a, method_labels, outcome_labels) }}{% endfor %}</div>{% endif %}
+</div><div class="crm-col-rail"><div class="crm-group"><div class="crm-group__head"><h3>Ownership</h3></div>{% if deal.assigned_to_name %}<div class="crm-cell"><span class="crm-cell__lead">{{ avatar(deal.assigned_to_name, 'crm-avatar-sm') }}</span><div class="crm-cell__body"><div class="crm-cell__sub">Assigned to</div><div class="crm-cell__title">{{ deal.assigned_to_name }}</div></div></div>{% endif %}{% if crm_ctx.is_admin %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Added by</div><div class="crm-cell__title">{{ deal.added_by_name }}</div></div></div>{% endif %}<div class="crm-cell"><div class="crm-cell__body"><div class="crm-cell__sub">Source</div><div class="crm-cell__title">{{ deal.source|replace('_',' ')|title }}</div></div></div></div></div></div>
+{% endblock %}
+{% block crm_js %}<script>window.CRM_RECORD = { deal_id: {{ deal.id }}, entity: {{ deal.name|tojson }} };</script>{% endblock %}

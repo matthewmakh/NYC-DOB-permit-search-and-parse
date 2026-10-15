@@ -1,0 +1,28 @@
+{% extends "crm/_layout.html" %}
+{% block title %}{{ 'Edit ' ~ deal.name if deal else 'New deal' }} — CRM{% endblock %}
+{% block crm_content %}
+{% set v = form_values if form_values is defined else (deal or {}) %}
+<div class="crm-title"><div><h1 class="crm-large-title">{{ 'Edit deal' if deal else 'New deal' }}</h1><p class="crm-subtitle">Give the opportunity an owner, value, close target, and a dated next step.</p></div></div>
+{% if form_error %}<div class="crm-collision"><i class="fas fa-triangle-exclamation"></i> {{ form_error }}</div>{% endif %}
+<form class="crm-group crm-record-form" method="post">
+    <div class="crm-group__head"><h3>Opportunity</h3><span class="count">Required fields are marked *</span></div>
+    <div class="crm-form-grid">
+        <label class="crm-field span-2"><span class="crm-label">Deal name *</span><input class="crm-input" name="name" required maxlength="255" value="{{ v.get('name', '') }}" placeholder="123 Main St — roof replacement"></label>
+        <label class="crm-field"><span class="crm-label">Service</span><input class="crm-input" name="service_type" maxlength="120" value="{{ v.get('service_type', '') or '' }}" placeholder="Roofing, façade, windows…"></label>
+        <label class="crm-field"><span class="crm-label">Estimated value</span><input class="crm-input" type="number" min="0" step="0.01" name="estimated_value" value="{{ v.get('estimated_value', '') if v.get('estimated_value') is not none else '' }}" placeholder="25000"></label>
+        <label class="crm-field"><span class="crm-label">Stage *</span><select class="crm-select js-deal-stage-input" name="stage">{% for s in stages %}<option value="{{ s }}" {{ 'selected' if v.get('stage', 'prospect') == s }}>{{ stage_labels[s] }}</option>{% endfor %}</select></label>
+        <label class="crm-field"><span class="crm-label">Expected close</span><input class="crm-input" type="date" name="expected_close_date" value="{{ v.get('expected_close_date').isoformat() if v.get('expected_close_date') and v.get('expected_close_date').isoformat is defined else v.get('expected_close_date', '') }}"></label>
+        <label class="crm-field"><span class="crm-label">Building</span><select class="crm-select" name="building_id"><option value="">None</option>{% for b in buildings %}<option value="{{ b.id }}" {{ 'selected' if (v.get('building_id') or preset_building) == b.id }}>{{ b.address }}</option>{% endfor %}</select></label>
+        <label class="crm-field"><span class="crm-label">Contact</span><select class="crm-select" name="contact_id"><option value="">None</option>{% for c in contacts %}<option value="{{ c.id }}" {{ 'selected' if (v.get('contact_id') or preset_contact) == c.id }}>{{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}</option>{% endfor %}</select></label>
+        {% if crm_ctx.is_admin %}<label class="crm-field"><span class="crm-label">Assigned to</span><select class="crm-select" name="assigned_to_id">{% for u in roster %}<option value="{{ u.id }}" {{ 'selected' if v.get('assigned_to_id', crm_ctx.user_id) == u.id }}>{{ u.name }}</option>{% endfor %}</select></label>{% else %}<input type="hidden" name="assigned_to_id" value="{{ crm_ctx.user_id }}">{% endif %}
+        <label class="crm-field"><span class="crm-label">Source</span><select class="crm-select" name="source"><option value="manual">Manual</option><option value="permit" {{ 'selected' if v.get('source') == 'permit' }}>Permit lead</option><option value="referral" {{ 'selected' if v.get('source') == 'referral' }}>Referral</option><option value="inbound" {{ 'selected' if v.get('source') == 'inbound' }}>Inbound</option><option value="outbound" {{ 'selected' if v.get('source') == 'outbound' }}>Outbound</option></select></label>
+    </div>
+    <div class="crm-section-title">Next step</div>
+    <div class="crm-form-grid">
+        <label class="crm-field span-2"><span class="crm-label">What happens next?</span><input class="crm-input" name="next_step" maxlength="255" value="{{ v.get('next_step', '') or '' }}" placeholder="Call owner after board meeting"></label>
+        <label class="crm-field"><span class="crm-label">Date and time</span><input class="crm-input" type="datetime-local" name="next_step_at" value="{{ v.get('next_step_at')|crm_input_dt if v.get('next_step_at') and v.get('next_step_at') is not string else v.get('next_step_at', '') }}"></label>
+        <label class="crm-field js-lost-reason"><span class="crm-label">Lost reason (required if lost)</span><textarea class="crm-textarea" name="lost_reason" placeholder="Competitor, timing, price, no response…">{{ v.get('lost_reason', '') or '' }}</textarea></label>
+    </div>
+    <div class="crm-sheet__foot"><a class="cbtn" href="{{ '/crm/deals/' ~ deal.id if deal else '/crm/deals' }}">Cancel</a><button class="cbtn cbtn-primary" type="submit">{{ 'Save changes' if deal else 'Create deal' }}</button></div>
+</form>
+{% endblock %}

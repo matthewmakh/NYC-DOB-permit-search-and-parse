@@ -1,0 +1,251 @@
+/* Spreadsheet overflow stays inside the workspace, on both desktop and mobile. */
+.crm-main:has(#prospecting) { max-width: none; min-width: 0; }
+#prospecting [hidden], .prospect-dialog [hidden] { display: none !important; }
+#prospecting { min-width: 0; }
+#prospect-back { display: inline-block; margin-bottom: 12px; font-size: 13px; }
+#prospect-message:not(:empty) { padding: 12px 16px; margin-bottom: 16px; background: var(--c-blue-tint); border-radius: 8px; }
+.prospect-summary { display: flex; flex-wrap: wrap; gap: 12px 32px; padding: 16px 0 24px; }
+.prospect-summary strong { font-size: 24px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+.prospect-summary span { color: var(--c-label-2); font-size: 13px; }
+.prospect-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 16px; background: var(--c-surface); border: 1px solid var(--c-hairline); border-radius: 12px; }
+.prospect-toolbar label, .prospect-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; min-width: 0; }
+.prospect-toolbar label:first-child { flex: 1 1 220px; }
+.prospect-toolbar input, .prospect-toolbar select, .prospect-form input, .prospect-form select, .prospect-form textarea { width: 100%; min-width: 0; border: 1px solid var(--c-hairline); border-radius: 7px; background: var(--c-surface); color: var(--c-label); padding: 10px; font: inherit; min-height: 42px; }
+.prospect-check { flex-direction: row !important; align-items: center; min-height: 44px; }
+.prospect-check input { width: 18px; min-height: 18px; }
+.prospect-hint { font-size: 12px; color: var(--c-label-2); margin: 12px 0; }
+.prospect-ownership { padding: 14px 16px; border: 1px solid var(--c-hairline); border-radius: 10px; background: var(--c-surface); }
+.prospect-ownership > p:first-child { margin: 0 0 12px; font-size: 13px; }
+.prospect-assignment-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.prospect-assignment-form label, .prospect-owner-filter { display: grid; gap: 6px; font-size: 13px; }
+.prospect-assignment-form select, .prospect-owner-filter select { border: 1px solid var(--c-hairline); border-radius: 7px; padding: 10px; background: var(--c-surface); color: var(--c-label); min-height: 44px; max-width: 100%; font: inherit; }
+.prospect-assignment-form label { flex: 1 1 200px; max-width: 340px; }
+.prospect-owner-filter { width: min(100%, 300px); margin: 0 0 20px; }
+.prospect-table-wrap { overflow: auto; max-height: 68vh; border: 1px solid var(--c-hairline); border-radius: 10px; background: var(--c-surface); }
+.prospect-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 13px; }
+.prospect-table th, .prospect-table td { padding: 0; border-bottom: 1px solid var(--c-sep); border-right: 1px solid var(--c-sep); vertical-align: middle; min-width: 160px; max-width: 300px; }
+.prospect-table th { position: sticky; top: 0; z-index: 2; text-align: left; background: var(--c-surface-2); font-size: 11px; letter-spacing: .025em; text-transform: uppercase; }
+.prospect-table td { height: 56px; background: var(--c-surface); }
+.prospect-table tr:hover td { background: var(--c-surface-2); }
+.prospect-table th:first-child, .prospect-table td:first-child { position: sticky; left: 0; z-index: 1; border-right: 2px solid var(--c-hairline); }
+.prospect-table [data-column="lead"] { min-width: 235px; width: 235px; }
+.prospect-table th:first-child { z-index: 3; }
+.prospect-table [data-column="touch_count"] { min-width: 100px; width: 100px; }
+.prospect-column-handle { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 44px; padding: 12px; border: 0; background: transparent; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left; cursor: grab; touch-action: none; user-select: none; }
+.prospect-column-handle svg { flex-shrink: 0; color: var(--c-label-2); }
+.prospect-column-handle:hover { background: var(--c-fill); }
+.prospect-column-handle.is-dragging { opacity: .5; }
+.prospect-column-dragging, .prospect-column-dragging * { cursor: grabbing !important; }
+.prospect-table th.drop-before { box-shadow: inset 3px 0 var(--c-blue-ink); }
+.prospect-table th.drop-after { box-shadow: inset -3px 0 var(--c-blue-ink); }
+.prospect-column-ghost { position: fixed; z-index: 10000; pointer-events: none; max-width: 240px; padding: 10px 14px; border: 1px solid var(--c-blue-ink); border-radius: 8px; background: var(--c-surface); color: var(--c-label); box-shadow: var(--c-shadow-pop); font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
+.prospect-layout-feedback { min-height: 18px; margin: 4px 0 12px; font-size: 12px; color: var(--c-label-2); }
+.prospect-column-option { display: flex; align-items: center; gap: 4px; font-size: 12px; min-height: 44px; }
+.prospect-column-option > label, .prospect-column-option > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.prospect-column-option > span { padding: 7px; }
+.prospect-column-option > button { flex: 0 0 36px; min-height: 36px; padding: 0; border: 1px solid var(--c-hairline); border-radius: 6px; color: var(--c-label); background: var(--c-surface); cursor: pointer; }
+.prospect-column-option > button:disabled { opacity: .35; cursor: default; }
+.prospect-table td > span { display: block; padding: 12px; }
+.prospect-cell, .prospect-open { display: block; width: 100%; max-width: 300px; min-height: 55px; padding: 10px 12px; background: transparent; border: 0; text-align: left; color: var(--c-label); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prospect-open { color: var(--c-blue-ink); font-weight: 600; max-width: 235px; }
+.prospect-open small { display: block; font-weight: 400; color: var(--c-label-2); padding-top: 4px; overflow: hidden; text-overflow: ellipsis; }
+.prospect-table select, .prospect-table input { margin: 6px; padding: 9px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--c-label); font: inherit; width: calc(100% - 12px); min-height: 42px; }
+.prospect-table select:hover, .prospect-table input:hover { border-color: var(--c-hairline); }
+.prospect-cell:focus-visible, .prospect-open:focus-visible, #prospecting :focus-visible, .prospect-dialog :focus-visible { outline: 2px solid var(--c-blue-ink); outline-offset: -2px; }
+.prospect-table textarea { width: 280px; min-height: 80px; font: inherit; background: var(--c-surface); color: var(--c-label); }
+.prospect-pagination { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; font-size: 13px; }
+.prospect-pagination > div { display: flex; gap: 8px; }
+.prospect-columns { position: relative; }
+.prospect-columns > div { position: absolute; right: 0; top: 48px; z-index: 5; width: 310px; max-width: calc(100vw - 64px); max-height: 360px; overflow: auto; padding: 12px; background: var(--c-surface); border: 1px solid var(--c-hairline); border-radius: 10px; box-shadow: var(--c-shadow-pop); }
+.prospect-columns label { display: flex; flex-direction: row; padding: 7px; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.prospect-columns input { width: 16px; min-height: 16px; }
+.prospect-list-card { display: flex; align-items: center; gap: 24px; justify-content: space-between; background: var(--c-surface); border: 1px solid var(--c-hairline); padding: 20px; margin-bottom: 12px; border-radius: 12px; text-decoration: none; color: var(--c-label); }
+.prospect-list-card:hover { border-color: var(--c-blue-ink); }
+.prospect-list-card h2 { font-size: 17px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.prospect-list-card p { font-size: 13px; color: var(--c-label-2); margin: 0; }
+.prospect-list-card > span { flex-shrink: 0; font-size: 13px; color: var(--c-blue-ink); }
+.prospect-empty { text-align: center; padding: 64px 24px; background: var(--c-surface); border: 1px dashed var(--c-hairline); border-radius: 12px; }
+.prospect-empty h2 { font-size: 20px; margin-bottom: 12px; }
+.prospect-empty p { color: var(--c-label-2); }
+.prospect-dialog { border: 1px solid var(--c-hairline); border-radius: 16px; background: var(--c-surface); color: var(--c-label); padding: 24px; width: min(760px, calc(100vw - 32px)); max-height: 88dvh; overflow: auto; margin: auto; box-shadow: var(--c-shadow-pop); }
+.prospect-dialog::backdrop { background: rgba(0,0,0,.48); }
+.prospect-dialog-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 18px; }
+.prospect-dialog h2 { font-size: 21px; margin: 0; overflow-wrap: anywhere; }
+.prospect-dialog h3 { font-size: 16px; margin: 24px 0 12px; }
+.prospect-dialog p { font-size: 13px; line-height: 1.6; }
+.prospect-dialog summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.prospect-form { display: grid; gap: 16px; }
+.prospect-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.prospect-form textarea { min-height: 95px; resize: vertical; }
+.prospect-form .cbtn { justify-self: start; }
+.prospect-error { color: var(--c-red-ink); white-space: pre-wrap; }
+.prospect-eyebrow { color: var(--c-label-2); margin: 0 0 4px; font-size: 11px !important; text-transform: uppercase; letter-spacing: .06em; }
+.prospect-preview-table { overflow: auto; max-height: 260px; }
+.prospect-preview-table table { border-collapse: collapse; font-size: 12px; }
+.prospect-preview-table th, .prospect-preview-table td { min-width: 160px; padding: 8px; border: 1px solid var(--c-hairline); text-align: left; max-width: 260px; overflow-wrap: anywhere; }
+.prospect-research { display: grid; grid-template-columns: minmax(110px, 1fr) 3fr; font-size: 13px; }
+.prospect-research dt, .prospect-research dd { padding: 10px 0; border-bottom: 1px solid var(--c-sep); overflow-wrap: anywhere; margin: 0; white-space: pre-wrap; }
+.prospect-research dt { color: var(--c-label-2); padding-right: 12px; }
+.prospect-touch { border-left: 2px solid var(--c-hairline); padding: 0 0 18px 16px; margin-left: 3px; font-size: 13px; }
+.prospect-touch p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0; }
+.prospect-touch small { color: var(--c-label-2); }
+.prospect-promote { margin-top: 24px; padding: 16px; background: var(--c-blue-tint); border-radius: 10px; }
+@media (max-width: 600px) {
+    .prospect-toolbar > label, .prospect-toolbar > label:first-child { flex: 1 1 100%; }
+    .prospect-summary { gap: 12px 20px; }
+    .prospect-summary strong { font-size: 20px; }
+    .prospect-form-grid { grid-template-columns: 1fr; }
+    .prospect-dialog { padding: 18px; }
+    .prospect-list-card { gap: 12px; padding: 16px; }
+    .prospect-list-card > span { max-width: 80px; }
+    .prospect-table th:first-child, .prospect-table td:first-child { position: static; }
+    .prospect-table [data-column="lead"] { min-width: 200px; }
+    .prospect-column-option > button { flex-basis: 44px; min-height: 44px; }
+    .prospect-toolbar { position: relative; }
+    .prospect-columns { position: static; }
+    .prospect-columns > div { left: 16px; right: 16px; top: calc(100% - 8px); width: auto; max-width: none; }
+    .prospect-pagination { flex-wrap: wrap; }
+}
+
+/* Sheet controls keep the rows primary; detailed settings live in dialogs. */
+.prospect-sheet-tools, .prospect-bulk-bar, .prospect-column-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.prospect-sheet-tools { justify-content: space-between; margin: 14px 0 8px; font-size: 12px; color: var(--c-label-2); }
+.prospect-bulk-bar { padding: 12px; margin-bottom: 10px; border: 1px solid var(--c-blue-ink); border-radius: 10px; background: var(--c-blue-tint); font-size: 13px; }
+.prospect-bulk-bar strong { margin-right: auto; }
+.prospect-table th:first-child, .prospect-table td:first-child { min-width: 48px; width: 48px; max-width: 48px; position: sticky; left: 0; z-index: 3; }
+.prospect-table th:first-child { z-index: 5; }
+.prospect-table .prospect-select-col { text-align: center; }
+.prospect-select-col input { width: 18px; min-height: 18px; margin: 14px; cursor: pointer; }
+.prospect-table .prospect-pinned { position: sticky; left: 48px; z-index: 2; border-right: 2px solid var(--c-hairline); }
+.prospect-table th.prospect-pinned { z-index: 4; }
+.prospect-table tr.is-selected td { background: var(--c-blue-tint); }
+.prospect-cell, .prospect-open { max-width: 100%; }
+.prospect-column-handle { padding-right: 22px; }
+.prospect-column-handle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prospect-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 14px; padding: 0; border: 0; border-right: 2px solid var(--c-hairline); background: transparent; cursor: col-resize; touch-action: none; }
+.prospect-resize-handle:hover, .prospect-resize-handle:focus-visible { border-color: var(--c-blue-ink); background: var(--c-blue-tint); }
+.prospect-table td > .prospect-duplicate-slot { padding: 0 8px 6px; }
+.prospect-duplicate-slot:empty { display: none; }
+.prospect-duplicate-badge { border: 0; border-radius: 5px; background: var(--c-blue-tint); color: var(--c-blue-ink); font: inherit; font-size: 11px; padding: 6px; cursor: pointer; }
+.prospect-match { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--c-sep); }
+.prospect-match span { font-size: 12px; color: var(--c-label-2); overflow-wrap: anywhere; }
+.prospect-match-warning { padding: 0 14px 12px; margin-bottom: 16px; background: var(--c-blue-tint); border-radius: 10px; }
+.prospect-columns > .prospect-columns-panel { width: 380px; }
+.prospect-columns-panel > .prospect-column-tools { position: sticky; top: -12px; background: var(--c-surface); padding: 8px 0; z-index: 1; }
+.prospect-column-option { gap: 3px; }
+.prospect-column-option > label { flex: 1 1 100px !important; }
+.prospect-column-option input { flex-shrink: 0; }
+@media (max-width: 640px) {
+    .prospect-columns > .prospect-columns-panel { width: auto; }
+    .prospect-table td.prospect-pinned { position: static; }
+    .prospect-table th.prospect-pinned { position: sticky; left: auto; z-index: 2; }
+    .prospect-bulk-bar strong { flex-basis: 100%; }
+    .prospect-duplicate-badge { min-height: 44px; }
+    .prospect-form input, .prospect-form select, .prospect-form textarea { font-size: 16px; }
+}
+.prospect-view-toolbar { margin: 0 0 18px; }
+.prospect-view-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--c-surface-2); }
+.prospect-view-tabs [aria-pressed="true"] { background: var(--c-surface); color: var(--c-blue-ink); box-shadow: 0 1px 3px #0001; }
+.prospect-network-search { display: grid; gap: 6px; font-size: 13px; max-width: 420px; }
+.prospect-network-search input { border: 1px solid var(--c-hairline); border-radius: 8px; padding: 12px; background: var(--c-surface); color: var(--c-label); font: inherit; }
+.prospect-network-cards { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,280px),1fr)); gap: 14px; }
+.prospect-network-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid var(--c-hairline); border-radius: 12px; background: var(--c-surface); color: var(--c-label); text-align: left; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+.prospect-network-card:hover { border-color: var(--c-blue-ink); }
+.prospect-network-card strong { font-size: 17px; }
+.prospect-network-card > span:last-child { font-size: 13px; color: var(--c-label-2); }
+.prospect-profile-link { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--c-sep); }
+.prospect-profile-link > div { min-width: 0; }
+.prospect-profile-link .prospect-eyebrow { display: block; }
+.prospect-profile-name { display: block; text-align: left; border: 0; background: none; color: var(--c-blue-ink); font: inherit; padding: 8px 0; cursor: pointer; overflow-wrap: anywhere; }
+.prospect-profile-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prospect-link-editor { margin-top: 20px; }
+@media(max-width:640px) {
+    .prospect-view-toolbar { align-items: stretch; }
+    .prospect-view-tabs { width: 100%; }
+    .prospect-view-tabs .cbtn { flex: 1; }
+    .prospect-network-search input { font-size: 16px; }
+}
+/* Lead intelligence: setup, persistent activity, and a focused evidence review. */
+.research-kicker { display:block; font-size:10px; font-weight:750; letter-spacing:.11em; color:var(--c-label-2); margin-bottom:6px; }
+.prospect-research-bar { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:22px 24px; margin-bottom:20px; background:var(--c-blue-tint); border:1px solid var(--c-hairline); border-radius:16px; }
+.prospect-research-bar strong { font-size:18px; display:block; letter-spacing:-.02em; }
+.prospect-research-bar p { margin:6px 0 0; color:var(--c-label-2); font-size:13px; }
+#prospect-research-inbox { margin:0 0 20px; }
+.research-inbox-heading { display:flex; justify-content:space-between; gap:12px; margin:14px 0 10px; font-size:13px; }
+.research-inbox-heading>span { color:var(--c-label-2); }
+.research-inbox-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:10px; }
+.research-inbox-card { display:flex; align-items:center; gap:12px; padding:16px; background:var(--c-surface); color:var(--c-label); border:1px solid var(--c-hairline); border-radius:12px; text-decoration:none; }
+.research-inbox-card>span:nth-child(2) { flex:1; min-width:0; }.research-inbox-card strong { display:block; overflow-wrap:anywhere; }
+.research-inbox-card small { display:block; margin-top:5px; color:var(--c-label-2); font-size:12px; }
+.research-inbox-card>span:last-child { color:var(--c-blue-ink); font-size:12px; }.research-inbox-card:hover { border-color:var(--c-blue); }
+.prospect-enrichment-dialog { width:min(1240px,calc(100vw - 48px)); height:min(880px,90dvh); max-height:90dvh; padding:0; overflow:hidden; border-radius:20px; }
+.prospect-enrichment-dialog[open] { display:flex; flex-direction:column; }
+.prospect-enrichment-dialog .research-header { flex:0 0 auto; }
+.research-header { display:flex; justify-content:space-between; align-items:center; padding:20px 26px; border-bottom:1px solid var(--c-hairline); background:var(--c-surface); }
+.prospect-enrichment-dialog .research-header h2 { font-size:21px; letter-spacing:-.035em; }
+.research-shell { display:grid; grid-template-columns:216px minmax(0,1fr); flex:1; min-height:0; }
+.research-sidebar { padding:22px 14px; border-right:1px solid var(--c-hairline); background:var(--c-surface-2); overflow:auto; }
+.research-sidebar>.cbtn { width:100%; margin-bottom:28px; min-height:42px; }.research-sidebar>.research-kicker { padding-left:10px; }
+.research-run-link { display:block; width:100%; text-align:left; background:transparent; color:var(--c-label); border:1px solid transparent; border-radius:10px; padding:13px 10px; margin:5px 0; cursor:pointer; }
+.research-run-link>span { display:flex; align-items:center; gap:7px; font-size:13px; font-weight:650; }
+.research-run-link small,.research-run-link em { display:block; font-size:11px; color:var(--c-label-2); margin:6px 0 0 14px; font-style:normal; }
+.research-run-link.is-active { background:var(--c-surface); border-color:var(--c-hairline); box-shadow:var(--c-shadow-1); }
+.research-run-link:hover { background:var(--c-fill); }.research-sidebar .research-sidebar-note,.research-history-empty { margin:24px 10px; font-size:12px; color:var(--c-label-2); line-height:1.6; }
+.research-main { min-width:0; min-height:0; padding:26px 30px; overflow:auto; background:var(--c-surface); }
+#prospect-enrichment-error:empty { display:none; }
+.prospect-enrichment-dialog .research-section-head h3,.prospect-enrichment-dialog .research-run-heading h3 { font-size:27px; letter-spacing:-.04em; line-height:1.2; margin:8px 0; }
+.research-section-head>p { margin:8px 0 24px; color:var(--c-label-2); }
+.research-step-heading { display:flex; align-items:center; gap:9px; margin:24px 0 12px; }.research-step-heading>span { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--c-surface-3); font-size:11px; font-weight:700; }.research-step-heading h4 { margin:0; font-size:14px; }.research-step-heading>strong { margin-left:auto; color:var(--c-blue-ink); font-size:12px; background:var(--c-blue-tint); border-radius:20px; padding:5px 10px; }
+.research-picker-tools { display:flex; gap:8px; align-items:center; }.research-search { flex:1; min-width:0; }.research-search input { width:100%; min-height:42px; border:1px solid var(--c-hairline); border-radius:9px; background:var(--c-surface-2); color:var(--c-label); font-size:14px; padding:10px 12px; box-sizing:border-box; }
+.prospect-enrichment-dialog .research-caption { color:var(--c-label-2); font-size:11px; margin:10px 0; }
+.research-picker { max-height:230px; overflow:auto; border:1px solid var(--c-hairline); border-radius:11px; }
+.research-picker-row { display:flex; align-items:center; gap:12px; padding:12px 14px; border-bottom:1px solid var(--c-sep); cursor:pointer; min-height:56px; box-sizing:border-box; }.research-picker-row:last-child { border:0; }.research-picker-row:hover { background:var(--c-fill); }.research-picker-row>span:nth-of-type(2) { flex:1; min-width:0; }
+.research-picker-row strong,.research-picker-row small { display:block; font-size:13px; overflow-wrap:anywhere; }.research-picker-row small { font-size:11px; margin-top:3px; color:var(--c-label-2); }.research-picker-row.is-busy { opacity:.65; }.research-picker-row em { font-size:11px; font-style:normal; color:var(--c-blue-ink); }
+.research-avatar { display:grid; place-items:center; width:30px; height:30px; flex:0 0 30px; background:var(--c-surface-2); border:1px solid var(--c-hairline); color:var(--c-label-2); border-radius:9px; font-size:12px; font-weight:650; }
+.prospect-enrichment-dialog input[type=checkbox],.prospect-enrichment-dialog input[type=radio] { accent-color:var(--c-blue); width:17px; height:17px; flex:0 0 17px; margin:0; }
+.research-methods { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.research-method { display:flex; align-items:start; gap:12px; padding:18px; border:1px solid var(--c-hairline); border-radius:12px; cursor:pointer; }.research-method:has(input:checked) { border-color:var(--c-blue); background:var(--c-blue-tint); }.research-method input { margin-top:2px!important; }.research-method strong { display:block; font-size:14px; }.research-method small { display:block; font-size:12px; line-height:1.6; color:var(--c-label-2); margin:7px 0 10px; }.research-method em { font-size:10px; font-style:normal; color:var(--c-blue-ink); font-weight:600; }
+.prospect-enrichment-dialog .research-explainer { color:var(--c-label-2); margin:12px 0; }.prospect-enrichment-dialog .research-explainer summary { font-size:12px; font-weight:500; }
+.research-launch { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 0 0; border-top:1px solid var(--c-hairline); margin-top:12px; }.research-launch strong { display:block; font-size:14px; }.research-launch small { display:block; font-size:12px; margin-top:6px; color:var(--c-label-2); }.research-launch .cbtn { padding:12px 20px; }
+.research-run-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:16px; }
+.research-progress { display:grid; grid-template-columns:1fr auto; gap:18px; padding:22px; background:var(--c-blue-tint); border:1px solid var(--c-hairline); border-radius:14px; }
+.research-status-pill { display:inline-flex; align-items:center; gap:7px; color:var(--c-blue-ink); font-weight:600; font-size:11px; margin-bottom:12px; }.research-status-pill::before { content:''; width:6px; height:6px; background:currentColor; border-radius:50%; }
+.research-progress strong { display:block; font-size:24px; letter-spacing:-.03em; }.research-progress strong>span { font-size:15px; font-weight:500; color:var(--c-label-2); letter-spacing:0; }.research-progress p { margin:7px 0 0; font-size:12px; color:var(--c-label-2); }.research-percent { font-size:36px; letter-spacing:-.045em; font-weight:650; align-self:center; color:var(--c-blue-ink); }
+.research-progress progress { grid-column:1/-1; width:100%; height:6px; accent-color:var(--c-blue); border-radius:20px; overflow:hidden; border:0; }.research-progress progress::-webkit-progress-bar { background:var(--c-fill); }.research-progress progress::-webkit-progress-value { background:var(--c-blue); border-radius:20px; }
+.research-metrics { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--c-hairline); border-radius:12px; margin:14px 0; padding:16px 0; }.research-metrics>div { padding:0 18px; border-right:1px solid var(--c-hairline); }.research-metrics>div:last-child { border:0; }.research-metrics strong { display:block; font-size:22px; font-weight:650; letter-spacing:-.03em; }.research-metrics span { display:block; font-size:11px; margin-top:4px; color:var(--c-label-2); }
+.research-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--c-green); flex:0 0 7px; }.research-dot.is-live { background:var(--c-blue); box-shadow:0 0 0 4px var(--c-blue-tint); }.research-active-row { display:flex; align-items:center; gap:10px; min-height:34px; font-size:12px; }.research-active-row strong { font-weight:550; }.research-active-row>span:last-child { margin-left:auto; color:var(--c-label-2); text-align:right; }
+.research-results-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:25px 0 12px; }.research-results-heading h4 { margin:0; font-size:16px; }.research-results-heading p { color:var(--c-label-2); font-size:12px; margin:5px 0 0; }
+.research-filters { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }.research-filters button { border:0; border-radius:7px; min-height:36px; padding:8px 10px; font-size:12px; background:transparent; color:var(--c-label-2); cursor:pointer; }.research-filters button[aria-pressed=true] { background:var(--c-fill); color:var(--c-label); font-weight:600; }
+.research-review { display:grid; grid-template-columns:minmax(180px,34%) minmax(0,1fr); border:1px solid var(--c-hairline); border-radius:12px; overflow:hidden; }
+#research-lead-list { background:var(--c-surface-2); border-right:1px solid var(--c-hairline); max-height:440px; overflow:auto; padding:6px; }
+.research-lead { display:flex; align-items:start; width:100%; gap:10px; text-align:left; padding:13px 10px; border:1px solid transparent; border-radius:9px; color:var(--c-label); background:transparent; cursor:pointer; }.research-lead>span:last-child { min-width:0; flex:1; }.research-lead strong { display:block; font-size:13px; line-height:1.4; overflow-wrap:anywhere; }.research-lead small { display:block; color:var(--c-label-2); font-size:11px; margin-top:3px; line-height:1.4; overflow-wrap:anywhere; }.research-lead.is-active { background:var(--c-surface); border-color:var(--c-hairline); box-shadow:var(--c-shadow-1); }.research-lead:hover { background:var(--c-fill); }
+.research-badge { display:inline-block; font-size:10px; font-style:normal; margin-top:8px; padding:3px 6px; border-radius:4px; background:var(--c-fill); color:var(--c-label-2); }.research-badge.status-running { background:var(--c-blue-tint); color:var(--c-blue-ink); }.research-badge.status-found { background:var(--c-green-tint); color:var(--c-green-ink); }.research-badge.status-failed,.research-badge.status-needs_review { background:var(--c-orange-tint); color:var(--c-orange-ink); }
+#research-detail { min-width:0; padding:20px; max-height:440px; overflow:auto; }.research-detail-head { border-bottom:1px solid var(--c-hairline); padding-bottom:16px; margin-bottom:4px; }.research-detail-head h4 { font-size:19px; margin:6px 0; letter-spacing:-.025em; }.research-detail-head p { color:var(--c-label-2); margin:0; }
+.research-finding { padding:18px 0; border-bottom:1px solid var(--c-sep); }.research-finding>label { display:flex; align-items:start; gap:12px; cursor:pointer; }.research-finding>label>span { min-width:0; }.research-finding input { margin-top:2px!important; }.research-finding strong { font-size:12px; font-weight:650; line-height:1.5; }.research-value { display:block; font-size:14px; margin:7px 0; overflow-wrap:anywhere; }.research-finding small { display:block; color:var(--c-label-2); font-size:11px; }.research-finding em { display:inline-block; margin-top:7px; color:var(--c-orange-ink); font-size:10px; font-style:normal; }.research-finding.has-conflict { background:var(--c-orange-tint); padding:14px 10px; border-radius:8px; }
+.research-evidence { margin:10px 0 0 29px; font-size:11px; }.research-evidence a { color:var(--c-blue-ink); }.prospect-enrichment-dialog .research-evidence summary,.prospect-enrichment-dialog .research-checked summary { padding:8px 0; font-size:11px; font-weight:500; color:var(--c-label-2); }.research-evidence p { overflow-wrap:anywhere; }.research-checked { margin-top:15px; font-size:12px; }
+.research-empty { padding:32px 18px; text-align:center; color:var(--c-label-2); font-size:13px; line-height:1.6; }.research-empty h4 { color:var(--c-label); margin:12px 0 5px; font-size:15px; }.research-empty p { max-width:330px; margin:0 auto; }.research-source-error { padding:10px 12px; background:var(--c-orange-tint); border-radius:8px; color:var(--c-orange-ink); }
+.research-review-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 0; }.research-review-footer>p { color:var(--c-label-2); font-size:11px; }.research-review-footer>div { display:flex; gap:8px; align-items:center; }.research-bulk { position:relative; }.prospect-enrichment-dialog .research-bulk>summary { padding:8px 12px; font-size:12px; }.research-bulk>div { position:absolute; right:0; bottom:100%; z-index:3; width:270px; background:var(--c-surface); border:1px solid var(--c-hairline); box-shadow:var(--c-shadow-pop); border-radius:12px; padding:8px; }.research-bulk button { display:block; width:100%; text-align:left; margin:4px 0; }.research-bulk small { display:block; padding:8px; font-size:11px; line-height:1.6; color:var(--c-label-2); }
+.research-spinner { display:inline-block; width:20px; height:20px; border:2px solid var(--c-hairline); border-top-color:var(--c-blue); border-radius:50%; animation:research-spin 1s linear infinite; }@keyframes research-spin { to { transform:rotate(360deg); } }@media(prefers-reduced-motion:reduce) { .research-spinner { animation:none; } }
+.research-bulk button { white-space:normal; line-height:1.5; }
+@media(max-width:900px) { .research-shell { grid-template-columns:176px minmax(0,1fr); }.research-main { padding:20px; }.research-review { grid-template-columns:180px minmax(0,1fr); }.research-method { padding:12px; }.research-run-link>span { font-size:12px; } }
+@media(max-width:640px) {
+    .prospect-enrichment-dialog { width:100vw; max-width:100vw; height:100dvh; max-height:100dvh; margin:0; border-radius:0; border:0; }
+    .research-header { padding:16px; }.research-shell { height:calc(100% - 85px); display:flex; flex-direction:column; }.research-sidebar { display:flex; flex:0 0 auto; align-items:center; gap:10px; border-right:0; border-bottom:1px solid var(--c-hairline); padding:10px 16px; overflow:auto; }.research-sidebar>.cbtn { width:auto; flex:0 0 auto; margin:0; }.research-sidebar>.research-kicker,.research-sidebar-note,.research-history-empty { display:none; }#research-history { display:flex; gap:6px; }.research-run-link { width:180px; flex:0 0 180px; margin:0; padding:8px; }.research-run-link em { display:none; }.research-run-link small { font-size:10px; }
+    .research-main { padding:20px 16px max(20px,env(safe-area-inset-bottom)); }.research-methods { grid-template-columns:1fr; }.research-picker-tools { flex-wrap:wrap; }.research-search { flex-basis:100%; }.research-search input { font-size:16px; }.research-picker { max-height:240px; }.research-picker-row { padding:12px; }.research-picker-row em { max-width:66px; }.research-section-head h3 { font-size:23px!important; }.research-launch { flex-wrap:wrap; }.research-launch>.cbtn { width:100%; min-height:44px; }.research-metrics>div { padding:0 10px; }.research-metrics span { font-size:10px; }.research-progress { padding:16px; }.research-percent { font-size:28px; }.research-active-row { flex-wrap:wrap; }.research-active-row>span:last-child { font-size:11px; }
+    .research-review { display:flex; flex-direction:column; }#research-lead-list { display:flex; gap:4px; border-right:0; border-bottom:1px solid var(--c-hairline); overflow:auto; max-height:150px; }.research-lead { width:190px; flex:0 0 190px; }#research-detail { max-height:none; padding:16px; }.research-review-footer { flex-direction:column; align-items:stretch; }.research-review-footer>div { justify-content:space-between; }.research-filters button { min-height:44px; }.research-results-heading { align-items:start; }.research-run-heading { gap:8px; }.research-run-heading h3 { font-size:22px!important; }.research-run-heading .cbtn { font-size:11px; }.prospect-research-bar { flex-direction:column; align-items:start; padding:20px; }.research-inbox-heading>span { display:none; }.research-inbox-card>span:last-child { font-size:11px; }
+}
+/* Evidence is organized by subject, then by source record type. */
+.research-header-actions { display:flex; align-items:center; gap:8px; }
+#prospect-enrichment-cancel { color:var(--c-orange-ink); }
+.research-context-note { padding:12px; border-radius:8px; background:var(--c-blue-tint); color:var(--c-label-2); font-size:12px!important; }
+.research-group { border:1px solid var(--c-hairline); border-radius:10px; margin:12px 0; overflow:hidden; }
+.prospect-enrichment-dialog .research-group>summary { padding:14px; display:grid; grid-template-columns:1fr auto; gap:5px 10px; background:var(--c-surface-2); }
+.research-group>summary:before { content:'▸'; grid-row:1/3; grid-column:2; align-self:center; }.research-group[open]>summary:before { content:'▾'; }
+.research-group-type { color:var(--c-blue-ink); font-size:10px; letter-spacing:.07em; }.research-group>summary strong { font-size:14px; overflow-wrap:anywhere; }.research-group>summary>span:last-child { font-size:11px; color:var(--c-label-2); font-weight:400; }
+.research-group-body { padding:0 14px 12px; }.research-connection { color:var(--c-label-2); font-size:12px!important; line-height:1.6; }
+.research-category { border-top:1px solid var(--c-hairline); }.prospect-enrichment-dialog .research-category>summary { font-size:12px; padding:12px 0; }.research-category>summary>span { color:var(--c-label-2); margin-left:6px; font-weight:400; }
+.research-category .research-finding:last-child { border:0; }.research-category .research-finding { padding:12px 0; }
+.research-proof { padding:12px; background:var(--c-surface-2); border:1px solid var(--c-hairline); border-radius:8px; margin-top:4px; }.research-proof h5 { font-size:12px; margin:0 0 8px; }.research-proof p { font-size:12px; }.research-proof dl { margin:8px 0 14px; }.research-proof dt { color:var(--c-label-2); font-size:11px; margin-top:9px; }.research-proof dd { margin:3px 0 0; font-size:12px; overflow-wrap:anywhere; white-space:pre-wrap; }.research-limitation { border-left:3px solid var(--c-orange); padding-left:10px; }
+.research-activity { border:1px solid var(--c-hairline); border-radius:10px; padding:0 14px; margin:16px 0; }.prospect-enrichment-dialog .research-activity>summary { font-size:13px; }.research-activity>summary>span { font-weight:400; color:var(--c-label-2); font-size:11px; margin-left:8px; }
+.research-activity-list { list-style:none; padding:0; margin:0; max-height:280px; overflow:auto; }.research-activity-list li { display:flex; gap:12px; padding:10px 0; border-top:1px solid var(--c-hairline); font-size:12px; }.research-activity-list time { color:var(--c-label-2); min-width:72px; font-size:11px; }.research-activity-list li>div { min-width:0; flex:1; overflow-wrap:anywhere; }.research-activity-list b { font-weight:550; }.research-activity-list li>div>span { font-size:10px; margin-left:7px; color:var(--c-blue-ink); }.research-activity-list p { margin:4px 0 0; font-size:12px; color:var(--c-label-2); }.research-activity-list .event-error span { color:var(--c-orange-ink); }
+@media(max-width:640px) { .research-header-actions { gap:5px; flex-wrap:wrap; justify-content:flex-end; }.research-header-actions .cbtn { min-height:40px; font-size:12px; }.research-header h2 { font-size:18px!important; }.research-activity>summary>span { display:block; margin:6px 0 0; }.research-group-body { padding:0 10px 10px; }.research-evidence { margin-left:0; } }

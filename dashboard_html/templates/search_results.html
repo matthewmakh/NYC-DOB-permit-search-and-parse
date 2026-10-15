@@ -1,243 +1,260 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search Results - NYC Real Estate Intel</title>
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
-        .result-card {
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-            cursor: pointer;
-            transition: all var(--transition-base);
-        }
-        .result-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-            border-color: var(--primary);
-        }
-        .match-tag {
-            background: var(--bg-tertiary);
-            color: var(--primary);
-            padding: 0.25rem 0.625rem;
-            border-radius: var(--radius-sm);
-            font-size: 0.75rem;
-            font-weight: 600;
-            border: 1px solid var(--primary-light);
-            display: inline-block;
-            margin: 0.125rem;
-        }
-        .search-tip {
-            background: var(--bg-tertiary);
-            border-radius: var(--radius-md);
-            padding: var(--spacing-md);
-            margin-bottom: var(--spacing-lg);
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-        }
-        .search-tip i {
-            color: var(--primary);
-            margin-right: 0.5rem;
-        }
-    </style>
-</head>
-<body>
-    <!-- Top Navigation -->
-    <nav class="top-nav">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🏙️ NYC Real Estate Intel</h1>
-            </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
-            </div>
-            <div class="nav-actions">
-                <button class="btn btn-secondary" onclick="window.location.href='/'">
-                    <i class="fas fa-arrow-left"></i> Back
-                </button>
-            </div>
-        </div>
-    </nav>
+{% extends "base.html" %}
 
-    <!-- Search Header -->
-    <section class="search-header" style="background: var(--bg-secondary); padding: var(--spacing-xl) 0; border-bottom: 1px solid var(--border-color);">
-        <div class="container">
-            <h1 style="font-size: 1.75rem; margin-bottom: var(--spacing-md);">Search Results</h1>
-            <div class="search-bar-large">
-                <i class="fas fa-search search-icon"></i>
-                <input 
-                    type="text" 
-                    id="searchInput" 
-                    class="search-input-large" 
-                    placeholder="Search addresses, owners, permits, BBLs..."
-                    value="{{ query }}"
-                >
-                <button class="btn btn-primary search-btn" onclick="performSearch()">Search</button>
-            </div>
-            <div id="resultsCount" style="margin-top: var(--spacing-md); color: var(--text-muted);"></div>
-        </div>
-    </section>
+{% block title %}Search explorer — NYC Permit Leads{% endblock %}
 
-    <!-- Results -->
-    <section style="padding: var(--spacing-2xl) 0;">
-        <div class="container">
-            <div class="search-tip">
-                <i class="fas fa-lightbulb"></i>
-                <strong>Tip:</strong> You can search by address (try both "Street" and "St"), owner name, BBL number, permit number, zip code (e.g., "11223"), or contact name.
-            </div>
-            <div id="resultsContainer" style="display: flex; flex-direction: column; gap: var(--spacing-lg);">
-                <div class="loading-state">
-                    <div style="text-align: center; padding: var(--spacing-2xl);">
-                        <i class="fas fa-spinner fa-spin" style="font-size: 2rem; color: var(--primary); margin-bottom: var(--spacing-md);"></i>
-                        <p>Searching across all properties and permits...</p>
-                    </div>
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/search_results.css') }}">
+{% endblock %}
+
+{% block content %}
+<main class="sr-page">
+    <header class="sr-head">
+        <div class="sr-head-copy">
+            <p class="sr-eyebrow">Universal search</p>
+            <h1>Turn a name into a property list</h1>
+            <p>Group the same search by property, owner, job type, or permit. Every filter applies to every view.</p>
+        </div>
+        <form class="sr-search" id="searchForm" role="search">
+            <label class="sr-visually-hidden" for="searchInput">Search properties and permits</label>
+            <i class="fas fa-search" aria-hidden="true"></i>
+            <input id="searchInput" name="q" type="search" value="{{ query }}"
+                placeholder="Permittee, owner, address, BBL, permit, phone…" autocomplete="off">
+            <button class="btn btn-primary" type="submit">Search</button>
+        </form>
+    </header>
+
+    <div class="sr-mobile-actions">
+        <button class="btn btn-secondary" id="openFiltersBtn" type="button" aria-controls="searchFilters"
+            aria-expanded="false">
+            <i class="fas fa-sliders" aria-hidden="true"></i>
+            Filters <span class="sr-filter-count" id="mobileFilterCount" hidden>0</span>
+        </button>
+        <span id="mobileResultCount" class="sr-mobile-count">Searching…</span>
+    </div>
+
+    <button class="sr-filter-backdrop" id="filterBackdrop" type="button" aria-label="Close filters" hidden></button>
+
+    <div class="sr-layout">
+        <aside class="sidebar sr-sidebar" id="searchFilters" aria-label="Search filters">
+            <div class="sidebar-header">
+                <div>
+                    <h2>Filters</h2>
+                    <span class="sr-filter-summary" id="filterSummary">All results</span>
+                </div>
+                <div class="sr-filter-head-actions">
+                    <button class="btn-clear" id="clearFiltersBtn" type="button">Clear all</button>
+                    <button class="sr-close-filters" id="closeFiltersBtn" type="button" aria-label="Close filters">
+                        <i class="fas fa-xmark" aria-hidden="true"></i>
+                    </button>
                 </div>
             </div>
-        </div>
-    </section>
 
-    <script>
-        const searchQuery = "{{ query }}";
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            loadResults();
-            
-            // Allow Enter key to search
-            document.getElementById('searchInput').addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    performSearch();
-                }
-            });
-        });
-        
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-        
-        async function loadResults() {
-            const container = document.getElementById('resultsContainer');
-            const countEl = document.getElementById('resultsCount');
-            
-            try {
-                const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
-                
-                if (!response.ok) {
-                    throw new Error(`Search failed with status ${response.status}`);
-                }
-                
-                const results = await response.json();
-                
-                console.log('Loaded', results.length, 'results');
-                
-                countEl.textContent = `Found ${results.length} result${results.length !== 1 ? 's' : ''} for "${escapeHtml(searchQuery)}"`;
-                
-                if (results.length === 0) {
-                    container.innerHTML = `
-                        <div style="text-align: center; padding: var(--spacing-2xl); color: var(--text-muted);">
-                            <i class="fas fa-search" style="font-size: 3rem; opacity: 0.3; margin-bottom: var(--spacing-md);"></i>
-                            <p style="font-size: 1.125rem; margin-bottom: var(--spacing-sm);">No results found for "${escapeHtml(searchQuery)}"</p>
-                            <p style="margin-bottom: var(--spacing-lg);">Try a different search term or check your spelling</p>
-                            <div style="text-align: left; max-width: 400px; margin: 0 auto; background: var(--bg-tertiary); padding: var(--spacing-lg); border-radius: var(--radius-md);">
-                                <strong style="display: block; margin-bottom: var(--spacing-sm);">Search tips:</strong>
-                                <ul style="margin: 0; padding-left: 1.5rem; line-height: 1.8;">
-                                    <li>Try "123 Main St" instead of "123 Main Street"</li>
-                                    <li>Search by BBL: "1-00234-0056"</li>
-                                    <li>Search by zip code: "11223"</li>
-                                    <li>Search owner names: "Smith LLC"</li>
-                                    <li>Search permit numbers: "PW123456"</li>
-                                </ul>
-                            </div>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                container.innerHTML = results.map(result => `
-                    <div class="result-card" onclick="window.location.href='/property/${result.bbl}'">
-                        <div style="display: flex; justify-content: space-between; align-items: start;">
-                            <div style="flex: 1;">
-                                <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: var(--spacing-sm); color: var(--text-primary);">
-                                    ${escapeHtml(result.address) || 'Address Unknown'}
-                                </h3>
-                                <div style="color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
-                                    <strong>Owner:</strong> ${escapeHtml(result.owner) || 'Unknown'}
-                                </div>
-                                
-                                <!-- Match Reasons -->
-                                ${result.match_reasons && result.match_reasons.length > 0 ? `
-                                    <div style="margin: var(--spacing-sm) 0;">
-                                        <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.25rem; font-weight: 600;">
-                                            Why this matched:
-                                        </div>
-                                        <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
-                                            ${result.match_reasons.slice(0, 5).map(reason => `
-                                                <span class="match-tag">${escapeHtml(reason)}</span>
-                                            `).join('')}
-                                            ${result.match_reasons.length > 5 ? `<span class="match-tag">+${result.match_reasons.length - 5} more</span>` : ''}
-                                        </div>
-                                    </div>
-                                ` : ''}
-                                
-                                <div style="display: flex; gap: var(--spacing-md); color: var(--text-muted); font-size: 0.875rem; margin-top: var(--spacing-sm);">
-                                    <span><i class="fas fa-building"></i> BBL: ${formatBBL(result.bbl)}</span>
-                                    <span><i class="fas fa-file-alt"></i> ${result.permits || 0} permit${result.permits != 1 ? 's' : ''}</span>
-                                    ${result.assessed_value ? `<span><i class="fas fa-dollar-sign"></i> $${formatNumber(result.assessed_value)}</span>` : ''}
-                                    ${result.sale_price ? `<span><i class="fas fa-tag"></i> Sale: $${formatNumber(result.sale_price)}</span>` : ''}
-                                </div>
-                            </div>
-                            <div style="color: var(--primary); font-size: 1.5rem;">
-                                <i class="fas fa-arrow-right"></i>
-                            </div>
-                        </div>
-                    </div>
-                `).join('');
-                
-            } catch (error) {
-                console.error('Error loading results:', error);
-                container.innerHTML = `
-                    <div style="text-align: center; padding: var(--spacing-2xl); color: var(--secondary);">
-                        <i class="fas fa-exclamation-circle" style="font-size: 3rem; margin-bottom: var(--spacing-md);"></i>
-                        <p style="margin-bottom: var(--spacing-md);">Error loading results. Please try again.</p>
-                        <button class="btn btn-primary" onclick="loadResults()">
-                            <i class="fas fa-redo"></i> Retry
-                        </button>
-                    </div>
-                `;
-            }
-        }
-        
-        function performSearch() {
-            const query = document.getElementById('searchInput').value.trim();
-            if (query) {
-                window.location.href = `/search-results?q=${encodeURIComponent(query)}`;
-            }
-        }
-        
-        function formatBBL(bbl) {
-            if (!bbl) return '';
-            const bblStr = bbl.toString();
-            if (bblStr.length === 10) {
-                return `${bblStr[0]}-${bblStr.substr(1, 5)}-${bblStr.substr(6, 4)}`;
-            }
-            return bblStr;
-        }
-        
-        function formatNumber(num) {
-            if (!num) return '0';
-            return Math.round(num).toLocaleString();
-        }
-    </script>
-</body>
-</html>
+            <div class="filter-section">
+                <h3>Match the search in</h3>
+                <select id="matchField" class="filter-select" multiple data-multiselect
+                    data-placeholder="Every searchable field">
+                    <option value="permittee">Permittee business</option>
+                    <option value="applicant">Applicant</option>
+                    <option value="property_owner">Property owner</option>
+                    <option value="permit_owner">Permit owner</option>
+                    <option value="address">Address, BBL or ZIP</option>
+                    <option value="permit">Permit or job number</option>
+                    <option value="phone">Phone number</option>
+                </select>
+                <small class="filter-hint">Leave empty to search all fields.</small>
+            </div>
+
+            <div class="filter-section">
+                <h3>Borough</h3>
+                <select id="boroughFilter" class="filter-select" multiple data-multiselect
+                    data-placeholder="All boroughs">
+                    <option value="1">Manhattan</option>
+                    <option value="2">Bronx</option>
+                    <option value="3">Brooklyn</option>
+                    <option value="4">Queens</option>
+                    <option value="5">Staten Island</option>
+                </select>
+            </div>
+
+            <div class="filter-section">
+                <h3>Property</h3>
+                <label class="filter-label" for="propertyType">Property type</label>
+                <select id="propertyType" class="filter-select" multiple data-multiselect
+                    data-placeholder="All types">
+                    <option value="residential">Residential</option>
+                    <option value="commercial">Commercial</option>
+                    <option value="mixed">Mixed use</option>
+                </select>
+
+                <label class="filter-label sr-field-gap" for="buildingClass">Building class</label>
+                <select id="buildingClass" class="filter-select" multiple data-multiselect
+                    data-placeholder="All classes" data-search-placeholder="Search class…">
+                    {%- for group in building_class_groups %}
+                    <optgroup label="{{ group.label }}">
+                        {%- for option in group.options %}
+                        <option value="{{ option.value }}">{{ option.label }}</option>
+                        {%- endfor %}
+                    </optgroup>
+                    {%- endfor %}
+                </select>
+
+                <label class="filter-label sr-field-gap">Units</label>
+                <div class="range-inputs">
+                    <input id="minUnits" class="filter-input" type="number" min="0" placeholder="Min" aria-label="Minimum units">
+                    <input id="maxUnits" class="filter-input" type="number" min="0" placeholder="Max" aria-label="Maximum units">
+                </div>
+
+                <label class="filter-label sr-field-gap">Building square feet</label>
+                <div class="range-inputs">
+                    <input id="minSqft" class="filter-input" type="number" min="0" placeholder="Min" aria-label="Minimum square feet">
+                    <input id="maxSqft" class="filter-input" type="number" min="0" placeholder="Max" aria-label="Maximum square feet">
+                </div>
+
+                <label class="filter-label sr-field-gap">Assessed value</label>
+                <div class="range-inputs">
+                    <input id="minValue" class="filter-input" type="number" min="0" placeholder="Min $" aria-label="Minimum assessed value">
+                    <input id="maxValue" class="filter-input" type="number" min="0" placeholder="Max $" aria-label="Maximum assessed value">
+                </div>
+            </div>
+
+            <div class="filter-section">
+                <h3>Permit work</h3>
+                <label class="filter-label" for="jobType">Job type</label>
+                <select id="jobType" class="filter-select" multiple data-multiselect
+                    data-facet="job_type" data-placeholder="All jobs"></select>
+
+                <label class="filter-label sr-field-gap" for="workType">Work type</label>
+                <select id="workType" class="filter-select" multiple data-multiselect
+                    data-facet="work_type" data-placeholder="All work"></select>
+
+                <label class="filter-label sr-field-gap" for="permitType">Permit type</label>
+                <select id="permitType" class="filter-select" multiple data-multiselect
+                    data-facet="permit_type" data-placeholder="All permits"></select>
+
+                <label class="filter-label sr-field-gap" for="licenseType">License type</label>
+                <select id="licenseType" class="filter-select" multiple data-multiselect
+                    data-facet="license_type" data-placeholder="All licenses"></select>
+
+                <label class="filter-label sr-field-gap" for="permitStatus">Permit status</label>
+                <select id="permitStatus" class="filter-select" multiple data-multiselect
+                    data-facet="permit_status" data-placeholder="Any status"></select>
+            </div>
+
+            <div class="filter-section">
+                <h3>Permit activity</h3>
+                <label class="checkbox-label sr-current-toggle">
+                    <input id="currentOnly" type="checkbox">
+                    <span>
+                        <strong>Current / open only</strong>
+                        <small>Issued and unexpired, or otherwise active</small>
+                    </span>
+                </label>
+
+                <label class="filter-label sr-field-gap" for="permitActivityMode">Timing rule</label>
+                <select id="permitActivityMode" class="filter-input">
+                    <option value="within">Had permits within window</option>
+                    <option value="inactive">No property permits within window</option>
+                </select>
+
+                <label class="filter-label sr-field-gap" for="recentPermitDays">Time window</label>
+                <select id="recentPermitDays" class="filter-select" data-multiselect
+                    data-placeholder="Any time" aria-describedby="permitActivityHint">
+                    <option value="">Any time</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                    <option value="180">Last 6 months</option>
+                    <option value="365">Last year</option>
+                    <option value="730">Last 2 years</option>
+                    <option value="custom">Custom&hellip;</option>
+                </select>
+                <input id="recentPermitCustomDays" class="filter-input" type="number"
+                    min="1" max="3650" inputmode="numeric" placeholder="Number of days"
+                    style="display: none; margin-top: 8px;">
+                <small class="filter-hint" id="permitActivityHint">
+                    Choose a time window to apply this timing rule.
+                </small>
+
+                <label class="filter-label sr-field-gap" for="minMatchingPermits">Minimum matching permits</label>
+                <input id="minMatchingPermits" class="filter-input" type="number" min="0" placeholder="Any count">
+            </div>
+
+            <div class="filter-section">
+                <h3>HPD violations</h3>
+                <select id="violationsFilter" class="filter-select" multiple data-multiselect data-placeholder="Any">
+                    <option value="true">Has open violations</option>
+                    <option value="false">No open violations</option>
+                </select>
+            </div>
+
+            <div class="sr-mobile-apply">
+                <button class="btn btn-primary" id="applyFiltersBtn" type="button">Show results</button>
+            </div>
+        </aside>
+
+        <section class="sr-content" aria-labelledby="resultsHeading">
+            <h2 class="sr-visually-hidden" id="resultsHeading">Search results</h2>
+
+            <section class="sr-stats" aria-label="Search summary">
+                <div class="sr-stat"><span>Properties</span><strong id="statProperties">—</strong></div>
+                <div class="sr-stat"><span>Matching permits</span><strong id="statPermits">—</strong></div>
+                <div class="sr-stat"><span>Current / open</span><strong id="statOpen">—</strong></div>
+                <div class="sr-stat"><span>Units represented</span><strong id="statUnits">—</strong></div>
+            </section>
+
+            <div class="sr-group-bar">
+                <div class="sr-group-tabs" id="groupTabs" role="tablist" aria-label="Group results by">
+                    <button type="button" role="tab" data-group="property" aria-selected="true">
+                        Properties <span id="tabPropertyCount">—</span>
+                    </button>
+                    <button type="button" role="tab" data-group="owner" aria-selected="false">
+                        Owners <span id="tabOwnerCount">—</span>
+                    </button>
+                    <button type="button" role="tab" data-group="job_type" aria-selected="false">
+                        Job types <span id="tabJobCount">—</span>
+                    </button>
+                    <button type="button" role="tab" data-group="permit" aria-selected="false">
+                        Permits <span id="tabPermitCount">—</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sr-active-filters" id="activeFilters" aria-label="Active filters"></div>
+
+            <div class="sr-toolbar">
+                <div class="sr-result-copy" id="resultsCount" aria-live="polite">Searching…</div>
+                <div class="sr-sort-controls">
+                    <label for="sortBy">Sort</label>
+                    <select id="sortBy" class="control-select"></select>
+                    <select id="sortOrder" class="control-select" aria-label="Sort direction">
+                        <option value="desc">High to low</option>
+                        <option value="asc">Low to high</option>
+                    </select>
+                    <label for="perPage">Rows</label>
+                    <select id="perPage" class="control-select">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="sr-results" id="resultsContainer" aria-live="polite" aria-busy="true">
+                <div class="sr-loading">
+                    <span class="sr-spinner" aria-hidden="true"></span>
+                    <p>Searching properties and permits…</p>
+                </div>
+            </div>
+            <nav class="pagination sr-pagination" id="pagination" aria-label="Search result pages"></nav>
+        </section>
+    </div>
+</main>
+
+<script id="searchExplorerConfig" type="application/json">{{ {'query': query}|tojson }}</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/multiselect.js') }}"></script>
+<script src="{{ url_for('static', filename='js/search_results.js') }}"></script>
+{% endblock %}

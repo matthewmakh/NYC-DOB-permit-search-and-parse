@@ -1,211 +1,353 @@
 {% extends "base.html" %}
 
-{% block title %}{{ bbl }} - Building Intelligence Profile{% endblock %}
+{% block title %}{{ bbl }} — Building Profile{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/building_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/entity.css') }}">
+<link rel="stylesheet" href="/static/css/property-workspace.css">
 {% endblock %}
 
 {% block content %}
-<div class="building-profile-container">
-    <!-- HERO SECTION - COMPACT -->
-    <div class="hero-section" id="hero-section">
-        <div class="hero-content">
-            <div class="hero-left">
-                <h1 class="building-address" id="building-address">Loading...</h1>
-                <div class="bbl-code">BBL: <span id="bbl-display">{{ bbl }}</span> <span id="bin-display"></span></div>
+<div class="dossier property-workspace">
+
+    <!-- Header band: address, identifiers, risk, jump nav -->
+    <div class="dossier-head">
+        <div class="dossier-head-inner">
+            <div class="dossier-head-row">
+                <div class="dossier-title-block">
+                    <div class="dossier-crumbs"><a href="{{ return_to|default('/properties') }}">Properties</a><span class="crumb-sep">/</span><span id="crumb-borough">&hellip;</span></div>
+                    <h1 class="building-address" id="building-address">Loading&hellip;</h1>
+                    <div class="dossier-chips">
+                        <span class="id-chip mono">BBL <span id="bbl-display">{{ bbl }}</span></span>
+                        <span class="id-chip mono" id="bin-display" style="display: none;"></span>
+                        <span class="id-chip accent" id="class-chip" style="display: none;"></span>
+                    </div>
+                </div>
+                <div class="dossier-head-actions">
+                    <a class="btn research-jump" href="#owner-research"><i class="fas fa-magnifying-glass" aria-hidden="true"></i> Research owners</a>
+                    <a class="btn btn-secondary" id="streetview-btn" href="#streetview-card"
+                       title="See this property in Google Maps">
+                        <i class="fas fa-map"></i> Google Maps
+                    </a>
+                    <a class="btn btn-secondary" id="crm-add-btn" href="/crm/buildings/add?bbl={{ bbl }}"
+                       title="Track this building in the sales CRM">
+                        <i class="fas fa-address-book"></i> Add to CRM
+                    </a>
+                    <div class="risk-score-card" id="risk-score-card">
+                        <div class="risk-score-value" id="risk-score-value">&ndash;</div>
+                        <div class="risk-score-copy">
+                            <span class="risk-score-label" id="risk-score-label">Loading</span>
+                            <button class="risk-explanation-btn" id="risk-explanation-btn">Why this score?</button>
+                        </div>
+                    </div>
+                </div>
             </div>
-            
-            <div class="hero-right">
-                <!-- RISK SCORE CARD -->
-                <div class="risk-score-card" id="risk-score-card">
-                    <div class="risk-score-value" id="risk-score-value">--</div>
-                    <div class="risk-score-label" id="risk-score-label">LOADING...</div>
-                    <button class="risk-explanation-btn" id="risk-explanation-btn">
-                        Why this score? ⓘ
+
+        </div>
+
+    </div>
+
+    <!-- Sticky section navigation stays available throughout the profile. -->
+    <div class="section-nav-bar">
+        <nav class="section-nav" id="section-nav" aria-label="Property sections">
+            <button class="tab-btn active" data-tab="overview"><span class="tab-label">Overview</span></button>
+            <button class="tab-btn" data-tab="building"><span class="tab-label">Building</span></button>
+            <button class="tab-btn" data-tab="owners"><span class="tab-label">Ownership</span><span class="tab-badge" id="owners-badge"></span></button>
+            <button class="tab-btn" data-tab="contacts"><span class="tab-label">Contacts</span><span class="tab-badge" id="contacts-badge"></span></button>
+            <button class="tab-btn" data-tab="financials"><span class="tab-label">Financials</span></button>
+            <button class="tab-btn" data-tab="activity"><span class="tab-label">Timeline</span><span class="tab-badge" id="activity-badge"></span></button>
+            <button class="tab-btn" data-tab="permits"><span class="tab-label">Permits</span><span class="tab-badge" id="permits-badge"></span></button>
+            <button class="tab-btn" data-tab="transactions"><span class="tab-label">Transactions</span><span class="tab-badge" id="transactions-badge"></span></button>
+            <button class="tab-btn" data-tab="violations"><span class="tab-label">Violations</span><span class="tab-badge" id="violations-badge"></span></button>
+        </nav>
+    </div>
+
+    <div class="dossier-body" id="tab-overview">
+
+        <!-- At-a-glance strip -->
+        <div class="glance-strip" id="glance-strip">
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+            <div class="glance-tile skeleton"><span class="glance-label">Loading</span><span class="glance-value">&ndash;</span></div>
+        </div>
+
+        <section class="dossier-card building-intelligence-card" id="tab-building" aria-labelledby="building-facts-heading">
+            <div class="dossier-card-head">
+                <div>
+                    <h3 id="building-facts-heading">Building &amp; lot facts</h3>
+                    <p class="card-subtitle">Units, physical scale, zoning, assessment and public-service districts for this tax lot.</p>
+                </div>
+                <div class="building-facts-actions">
+                    <button class="building-facts-toggle" id="building-facts-toggle"
+                            type="button" aria-expanded="false" aria-controls="building-facts-groups">
+                        Show full record
                     </button>
+                    <a class="freshness-note building-source-link" id="building-facts-source"
+                       href="https://data.cityofnewyork.us/d/64uk-42ks" target="_blank" rel="noopener noreferrer">
+                        Checking latest PLUTO&hellip;
+                    </a>
                 </div>
-                
-                <!-- ALL OWNER SOURCES -->
-                <div class="owners-card">
-                    <h3>Property Ownership</h3>
-                    <div class="owner-sources" id="owner-sources">
-                        <div class="owner-item skeleton">
-                            <span class="owner-source">Loading...</span>
-                            <span class="owner-name">...</span>
+            </div>
+            <div class="dossier-card-body">
+                <div class="building-facts-highlights" id="building-facts-highlights" aria-live="polite">
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                    <div class="building-fact-highlight skeleton"><span>Loading</span><strong>&ndash;</strong></div>
+                </div>
+                <div class="building-facts-groups" id="building-facts-groups" hidden>
+                    <div class="skeleton-text"></div>
+                    <div class="skeleton-text"></div>
+                    <div class="skeleton-text"></div>
+                </div>
+                <p class="building-facts-note" id="building-facts-note">
+                    PLUTO reports at the tax-lot level; condominium units are generally aggregated to the billing lot.
+                </p>
+            </div>
+        </section>
+
+        <div class="dossier-columns">
+
+            <!-- Main column -->
+            <div class="dossier-main">
+
+                <section class="dossier-card" id="tab-owners">
+                    <div class="dossier-card-head">
+                        <div><span class="workspace-eyebrow">Ownership intelligence</span><h3>People behind the property</h3></div>
+                        <button class="linklike" id="toggle-owner-history">Ownership history</button>
+                    </div>
+                    <div class="dossier-card-body">
+                        <section class="owner-research" id="owner-research" aria-labelledby="owner-research-heading">
+                            <div class="owner-research-heading">
+                                <div><h4 id="owner-research-heading">Owner research</h4><p>Compare the evidence. Preview a search. Save a reviewed match for your team.</p></div>
+                                <button type="button" class="research-button" data-research-action="reload">Reload research</button>
+                            </div>
+                            <div id="owner-research-toolbar" class="research-toolbar" aria-label="Filter ownership records"></div>
+                            <p id="owner-research-feedback" class="research-feedback" role="status" aria-live="polite"></p>
+                            <div id="owner-research-conflicts"></div>
+                            <div id="owner-research-people"><p class="research-muted">Loading people and saved reviews…</p></div>
+                            <details class="research-sources-disclosure">
+                                <summary>Source refresh &amp; change history</summary>
+                                <p class="research-muted">Refresh one source at a time. History starts when this feature first observes a source; a check date is separate from its reported date.</p>
+                                <div id="owner-research-sources"><p class="research-muted">Loading source status…</p></div>
+                                <div id="owner-research-history"></div>
+                            </details>
+                        </section>
+                        <details class="ownership-ledger">
+                            <summary>Original source records <span>Names, reported dates &amp; enrichment</span></summary>
+                            <div class="owner-sources" id="owner-sources">
+                                <div class="owner-item skeleton">
+                                    <span class="owner-source">Loading</span>
+                                    <span class="owner-name">&hellip;</span>
+                                </div>
+                            </div>
+                        </details>
+                        <div id="owners-content" class="owner-history" style="display: none;">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <details class="dossier-card profile-disclosure" id="tab-contacts">
+                    <summary class="dossier-card-head">
+                        <h3>Contacts</h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="contacts-panel">
+                        <div class="contacts-directory" id="contacts-directory">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
+                </details>
+
+                <section class="dossier-card" id="tab-financials">
+                    <div class="dossier-card-head">
+                        <h3>Financial position</h3>
+                        <span class="fin-flag" id="financing-flag" style="display: none;"></span>
+                    </div>
+                    <div class="dossier-card-body">
+                        <div id="financials-content">Loading&hellip;</div>
+                    </div>
+                </section>
+
+                <details class="dossier-card profile-disclosure" id="tab-activity">
+                    <summary class="dossier-card-head">
+                        <h3>Timeline <span class="disclosure-count" id="activity-section-count"></span></h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="activity-panel">
+                        <div class="timeline-filters" id="timeline-filters">
+                            <button class="pill-btn active" data-type="all">All</button>
+                            <button class="pill-btn" data-type="transaction">Deeds &amp; loans</button>
+                            <button class="pill-btn" data-type="permit">Permits</button>
+                        </div>
+                        <div class="activity-feed" id="activity-feed">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="dossier-card profile-disclosure" id="tab-permits">
+                    <summary class="dossier-card-head">
+                        <div>
+                            <h3>Permits &amp; DOB filings <span class="disclosure-count" id="permits-section-count"></span></h3>
+                            <p class="card-subtitle">Issued permits and active job filings, shown together without treating them as the same thing.</p>
+                        </div>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="permits-panel">
+                        <div id="permits-content">Loading&hellip;</div>
+                    </div>
+                </details>
+
+                <details class="dossier-card profile-disclosure" id="tab-transactions">
+                    <summary class="dossier-card-head">
+                        <h3>ACRIS transactions <span class="disclosure-count" id="transactions-section-count"></span></h3>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="transactions-panel">
+                        <div id="transactions-content">Loading&hellip;</div>
+                    </div>
+                </details>
+
+                <details class="dossier-card profile-disclosure" id="tab-violations">
+                    <summary class="dossier-card-head">
+                        <h3>Violations <span class="disclosure-count" id="violations-section-count"></span></h3>
+                        <span class="freshness-note">Live details load when opened</span>
+                        <span class="disclosure-action" aria-hidden="true"></span>
+                    </summary>
+                    <div class="dossier-card-body" id="violations-panel">
+                        <p class="data-freshness-note">Details are checked when this section is opened. Status reflects each agency's current record. The daily DOB NOW Safety feed is shown separately from legacy DOB/BIS, HPD housing, and ECB penalty records.</p>
+                        <div id="violations-content">Loading&hellip;</div>
+                    </div>
+                </details>
+
+            </div>
+
+            <!-- Rail -->
+            <aside class="dossier-rail">
+                <div class="dossier-card rail-card streetview-card" id="streetview-card">
+                    <div class="dossier-card-head">
+                        <h3><i class="fas fa-map" style="color:var(--accent);margin-right:6px"></i>Map &amp; Street View</h3>
+                        <a class="linklike" id="streetview-open" href="#" target="_blank" rel="noopener" style="display:none">Open in Google Maps</a>
+                    </div>
+                    <div class="streetview-body" id="streetview-body">
+                        <div class="streetview-empty"><span class="spinner spinner-sm"></span></div>
+                    </div>
+                </div>
+
+                <div class="dossier-card rail-card" id="signals-card" style="display: none;">
+                    <div class="dossier-card-head"><h3>Signals</h3></div>
+                    <div class="dossier-card-body" id="signals-list"></div>
+                </div>
+
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>On this property</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="stats-grid" id="property-stats">
+                            <div class="stat-item skeleton">
+                                <div class="stat-value">&ndash;</div>
+                                <div class="stat-label">Loading</div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- RISK EXPLANATION MODAL -->
-    <div class="modal" id="risk-explanation-modal">
-        <div class="modal-content">
-            <span class="modal-close">&times;</span>
-            <h2>Risk Score Breakdown</h2>
-            <div id="risk-factors-list"></div>
-            <div class="risk-total">
-                <strong>Total Risk Score:</strong> <span id="modal-risk-score">--</span>/100
-            </div>
-        </div>
-    </div>
-    
-    <!-- TAB NAVIGATION -->
-    <div class="tab-navigation">
-        <button class="tab-btn active" data-tab="overview">
-            <span class="tab-icon">📊</span>
-            <span class="tab-label">Overview</span>
-        </button>
-        <button class="tab-btn" data-tab="financials">
-            <span class="tab-icon">💰</span>
-            <span class="tab-label">Financials</span>
-        </button>
-        <button class="tab-btn" data-tab="owners">
-            <span class="tab-icon">👤</span>
-            <span class="tab-label">Owners</span>
-            <span class="tab-badge" id="owners-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="transactions">
-            <span class="tab-icon">📄</span>
-            <span class="tab-label">Transactions</span>
-            <span class="tab-badge" id="transactions-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="permits">
-            <span class="tab-icon">🔨</span>
-            <span class="tab-label">Permits</span>
-            <span class="tab-badge" id="permits-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="violations">
-            <span class="tab-icon">⚠️</span>
-            <span class="tab-label">Violations</span>
-            <span class="tab-badge" id="violations-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="activity">
-            <span class="tab-icon">📅</span>
-            <span class="tab-label">Activity</span>
-            <span class="tab-badge" id="activity-badge"></span>
-        </button>
-        <button class="tab-btn" data-tab="contacts">
-            <span class="tab-icon">📞</span>
-            <span class="tab-label">Contacts</span>
-            <span class="tab-badge" id="contacts-badge"></span>
-        </button>
-    </div>
-    
-    <!-- TAB CONTENT -->
-    <div class="tab-content-container">
-        <!-- OVERVIEW TAB -->
-        <div class="tab-content active" id="tab-overview">
-            <div class="cards-grid">
-                <!-- Building Basics Card -->
-                <div class="info-card">
-                    <h3>Building Information</h3>
-                    <div class="info-rows" id="building-basics">
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
-                    </div>
-                </div>
-                
-                <!-- Property Stats Card -->
-                <div class="info-card">
-                    <h3>Property Stats</h3>
-                    <div class="stats-grid" id="property-stats">
-                        <div class="stat-item skeleton">
-                            <div class="stat-value">--</div>
-                            <div class="stat-label">Loading</div>
+
+                <div class="dossier-card rail-card">
+                    <div class="dossier-card-head"><h3>Key metrics</h3></div>
+                    <div class="dossier-card-body">
+                        <div class="metrics-list" id="quick-metrics">
+                            <div class="skeleton-text"></div>
+                            <div class="skeleton-text"></div>
                         </div>
                     </div>
                 </div>
-                
-                <!-- Quick Metrics Card -->
-                <div class="info-card">
-                    <h3>Quick Metrics</h3>
-                    <div class="metrics-list" id="quick-metrics">
-                        <div class="skeleton-text"></div>
-                        <div class="skeleton-text"></div>
+
+                <details class="dossier-card rail-card profile-disclosure" id="property-data-sources">
+                    <summary class="dossier-card-head"><h3>Data sources</h3><span class="disclosure-action" aria-hidden="true"></span></summary>
+                    <div class="dossier-card-body" id="source-directory">
+                        <div class="source-row"><span>Loading source links&hellip;</span></div>
                     </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- FINANCIALS TAB -->
-        <div class="tab-content" id="tab-financials">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Financial Overview</h3>
-                    <div id="financials-content">Loading...</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- OWNERS TAB -->
-        <div class="tab-content" id="tab-owners">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Ownership History</h3>
-                    <div id="owners-content">Loading...</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- TRANSACTIONS TAB -->
-        <div class="tab-content" id="tab-transactions">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>ACRIS Transaction History</h3>
-                    <div id="transactions-content">Loading...</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- PERMITS TAB -->
-        <div class="tab-content" id="tab-permits">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Construction Permits</h3>
-                    <div id="permits-content">Loading...</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- VIOLATIONS TAB -->
-        <div class="tab-content" id="tab-violations">
-            <div class="cards-grid">
-                <div class="info-card full-width">
-                    <h3>Violations Summary</h3>
-                    <div id="violations-content">Loading...</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- ACTIVITY TAB -->
-        <div class="tab-content" id="tab-activity">
-            <div class="activity-feed" id="activity-feed">
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-            </div>
-        </div>
-        
-        <!-- CONTACTS TAB -->
-        <div class="tab-content" id="tab-contacts">
-            <div class="contacts-directory" id="contacts-directory">
-                <div class="skeleton-text"></div>
-                <div class="skeleton-text"></div>
-            </div>
+                </details>
+            </aside>
         </div>
     </div>
 </div>
 
-<!-- Permit Detail Modal -->
+<!-- Risk explanation modal -->
+<div class="modal" id="risk-explanation-modal">
+    <div class="modal-content">
+        <span class="modal-close">&times;</span>
+        <h2>Risk score breakdown</h2>
+        <div id="risk-factors-list"></div>
+        <div class="risk-total">
+            <strong>Total risk score:</strong> <span id="modal-risk-score">&ndash;</span>/100
+        </div>
+    </div>
+</div>
+
+<!-- Permit detail modal -->
 <div id="permit-modal" class="permit-modal" style="display: none;"></div>
 
-<!-- Data passed from Flask -->
 <script>
     const BBL = "{{ bbl }}";
+</script>
+<script>
+    // Google Maps always opens the address map; Street View is a separate option.
+    (async function () {
+        const body = document.getElementById('streetview-body');
+        const openLink = document.getElementById('streetview-open');
+        const headBtn = document.getElementById('streetview-btn');
+        const esc = (v) => { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; };
+        try {
+            const res = await fetch('/api/property/{{ bbl }}/streetview');
+            const sv = await res.json();
+            if (!sv.success) throw new Error(sv.error || 'lookup failed');
+            if (sv.map_url) {
+                openLink.href = sv.map_url; openLink.style.display = '';
+                headBtn.href = sv.map_url; headBtn.target = '_blank'; headBtn.rel = 'noopener noreferrer';
+                headBtn.innerHTML = '<i class="fas fa-map"></i> Google Maps';
+            }
+            const mapLink = '<a class="btn btn-secondary btn-sm" href="' + esc(sv.map_url) + '" target="_blank" rel="noopener noreferrer"><i class="fas fa-map"></i> Open in Google Maps</a>';
+            const streetLink = sv.streetview_url ? '<a class="btn btn-secondary btn-sm" href="' + esc(sv.streetview_url) + '" target="_blank" rel="noopener noreferrer"><i class="fas fa-street-view"></i> Street View nearby</a>' : '';
+            if (sv.embed_url) {
+                body.innerHTML = '<iframe class="streetview-frame" src="' + esc(sv.embed_url) + '" loading="lazy" ' +
+                    'referrerpolicy="strict-origin-when-cross-origin" allowfullscreen title="' + (sv.embed_kind === 'streetview' ? 'Street View near ' : 'Map of ') + esc(sv.address || '') + '"></iframe>' +
+                    '<div class="streetview-foot">' + mapLink + streetLink + '</div>';
+            } else {
+                body.innerHTML = '<div class="streetview-empty">' +
+                    '<i class="fas fa-map-location-dot"></i>' +
+                    '<p>Explore the property and its surroundings in Google Maps.</p>' + mapLink + streetLink +
+                    '</div>';
+            }
+        } catch (e) {
+            body.innerHTML = '<div class="streetview-empty"><i class="fas fa-street-view"></i><p>Street View unavailable right now.</p></div>';
+        }
+    })();
+</script>
+<script>
+    // Swap the CRM button to "In CRM" when this BBL is already tracked.
+    (async function () {
+        try {
+            const res = await fetch('/crm/api/bbl-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bbls: ["{{ bbl }}"] })
+            });
+            const data = await res.json();
+            const btn = document.getElementById('crm-add-btn');
+            const crmId = data && data.in_crm && data.in_crm["{{ bbl }}"];
+            if (btn && crmId) {
+                btn.href = '/crm/buildings/' + crmId;
+                btn.innerHTML = '<i class="fas fa-check"></i> In CRM';
+                btn.title = 'Open this building in the CRM';
+            }
+        } catch (e) { /* button stays as Add to CRM */ }
+    })();
 </script>
 {% endblock %}
 

@@ -146,7 +146,6 @@ def run_migration():
         print("\n📊 Creating indexes on new fields:\n")
         
         indexes = [
-            ("idx_permits_borough", "borough"),
             ("idx_permits_zip_code", "zip_code"),
             ("idx_permits_work_type", "work_type"),
             ("idx_permits_permit_type_new", "permit_type"),
@@ -166,6 +165,12 @@ def run_migration():
                 print(f"   ✅ INDEX: {index_name} on {column_name}")
             except Exception as e:
                 print(f"   ⚠️  INDEX: {index_name} - {e}")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_permits_borough_filing_date
+            ON permits(borough, filing_date DESC NULLS LAST)
+        """)
+        print("   ✅ INDEX: idx_permits_borough_filing_date on borough, filing_date")
         
         # Commit transaction
         conn.commit()

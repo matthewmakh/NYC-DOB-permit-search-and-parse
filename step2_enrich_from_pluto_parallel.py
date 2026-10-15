@@ -55,140 +55,15 @@ NUM_WORKERS = 3    # Parallel API workers (optimal balance: speed + readability 
 VERBOSE_LOGGING = False  # Set to True for local debugging, False for Railway
 
 
-def get_pluto_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Query NYC PLUTO API for building data by BBL"""
-    try:
-        params = {"$where": f"bbl='{bbl}'", "$limit": 1}
-        response = requests.get(PLUTO_API_BASE, params=params, timeout=10)
-        response.raise_for_status()
-        time.sleep(API_DELAY)
-        
-        data = response.json()
-        if not data:
-            return None, None
-            
-        record = data[0]
-        result = {
-            'owner_name': record.get('ownername'),
-            'building_class': record.get('bldgclass'),
-            'land_use': record.get('landuse'),
-            'residential_units': int(float(record.get('unitsres', 0) or 0)),
-            'total_units': int(float(record.get('unitstotal', 0) or 0)),
-            'num_floors': int(float(record.get('numfloors', 0) or 0)),
-            'building_sqft': int(float(record.get('bldgarea', 0) or 0)),
-            'lot_sqft': int(float(record.get('lotarea', 0) or 0)),
-            'year_built': int(float(record.get('yearbuilt', 0) or 0)) if record.get('yearbuilt') else None,
-            'year_altered': int(float(record.get('yearalter1', 0) or 0)) if record.get('yearalter1') else None,
-            'zip_code': record.get('zipcode')
-        }
-        return result, None
-    except Exception as e:
-        return None, f"PLUTO error: {str(e)}"
-
-
-def get_rpad_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Query NYC RPAD (Property Tax) API for owner and assessed values"""
-    try:
-        params = {"$where": f"bble='{bbl}'", "$limit": 1}
-        response = requests.get(RPAD_API_BASE, params=params, timeout=10)
-        response.raise_for_status()
-        time.sleep(API_DELAY)
-        
-        data = response.json()
-        if not data:
-            return None, None
-            
-        record = data[0]
-        result = {
-            'owner_name_rpad': record.get('owner'),
-            'assessed_land_value': int(float(record.get('avland', 0) or 0)),
-            'assessed_total_value': int(float(record.get('avtot', 0) or 0))
-        }
-        return result, None
-    except Exception as e:
-        return None, f"RPAD error: {str(e)}"
-
-
-def get_hpd_data_for_bbl(bbl: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Query NYC HPD APIs for registered owner and quality indicators"""
-    try:
-        # Parse BBL
-        boro = bbl[0]
-        block = str(int(bbl[1:6]))
-        lot = str(int(bbl[6:10]))
-        
-        result = {
-            'owner_name_hpd': None,
-            'hpd_registration_id': None,
-            'hpd_open_violations': 0,
-            'hpd_total_violations': 0,
-            'hpd_open_complaints': 0,
-            'hpd_total_complaints': 0
-        }
-        
-        # 1. Get HPD registration
-        r = requests.get(HPD_REGISTRATION_API,
-                        params={'boroid': boro, 'block': block, 'lot': lot, '$limit': 1},
-                        timeout=10)
-        r.raise_for_status()
-        time.sleep(API_DELAY)
-        
-        registrations = r.json()
-        if not registrations:
-            return None, None
-        
-        reg = registrations[0]
-        result['hpd_registration_id'] = reg.get('registrationid')
-        
-        # 2. Get owner from contacts
-        if result['hpd_registration_id']:
-            r = requests.get(HPD_CONTACTS_API,
-                            params={'registrationid': result['hpd_registration_id'],
-                                   'type': 'HeadOfficer', '$limit': 1},
-                            timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            contacts = r.json()
-            if contacts:
-                contact = contacts[0]
-                first = contact.get('firstname', '')
-                last = contact.get('lastname', '')
-                corp = contact.get('corporationname', '')
-                result['owner_name_hpd'] = corp if corp else f"{first} {last}".strip()
-        
-        # 3. Get violations count
-        r = requests.get(HPD_VIOLATIONS_API,
-                        params={'boroid': boro, 'block': block, 'lot': lot,
-                               '$select': 'currentstatus', '$limit': 1000},
-                        timeout=10)
-        r.raise_for_status()
-        time.sleep(API_DELAY)
-        
-        violations = r.json()
-        result['hpd_total_violations'] = len(violations)
-        result['hpd_open_violations'] = sum(1 for v in violations 
-                                           if v.get('currentstatus') not in ['VIOLATION CLOSED', 'VIOLATION DISMISSED'])
-        
-        # 4. Get complaints count (optional) - NOTE: This API appears to be restricted (403)
-        try:
-            r = requests.get(HPD_COMPLAINTS_API,
-                            params={'boroid': boro, 'block': block, 'lot': lot,
-                                   '$select': 'status', '$limit': 1000},
-                            timeout=10)
-            r.raise_for_status()
-            time.sleep(API_DELAY)
-            
-            complaints = r.json()
-            result['hpd_total_complaints'] = len(complaints)
-            result['hpd_open_complaints'] = sum(1 for c in complaints 
-                                               if c.get('status') not in ['CLOSE', 'CLOSED'])
-        except:
-            pass
-        
-        return result, None
-    except Exception as e:
-        return None, f"HPD error: {str(e)}"
+# The fetch helpers live in step2_enrich_from_pluto — one implementation,
+# with the corrected open/closed logic, distinct-complaint counting, and
+# the extra PLUTO/HPD fields. This wrapper only adds concurrency.
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
+from step2_enrich_from_pluto import (  # noqa: E402
+    get_pluto_data_for_bbl,
+    get_rpad_data_for_bbl,
+    get_hpd_data_for_bbl,
+)
 
 
 def enrich_single_building(building: Dict, worker_id: int) -> Dict:

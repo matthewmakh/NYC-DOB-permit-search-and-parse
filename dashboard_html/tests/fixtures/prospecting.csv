@@ -1,0 +1,3 @@
+Contact Name,Company,Phone,Email,Source,Extra
+Test Person,Example Co,212-555-0100,test@example.test,https://example.test,"<script>alert(1)</script>"
+Other Person,Other Co,212-555-0101,other@example.test,https://example.org,Research

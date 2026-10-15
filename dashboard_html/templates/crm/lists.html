@@ -1,0 +1,50 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import empty %}
+{% block title %}CRM — Lists{% endblock %}
+{% block crm_content %}
+<div class="crm-title">
+    <div>
+        <h1 class="crm-large-title">Lists</h1>
+        <p class="crm-subtitle">Hand-built work queues, plus saved lead lists that re-run live over the permit database.</p>
+    </div>
+    <div class="crm-title-actions"><a class="cbtn" href="/crm/prospecting">CSV prospect lists</a><button type="button" class="cbtn cbtn-primary js-new-list"><i class="fas fa-plus"></i> New list</button></div>
+</div>
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Work lists</h3><span class="count">{{ lists|length }}</span></div>
+    {% for l in lists %}
+    <div class="crm-cell">
+        <span class="crm-cell__lead"><span class="crm-avatar crm-avatar--building"><i class="fas fa-list-ul"></i></span></span>
+        <div class="crm-cell__body">
+            <div class="crm-cell__title"><a href="/crm/lists/{{ l.id }}">{{ l.name }}</a></div>
+            <div class="crm-cell__sub">{{ l.item_count }} lead{{ 's' if l.item_count != 1 }} · by {{ l.owner_name }}{% if l.assigned_to_name %} · assigned to {{ l.assigned_to_name }}{% endif %}{% if l.description %} · {{ l.description|truncate(70) }}{% endif %}</div>
+        </div>
+        <div class="crm-cell__trail">
+            <a class="cbtn cbtn-sm" href="/crm/focus?source=list&list={{ l.id }}"><i class="fas fa-bullseye"></i> Call through</a>
+            <a class="cbtn cbtn-icon cbtn-sm" href="/crm/lists/{{ l.id }}"><i class="fas fa-chevron-right"></i></a>
+        </div>
+    </div>
+    {% else %}
+    {% call empty('fa-list-ul', 'No lists yet', 'Build one from Discover results, from any building or person, or by hand right here.') %}
+        <button type="button" class="cbtn cbtn-primary js-new-list">Start a list</button>
+    {% endcall %}
+    {% endfor %}
+</div>
+<div class="crm-group">
+    <div class="crm-group__head"><h3>Saved lead lists</h3><a href="/properties" title="Set filters on the Properties page, then save them from there">Build one in Discover</a></div>
+    {% for sf in saved_filters %}
+    <div class="crm-cell">
+        <span class="crm-cell__lead"><span class="crm-avatar crm-avatar--building"><i class="fas fa-filter"></i></span></span>
+        <div class="crm-cell__body">
+            <div class="crm-cell__title"><a href="/properties?{{ sf.querystring }}">{{ sf.name }}</a>{% if sf.visibility == 'private' %} <i class="fas fa-lock" title="Only you can see this one" style="font-size:10px;color:var(--c-ink-3)"></i>{% endif %}</div>
+            <div class="crm-cell__sub">Re-runs live · by {{ sf.owner_name }} {{ sf.created_at|crm_timeago }}{% if sf.use_count %} · run {{ sf.use_count }}×{% endif %}</div>
+        </div>
+        <div class="crm-cell__trail">
+            <a class="cbtn cbtn-sm" href="/properties?{{ sf.querystring }}">Run</a>
+            <button type="button" class="cbtn cbtn-icon cbtn-sm js-filter-delete" data-id="{{ sf.id }}" title="Remove"><i class="fas fa-trash-can"></i></button>
+        </div>
+    </div>
+    {% else %}
+    {{ empty('fa-filter', 'No saved lead lists', 'Set filters on the Properties page and save the search — it stays live as new permits come in.') }}
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,595 +1,39 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Construction Intelligence - NYC Real Estate Intel</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-    <style>
-        .top-nav {
-            background: #1a1d29;
-            border-bottom: 1px solid #2d3142;
-            padding: 1rem 0;
-            margin-bottom: 2rem;
-        }
-        
-        .nav-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 2rem;
-        }
-        
-        .nav-title {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: #e2e8f0;
-        }
-        
-        .nav-links {
-            display: flex;
-            gap: 1.5rem;
-        }
-        
-        .nav-link {
-            color: #94a3b8;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.2s;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-        }
-        
-        .nav-link:hover {
-            color: #e2e8f0;
-            background: rgba(255,255,255,0.05);
-        }
-        
-        .nav-link.active {
-            color: white;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            font-weight: 600;
-        }
-    
-        .construction-container {
-            display: grid;
-            grid-template-columns: 1fr 350px;
-            gap: var(--spacing-lg);
-            padding: var(--spacing-xl) 0;
-            min-height: calc(100vh - 64px);
-        }
-        
-        .map-section {
-            display: flex;
-            flex-direction: column;
-            gap: var(--spacing-lg);
-        }
-        
-        #constructionMap {
-            height: 600px;
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            box-shadow: var(--shadow-lg);
-            position: relative;
-        }
-        
-        .map-loading-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(26, 29, 41, 0.95);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            border-radius: var(--radius-lg);
-            backdrop-filter: blur(4px);
-        }
-        
-        .map-loading-overlay.hidden {
-            display: none;
-        }
-        
-        .loading-spinner {
-            width: 60px;
-            height: 60px;
-            border: 4px solid rgba(139, 92, 246, 0.2);
-            border-top-color: #8b5cf6;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        
-        .loading-text {
-            margin-top: 1.5rem;
-            color: #e2e8f0;
-            font-size: 1rem;
-            font-weight: 600;
-        }
-        
-        .loading-subtext {
-            margin-top: 0.5rem;
-            color: #94a3b8;
-            font-size: 0.875rem;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .sidebar {
-            display: flex;
-            flex-direction: column;
-            gap: var(--spacing-lg);
-        }
-        
-        .filter-panel {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-        }
-        
-        .filter-group {
-            margin-bottom: var(--spacing-md);
-        }
-        
-        .filter-group:last-child {
-            margin-bottom: 0;
-        }
-        
-        .filter-label {
-            display: block;
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: var(--spacing-sm);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .filter-select,
-        .filter-input {
-            width: 100%;
-            padding: 0.625rem;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-md);
-            color: var(--text-primary);
-            font-size: 0.875rem;
-            transition: all var(--transition-fast);
-        }
-        
-        .filter-select:focus,
-        .filter-input:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
-        }
-        
-        .quick-stats-panel {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-        }
-        
-        .quick-stat {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-md);
-            padding: var(--spacing-md);
-            background: var(--bg-tertiary);
-            border-radius: var(--radius-md);
-            margin-bottom: var(--spacing-sm);
-            transition: all var(--transition-fast);
-        }
-        
-        .quick-stat:hover {
-            transform: translateX(4px);
-            border-left: 3px solid var(--primary);
-        }
-        
-        .quick-stat-icon {
-            font-size: 1.5rem;
-            width: 2.5rem;
-            height: 2.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-primary);
-            border-radius: var(--radius-md);
-        }
-        
-        .quick-stat-content {
-            flex: 1;
-        }
-        
-        .quick-stat-value {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .quick-stat-label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-        }
-        
-        .bottom-tabs {
-            margin-top: var(--spacing-xl);
-        }
-        
-        .tab-nav {
-            display: flex;
-            gap: var(--spacing-sm);
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: var(--spacing-lg);
-        }
-        
-        .tab-btn {
-            padding: var(--spacing-md) var(--spacing-lg);
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            font-weight: 600;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -2px;
-            transition: all var(--transition-fast);
-        }
-        
-        .tab-btn:hover {
-            color: var(--text-primary);
-        }
-        
-        .tab-btn.active {
-            color: var(--primary);
-            border-bottom-color: var(--primary);
-        }
-        
-        .tab-content {
-            display: none;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        .contractor-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-            margin-bottom: var(--spacing-md);
-            transition: all var(--transition-fast);
-            cursor: pointer;
-        }
-        
-        .contractor-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--primary);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .contractor-rank {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 2rem;
-            height: 2rem;
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: white;
-            border-radius: 50%;
-            font-weight: 700;
-            font-size: 0.875rem;
-            margin-right: var(--spacing-md);
-        }
-        
-        .permits-list-container {
-            max-height: 600px;
-            overflow-y: auto;
-        }
-        
-        .permit-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-            margin-bottom: var(--spacing-md);
-            transition: all var(--transition-fast);
-            cursor: pointer;
-        }
-        
-        .permit-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--primary);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .permit-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            margin-bottom: var(--spacing-md);
-        }
-        
-        .permit-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: var(--spacing-xs);
-        }
-        
-        .permit-address {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-        
-        .permit-type-badge {
-            padding: 0.375rem 0.75rem;
-            border-radius: var(--radius-full);
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .type-nb { background: #fef2f2; color: #991b1b; }
-        .type-a1 { background: #fff7ed; color: #9a3412; }
-        .type-a2 { background: #fefce8; color: #854d0e; }
-        .type-a3 { background: #f7fee7; color: #365314; }
-        .type-dm { background: #eef2ff; color: #3730a3; }
-        .type-sg { background: #faf5ff; color: #6b21a8; }
-        
-        .permit-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: var(--spacing-sm);
-            padding-top: var(--spacing-md);
-            border-top: 1px solid var(--border-color);
-        }
-        
-        .permit-detail-item {
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-        }
-        
-        .permit-detail-label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .permit-detail-value {
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .chart-container {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-            margin-bottom: var(--spacing-lg);
-        }
-        
-        .chart-title {
-            font-size: 1.125rem;
-            font-weight: 700;
-            margin-bottom: var(--spacing-lg);
-            color: var(--text-primary);
-        }
-        
-        .chart-bar {
-            display: flex;
-            align-items: center;
-            margin-bottom: var(--spacing-md);
-        }
-        
-        .chart-label {
-            width: 100px;
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-        
-        .chart-bar-container {
-            flex: 1;
-            height: 32px;
-            background: var(--bg-tertiary);
-            border-radius: var(--radius-md);
-            overflow: hidden;
-            position: relative;
-        }
-        
-        .chart-bar-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), var(--primary-light));
-            transition: width 0.5s ease;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            padding-right: 0.5rem;
-        }
-        
-        .chart-value {
-            color: white;
-            font-weight: 700;
-            font-size: 0.875rem;
-        }
-        
-        @media (max-width: 1200px) {
-            .construction-container {
-                grid-template-columns: 1fr;
-            }
-            
-            .sidebar {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            }
-        }
-        
-        /* Modal Styles */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(4px);
-            z-index: 9998;
-            animation: fadeIn 0.2s ease;
-        }
-        
-        .modal-overlay.active {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal-container {
-            background: var(--bg-primary);
-            border-radius: var(--radius-lg);
-            width: 90%;
-            max-width: 1200px;
-            max-height: 85vh;
-            overflow: hidden;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            animation: slideUp 0.3s ease;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1.5rem 2rem;
-            border-bottom: 1px solid var(--border-color);
-            background: var(--bg-secondary);
-        }
-        
-        .modal-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .modal-close {
-            background: transparent;
-            border: none;
-            font-size: 1.5rem;
-            color: var(--text-secondary);
-            cursor: pointer;
-            padding: 0.5rem;
-            line-height: 1;
-            transition: all 0.2s;
-            border-radius: var(--radius-md);
-        }
-        
-        .modal-close:hover {
-            background: rgba(239, 68, 68, 0.1);
-            color: #ef4444;
-        }
-        
-        .modal-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 2rem;
-        }
-        
-        .modal-loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 4rem;
-        }
-        
-        .modal-spinner {
-            width: 48px;
-            height: 48px;
-            border: 4px solid rgba(139, 92, 246, 0.2);
-            border-top-color: #8b5cf6;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        @keyframes slideUp {
-            from { 
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to { 
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-    </style>
-</head>
-<body>
-    <!-- Top Navigation -->
-    <nav class="top-nav">
-        <div class="nav-content">
-            <div class="nav-title">
-                🏙️ NYC Real Estate Intel
-            </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/construction" class="nav-link active">🏗️ Construction</a>
-                <a href="/contractors" class="nav-link">👷 Contractors</a>
-                <a href="/investments" class="nav-link">💰 Investments</a>
-                <a href="/properties" class="nav-link">🏢 Properties</a>
-                <a href="/analytics" class="nav-link">📊 Analytics</a>
-            </div>
-        </div>
-    </nav>
+{% extends "base.html" %}
 
-    <!-- Main Content -->
-    <div class="container">
-        <!-- Stats Bar -->
-        <section style="padding: var(--spacing-xl) 0 var(--spacing-md) 0;">
-            <h1 style="font-size: 2rem; font-weight: 800; margin-bottom: var(--spacing-md);">
-                🏗️ Construction Intelligence
-            </h1>
-            <p style="color: var(--text-secondary); margin-bottom: var(--spacing-xl);">
-                Real-time insights into NYC's active construction projects, contractors, and market trends
-            </p>
-            
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+{% block title %}Permit Leads — NYC Permit Leads{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<link rel="stylesheet" href="/static/css/permits.css">
+{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+    <main class="container permit-explorer">
+        <header class="explorer-heading">
+            <div>
+                <span class="workspace-eyebrow">NYC permit intelligence</span>
+                <h1>Follow the work across the city.</h1>
+                <p>Search permits by address, number, applicant, job type, borough, and recency.</p>
+            </div>
+            <a class="btn btn-secondary" href="/properties">Explore properties</a>
+        </header>
+        <section aria-label="Permit overview">
+            <div class="stats-grid permit-stats-grid">
                 <div class="stat-box">
-                    <div class="stat-icon" style="background: linear-gradient(135deg, #3b82f6, #2563eb);">
+                    <div class="stat-icon">
                         <i class="fas fa-hard-hat"></i>
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="statActivePermits">0</div>
-                        <div class="stat-label" style="color: var(--text-secondary);">Active Permits</div>
+                        <div class="stat-label" id="statPermitLabel" style="color: var(--text-secondary);">Recent permits</div>
                     </div>
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-icon" style="background: linear-gradient(135deg, #10b981, #059669);">
+                    <div class="stat-icon">
                         <i class="fas fa-dollar-sign"></i>
                     </div>
                     <div class="stat-content">
@@ -599,7 +43,7 @@
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-icon" style="background: linear-gradient(135deg, #8b5cf6, #7c3aed);">
+                    <div class="stat-icon">
                         <i class="fas fa-map-marked-alt"></i>
                     </div>
                     <div class="stat-content">
@@ -609,7 +53,7 @@
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-icon" style="background: linear-gradient(135deg, #f59e0b, #d97706);">
+                    <div class="stat-icon">
                         <i class="fas fa-fire"></i>
                     </div>
                     <div class="stat-content">
@@ -621,9 +65,10 @@
         </section>
 
         <!-- Main Grid -->
-        <div class="construction-container">
+        <div class="construction-container" data-mobile-filter-toolbar>
             <!-- Left: Map Section -->
             <div class="map-section">
+                <button type="button" class="mobile-map-toggle btn btn-secondary" aria-expanded="false" aria-controls="constructionMap">Show permit map</button>
                 <div id="constructionMap" style="position: relative;">
                     <div id="mapLoadingOverlay" class="map-loading-overlay">
                         <div class="loading-spinner"></div>
@@ -635,19 +80,19 @@
                 <!-- Bottom Tabs -->
                 <div class="bottom-tabs">
                     <div class="tab-nav">
-                        <button class="tab-btn active" onclick="switchTab('permits')">
+                        <button class="tab-btn active" onclick="switchTab('permits', this)">
                             <i class="fas fa-list"></i> Permits List
                         </button>
-                        <button class="tab-btn" onclick="switchTab('contractors')">
+                        <button class="tab-btn" onclick="switchTab('contractors', this)">
                             <i class="fas fa-users"></i> Top Contractors
                         </button>
-                        <button class="tab-btn" onclick="switchTab('trends')">
+                        <button class="tab-btn" onclick="switchTab('trends', this)">
                             <i class="fas fa-chart-line"></i> Trends
                         </button>
-                        <button class="tab-btn" onclick="switchTab('types')">
+                        <button class="tab-btn" onclick="switchTab('types', this)">
                             <i class="fas fa-th-list"></i> By Type
                         </button>
-                        <button class="tab-btn" onclick="switchTab('boroughs')">
+                        <button class="tab-btn" onclick="switchTab('boroughs', this)">
                             <i class="fas fa-map"></i> By Borough
                         </button>
                     </div>
@@ -658,7 +103,7 @@
                                 <div style="display: flex; align-items: center; gap: var(--spacing-md);">
                                     <i class="fas fa-clipboard-list" style="color: var(--primary); font-size: 1.25rem;"></i>
                                     <div>
-                                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0;">Active Permits</h3>
+                                        <h3 id="permitsListTitle" style="font-size: 1rem; font-weight: 700; margin: 0;">Recent permits</h3>
                                         <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0;" id="permitsListCount">Loading...</p>
                                     </div>
                                 </div>
@@ -666,7 +111,7 @@
                                     <select id="sortBy" class="filter-select" style="width: auto; padding: 0.5rem;" onchange="sortPermitsList()">
                                         <option value="date_desc">Newest First</option>
                                         <option value="date_asc">Oldest First</option>
-                                        <option value="score">🔥 Hottest to Coldest</option>
+                                        <option value="score">Highest lead score</option>
                                         <option value="contacts">Most Contacts</option>
                                         <option value="address">Address A-Z</option>
                                         <option value="applicant">Applicant A-Z</option>
@@ -743,11 +188,17 @@
             <!-- Right: Sidebar -->
             <div class="sidebar">
                 <!-- Filters -->
-                <div class="filter-panel">
+                <div class="filter-panel" data-mobile-filters>
                     <h3 style="font-size: 1.125rem; font-weight: 700; margin-bottom: var(--spacing-lg); color: var(--text-primary);">
                         <i class="fas fa-filter"></i> Filters
                     </h3>
                     
+                    <div class="filter-group">
+                        <label class="filter-label" for="searchInput">Search permits</label>
+                        <input id="searchInput" class="filter-input" type="search"
+                               placeholder="Address, permit, applicant, owner">
+                    </div>
+
                     <div class="filter-group">
                         <label class="filter-label">Borough</label>
                         <select id="filterBorough" class="filter-select">
@@ -774,8 +225,16 @@
                     </div>
                     
                     <div class="filter-group">
-                        <label class="filter-label">Time Period</label>
-                        <select id="filterDays" class="filter-select">
+                        <label class="filter-label" for="filterActivityMode">Timing rule</label>
+                        <select id="filterActivityMode" class="filter-select">
+                            <option value="within">Permits within window</option>
+                            <option value="inactive">Permits older than window</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label class="filter-label" for="filterDays">Time window</label>
+                        <select id="filterDays" class="filter-select" aria-describedby="constructionActivityHint">
                             <option value="7">Last 7 Days</option>
                             <option value="14">Last 14 Days</option>
                             <option value="30">Last 30 Days</option>
@@ -784,8 +243,15 @@
                             <option value="365">Last Year</option>
                             <option value="730">Last 2 Years</option>
                             <option value="1825">Last 5 Years</option>
+                            <option value="custom">Custom…</option>
                             <option value="all">All Time</option>
                         </select>
+                        <input id="filterCustomDays" class="filter-input" type="number"
+                            min="1" max="3650" inputmode="numeric" placeholder="Number of days"
+                            style="display:none; margin-top: var(--spacing-sm);">
+                        <small id="constructionActivityHint" style="display:block; margin-top:var(--spacing-sm); color:var(--text-secondary); font-size:0.75rem; line-height:1.45;">
+                            Shows individual permit records issued inside the selected window.
+                        </small>
                     </div>
                     
                     <button class="btn btn-primary" style="width: 100%; margin-top: var(--spacing-md);" onclick="applyFilters()">
@@ -806,32 +272,14 @@
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 
-    <!-- Contractor Modal -->
-    <div id="contractorModal" class="modal-overlay" onclick="closeContractorModal(event)">
-        <div class="modal-container" onclick="event.stopPropagation()">
-            <div class="modal-header">
-                <div class="modal-title" id="contractorModalTitle">
-                    <i class="fas fa-hard-hat"></i> Contractor Profile
-                </div>
-                <button class="modal-close" onclick="closeContractorModal()">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            <div class="modal-body" id="contractorModalBody">
-                <div class="modal-loading">
-                    <div class="modal-spinner"></div>
-                    <div style="margin-top: 1rem; color: var(--text-secondary);">Loading contractor data...</div>
-                </div>
-            </div>
-        </div>
-    </div>
+{% endblock %}
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/loading.js') }}"></script>
     <script src="{{ url_for('static', filename='js/construction.js') }}"></script>
-</body>
-</html>
+{% endblock %}

@@ -4,11 +4,14 @@ Master Enrichment Pipeline
 Runs all building enrichment steps in sequence with dependency checking
 
 Execution order:
+0. Apply additive schema migrations
 1. Step 1: Link permits to buildings (derive BBL)
 2. Step 2: Enrich from PLUTO + RPAD + HPD (owners, assessed values, violations)
-3. Step 3: Enrich from ACRIS (transaction history)
-4. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
-5. Geocode permits (lat/lng)
+3. Step 6: Refresh user-facing distress/compliance signals before long backfills
+4. Step 3: Enrich from ACRIS (transaction history)
+5. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
+6. Step 5: Enrich owner entities from NY Secretary of State
+7. Geocode permits and recover queued property enrichment
 
 Each step is self-contained and checks if work is needed before running.
 """
@@ -16,7 +19,18 @@ Each step is self-contained and checks if work is needed before running.
 import subprocess
 import sys
 import time
+import os
 from datetime import datetime
+
+# Force unbuffered output for Railway logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Startup diagnostics
+print(f"[STARTUP] Pipeline starting at {datetime.now().isoformat()}", flush=True)
+print(f"[STARTUP] Python: {sys.version}", flush=True)
+print(f"[STARTUP] Working directory: {os.getcwd()}", flush=True)
+print(f"[STARTUP] DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}", flush=True)
 
 # Colors for output
 class Colors:
@@ -29,51 +43,56 @@ class Colors:
     BOLD = '\033[1m'
 
 def print_header(msg):
-    print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}")
-    print(f"{Colors.BOLD}{Colors.HEADER}{msg}{Colors.END}")
-    print(f"{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}\n")
+    print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}", flush=True)
+    print(f"{Colors.BOLD}{Colors.HEADER}{msg}{Colors.END}", flush=True)
+    print(f"{Colors.BOLD}{Colors.HEADER}{'='*70}{Colors.END}\n", flush=True)
 
 def print_step(step_num, name):
-    print(f"\n{Colors.BOLD}{Colors.BLUE}▶ Step {step_num}: {name}{Colors.END}")
-    print(f"{Colors.BLUE}{'─'*70}{Colors.END}")
+    print(f"\n{Colors.BOLD}{Colors.BLUE}▶ Step {step_num}: {name}{Colors.END}", flush=True)
+    print(f"{Colors.BLUE}{'─'*70}{Colors.END}", flush=True)
 
 def print_success(msg):
-    print(f"{Colors.GREEN}✅ {msg}{Colors.END}")
+    print(f"{Colors.GREEN}✅ {msg}{Colors.END}", flush=True)
 
 def print_error(msg):
-    print(f"{Colors.RED}❌ {msg}{Colors.END}")
+    print(f"{Colors.RED}❌ {msg}{Colors.END}", flush=True)
 
 def print_warning(msg):
-    print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
+    print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}", flush=True)
 
-def run_script(script_name, description):
-    """Run a Python script and return success status"""
-    print(f"\n🚀 Running: {script_name}")
-    print(f"   Description: {description}")
+def run_script(script_name, description, extra_env=None):
+    """Run a Python script and return success status - streams output in real-time"""
+    print(f"\n🚀 Running: {script_name}", flush=True)
+    print(f"   Description: {description}", flush=True)
     
     start_time = time.time()
     
     try:
+        timeout = max(60, int(os.getenv('PIPELINE_STEP_TIMEOUT_SECONDS', '14400')))
+        child_env = {**os.environ, **(extra_env or {})}
+        # Leave at least 25% of the hard limit to drain active source requests.
+        # The two checkpointed passes stop admitting work before this budget.
+        child_env['ENRICHMENT_BATCH_SECONDS'] = str(min(
+            max(1, float(child_env.get('ENRICHMENT_BATCH_SECONDS', '10800'))),
+            timeout * 0.75))
+        # Stream output directly instead of capturing (for Railway logs)
         result = subprocess.run(
-            [sys.executable, script_name],
-            capture_output=True,
+            [sys.executable, '-u', script_name],  # -u for unbuffered Python output
             text=True,
-            check=False
+            check=False,
+            timeout=timeout,
+            env=child_env,
+            # Note: No capture_output, so stdout/stderr go directly to console
         )
         
         duration = time.time() - start_time
-        
-        # Print script output
-        if result.stdout:
-            print(result.stdout)
         
         if result.returncode == 0:
             print_success(f"Completed in {duration:.1f}s")
             return True
         else:
             print_error(f"Failed with exit code {result.returncode}")
-            if result.stderr:
-                print(f"\nError output:\n{result.stderr}")
+            # Note: stderr was streamed directly to console, not captured
             return False
             
     except Exception as e:
@@ -89,6 +108,39 @@ def main():
     
     # Track success/failure
     results = {}
+
+    # ===== STEP 0: Safe additive schema migrations =====
+    print_step(0, "Apply Additive Data-Freshness Migrations")
+    results['migrations'] = run_script(
+        'migrate_add_freshness_and_jobs.py',
+        'Create source-specific freshness clocks and durable enrichment queue'
+    )
+    if not results['migrations']:
+        print_error("Migration failed - cannot safely continue")
+        sys.exit(1)
+
+    results['project_migration'] = run_script(
+        'migrate_add_project_intelligence.py',
+        'Create role-aware permit participants, consolidated projects, and sales alerts'
+    )
+    if not results['project_migration']:
+        print_error("Project intelligence migration failed - cannot safely continue")
+        sys.exit(1)
+
+    results['signals_migration'] = run_script(
+        'migrate_add_intel_signals.py',
+        'Create versioned distress/compliance signal freshness and error tracking'
+    )
+    if not results['signals_migration']:
+        print_error("Signal intelligence migration failed - cannot safely continue")
+        sys.exit(1)
+    results['reliability_migration'] = run_script(
+        'migrate_enrichment_reliability.py', 'Create independent enrichment checkpoints')
+    if not results['reliability_migration']:
+        sys.exit(1)
+    results['safety'] = run_script('sync_dob_safety.py', 'Refresh daily DOB Safety totals citywide')
+    # Recover interactive work before the longer periodic backfills.
+    results['property_jobs'] = run_script('process_property_enrichment_jobs.py', 'Recover queued property lookups')
     
     # ===== STEP 1: Link Permits to Buildings =====
     print_step(1, "Link Permits to Buildings (BBL Generation)")
@@ -110,12 +162,42 @@ def main():
     
     if not results['step2']:
         print_warning("Step 2 failed - continuing to next steps")
-    
+
+    # Run the user-facing signal pass before ACRIS. Both long backfills use a
+    # bounded daily batch, so a deploy or source outage loses at most one
+    # partial pass and neither data family can starve the other indefinitely.
+    print_step(6, "Enrich Distress & Compliance Signals")
+    results['step6'] = run_script(
+        'step6_enrich_signals.py',
+        'Litigation, evictions, exemptions, speculation list, DOB complaints, COs, FISP, LL84, rolling sales',
+        extra_env={
+            'SIGNALS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_SIGNALS_BATCH_SIZE', '15000'),
+        },
+    )
+
+    if not results['step6']:
+        print_warning("Step 6 failed - continuing to transaction enrichment")
+
+    # Flag every tracked property touched by a recently-recorded deed before
+    # the normal ACRIS stale-row selection runs.
+    print_step('2b', "Detect Recent ACRIS Activity")
+    results['recent_sales'] = run_script(
+        'sync_recent_sales.py',
+        'Flag properties with recent deeds, mortgages, assignments, or satisfactions'
+    )
+    if not results['recent_sales']:
+        print_warning("Recent-sale detection failed - continuing with stale-window refresh")
+
     # ===== STEP 3: Enrich from ACRIS =====
     print_step(3, "Enrich from ACRIS (Transaction History)")
     results['step3'] = run_script(
         'step3_enrich_from_acris.py',
-        'Add purchase dates, sale prices, mortgage amounts'
+        'Add purchase dates, sale prices, mortgage amounts',
+        extra_env={
+            'ACRIS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_ACRIS_BATCH_SIZE', '15000'),
+        },
     )
     
     if not results['step3']:
@@ -125,7 +207,11 @@ def main():
     print_step(4, "Enrich from Tax Delinquency & Liens")
     results['step4'] = run_script(
         'step4_enrich_from_tax_liens.py',
-        'Add tax delinquency status, ECB liens, DOB violations'
+        'Add tax delinquency status, ECB liens, DOB violations',
+        extra_env={
+            'BUILDING_BATCH_SIZE': os.getenv(
+                'PIPELINE_TAX_BATCH_SIZE', '15000'),
+        },
     )
     
     if not results['step4']:
@@ -135,22 +221,27 @@ def main():
     print_step(5, "Enrich from NY Secretary of State (LLC Owners)")
     results['step5'] = run_script(
         'step5_enrich_from_sos.py',
-        'Find real people (CEO, agents) behind LLC-owned properties'
+        'Find real people (CEO, agents) behind LLC-owned properties',
+        extra_env={
+            'SOS_MAX_BUILDINGS': os.getenv(
+                'PIPELINE_SOS_BATCH_SIZE', '5000'),
+        },
     )
     
     if not results['step5']:
         print_warning("Step 5 failed - continuing to geocoding")
     
-    # ===== STEP 6: Geocode Permits =====
-    print_step(6, "Geocode Permits (Latitude/Longitude)")
+    # ===== STEP 7: Geocode Permits =====
+    print_step(7, "Geocode Permits (Latitude/Longitude)")
     results['geocode'] = run_script(
         'geocode_permits.py',
         'Add geographic coordinates for mapping'
     )
-    
+
     if not results['geocode']:
         print_warning("Geocoding failed - pipeline otherwise complete")
-    
+
+
     # ===== SUMMARY =====
     end_time = datetime.now()
     duration = end_time - start_time
@@ -167,14 +258,19 @@ def main():
         print(f"  {step:12} {status}")
     
     # Overall status
-    critical_steps = ['step1', 'step2']  # Must succeed
+    critical_steps = [
+        'migrations',
+        'project_migration',
+        'signals_migration',
+        'reliability_migration', 'safety', 'property_jobs', 'geocode', 'recent_sales',
+        'step1',
+        'step2',
+        'step6',
+        'step3',
+        'step4',
+        'step5',
+    ]  # Must succeed
     critical_failed = any(not results.get(step, False) for step in critical_steps)
-    
-    if critical_failed:
-        print_error("\n⚠️  Critical steps failed - enrichment incomplete")
-        sys.exit(1)
-    else:
-        print_success("\n✅ Pipeline completed successfully!")
     
     if critical_failed:
         print_error("\n❌ PIPELINE FAILED - Critical steps did not complete")
@@ -184,4 +280,24 @@ def main():
         sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    pipeline_conn = None
+    try:
+        import psycopg2
+        from migrate_add_freshness_and_jobs import database_dsn
+        pipeline_conn = psycopg2.connect(database_dsn(), connect_timeout=10)
+        with pipeline_conn.cursor() as lock_cursor:
+            lock_cursor.execute('SELECT pg_try_advisory_lock(72101,0)')
+            if not lock_cursor.fetchone()[0]:
+                print('Another enrichment pipeline is running; skipping overlapping run', flush=True)
+                sys.exit(0)
+        pipeline_conn.commit()
+        main()
+    except Exception as e:
+        print(f"[FATAL] Unhandled exception in pipeline: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+    finally:
+        if pipeline_conn is not None:
+            pipeline_conn.close()

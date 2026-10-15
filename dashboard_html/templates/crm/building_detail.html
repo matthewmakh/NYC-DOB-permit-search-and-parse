@@ -1,0 +1,40 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import contacted_btn, streetview %}
+{% block title %}{{ b.address }} — CRM{% endblock %}
+{% block crm_content %}
+<div id="bHeader" data-partial="/crm/partials/building/{{ b.id }}/header">
+    {% include "crm/partials/building_header.html" %}
+</div>
+{% if request.args.get('existing') %}<div class="crm-collision is-info"><i class="fas fa-circle-info"></i> This building was already in the CRM — here it is.</div>{% endif %}
+
+<div class="crm-quick" data-shortcuts="record">
+    <button type="button" class="is-primary js-contacted" data-building-id="{{ b.id }}" data-entity="{{ b.address }}" data-last-touch="{{ last_touch }}"><i class="fas fa-phone"></i>Contacted</button>
+    <button type="button" class="js-visit" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="fas fa-person-walking"></i>Log visit</button>
+    <button type="button" class="js-followup" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="far fa-calendar-plus"></i>Follow up</button>
+    <button type="button" class="js-add-to-list" data-building-id="{{ b.id }}" data-entity="{{ b.address }}"><i class="fas fa-list-ul"></i>Add to list</button>
+    <button type="button" class="js-add-person" data-building-id="{{ b.id }}"><i class="fas fa-user-plus"></i>Add person</button>
+</div>
+
+<div class="crm-columns">
+    <div class="crm-col-main">
+        <div class="crm-group" id="bTimeline" data-partial="/crm/partials/building/{{ b.id }}/timeline">
+            {% include "crm/partials/building_timeline.html" %}
+        </div>
+    </div>
+    <div class="crm-col-rail">
+        <div class="crm-group" id="bStreetView">
+            <div class="crm-group__head"><h3><i class="fas fa-street-view" style="color:var(--c-blue)"></i> Street View</h3></div>
+            {{ streetview(sv, is_admin=crm_ctx.is_admin) }}
+        </div>
+        <div class="crm-group" id="bPeople" data-partial="/crm/partials/building/{{ b.id }}/people">
+            {% include "crm/partials/building_people.html" %}
+        </div>
+        <div id="bRail" data-partial="/crm/partials/building/{{ b.id }}/rail">
+            {% include "crm/partials/building_rail.html" %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block crm_js %}
+<script>window.CRM_RECORD = { building_id: {{ b.id }}, entity: {{ b.address|tojson }} };</script>
+{% endblock %}

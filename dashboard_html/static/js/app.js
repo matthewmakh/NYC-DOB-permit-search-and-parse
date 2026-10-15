@@ -401,11 +401,12 @@ function createLeadCard(permit) {
                                 <a href="tel:${c.phone}"><i class="fas fa-phone-alt"></i> ${escapeHtml(c.phone)}</a>
                             </div>
                         `).join('') : '<p style="color: var(--text-muted); text-align: center; padding: 2rem;">No contacts available</p>'}
-                        ${permit.link ? `
+                        ${permit.source_link?.url ? `
                             <div style="margin-top: 1rem;">
-                                <a href="${permit.link}" target="_blank" class="btn btn-primary" style="width: 100%; justify-content: center; display: flex; align-items: center; gap: 0.5rem;">
-                                    <i class="fas fa-external-link-alt"></i> View Official Permit Details
+                                <a href="${escapeHtml(permit.source_link.url)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width: 100%; justify-content: center; display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-external-link-alt"></i> ${escapeHtml(permit.source_link.label)}
                                 </a>
+                                ${permit.source_link.hint ? `<p>${escapeHtml(permit.source_link.hint)}</p>` : ''}
                             </div>
                         ` : ''}
                     </div>
@@ -1546,7 +1547,8 @@ function openBuildingDetail(buildingId) {
     document.getElementById('buildingDetailBBL').textContent = `BBL: ${building.bbl || 'N/A'}`;
     
     // Owner badge - show the best available owner
-    const ownerName = building.owner_name_hpd || building.current_owner_name || building.owner_name_rpad || 'Unknown Owner';
+    const ownerName = building.sale_buyer_primary || building.current_owner_name ||
+        building.owner_name_hpd || building.owner_name_rpad || 'Unknown Owner';
     document.getElementById('buildingDetailOwner').textContent = ownerName;
 
     // Property Overview
@@ -1744,6 +1746,7 @@ async function loadAllContacts(buildingId) {
                             <i class="fas fa-phone"></i>
                             <span>${formatPhoneNumber(contact.phone)}</span>
                             ${contact.phone_type ? `<span class="phone-type-badge">${contact.phone_type}</span>` : ''}
+                            ${contact.needs_revalidation ? '<span class="phone-type-badge">Needs revalidation</span>' : ''}
                         </div>
                     ` : ''}
                     ${contact.email ? `
@@ -1797,7 +1800,7 @@ async function loadNearbyBuildings(building) {
                 <span class="distance-badge">${nb.distance.toFixed(2)} mi</span>
             </div>
             <div class="nearby-details">
-                ${nb.current_owner_name || nb.owner_name_rpad || nb.owner_name_hpd || 'Owner unknown'}
+                ${nb.sale_buyer_primary || nb.current_owner_name || nb.owner_name_hpd || nb.owner_name_rpad || 'Owner unknown'}
             </div>
             <div class="nearby-meta">
                 ${nb.residential_units ? `<span>🏠 ${nb.residential_units} units</span>` : ''}
@@ -2189,4 +2192,3 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-

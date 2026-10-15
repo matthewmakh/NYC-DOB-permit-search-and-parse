@@ -1,0 +1,20 @@
+{% extends "crm/_layout.html" %}
+{% block title %}{{ c.name }} — CRM{% endblock %}
+{% block crm_content %}
+<div id="cHeader" data-partial="/crm/partials/contact/{{ c.id }}/header" data-shortcuts="record">
+    {% include "crm/partials/contact_header.html" %}
+</div>
+<div class="crm-columns">
+    <div class="crm-col-main">
+        <div class="crm-group" id="cTimeline" data-partial="/crm/partials/contact/{{ c.id }}/timeline">
+            {% include "crm/partials/contact_timeline.html" %}
+        </div>
+    </div>
+    <div class="crm-col-rail" id="cRail" data-partial="/crm/partials/contact/{{ c.id }}/rail">
+        {% include "crm/partials/contact_rail.html" %}
+    </div>
+</div>
+{% endblock %}
+{% block crm_js %}
+<script>window.CRM_RECORD = { contact_id: {{ c.id }}, entity: {{ c.name|tojson }} };</script>
+{% endblock %}

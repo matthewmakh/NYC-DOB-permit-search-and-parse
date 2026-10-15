@@ -1,0 +1,17 @@
+{% extends "crm/_layout.html" %}
+{% block title %}CRM — Today{% endblock %}
+{% block crm_content %}
+<div class="crm-title">
+    <div>
+        <h1 class="crm-large-title">{{ 'Good morning' if ny_hour < 12 else ('Good afternoon' if ny_hour < 17 else 'Good evening') }}, {{ crm_user_name.split(' ')[0] }}</h1>
+        <p class="crm-subtitle">{{ today_ny.strftime('%A, %B %-d') }} — here's what needs a call, a visit, or a nudge.</p>
+    </div>
+    <div class="crm-title-actions">
+        <a href="/properties" class="cbtn"><i class="fas fa-magnifying-glass-location"></i> Discover</a>
+        <a href="/crm/focus" class="cbtn cbtn-primary"><i class="fas fa-bullseye"></i> Start calling</a>
+    </div>
+</div>
+<div id="todayBody" data-partial="/crm/partials/today">
+    {% include "crm/partials/today_body.html" %}
+</div>
+{% endblock %}

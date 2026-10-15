@@ -23,6 +23,13 @@
 
 Scrapes NYC DOB permit data, enriches it with property intelligence, and displays it in an interactive dashboard.
 
+The current multi-source importer covers legacy BIS permits, DOB NOW Build job
+filings, DOB NOW approved permits, DOB NOW Electrical applications and scope
+details, DOB NOW Elevator applications, and City Record procurement notices.
+Filing and permit stages are retained as raw records and consolidated into one
+project for sales review. City Record notices remain standalone pre-permit
+signals until an evidence-backed project graph can connect them.
+
 ### Key Features
 
 - ✅ **Permit Scraping**: Gets permit data from NYC DOB BIS website
@@ -118,15 +125,26 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=railway
 
-# NYC Geoclient API (free - get at developer.cityofnewyork.us)
-NYC_GEOCLIENT_APP_ID=your_app_id
-NYC_GEOCLIENT_APP_KEY=your_app_key
+# NYC Geoclient v2 (free - subscribe at api-portal.nyc.gov)
+NYC_GEOCLIENT_SUBSCRIPTION_KEY=your_v2_subscription_key
 
 # Optional Performance Tuning
 BUILDING_BATCH_SIZE=500  # Buildings per enrichment run
+STEP2_BATCH_LIMIT=16000  # Upper row limit; property refresh may stop earlier on time
+ENRICHMENT_BATCH_SECONDS=10800 # Soft budget for property and signal cron passes
+PIPELINE_STEP_TIMEOUT_SECONDS=14400 # Hard timeout; soft budget capped at 75% of this
 API_DELAY=0.1            # Seconds between API calls
 GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
+
 ```
+
+The property and signal passes stop admitting new records after 90% of their
+soft budget, finish active records, then retry failed records once within the
+remaining budget. Unstarted records stay due for the next run. Successful
+property sources keep their individual checkpoints during retries. Logs report
+succeeded, unresolved, and deferred counts separately; unresolved errors still
+fail the cron. `PROPERTY_REFRESH_ERROR_LIMIT` and `SIGNALS_ERROR_LIMIT` (both
+default 100) stop new work during widespread outages.
 
 ### Running Scripts Locally
 
@@ -134,8 +152,35 @@ GEOCODE_BATCH_SIZE=10    # Permits per geocoding run
 # Activate environment
 source venv-permit/bin/activate
 
-# Run permit scraper
-python permit_scraper.py
+# Run the incremental permit scraper
+python permit_scraper_api.py --days 14
+
+# Run only DOB NOW Build + Electrical sources
+python permit_scraper_api.py --dob-now-only --days 14
+
+# Run the same source set used by the production permit-intelligence cron
+python permit_scraper_api.py --sources dob_now_filings dob_now_approved dob_now_electrical dob_now_electrical_details dob_now_elevator city_record --days 14
+
+# Production wrapper: sync all active feeds, then canonicalize imported contacts.
+python run_permit_intelligence_cron.py
+
+# One-time repair after changing DOB NOW permit identity/owner mappings.
+# This is idempotent and can be resumed by rerunning the same command.
+python permit_scraper_api.py --dob-now-only --start 2016-01-01 --end YYYY-MM-DD
+
+# Bounded, restartable project/signal backfill; Electrical and Elevator
+# naturally begin at their 2017 launches. Electrical Details follows its
+# dated parent applications because the child feed has no date column.
+python backfill_project_intelligence.py --start 2016-01-01 --end YYYY-MM-DD --window-days 31
+
+# Consolidate rows already in PostgreSQL without re-fetching APIs. The cursor
+# form resumes after the last project key printed by a prior run.
+python backfill_project_intelligence.py --refresh-existing-only --project-batch-size 1000
+python backfill_project_intelligence.py --refresh-existing-only --project-batch-size 1000 --after-project-key DOBNOW:M01241021
+
+# Smaller transactions are more resilient through Railway's public TCP proxy.
+# A run inside Railway can use the faster private DATABASE_URL.
+PERMIT_BATCH_SIZE=1000 python backfill_project_intelligence.py --start 2025-01-01 --end YYYY-MM-DD --window-days 31
 
 # Extract contacts (after scraper)
 python add_permit_contacts.py
@@ -148,6 +193,12 @@ cd dashboard_html
 python app.py
 # Visit: http://localhost:5001
 ```
+
+Before a full-history run, compare `pg_database_size(current_database())` with
+the Postgres volume limit. The 2016-present feeds contain roughly 944k Build
+filings, 988k approved permits, 585k electrical applications, 1.25m electrical
+detail rows, 71k elevator applications, and 56k filtered City Record notices.
+Expand the volume or backfill recent years first when headroom is tight.
 
 ### Testing Individual Steps
 
@@ -204,8 +255,10 @@ Railway automatically provides:
 Optional performance tuning:
 - `BUILDING_BATCH_SIZE=500`
 - `API_DELAY=0.1`
-- `NYC_GEOCLIENT_APP_ID` (for geocoding)
-- `NYC_GEOCLIENT_APP_KEY` (for geocoding)
+- `NYC_GEOCLIENT_SUBSCRIPTION_KEY` (Geoclient v2; legacy `APP_KEY`, then `APP_ID`, are fallback variable names)
+
+See [Geocoding and SOS recovery](GEOCODING_RECOVERY.md) for retry behavior,
+checking failed SOS lookups, and previewing repairs to old coordinates.
 
 ### Monitoring Deployments
 
@@ -362,6 +415,11 @@ Each step processes in batches and respects API rate limits.
   - `migrate_add_buildings.py`
   - `migrate_add_dual_owner_fields.py`
   - `migrate_add_building_intelligence.py`
+  - `migrate_add_freshness_and_jobs.py`
+
+The master `run_enrichment_pipeline.py` now runs the last additive migration
+itself before enrichment. Its versioned ACRIS refresh rebuilds existing
+property mortgage/ownership summaries after logic changes.
 
 ---
 

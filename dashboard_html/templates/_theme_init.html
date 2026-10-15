@@ -1,0 +1,15 @@
+<script>
+    // Appearance: 'auto' | 'light' | 'dark'. One preference for the whole app
+    // (the CRM reads the same key), applied in the head before first paint.
+    (function () {
+        try {
+            var pref = localStorage.getItem('theme') || localStorage.getItem('crm-theme') || 'auto';
+            var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            var root = document.documentElement;
+            root.setAttribute('data-theme', dark ? 'dark' : 'light');
+            root.setAttribute('data-theme-pref', pref);
+            root.setAttribute('data-crm-pref', pref);
+            if (dark) root.setAttribute('data-crm-theme', 'dark');
+        } catch (e) { /* no storage: stay light */ }
+    })();
+</script>

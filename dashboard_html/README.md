@@ -193,3 +193,100 @@ Proprietary - Smart Installers Project
 ## Contact
 
 For issues or questions, contact the development team.
+
+## Ownership source dates
+
+The building profile keeps each source's owner name paired with its evidence:
+ACRIS uses the latest recorded deed, HPD uses the latest processed registration
+(not its expiration date), RPAD selects the latest fiscal year and prefers the
+final roll over the tentative roll, and ECB uses the latest dated violation
+that names a respondent. An ECB respondent is not necessarily an owner.
+
+PLUTO reports its release version; the SOS contact response does not provide a
+contact-report date. Neither the app's refresh time nor the entity's formation
+date is presented as an owner-report date. The UI shows “Last checked” separately.
+
+`migrate_enrichment_reliability.py` and the dashboard's existing startup migration
+add the source-date columns. Existing PLUTO/RPAD/HPD checkpoints become due once
+so the next scheduled refresh fills their metadata; failed refreshes retain the
+last successful names and dates and obey the normal retry delay. ECB metadata is
+filled by the next successful tax/violation refresh. No production backfill runs
+as part of the schema migration.
+
+## Reported addresses and enrichment privacy
+
+Address-bearing property/profile APIs require an active authenticated account
+and send `Cache-Control: private, no-store`. Older building endpoints exclude
+globally cached paid enrichment fields; paid contacts remain user-specific.
+
+CSV owner addresses come only from the source record that supplied the exported
+owner name: the primary ACRIS deed's matching grantee, or that owner's HPD
+registration contact. Missing or conflicting pairs export a blank address.
+Selecting the address also includes owner name, address source and reported date.
+SOS agents and ECB respondents are never substituted for the exported owner.
+Owner phone/email exports also require a matching owner name in that user's unlocks.
+
+HPD keeps each owner's name, role, registration/contact IDs, reported date and
+business address in `hpd_owner_contacts`. Its legacy single-address fields are
+populated only for a single contact. Existing HPD checkpoints refresh once to
+populate these pairs, with normal failure backoff.
+
+New owner and permit lookups retain normalized phone/email data, the selected
+person ID and limited match evidence. Raw vendor responses, relatives, birth
+data and address histories are not saved. The existing startup migration (or
+`migrate_enrichment_reliability.py`) runs a transactional, idempotent cleanup of
+previous raw payloads and excess owner match-summary fields. It also clears
+legacy HPD addresses that cannot be attributed to one contact. Saved contacts,
+payment receipts and unlocks are preserved. This cleanup affects the application
+database; existing database backups and vendor-side retention are separate.
+
+## Owner research and source history
+
+The Ownership section includes person cards with source roles, reported dates,
+and attributed search localities. Cross-source grouping requires a complete name
+and matching full reported address. A shared name or ZIP alone never establishes
+identity. Older reviews remain visible as historical records when their original
+source disappears. Source differences are review flags, not ownership conclusions.
+
+People searches open an editable preview before sending a name and city/state or
+ZIP to TruePeopleSearch. The newest available reported locality is selected;
+the property location is explicitly a fallback. Users can correct the search name,
+select another reported locality, enter a locality, or search by name only.
+The application does not scrape or automatically import the manual search result.
+
+Users can save a reviewed result link, selected phones/emails, match assessment,
+notes and research status. Reviews are stored in `crm_owner_research`, strictly
+scoped to the active user's team, with reviewer/time and optimistic save versions.
+Conflicting edits return 409 and keep the browser draft. Do-not-contact applies
+to that team/property/name, including accepted name variants: it blocks lookup
+actions and suppresses paid contact output and contact addresses in exports.
+It does not delete the underlying public source evidence or prior review.
+
+Each of HPD, ACRIS, PLUTO, historical RPAD, ECB and NY SOS can be refreshed
+individually through `/api/property/<bbl>/owner-sources/<source>/refresh`.
+Requests are authenticated, same-origin JSON with `X-Owner-Research: 1`, and
+queue only free public-source work. Jobs deduplicate per property/source, allow
+12 pending jobs per user, and enforce a five-minute success cooldown. Failures
+preserve successful facts, retry after six hours, and stop after three attempts;
+abandoned jobs recover after their 20-minute lease when no worker still owns them.
+
+`owner_source_snapshots` and `owner_source_history` save an initial baseline and
+subsequent name/address/role changes in the source update's transaction. Reported
+dates and observation times remain distinct; date-only refreshes do not create
+duplicate change events. History starts when the feature observes a source,
+with the most recent 100 events shown. Revision guards discard overlapping stale
+responses. Automatic pipeline updates use the same history hooks.
+
+Web startup and `migrate_enrichment_reliability.py` install these idempotent
+schemas; migrate before running individual enrichment scripts on a fresh database.
+The source worker starts per web worker and PostgreSQL coordinates job claims.
+Railway's forwarded HTTPS scheme is trusted only when its environment marker is
+present; local proxy deployments can explicitly set the Flask config
+`OWNER_RESEARCH_TRUST_PROXY_PROTO`. Forwarded host values are never trusted.
+
+Focused verification: `python -m unittest owner_research_tests
+owner_source_history_tests owner_source_dates_tests owner_privacy_tests
+enrichment_reliability_tests`, plus `node owner_research_ui_tests.js` and
+`node building_profile_permit_tests.js`. Database tests use disposable schemas
+under `OWNER_RESEARCH_TEST_DATABASE_URL` / `ENRICHMENT_TEST_DATABASE_URL`.
+`dashboard_html/tests/mobile_preview.py` provides synthetic in-memory UI fixtures.

@@ -29,7 +29,8 @@ import re
 import random
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import List, Dict, Optional, Tuple
 
 try:
@@ -38,6 +39,22 @@ except ImportError:
     raise ImportError("httpx is required. Install with: pip install httpx")
 
 log = logging.getLogger(__name__)
+
+
+def _retry_delay(attempt, response=None):
+    """Honor bounded Retry-After hints, with exponential backoff otherwise."""
+    delay = (2 ** attempt) + random.random()
+    hint = response.headers.get('Retry-After') if response is not None else None
+    if hint:
+        try:
+            wait = float(hint)
+        except ValueError:
+            try:
+                wait = (parsedate_to_datetime(hint) - datetime.now(timezone.utc)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                wait = 0
+        delay = max(delay, wait)
+    return min(delay, 60)
 
 
 # ============================================================================
@@ -75,6 +92,9 @@ class SOSBusinessResult:
     normalized_name: str      # Cleaned/normalized version
     found: bool = False       # Did we find it?
     error: str = ""           # Error message if failed
+    # How confidently the registered entity is the one we asked about:
+    # "exact", "prefix", or "none". Never "none" when found is True.
+    match_quality: str = "none"
     
     # Business details (if found)
     dos_id: str = ""          # NY DOS ID
@@ -114,6 +134,20 @@ class SOSBusinessResult:
 # NAME NORMALIZATION UTILITIES
 # ============================================================================
 
+# "C/O ...", "ATTN: ..." and "% ..." tails are mailing instructions appended
+# to owner names in ACRIS/RPAD, not part of the company's registered name.
+# Left in place they break the BeginsWith search outright (no registered name
+# starts with the full string), so those buildings silently got no SOS data.
+_CARE_OF_TAIL = re.compile(r'\s+(?:C/O|C\.O\.|ATTN:?|%)\s+.*$', re.IGNORECASE)
+
+
+def strip_care_of_tail(name: str) -> str:
+    """Drop a trailing care-of/attention clause from an owner name."""
+    if not name:
+        return ""
+    return _CARE_OF_TAIL.sub('', name).strip()
+
+
 def normalize_business_name(name: str) -> str:
     """
     Normalize business name for deduplication and caching.
@@ -121,7 +155,7 @@ def normalize_business_name(name: str) -> str:
     if not name:
         return ""
     
-    name = name.upper().strip()
+    name = strip_care_of_tail(name.upper().strip())
     
     # Remove location suffix
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
@@ -197,6 +231,8 @@ def _parse_name(full_name: str) -> Tuple[str, str, str]:
     if not full_name:
         return ('', '', '')
     parts = full_name.strip().split()
+    if not parts:
+        return ('', '', '')
     if len(parts) == 1:
         return (parts[0], '', '')
     elif len(parts) == 2:
@@ -209,9 +245,51 @@ def _clean_business_name_for_search(name: str) -> str:
     """Clean business name for API searching."""
     if not name:
         return ""
+    name = strip_care_of_tail(name)
     name = re.sub(r'\s*-\s*[A-Z\s]+,\s*[A-Z]{2}(\s+\d{5})?$', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s+(USA|U\.S\.A\.)$', '', name, flags=re.IGNORECASE)
     return name.strip()
+
+
+def _select_match(query_name: str, matches: List[Dict]) -> Tuple[Optional[Dict], str]:
+    """Pick the search hit that is actually the company we asked about.
+
+    The DOS search is a BeginsWith over entity names, so a query with no
+    registrant can still come back with a page of other companies. Ranking on
+    status alone — as this used to — meant an unrelated Active company beat
+    the exact match when the exact one happened to be dissolved, and its
+    officers were then stored as the building's owner.
+
+    Identity first, status second:
+      "exact"  — same name once suffixes and punctuation are normalized
+      "prefix" — the registered name starts with what we asked for, which
+                 catches "65 SPRING REALTY LLC" vs "65 SPRING REALTY, LLC"
+                 and similar registry spellings
+    Anything weaker is not a match, and we would rather return nothing.
+    """
+    wanted = normalize_business_name(query_name)
+    if not wanted:
+        return None, 'none'
+
+    exact, prefix = [], []
+    for m in matches:
+        candidate = normalize_business_name(m.get('entity_name') or '')
+        if not candidate:
+            continue
+        if candidate == wanted:
+            exact.append(m)
+        elif candidate.startswith(wanted) or wanted.startswith(candidate):
+            prefix.append(m)
+
+    for tier, name in ((exact, 'exact'), (prefix, 'prefix')):
+        if not tier:
+            continue
+        # Within a tier an Active registration is the better answer, but a
+        # dissolved exact match still beats an active near-miss.
+        active = [m for m in tier if m.get('entity_status') == 'Active']
+        return (active[0] if active else tier[0]), name
+
+    return None, 'none'
 
 
 def _parse_formation_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -242,7 +320,7 @@ class AsyncNYSOSClient:
     def __init__(self, concurrency: int = 5, timeout: int = 30, max_retries: int = 3):
         self.concurrency = concurrency
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max(1, max_retries)
         self.semaphore = asyncio.Semaphore(concurrency)
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
@@ -277,22 +355,37 @@ class AsyncNYSOSClient:
         
         async with self.semaphore:
             for attempt in range(self.max_retries):
+                stage = 'search'
+                response = None
                 try:
                     matches = await self._search_business(business_name)
                     
                     if not matches:
+                        result.error = ''
                         return result
                     
-                    active_matches = [m for m in matches if m.get('entity_status') == 'Active']
-                    selected = active_matches[0] if active_matches else matches[0]
+                    selected, match_quality = _select_match(business_name, matches)
+                    if selected is None:
+                        # The search returned companies, but none of them is
+                        # the one we asked about. Attaching a stranger's
+                        # officers to a building is worse than no data, so
+                        # record the miss and stop.
+                        result.error = (
+                            f"No entity matching '{business_name}' "
+                            f"(closest of {len(matches)}: "
+                            f"{matches[0].get('entity_name')!r})"
+                        )
+                        return result
+                    result.match_quality = match_quality
                     
+                    stage = 'details'
                     details = await self._get_business_details(
                         selected['dos_id'], 
                         selected['entity_name']
                     )
                     
                     if not details:
-                        return result
+                        raise ValueError('Empty entity details response')
                     
                     result.found = True
                     result.dos_id = details.get('dos_id', '')
@@ -304,29 +397,28 @@ class AsyncNYSOSClient:
                     result.county = details.get('county', '')
                     result.people = details.get('people', [])
                     result.raw_response = details.get('raw_response', {})
+                    result.error = ''
                     
                     return result
                     
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code in (429, 503):
-                        sleep_time = (2 ** attempt) + random.random()
-                        await asyncio.sleep(sleep_time)
-                        continue
-                    result.error = f"HTTP {e.response.status_code}"
-                    return result
+                    response = e.response
+                    result.error = f"{stage}: HTTP {response.status_code} (attempt {attempt + 1}/{self.max_retries})"
+                    if response.status_code not in (408, 429, 500, 502, 503, 504):
+                        return result
                     
-                except (httpx.TimeoutException, httpx.ConnectError) as e:
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep((2 ** attempt) + random.random())
-                        continue
-                    result.error = f"Connection error: {e}"
-                    return result
+                except (httpx.TransportError, ValueError) as e:
+                    result.error = (f"{stage}: {type(e).__name__} "
+                                    f"(attempt {attempt + 1}/{self.max_retries})")
                     
                 except Exception as e:
-                    result.error = str(e)
+                    result.error = f"{stage}: {type(e).__name__}: {e}"
                     return result
+
+                log.warning('SOS %r: %s', business_name, result.error)
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(_retry_delay(attempt, response))
             
-            result.error = "Max retries exceeded"
             return result
     
     async def lookup_many(self, business_names: List[str]) -> Dict[str, SOSBusinessResult]:
@@ -365,9 +457,13 @@ class AsyncNYSOSClient:
         )
         response.raise_for_status()
         content = response.json()
+        if not isinstance(content, dict) or not isinstance(content.get('entitySearchResultList'), list):
+            raise ValueError('Invalid entity search response')
         
         results = []
         for result in content.get('entitySearchResultList', []):
+            if not isinstance(result, dict) or not result.get('dosID') or not result.get('entityName'):
+                raise ValueError('Invalid entity search row')
             results.append({
                 'dos_id': result.get('dosID'),
                 'entity_name': result.get('entityName'),
@@ -394,6 +490,10 @@ class AsyncNYSOSClient:
         )
         response.raise_for_status()
         content = response.json()
+        if (not isinstance(content, dict)
+                or not isinstance(content.get('entityGeneralInfo'), dict)
+                or not content['entityGeneralInfo'].get('entityName')):
+            raise ValueError('Invalid entity details response')
         
         # Extract people (CEO, agents)
         people = []
@@ -404,11 +504,15 @@ class AsyncNYSOSClient:
         }
         
         for key, title in titles.items():
-            person_data = content.get(key, {})
-            if person_data and person_data.get('name'):
-                name = person_data.get('name', '')
+            person_data = content.get(key) or {}
+            if not isinstance(person_data, dict):
+                raise ValueError(f'Invalid {key} details')
+            name = (person_data.get('name') or '').strip()
+            if name:
                 first_name, middle_name, last_name = _parse_name(name)
-                address = person_data.get('address', {})
+                address = person_data.get('address') or {}
+                if not isinstance(address, dict):
+                    raise ValueError(f'Invalid {key} address')
                 
                 people.append(SOSPerson(
                     full_name=name,

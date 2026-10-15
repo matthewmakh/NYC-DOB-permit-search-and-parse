@@ -1,0 +1,50 @@
+{% extends "crm/_layout.html" %}
+{% from "crm/_macros.html" import stage_dot, avatar, empty %}
+{% block title %}CRM — Deals{% endblock %}
+{% block crm_content %}
+<div class="crm-title">
+    <div>
+        <h1 class="crm-large-title">Deals <small>{{ counts.get('all', {}).get('n', 0) }}</small></h1>
+        <p class="crm-subtitle">Opportunities, value, close targets, and the next action—separate from the building record.</p>
+    </div>
+    <div class="crm-title-actions">{% if crm_ctx.is_admin %}<a class="cbtn" href="/crm/api/export/deals.csv"><i class="fas fa-download"></i> Export</a>{% endif %}<a class="cbtn cbtn-primary" href="/crm/deals/add"><i class="fas fa-plus"></i> New deal</a></div>
+</div>
+
+<div class="crm-kpi-row">
+    <div class="crm-kpi"><div class="k-label">Open pipeline</div><div class="k-value">${{ counts.get('open', {}).get('value', 0)|crm_compact }}</div><div class="k-sub">{{ counts.get('open', {}).get('n', 0) }} active · {{ counts.get('all', {}).get('n', 0) }} total</div></div>
+    <div class="crm-kpi"><div class="k-label">Quoted</div><div class="k-value">{{ counts.get('quoted', {}).get('n', 0) }}</div><div class="k-sub">${{ counts.get('quoted', {}).get('value', 0)|crm_compact }} value</div></div>
+    <div class="crm-kpi"><div class="k-label">Nurture</div><div class="k-value">{{ counts.get('nurture', {}).get('n', 0) }}</div><div class="k-sub">Longer-term opportunities</div></div>
+    <div class="crm-kpi{{ ' is-alert' if missing }}"><div class="k-label">Needs next step</div><div class="k-value">{{ deals|selectattr('needs_next_step')|list|length if not missing else deals|length }}</div><div class="k-sub">Active deals without a date</div></div>
+</div>
+
+<div class="crm-toolbar">
+    <form class="crm-search" method="get" action="/crm/deals">
+        <i class="fas fa-magnifying-glass"></i><input type="text" name="q" value="{{ q or '' }}" placeholder="Deal, service, building, or contact">
+    </form>
+    <div class="crm-pills">
+        <a class="crm-pill{{ ' is-active' if not stage and not missing }}" href="/crm/deals">All</a>
+        {% for s in stages %}<a class="crm-pill{{ ' is-active' if stage == s }}" href="/crm/deals?stage={{ s }}"><span class="crm-dot dot-{{ s }}"></span>{{ stage_labels[s] }} <span class="n">{{ counts.get(s, {}).get('n', 0) }}</span></a>{% endfor %}
+        <a class="crm-pill{{ ' is-active' if missing }}" href="/crm/deals?missing=1"><i class="fas fa-flag"></i> No next step</a>
+    </div>
+</div>
+
+{% if deals %}
+<div class="crm-table-wrap">
+    <table class="crm-table crm-deals-table">
+        <thead><tr><th>Deal</th><th>Stage</th><th>Value</th><th>Next step</th><th>Close target</th>{% if crm_ctx.is_admin %}<th>Assigned to</th><th>Added by</th>{% endif %}<th></th></tr></thead>
+        <tbody>{% for d in deals %}
+        <tr>
+            <td class="t-name"><a href="/crm/deals/{{ d.id }}">{{ d.name }}</a><div class="t-muted">{{ d.service_type or 'Service not set' }}{% if d.building_address %} · {{ d.building_address }}{% endif %}{% if d.contact_name %} · {{ d.contact_name }}{% endif %}</div></td>
+            <td>{{ stage_dot(d.stage, stage_labels) }}</td>
+            <td class="t-num">{% if d.estimated_value is not none %}${{ '{:,.0f}'.format(d.estimated_value) }}{% else %}<span class="t-muted">—</span>{% endif %}</td>
+            <td>{% if d.next_step_at %}<strong>{{ d.next_step or 'Follow up' }}</strong><div class="t-muted">{{ d.next_step_at|crm_nydt }}</div>{% else %}<a class="crm-tag tag-red" href="/crm/deals/{{ d.id }}/edit"><i class="fas fa-flag"></i> Add next step</a>{% endif %}</td>
+            <td>{{ d.expected_close_date|crm_date if d.expected_close_date else '—' }}</td>
+            {% if crm_ctx.is_admin %}<td>{% if d.assigned_to_name %}{{ avatar(d.assigned_to_name, 'crm-avatar-sm') }} {{ d.assigned_to_name }}{% else %}—{% endif %}</td><td>{{ d.added_by_name }}</td>{% endif %}
+            <td><a class="cbtn cbtn-sm" href="/crm/deals/{{ d.id }}">Open</a></td>
+        </tr>{% endfor %}</tbody>
+    </table>
+</div>
+{% else %}
+<div class="crm-group">{% call empty('fa-handshake', 'No deals here', 'Create a deal when a building or contact becomes a real opportunity. It keeps value and next steps out of the building record.') %}<a class="cbtn cbtn-primary" href="/crm/deals/add">Create a deal</a>{% endcall %}</div>
+{% endif %}
+{% endblock %}
