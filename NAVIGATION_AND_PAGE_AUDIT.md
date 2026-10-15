@@ -106,7 +106,8 @@ PR #11 merged the complete application and shared design into `main`, preserving
 all 87 previous staging commits. The checkout now tracks all remote branches and
 uses `main`. Remote `staging` was fast-forwarded to the same merge commit.
 Production `DOB-Dashboard` is configured to deploy `main` with its existing
-configuration and database. The canonical URL is https://permits.up.railway.app.
+configuration and database. The application initially used https://permits.up.railway.app; the subsequent
+custom-domain cutover is documented below.
 
 Local verification passed 148 viewport page checks, 40 page/theme checks, all
 Node navigation/profile/owner-research regressions, six navigation/design-shell
@@ -127,13 +128,26 @@ Postgres service `36c7f698-67d4-4d31-a866-1807a4570b2a` in environment
 `b6e062af-d655-4f64-a83b-b094eafc7327`; the current app and pipeline services
 actively depend on it.
 
-The unused legacy production web instance is
+The retired legacy production web instance was
 `b091d649-80bc-4ba4-a2d3-969497da3bc1` in that production environment. The same
-service ID has a separate, updated staging instance; deletion must target only
-the obsolete production instance.
+service ID has a separate, updated staging instance, which was retained. Only
+the obsolete production instance was deleted.
 
 Railway attached `leads.installersny.com` to current service `DOB-Dashboard` on
-port 8080. GoDaddy DNS still needs its `leads` CNAME changed from
-`2ldtpjav.up.railway.app` to `d3hy1bc5.up.railway.app`; HTTPS ownership validation
-is pending. The existing app remains available at `permits.up.railway.app`.
-Do not delete the old web instance until custom-domain HTTPS and app health pass.
+port 8080. GoDaddy's `leads` CNAME was changed from
+`2ldtpjav.up.railway.app` to `d3hy1bc5.up.railway.app`, and a dedicated
+`_railway-verify.leads` TXT ownership record was added. Both authoritative
+nameservers and public resolvers return the new values. Railway verified ownership and issued valid HTTPS certificates after propagation. The existing app remains available at `permits.up.railway.app`.
+Custom-domain HTTPS, the current sign-in design and the read-only health check
+all passed; the health endpoint reports its database connected. The obsolete
+production web instance was deleted after those checks. A fresh service inventory
+confirmed it was gone from production, the current app and Postgres were retained,
+and the updated staging instance was still present. A post-removal health check
+on the custom domain returned HTTP 200 with the database connected.
+The canonical public URL is https://leads.installersny.com; the Railway URL remains
+available as a fallback.
+
+Final operational verification also showed the production permit and enrichment
+cron services reporting `SUCCESS`. No database was deleted or migrated during
+this domain cutover. DNS records outside `leads` and `_railway-verify.leads` were
+left unchanged.

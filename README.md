@@ -2,7 +2,8 @@
 
 **Last Updated:** November 15, 2025  
 **Repository:** https://github.com/matthewmakh/NYC-DOB-permit-search-and-parse  
-**Dashboard:** https://permits.up.railway.app
+**Dashboard:** https://leads.installersny.com
+**Railway fallback:** https://permits.up.railway.app
 
 ---
 
@@ -81,7 +82,7 @@ signals until an evidence-backed project graph can connect them.
    └─ Step 4: geocode_permits.py
       └─ NYC Geoclient API: Latitude/longitude
 
-4. Dashboard (permits.up.railway.app)
+4. Dashboard (leads.installersny.com)
    └─ Displays enriched data in two views
 ```
 
@@ -224,7 +225,7 @@ python geocode_permits.py
 
 | Service | Type | Config File | Schedule | Purpose |
 |---------|------|-------------|----------|---------|
-| **DOB-Dashboard** | Web App | `dashboard_html/railway.json` | Always On | Dashboard (permits.up.railway.app) |
+| **DOB-Dashboard** | Web App | `dashboard_html/railway.json` | Always On | Dashboard (leads.installersny.com) |
 | **Postgres** | Database | - | Always On | PostgreSQL database |
 | **Building-Enrichment-Pipeline** | Cron | `railway.enrichment.json` | Daily 3 AM | Master pipeline (all 4 steps) |
 
@@ -504,7 +505,7 @@ Your system is working correctly if:
 - [ ] Some buildings have ACRIS transaction data (~30-50%)
 - [ ] Geocoding achieves ~100% success over time
 - [ ] Pipeline completes in ~5 minutes
-- [ ] Dashboard loads at permits.up.railway.app
+- [ ] Dashboard loads at leads.installersny.com
 - [ ] Both views work (Permit View + Building View)
 - [ ] Filters and search function properly
 

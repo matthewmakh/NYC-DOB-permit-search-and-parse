@@ -36,13 +36,16 @@ FLASK_ENV=production
 ## Auto-Deployment
 
 `main` is the canonical source branch for production service `DOB-Dashboard`,
-served at **https://permits.up.railway.app**. Keep `staging` synchronized by
+served at **https://leads.installersny.com**.
+The Railway URL **https://permits.up.railway.app** remains available as a fallback. Keep `staging` synchronized by
 fast-forward for the existing preview and pipeline sources. Verify deployment
 status after a push; a GitHub merge alone does not confirm a successful rollout.
 
-The user designated `leads.installersny.com` for separate removal. Its legacy
-service and separate database are not the current application and were left
-untouched during this reconciliation.
+The custom domain is attached to `DOB-Dashboard` on port 8080. The obsolete
+production web instance is retired only after HTTPS and application health pass.
+Its apparent "different database" was actually the public endpoint of the same
+production Postgres used by the current app. Keep that shared database and its
+pipeline connections; there is no obsolete production database to delete.
 
 The historical `html-dashboard` branch is obsolete. See
 [`NAVIGATION_AND_PAGE_AUDIT.md`](../NAVIGATION_AND_PAGE_AUDIT.md) for the branch
