@@ -476,3 +476,7 @@
 .permit-contractor-copy { flex: 1; min-width: 0; }
 .permit-contractor-copy strong { display: block; overflow-wrap: anywhere; }
 .permit-contractor-copy > span { display: block; color: var(--ink-2); font-size: 12px; margin-top: 4px; }
+.permit-result-card:hover { box-shadow: var(--shadow-1); }
+.permit-result-card:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.permit-explorer .leaflet-popup-content-wrapper,
+.permit-explorer .leaflet-popup-tip { background: var(--surface); color: var(--ink); }

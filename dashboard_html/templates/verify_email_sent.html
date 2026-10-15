@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     {% include "_theme_init.html" %}
-    <title>Verify Email - NYC Permit Leads</title>
+    <title>Account Access - NYC Permit Leads</title>
     <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
     <link rel="stylesheet" href="/static/css/mobile.css">
@@ -13,18 +13,16 @@
     <div class="auth-container centered">
         <div class="auth-card">
             <div class="auth-header">
-                <h1>📧 Check Your Email</h1>
+                <h1>Your account is ready</h1>
             </div>
             
             <div class="verification-content">
-                <div class="email-icon">✉️</div>
-                <h2>Verification Email Sent</h2>
-                <p>We've sent a verification link to:</p>
+                <h2>No email verification needed</h2>
+                <p>Accounts are verified automatically:</p>
                 <p class="email-display">{{ email }}</p>
                 
                 <div class="instructions">
-                    <p>Please click the link in the email to verify your account and complete your subscription.</p>
-                    <p class="note">Didn't receive the email? Check your spam folder or <a href="{{ url_for('auth.resend_verification') }}">resend verification email</a>.</p>
+                    <p>Sign in to continue. An active subscription or sponsored team access is required.</p>
                 </div>
             </div>
             

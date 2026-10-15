@@ -2570,6 +2570,10 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
         button.textContent = 'Do not contact';
         return;
     }
+    if (button.disabled) return;
+    const originalMarkup = button.innerHTML;
+    const section = button.closest('.enrich-contact-section, .contact-card');
+    section?.querySelectorAll('.enrich-error').forEach(error => error.remove());
     // Disable button and show loading
     button.disabled = true;
     button.innerHTML = '<span class="loading-spinner"></span> Enriching...';
@@ -2613,20 +2617,20 @@ async function enrichPermitContact(bbl, buildingId, permitId, contactName, conta
         } else {
             // Show error
             button.disabled = false;
-            button.innerHTML = `Get Contact Info <span class="enrich-cost">$0.50</span>`;
+            button.innerHTML = originalMarkup;
             
             // Show error message
-            const section = button.closest('.enrich-contact-section');
             if (section) {
                 section.insertAdjacentHTML('beforeend', `
-                    <div class="enrich-error">${escapeHtml(data.error || 'Enrichment failed')}</div>
+                    <div class="enrich-error" role="alert">${escapeHtml(data.error || 'Enrichment failed')}</div>
                 `);
             }
         }
     } catch (error) {
         console.error('Enrichment error:', error);
         button.disabled = false;
-        button.innerHTML = `Get Contact Info <span class="enrich-cost">$0.50</span>`;
+        button.innerHTML = originalMarkup;
+        if (section) section.insertAdjacentHTML('beforeend', '<div class="enrich-error" role="alert">Could not unlock contact information. Please try again.</div>');
     }
 }
 
@@ -3459,6 +3463,8 @@ function renderActivityTab() {
 function renderContactsTab() {
     const { contacts } = buildingData;
     const container = document.getElementById('contacts-directory');
+    // Enriched records can exist even when no original permit phones exist.
+    if (!buildingData.enriched_contacts) loadEnrichedContacts();
     
     let html = '';
     
@@ -3491,7 +3497,7 @@ function renderContactsTab() {
                             <div class="contact-name">${entityNameLink(contact.name, { role: getContactTypeLabel(contact.type) })}</div>
                             <div class="contact-role">${getContactTypeLabel(contact.type)}</div>
                             <div class="contact-locked">
-                                Contact enriched - <button class="unlock-btn" onclick="unlockPermitContact('${contact.id}')">Unlock for $0.50</button>
+                                Contact enriched - <button type="button" class="unlock-btn" data-unlock-permit-contact="${escapeHtml(contact.id)}">Unlock for $0.50</button>
                             </div>
                             ${renderTruePeopleSearchLink(contact.name, contact)}
                         </div>
@@ -3551,11 +3557,10 @@ function renderContactsTab() {
     }
     
     container.innerHTML = html || '<div class="no-data">No contacts available</div>';
+    container.querySelectorAll('[data-unlock-permit-contact]').forEach(button => {
+        button.addEventListener('click', () => unlockPermitContact(button.dataset.unlockPermitContact, button));
+    });
     
-    // Load enriched contacts if not already loaded
-    if (!buildingData.enriched_contacts) {
-        loadEnrichedContacts();
-    }
 }
 
 /**
@@ -3656,9 +3661,15 @@ async function loadEnrichedContacts() {
 /**
  * Unlock a permit contact that was enriched by another user
  */
-async function unlockPermitContact(enrichmentId) {
-    // TODO: Implement unlock flow - similar to enrich but just grants access
-    alert('Contact unlock coming soon! For now, please re-enrich from the permit modal.');
+async function unlockPermitContact(enrichmentId, button) {
+    const contact = buildingData?.enriched_contacts?.permit_contacts?.find(item => String(item.id) === String(enrichmentId));
+    if (!contact || !button || button.disabled) return;
+    if (!confirm(`Unlock contact information for ${contact.name}? This costs $0.50 unless your account already has access.`)) return;
+    await enrichPermitContact(
+        buildingData?.building?.bbl || BBL, buildingData?.building?.id, null,
+        contact.name, contact.type, contact.license_number, contact.license_type,
+        contact.original_phone, button
+    );
 }
 
 

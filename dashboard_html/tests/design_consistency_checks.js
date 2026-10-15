@@ -3,7 +3,7 @@ async page => {
     const paths = ['/', '/properties', '/contractors', '/permits', '/buyers', '/alerts',
         '/search-results?q=West', '/property/1001230045', '/permit/1', '/contractor/example',
         '/entities', '/entity/1', '/admin/activity', '/admin/team', '/crm', '/crm/deals',
-        '/auth/login', '/auth/signup', '/auth/team-setup', '/auth/verify-email'];
+        '/auth/login', '/auth/signup', '/auth/team-setup', '/auth/verify-email', '/auth/forgot-password'];
     const failures = [], errors = [];
     const check = (ok, message) => { if (!ok) failures.push(message); };
     page.on('pageerror', error => errors.push(`${page.url()}: ${error.message}`));
@@ -40,6 +40,9 @@ async page => {
         }
     }
     await page.goto('http://127.0.0.1:5099/permits');
+    await page.locator('#permitsList .permit-result-card').first().waitFor();
+    const permitSurface = await page.locator('#permitsList .permit-result-card').first().evaluate(el => getComputedStyle(el).backgroundColor);
+    check(permitSurface === 'rgb(28, 28, 30)', `Dark permit cards use a different surface: ${permitSurface}`);
     const verticalFields = await page.locator('.filter-panel .filter-group').evaluateAll(groups => groups.every(group => {
         const label = group.querySelector('label'), input = group.querySelector('input,select');
         return !label || !input || label.getBoundingClientRect().bottom <= input.getBoundingClientRect().top + 1;

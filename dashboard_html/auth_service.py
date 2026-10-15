@@ -373,7 +373,8 @@ def login_required(f):
             if request.path.startswith('/api/'):
                 return jsonify({'success': False, 'error': 'Authentication required'}), 401
             
-            return redirect(url_for('auth.login', next=request.url))
+            destination = request.full_path if request.query_string else request.path
+            return redirect(url_for('auth.login', next=destination))
         
         # Store user in g for access in route
         g.user = user

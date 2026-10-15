@@ -53,3 +53,4 @@ proxy_auth_plugin.zip
 
 # Local browser verification output
 .playwright-cli/
+.playwright-mcp/

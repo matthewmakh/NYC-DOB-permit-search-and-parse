@@ -153,7 +153,8 @@ function setupQuickFilters() {
     const quickFilters = {
         'quickFilterHotLeads': () => {
             AppState.filters.minLeadScore = AppState.filters.minLeadScore === 70 ? 0 : 70;
-            applyFiltersLocal();
+            AppState.pagination.currentPage = 1;
+            loadPermits();
         },
         'quickFilterRecent': () => {
             AppState.filters.permitActivityMode = 'within';
@@ -166,7 +167,8 @@ function setupQuickFilters() {
         },
         'quickFilterContacts': () => {
             AppState.filters.hasContact = !AppState.filters.hasContact;
-            applyFiltersLocal();
+            AppState.pagination.currentPage = 1;
+            loadPermits();
         }
     };
     
@@ -216,7 +218,7 @@ function updateConstructionActivityHint() {
     const dayChoice = document.getElementById('filterDays')?.value;
     const customDays = document.getElementById('filterCustomDays')?.value;
     if (dayChoice === 'all') {
-        hint.textContent = 'All permit records are included; the timing rule does not narrow an all-time window.';
+        hint.textContent = 'Includes dated and undated records. Future issue dates are excluded.';
     } else if (dayChoice === 'custom' && !customDays) {
         hint.textContent = 'Enter a custom number of days to apply this timing rule.';
     } else {
@@ -240,6 +242,7 @@ function loadStats() {
     fetch(`/api/construction/stats?${params}`)
         .then(r => r.json())
         .then(data => {
+            if (!data.success) throw new Error('Statistics request failed');
             if (data.success) {
                 AppState.stats = data.stats;
                 displayStats(data.stats);
@@ -342,7 +345,9 @@ function displayBoroughsChart(boroughs) {
     setHtmlById('boroughsChart', html);
 }
 
+let permitRequest = 0;
 function loadPermits() {
+    const requestId = ++permitRequest;
     const offset = (AppState.pagination.currentPage - 1) * AppState.pagination.perPage;
     const params = appendPermitTimeParams(new URLSearchParams({
         limit: AppState.pagination.perPage,
@@ -352,12 +357,16 @@ function loadPermits() {
     if (AppState.filters.borough) params.append('borough', AppState.filters.borough);
     if (AppState.filters.jobType) params.append('job_type', AppState.filters.jobType);
     if (AppState.filters.searchText) params.append('q', AppState.filters.searchText);
+    if (AppState.filters.hasContact) params.set('has_contact', 'true');
+    if (AppState.filters.minLeadScore > 0) params.set('min_score', AppState.filters.minLeadScore);
     
     showLoadingSkeleton('permitsList', 5);
     
     fetch(`/api/construction/permits?${params}`)
         .then(r => r.json())
         .then(data => {
+            if (requestId !== permitRequest) return;
+            if (!data.success) throw new Error('Permit request failed');
             if (data.success) {
                 AppState.permits = data.permits;
                 AppState.pagination.totalCount = data.total_count;
@@ -368,8 +377,11 @@ function loadPermits() {
             }
         })
         .catch(err => {
+            if (requestId !== permitRequest) return;
             console.error('Permits error:', err);
-            showToast('Failed to load permits', 'error');
+            const list = document.getElementById('permitsList');
+            list.innerHTML = '<div class="empty-state" role="alert"><p>Could not load permits. Your filters are still here.</p><button type="button" class="btn btn-secondary" id="retryPermits">Retry</button></div>';
+            document.getElementById('retryPermits').addEventListener('click', loadPermits);
         });
 }
 
@@ -425,7 +437,7 @@ function displayPermitsList(permits) {
         const leadScore = p.lead_score || 0;
         const contactCount = p.contact_count || 0;
         const jobType = p.job_type || 'OTHER';
-        const issueDate = p.issue_date ? new Date(p.issue_date).toLocaleDateString() : 'N/A';
+        const issueDate = p.issue_date ? new Date(p.issue_date).toLocaleDateString('en-US', {timeZone: 'UTC'}) : 'N/A';
         
         const leadBadge = leadScore >= 70 ?
             '<span style="background:#10b981;color:var(--on-accent);padding:0.25rem 0.75rem;border-radius:12px;font-size:0.75rem;font-weight:600;">🔥 HOT</span>' :
@@ -434,10 +446,10 @@ function displayPermitsList(permits) {
             '<span style="background:var(--ink-2);color:var(--on-accent);padding:0.25rem 0.75rem;border-radius:12px;font-size:0.75rem;font-weight:600;">❄️ COLD</span>';
         
         return `
-            <div onclick="window.open('/permit/${p.id}', '_blank')" style="cursor:pointer;background:white;border:1px solid var(--line);border-left:4px solid ${getJobTypeColor(jobType)};border-radius:12px;padding:1.5rem;margin-bottom:1rem;transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 24px rgba(0,0,0,0.12)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='none'">
+            <a class="permit-result-card" href="/permit/${encodeURIComponent(p.id)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--line);border-left:4px solid ${getJobTypeColor(jobType)};border-radius:12px;padding:1.5rem;margin-bottom:1rem;">
                 <div style="display:flex;justify-content:space-between;margin-bottom:1rem;">
                     <div style="flex:1;">
-                        <div style="font-size:1.125rem;font-weight:700;color:#111827;margin-bottom:0.25rem;">
+                        <div style="font-size:1.125rem;font-weight:700;color:var(--ink);margin-bottom:0.25rem;">
                             ${escapeHtml(jobType)} - ${escapeHtml(p.address || 'No address')}
                         </div>
                         <div style="color:var(--ink-2);font-size:0.875rem;">
@@ -453,10 +465,10 @@ function displayPermitsList(permits) {
                     </div>
                 </div>
                 
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;padding:1rem;background:#f9fafb;border-radius:8px;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;padding:1rem;background:var(--surface-2);border-radius:8px;">
                     <div>
                         <div style="font-size:0.75rem;color:var(--ink-2);text-transform:uppercase;margin-bottom:0.25rem;">Permit #</div>
-                        <div style="font-weight:600;color:#111827;">${escapeHtml(p.permit_no || 'N/A')}</div>
+                        <div style="font-weight:600;color:var(--ink);">${escapeHtml(p.permit_no || 'N/A')}</div>
                     </div>
                     <div>
                         <div style="font-size:0.75rem;color:var(--ink-2);text-transform:uppercase;margin-bottom:0.25rem;">Contacts</div>
@@ -473,11 +485,11 @@ function displayPermitsList(permits) {
                     ${p.applicant ? `
                         <div>
                             <div style="font-size:0.75rem;color:var(--ink-2);text-transform:uppercase;margin-bottom:0.25rem;">Applicant</div>
-                            <div style="font-weight:600;color:#111827;font-size:0.875rem;">${escapeHtml(p.applicant)}</div>
+                            <div style="font-weight:600;color:var(--ink);font-size:0.875rem;">${escapeHtml(p.applicant)}</div>
                         </div>
                     ` : ''}
                 </div>
-            </div>
+            </a>
         `;
     }).join('');
     
@@ -500,6 +512,7 @@ function loadMapData() {
     fetch(`/api/construction/map-data?${params}`)
         .then(r => r.json())
         .then(data => {
+            if (!data.success) throw new Error('Map request failed');
             if (data.success) {
                 if (loadingCount) {
                     loadingCount.textContent = `Loading ${data.locations.length} markers...`;
@@ -543,30 +556,30 @@ function displayMapMarkers(locations) {
                 fillOpacity: 0.85
             });
             
-            const issueDate = loc.issue_date ? new Date(loc.issue_date).toLocaleDateString() : 'N/A';
+            const issueDate = loc.issue_date ? new Date(loc.issue_date).toLocaleDateString('en-US', {timeZone: 'UTC'}) : 'N/A';
             const leadBadge = leadScore >= 70 ? '🔥 HOT LEAD' : leadScore >= 50 ? '⚡ WARM' : '';
             
             marker.bindPopup(`
                 <div style="min-width:280px;font-family:system-ui;">
-                    <div style="font-size:1.125rem;font-weight:700;margin-bottom:0.5rem;color:#111827;">
+                    <div style="font-size:1.125rem;font-weight:700;margin-bottom:0.5rem;color:var(--ink);">
                         ${escapeHtml(loc.job_type)} - ${escapeHtml(loc.address || 'No address')}
                     </div>
                     ${leadBadge ? `<div style="background:${leadScore >= 70 ? '#10b981' : '#f59e0b'};color:var(--on-accent);display:inline-block;padding:0.25rem 0.75rem;border-radius:12px;font-size:0.75rem;font-weight:600;margin-bottom:0.75rem;">${leadBadge}</div>` : ''}
                     <div style="color:var(--ink-2);font-size:0.875rem;margin-bottom:0.75rem;">
                         <i class="fas fa-map-marker-alt"></i> ${escapeHtml(loc.borough || 'Unknown')} • ${issueDate}
                     </div>
-                    <div style="background:#f9fafb;padding:0.75rem;border-radius:6px;margin-bottom:0.75rem;">
+                    <div style="background:var(--surface-2);padding:0.75rem;border-radius:6px;margin-bottom:0.75rem;">
                         <div style="font-size:0.75rem;color:var(--ink-2);margin-bottom:0.25rem;">PERMIT NUMBER</div>
-                        <div style="font-weight:600;color:#111827;">${escapeHtml(loc.permit_no || 'N/A')}</div>
+                        <div style="font-weight:600;color:var(--ink);">${escapeHtml(loc.permit_no || 'N/A')}</div>
                     </div>
                     <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
-                        <div style="flex:1;background:#f9fafb;padding:0.5rem;border-radius:6px;text-align:center;">
+                        <div style="flex:1;background:var(--surface-2);padding:0.5rem;border-radius:6px;text-align:center;">
                             <div style="font-size:0.75rem;color:var(--ink-2);">Contacts</div>
                             <div style="font-weight:700;color:${(loc.contact_count || 0) > 0 ? '#10b981' : 'var(--ink-2)'};">
                                 ${loc.contact_count || 0}
                             </div>
                         </div>
-                        <div style="flex:1;background:#f9fafb;padding:0.5rem;border-radius:6px;text-align:center;">
+                        <div style="flex:1;background:var(--surface-2);padding:0.5rem;border-radius:6px;text-align:center;">
                             <div style="font-size:0.75rem;color:var(--ink-2);">Score</div>
                             <div style="font-weight:700;color:${leadScore >= 70 ? '#10b981' : leadScore >= 50 ? '#f59e0b' : 'var(--ink-2)'};">
                                 ${leadScore}
@@ -643,12 +656,12 @@ function sortPermitsList() {
     // Map frontend sort values to backend API values
     const sortMap = {
         'date_desc': 'date',
-        'date_asc': 'date',  // Will handle asc in backend if needed
+        'date_asc': 'date_asc',
         'score': 'score',
         'contacts': 'contacts',
-        'address': 'date',  // Fallback to date for now
-        'applicant': 'date',  // Fallback to date for now
-        'type': 'date'  // Fallback to date for now
+        'address': 'address',
+        'applicant': 'applicant',
+        'type': 'type'
     };
     
     AppState.filters.sortBy = sortMap[sortBy] || 'date';
@@ -657,6 +670,7 @@ function sortPermitsList() {
 }
 
 function clearFilters() {
+    document.getElementById('sortBy').value = 'date_desc';
     document.getElementById('filterBorough').value = '';
     document.getElementById('filterJobType').value = '';
     document.getElementById('filterDays').value = '90';

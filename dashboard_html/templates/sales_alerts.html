@@ -43,7 +43,7 @@
             </select>
         </div>
     </div>
-    <div id="alertList" class="alert-list"><div class="alerts-empty">Loading project alerts…</div></div>
+    <div id="alertList" class="alert-list" aria-live="polite"><div class="alerts-empty">Loading project alerts…</div></div>
 </main>
 {% endblock %}
 
@@ -52,40 +52,49 @@
 const money = value => value ? new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 0}).format(value) : null;
 const safe = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 let alertTimer;
+let alertRequest = 0;
 
 async function loadAlerts() {
+    const requestId = ++alertRequest;
     const list = document.getElementById('alertList');
     list.innerHTML = '<div class="alerts-empty">Loading project alerts…</div>';
     const query = document.getElementById('alertSearch').value.trim();
     const type = document.getElementById('alertType').value;
-    const response = await fetch(`/api/sales-alerts?status=all&type=${encodeURIComponent(type)}&q=${encodeURIComponent(query)}&limit=200`);
-    const data = await response.json();
-    if (!data.success) { list.innerHTML = `<div class="alerts-empty">${safe(data.error || 'Could not load alerts')}</div>`; return; }
-    if (!data.alerts.length) { list.innerHTML = '<div class="alerts-empty">No project alerts match this search.</div>'; return; }
-    list.innerHTML = data.alerts.map(alert => {
-        const storyDelta = alert.proposed_stories_count != null && alert.existing_stories_count != null
-            ? `${alert.existing_stories_count} → ${alert.proposed_stories_count} stories` : null;
-        const unitDelta = alert.proposed_dwelling_units != null && alert.existing_dwelling_units != null
-            ? `${alert.existing_dwelling_units} → ${alert.proposed_dwelling_units} units` : null;
-        const details = [alert.job_number && `Job ${alert.job_number}`, alert.initial_cost && money(alert.initial_cost), storyDelta, unitDelta,
-            alert.has_electrical_filing && `Electrical filing${alert.electrical_new_meters ? ` · ${alert.electrical_new_meters} new meters` : ''}`,
-            alert.electrical_scope_categories && `Electrical scope: ${alert.electrical_scope_categories}`,
-            alert.has_elevator_filing && `Elevator: ${alert.elevator_device_types || 'filing'}${alert.elevator_work_types ? ` · ${alert.elevator_work_types}` : ''}`,
-            alert.applicant_business_name && `Applicant: ${alert.applicant_business_name}`,
-            alert.owner_business_name && `Owner: ${alert.owner_business_name}`,
-            (alert.design_professional_business_name || alert.design_professional_person_name) && `Design professional: ${alert.design_professional_business_name || alert.design_professional_person_name}`,
-            alert.filing_representative_business_name && `Filing rep: ${alert.filing_representative_business_name}`].filter(Boolean);
-        return `<article class="alert-card">
-            <div class="alert-card-head"><div><h3>${safe(alert.title)}</h3><p>${safe(alert.summary)}</p></div><span class="alert-badge">${safe(alert.alert_type.replaceAll('_', ' '))}</span></div>
-            <div class="alert-details">${details.map(item => `<span>${safe(item)}</span>`).join('')}</div>
-            <div class="alert-actions">
-                ${alert.bbl ? `<a class="primary" href="/property/${encodeURIComponent(alert.bbl)}">View property</a>` : ''}
-                <a href="/permits?q=${encodeURIComponent(alert.job_number || alert.address || '')}">Find permits</a>
-                ${alert.owner_business_name ? `<a href="/properties?owner=${encodeURIComponent(alert.owner_business_name)}">Owner properties</a>` : ''}
-            </div>
-        </article>`;
-    }).join('');
+    try {
+        const response = await fetch(`/api/sales-alerts?status=all&type=${encodeURIComponent(type)}&q=${encodeURIComponent(query)}&limit=200`);
+        const data = await response.json();
+        if (requestId !== alertRequest) return;
+        if (!response.ok || !data.success || !Array.isArray(data.alerts)) throw new Error('Alert request failed');
+        if (!data.alerts.length) { list.innerHTML = '<div class="alerts-empty">No project alerts match this search.</div>'; return; }
+        list.innerHTML = data.alerts.map(alert => {
+            const storyDelta = alert.proposed_stories_count != null && alert.existing_stories_count != null
+                ? `${alert.existing_stories_count} → ${alert.proposed_stories_count} stories` : null;
+            const unitDelta = alert.proposed_dwelling_units != null && alert.existing_dwelling_units != null
+                ? `${alert.existing_dwelling_units} → ${alert.proposed_dwelling_units} units` : null;
+            const details = [alert.job_number && `Job ${alert.job_number}`, alert.initial_cost && money(alert.initial_cost), storyDelta, unitDelta,
+                alert.has_electrical_filing && `Electrical filing${alert.electrical_new_meters ? ` · ${alert.electrical_new_meters} new meters` : ''}`,
+                alert.electrical_scope_categories && `Electrical scope: ${alert.electrical_scope_categories}`,
+                alert.has_elevator_filing && `Elevator: ${alert.elevator_device_types || 'filing'}${alert.elevator_work_types ? ` · ${alert.elevator_work_types}` : ''}`,
+                alert.applicant_business_name && `Applicant: ${alert.applicant_business_name}`,
+                alert.owner_business_name && `Owner: ${alert.owner_business_name}`,
+                (alert.design_professional_business_name || alert.design_professional_person_name) && `Design professional: ${alert.design_professional_business_name || alert.design_professional_person_name}`,
+                alert.filing_representative_business_name && `Filing rep: ${alert.filing_representative_business_name}`].filter(Boolean);
+            return `<article class="alert-card">
+                <div class="alert-card-head"><div><h3>${safe(alert.title)}</h3><p>${safe(alert.summary)}</p></div><span class="alert-badge">${safe(alert.alert_type.replaceAll('_', ' '))}</span></div>
+                <div class="alert-details">${details.map(item => `<span>${safe(item)}</span>`).join('')}</div>
+                <div class="alert-actions">
+                    ${alert.bbl ? `<a class="primary" href="/property/${encodeURIComponent(alert.bbl)}">View property</a>` : ''}
+                    <a href="/permits?q=${encodeURIComponent(alert.job_number || alert.address || '')}">Find permits</a>
+                    ${alert.owner_business_name ? `<a href="/properties?owner=${encodeURIComponent(alert.owner_business_name)}">Owner properties</a>` : ''}
+                </div>
+            </article>`;
+        }).join('');
+    } catch (error) {
+        if (requestId !== alertRequest) return;
+        list.innerHTML = '<div class="alerts-empty" role="alert">Could not load project alerts. <button type="button" class="btn btn-secondary" data-retry-alerts>Retry</button></div>';
+    }
 }
+document.getElementById('alertList').addEventListener('click', event => { if (event.target.closest('[data-retry-alerts]')) loadAlerts(); });
 const initialAlertQuery = new URLSearchParams(window.location.search).get('q') || '';
 document.getElementById('alertSearch').value = initialAlertQuery;
 document.getElementById('alertSearch').addEventListener('input', () => {
