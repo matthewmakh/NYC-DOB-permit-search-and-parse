@@ -1,7 +1,6 @@
 /* ============================================================
    NYC Real Estate Intel — design system
-   Used by: home.html, properties.html, contractors.html
-   Legacy pages keep main.css; do not link both.
+   Shared by every live page through base.html and the account shell.
    ============================================================ */
 
 :root {
@@ -21,9 +20,10 @@
     --line-2: #d2d2cb;
 
     /* Accent — one color, used sparingly */
-    --accent: #1d4ed8;
-    --accent-hover: #1a41ad;
-    --accent-soft: #eef2fc;
+    --accent: #0f766e;
+    --on-accent: #fff;
+    --accent-hover: #115e59;
+    --accent-soft: #e8f5f1;
 
     /* Semantic */
     --green: #167a3d;
@@ -72,9 +72,10 @@ html[data-theme="dark"] {
     --line: rgba(84, 84, 88, 0.5);
     --line-2: rgba(84, 84, 88, 0.7);
 
-    --accent: #0a84ff;
-    --accent-hover: #3b9bff;
-    --accent-soft: rgba(10, 132, 255, 0.22);
+    --accent: #79dccc;
+    --on-accent: #123b36;
+    --accent-hover: #a5eadf;
+    --accent-soft: #173c39;
 
     --green: #62dd84;
     --green-soft: rgba(48, 209, 88, 0.2);

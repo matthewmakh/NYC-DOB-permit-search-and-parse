@@ -35,16 +35,15 @@ FLASK_ENV=production
 
 ## Auto-Deployment
 
-Railway will automatically deploy when you push to the `html-dashboard` branch.
+`main` is the canonical source branch. At the October 15, 2026 branch audit,
+GitHub deployment records showed production and staging following `staging`.
+Until those Railway source settings are changed to `main`, keep `staging` at the
+same commit using a fast-forward from `main`. Verify deployment status after a
+push; a GitHub merge alone does not confirm a successful Railway rollout.
 
-```bash
-git checkout html-dashboard
-# make changes...
-git add .
-git commit -m "Update dashboard"
-git push origin html-dashboard
-# Railway deploys automatically! 🎉
-```
+The historical `html-dashboard` branch is obsolete. See
+[`NAVIGATION_AND_PAGE_AUDIT.md`](../NAVIGATION_AND_PAGE_AUDIT.md) for the branch
+inventory and current page design map.
 
 ## Local Development
 

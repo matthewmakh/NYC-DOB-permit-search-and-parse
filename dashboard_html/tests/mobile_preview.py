@@ -10,7 +10,8 @@ from jinja2 import ChainableUndefined
 ROOT = Path(__file__).resolve().parents[1]
 app = Flask(__name__, template_folder=str(ROOT / 'templates'), static_folder=str(ROOT / 'static'))
 app.secret_key = 'local-ui-fixture-only'
-for endpoint in ('login', 'signup', 'forgot_password', 'team_setup'):
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+for endpoint in ('login', 'signup', 'forgot_password', 'team_setup', 'resend_verification'):
     app.add_url_rule('/auth/' + endpoint, endpoint='auth.' + endpoint, build_only=True)
 app.jinja_env.undefined = ChainableUndefined
 for name in ('date', 'due', 'input_time', 'nyday', 'nydt', 'nytime', 'recency', 'timeago', 'tel', 'input_dt', 'compact'):
@@ -196,6 +197,10 @@ def api(path):
             sample_addresses=[BUILDING['address']])],
         alerts=[dict(project_key='DOBNOW:M01234567', address=BUILDING['address'], owner_name=BUILDING['owner_name'],
             alert_type='new_filing', job_type='A2', initial_cost=1250000, description=PERMIT['work_description'])])
+    if path == 'entity/1':
+        data.update(dossier=dict(id=1, display_name=BUILDING['owner_name'], entity_kind='organization',
+                    permanent=False, retention_days=60, cache_hours=24, summary={}),
+                    jobs={}, rows=[], steps={}, source_labels={})
     if path.startswith('building-profile/'):
         data['building'] = {**BUILDING, 'zip_code': '10027', 'sale_buyer_primary': 'DAVIS, JORDAN', 'owner_name_hpd': 'Jordan Davis; Alex Smith',
                             'ecb_respondent_name': 'Jordan Davis', 'owner_name_rpad': 'Morgan Lee'}
@@ -213,14 +218,15 @@ def api(path):
 def page(path=''):
     routes = {'':'home.html', 'permits':'construction.html', 'properties':'properties.html',
         'contractors':'contractors.html', 'buyers':'repeat_buyers.html', 'alerts':'sales_alerts.html',
-        'search':'search_results.html', 'property/1001230045':'building_profile.html',
+        'search':'search_results.html', 'search-results':'search_results.html', 'entities':'entities.html', 'entity/1':'entity_profile.html', 'property/1001230045':'building_profile.html',
         'permit/1':'permit_detail.html', 'contractor/example':'contractor_profile.html',
         'admin/team':'admin_team.html', 'admin/activity':'admin_activity.html',
-        'auth/login':'login.html', 'auth/signup':'signup.html', 'auth/team-setup':'team_setup.html',
+        'auth/verify-email':'verify_email_sent.html', 'auth/login':'login.html', 'auth/signup':'signup.html', 'auth/team-setup':'team_setup.html',
         'crm':'crm/today.html'}
     template = routes.get(path, path + '.html' if path.startswith('crm/') else None)
     if not template: return 'Fixture route not found', 404
-    ctx = dict(active_page=path.split('/')[0], bbl=BUILDING['bbl'], contractor_name=CONTRACTOR['name'],
+    active_page = {'': 'home', 'property': 'properties', 'permit': 'permits', 'contractor': 'contractors', 'entity': 'home', 'entities': 'home'}.get(path.split('/')[0], path.split('/')[0])
+    ctx = dict(active_page=active_page, bbl=BUILDING['bbl'], contractor_name=CONTRACTOR['name'],
         permit={**PERMIT, 'issue_date': datetime(2026,9,1)}, contacts=[], contractor=CONTRACTOR,
         crm_ctx=dict(is_admin=True, user_id=1), crm_user_name='Jordan Davis', crm_tab=path.split('/')[-1],
         due_count=3, notification_count=2, push_public_key='', default_reminder_minutes=15,
@@ -229,7 +235,7 @@ def page(path=''):
         buildings=[BUILDING]*3, board=dict(new=[BUILDING], contacted=[], qualified=[], won=[]),
         counts={}, deals=[DEAL]*3, today_ny=date(2026,9,23), ny_hour=10, counters={}, spark=[dict(n=n, day='Mon') for n in [1,2,3,2,5,2,3]],
         overdue=[], due_today=[], upcoming=[], feed=[], groups=[], lists=[], notifications=[], history=[],
-        csrf_token='fixture', q='', building=BUILDING, contact={}, record={}, stats={},
+        csrf_token='fixture', dossier=dict(id=1, display_name='West 123rd Street Property Management Associates LLC', entity_kind='company'), email='jordan@example.test', query=request.args.get('q',''), q='', building=BUILDING, contact={}, record={}, stats={},
         b=BUILDING, c=dict(id=1,name='Jordan Davis',company=BUILDING['owner_name']), deal=DEAL,
         queue=[], source='today', focus_title='Today', sv={}, timeline=[], phones=[], emails=[],
         deal_funnel={}, report=dict(no_next_step=0, overdue=0), touches=[dict(n=1,day=date(2026,9,23))],

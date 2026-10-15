@@ -4,8 +4,8 @@
     --site-nav-muted: #475569;
     --site-nav-line: #e2e8f0;
     --site-nav-hover: #f1f5f9;
-    --site-nav-active: #e0f2fe;
-    --site-nav-accent: #0369a1;
+    --site-nav-active: var(--accent-soft);
+    --site-nav-accent: var(--accent);
     --site-nav-mark-ink: #fff;
     --site-nav-focus: rgba(3, 105, 161, 0.32);
     --site-nav-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
@@ -19,8 +19,8 @@ html[data-theme="dark"] {
     --site-nav-muted: #a1a1aa;
     --site-nav-line: rgba(84, 84, 88, 0.5);
     --site-nav-hover: rgba(255, 255, 255, 0.06);
-    --site-nav-active: rgba(10, 132, 255, 0.2);
-    --site-nav-accent: #74b4ff;
+    --site-nav-active: var(--accent-soft);
+    --site-nav-accent: var(--accent);
     --site-nav-mark-ink: #0e0e10;
     --site-nav-focus: rgba(116, 180, 255, 0.4);
     --site-nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);

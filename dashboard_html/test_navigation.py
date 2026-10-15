@@ -22,6 +22,8 @@ PUBLIC_TEMPLATES = {
     "contractor_profile.html",
     "admin_activity.html",
     "admin_team.html",
+    "entities.html",
+    "entity_profile.html",
 }
 PRIMARY_DESTINATIONS = {
     "/",
@@ -61,6 +63,21 @@ class NavigationTests(unittest.TestCase):
             )
             self.assertTrue(uses_shared_nav, f"{name} does not use shared navigation")
             self.assertNotIn('<nav class="top-nav">', source, f"{name} has legacy navigation")
+
+    def test_live_pages_share_the_current_design_shell(self):
+        for name in PUBLIC_TEMPLATES:
+            source = (TEMPLATES / name).read_text()
+            self.assertIn('{% extends "base.html" %}', source, name)
+            self.assertNotRegex(source, r"css/(main|styles)\.css", name)
+        base = (TEMPLATES / "base.html").read_text()
+        self.assertEqual(1, base.count('/static/css/app.css'))
+        self.assertEqual(1, base.count('/static/js/navigation.js'))
+        self.assertEqual(1, base.count('/static/js/mobile.js'))
+        self.assertLess(base.index('_theme_init.html'), base.index('/static/css/app.css'))
+        for name in ('login.html', 'signup.html', 'team_setup.html', 'verify_email_sent.html'):
+            source = (TEMPLATES / name).read_text()
+            self.assertIn('_theme_init.html', source, name)
+            self.assertIn('/static/css/app.css', source, name)
 
     def test_removed_workflow_and_dead_routes_stay_removed(self):
         removed = (

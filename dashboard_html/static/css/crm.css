@@ -5,21 +5,21 @@
    ============================================================ */
 
 :root {
-    --c-canvas: #f5f5f7;
-    --c-surface: #ffffff;
-    --c-surface-2: #f2f2f7;
-    --c-surface-3: #e8e8ed;
+    --c-canvas: var(--bg);
+    --c-surface: var(--surface);
+    --c-surface-2: var(--surface-2);
+    --c-surface-3: var(--surface-3);
     --c-fill: rgba(120, 120, 128, 0.12);
     --c-fill-hover: rgba(120, 120, 128, 0.2);
     --c-hairline: rgba(60, 60, 67, 0.16);
     --c-sep: rgba(60, 60, 67, 0.10);
 
-    --c-label: #1d1d1f;
-    --c-label-2: rgba(60, 60, 67, 0.64);
-    --c-label-3: rgba(60, 60, 67, 0.38);
-    --c-on-color: #ffffff;
+    --c-label: var(--ink);
+    --c-label-2: var(--ink-2);
+    --c-label-3: var(--ink-3);
+    --c-on-color: var(--on-accent);
 
-    --c-blue: #0a7aff;   --c-blue-ink: #0b5fd1;   --c-blue-tint: rgba(10, 122, 255, 0.12);
+    --c-blue: var(--accent);   --c-blue-ink: var(--accent);   --c-blue-tint: var(--accent-soft);
     --c-green: #34c759;  --c-green-ink: #1c8a3d;  --c-green-tint: rgba(52, 199, 89, 0.15);
     --c-orange: #ff9500; --c-orange-ink: #a85d00; --c-orange-tint: rgba(255, 149, 0, 0.16);
     --c-red: #ff3b30;    --c-red-ink: #c72c22;    --c-red-tint: rgba(255, 59, 48, 0.12);
@@ -39,20 +39,20 @@
 }
 
 html[data-crm-theme="dark"] {
-    --c-canvas: #0e0e10;
-    --c-surface: #1c1c1e;
-    --c-surface-2: #2c2c2e;
-    --c-surface-3: #3a3a3c;
+    --c-canvas: var(--bg);
+    --c-surface: var(--surface);
+    --c-surface-2: var(--surface-2);
+    --c-surface-3: var(--surface-3);
     --c-fill: rgba(120, 120, 128, 0.26);
     --c-fill-hover: rgba(120, 120, 128, 0.36);
     --c-hairline: rgba(84, 84, 88, 0.7);
     --c-sep: rgba(84, 84, 88, 0.5);
 
-    --c-label: #f5f5f7;
-    --c-label-2: rgba(235, 235, 245, 0.64);
-    --c-label-3: rgba(235, 235, 245, 0.38);
+    --c-label: var(--ink);
+    --c-label-2: var(--ink-2);
+    --c-label-3: var(--ink-3);
 
-    --c-blue: #0a84ff;   --c-blue-ink: #74b4ff;   --c-blue-tint: rgba(10, 132, 255, 0.22);
+    --c-blue: var(--accent);   --c-blue-ink: var(--accent);   --c-blue-tint: var(--accent-soft);
     --c-green: #30d158;  --c-green-ink: #62dd84;  --c-green-tint: rgba(48, 209, 88, 0.2);
     --c-orange: #ff9f0a; --c-orange-ink: #ffb84d; --c-orange-tint: rgba(255, 159, 10, 0.22);
     --c-red: #ff453a;    --c-red-ink: #ff7d74;    --c-red-tint: rgba(255, 69, 58, 0.2);
@@ -71,12 +71,11 @@ html[data-crm-theme="dark"] {
     --site-nav-muted: #a1a1aa;
     --site-nav-line: rgba(84, 84, 88, 0.5);
     --site-nav-hover: rgba(255, 255, 255, 0.06);
-    --site-nav-active: rgba(10, 132, 255, 0.2);
-    --site-nav-accent: #74b4ff;
+    --site-nav-active: var(--accent-soft);
+    --site-nav-accent: var(--accent);
     --bg: #0e0e10; --surface: #1c1c1e; --surface-2: #2c2c2e; --surface-3: #3a3a3c;
-    --ink: #f5f5f7; --ink-2: rgba(235, 235, 245, 0.64); --ink-3: rgba(235, 235, 245, 0.38);
+    --ink: #f5f5f7; --ink-2: rgba(235, 235, 245, 0.64); --ink-3: #a9adb8;
     --line: rgba(84, 84, 88, 0.5); --line-2: rgba(84, 84, 88, 0.7);
-    --accent: #0a84ff; --accent-hover: #3b9bff; --accent-soft: rgba(10, 132, 255, 0.22);
     --green: #62dd84; --green-soft: rgba(48, 209, 88, 0.2);
     --amber: #ffb84d; --amber-soft: rgba(255, 159, 10, 0.22);
     --red: #ff7d74; --red-soft: rgba(255, 69, 58, 0.2);
@@ -278,7 +277,7 @@ body { background: var(--c-canvas); color: var(--c-label); }
 .cbtn i { font-size: 12px; }
 
 .cbtn-primary { background: var(--c-blue); color: var(--c-on-color); }
-.cbtn-primary:hover { background: #0f6fe6; color: var(--c-on-color); }
+.cbtn-primary:hover { background: var(--accent-hover); color: var(--c-on-color); }
 html[data-crm-theme="dark"] .cbtn-primary:hover { background: #2b8fff; }
 
 .cbtn-tinted { background: var(--c-blue-tint); color: var(--c-blue-ink); }

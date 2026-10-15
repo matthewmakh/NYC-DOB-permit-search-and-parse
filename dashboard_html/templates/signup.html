@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Sign Up - NYC Building Intelligence</title>
+    {% include "_theme_init.html" %}
+    <title>Sign Up - NYC Permit Leads</title>
+    <link rel="stylesheet" href="/static/css/app.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
     <script src="https://js.stripe.com/v3/"></script>
     <link rel="stylesheet" href="/static/css/mobile.css">
@@ -12,7 +14,7 @@
     <div class="auth-container">
         <div class="auth-card">
             <div class="auth-header">
-                <h1>🏢 NYC Building Intelligence</h1>
+                <h1>NYC Permit Leads</h1>
                 <p>Create your account</p>
             </div>
             

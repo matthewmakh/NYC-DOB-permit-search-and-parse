@@ -2,10 +2,12 @@
 // Start mobile_preview.py first. All data is local sample data.
 async page => {
     page.setDefaultTimeout(5000);
+    await page.goto('http://127.0.0.1:5099/');
+    await page.evaluate(() => { localStorage.setItem('theme', 'auto'); localStorage.setItem('crm-theme', 'auto'); });
     const failures = [];
     const check = (ok, message) => { if (!ok) failures.push(message); };
     const paths = ['/', '/properties', '/contractors', '/permits', '/buyers', '/alerts',
-        '/search?q=West', '/property/1001230045', '/permit/1', '/crm', '/crm/buildings',
+        '/search?q=West', '/entities', '/entity/1', '/auth/verify-email', '/property/1001230045', '/permit/1', '/crm', '/crm/buildings',
         '/crm/buildings?view=table', '/crm/buildings?view=board', '/crm/deals', '/crm/contacts',
         '/crm/notifications', '/crm/focus', '/crm/building_detail', '/crm/contact_detail', '/crm/deal_detail', '/crm/deal_form', '/crm/building_add', '/crm/lists', '/crm/list_detail', '/crm/starred', '/crm/team', '/crm/history', '/crm/followups', '/contractor/example', '/auth/team-setup', '/auth/login', '/auth/signup', '/admin/team', '/admin/activity'];
     let pageChecks = 0;
@@ -81,5 +83,6 @@ async page => {
     check(await page.locator('.mobile-filter-dialog').evaluate(e => getComputedStyle(e).backgroundColor !== 'rgb(255, 255, 255)'), 'Dark drawer uses a light surface');
     await page.keyboard.press('Escape');
     await page.emulateMedia({ reducedMotion: 'no-preference', colorScheme: 'light' });
+    if (failures.length) throw new Error(JSON.stringify({ pageChecks, failures }));
     return { pageChecks, failures, interactions: 'filters, persistence, breakpoint changes, map, tabs, CRM sheets, search drawer, landscape menu, dark mode, reduced motion' };
 }

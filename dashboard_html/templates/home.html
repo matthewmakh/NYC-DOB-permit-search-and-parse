@@ -1,22 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>NYC Permit Leads</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/app.css">
-    <link rel="stylesheet" href="/static/css/navigation.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/static/css/mobile.css">
-</head>
-<body>
-    {% from "_site_nav.html" import site_nav with context %}
-    {% call site_nav('home', g.user if g.user is defined else none) %}{% endcall %}
+{% extends "base.html" %}
 
-    <section class="hero">
+{% block title %}NYC Permit Leads{% endblock %}
+
+{% block content %}
+<section class="hero">
         <div class="hero-inner">
             <h1 class="hero-title">Find the next NYC building lead</h1>
             <p class="hero-subtitle">Search permits, ownership, buyers, project teams, and sales history across all five boroughs.</p>
@@ -111,9 +98,9 @@
             Data sources: NYC DOB permits, PLUTO, ACRIS, HPD, NY Department of State.
         </div>
     </footer>
+{% endblock %}
 
-    <script src="/static/js/navigation.js"></script>
+{% block extra_js %}
+
     <script src="/static/js/home.js"></script>
-    <script src="/static/js/mobile.js"></script>
-</body>
-</html>
+{% endblock %}

@@ -1,13 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Activity Logs - Admin Panel</title>
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/navigation.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
+{% extends "base.html" %}
+
+{% block title %}Activity Logs - Admin Panel{% endblock %}
+
+{% block extra_css %}
+<style>
         /* Admin-specific styles */
         .admin-container {
             max-width: 1600px;
@@ -27,14 +23,14 @@
         .admin-title {
             font-size: 24px;
             font-weight: 600;
-            color: #1a1a2e;
+            color: var(--ink);
             display: flex;
             align-items: center;
             gap: 12px;
         }
         
         .admin-title i {
-            color: #6366f1;
+            color: var(--accent);
         }
         
         /* Stats Cards */
@@ -46,22 +42,22 @@
         }
         
         .stat-card {
-            background: white;
+            background: var(--surface);
             border-radius: 12px;
             padding: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            border: 1px solid #e5e7eb;
+            box-shadow: var(--shadow-1);
+            border: 1px solid var(--line);
         }
         
         .stat-card-value {
             font-size: 28px;
             font-weight: 700;
-            color: #1a1a2e;
+            color: var(--ink);
             margin-bottom: 4px;
         }
         
         .stat-card-label {
-            color: #6b7280;
+            color: var(--ink-2);
             font-size: 14px;
         }
         
@@ -73,12 +69,12 @@
         
         /* Filter Section */
         .filters-section {
-            background: white;
+            background: var(--surface);
             border-radius: 12px;
             padding: 20px;
             margin-bottom: 24px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            border: 1px solid #e5e7eb;
+            box-shadow: var(--shadow-1);
+            border: 1px solid var(--line);
         }
         
         .filters-header {
@@ -92,14 +88,14 @@
         .filters-title {
             font-size: 16px;
             font-weight: 600;
-            color: #374151;
+            color: var(--ink-2);
             display: flex;
             align-items: center;
             gap: 8px;
         }
         
         .filters-toggle {
-            color: #6b7280;
+            color: var(--ink-2);
             transition: transform 0.2s;
         }
         
@@ -126,23 +122,23 @@
         .filter-label {
             font-size: 12px;
             font-weight: 500;
-            color: #6b7280;
+            color: var(--ink-2);
             text-transform: uppercase;
         }
         
         .filter-input, .filter-select {
             padding: 10px 12px;
-            border: 1px solid #e5e7eb;
+            border: 1px solid var(--line);
             border-radius: 8px;
             font-size: 14px;
-            background: #f9fafb;
+            background: var(--surface-2);
             transition: all 0.2s;
         }
         
         .filter-input:focus, .filter-select:focus {
-            border-color: #6366f1;
+            border-color: var(--accent);
             outline: none;
-            background: white;
+            background: var(--surface);
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
         }
         
@@ -151,15 +147,15 @@
             gap: 12px;
             margin-top: 16px;
             padding-top: 16px;
-            border-top: 1px solid #e5e7eb;
+            border-top: 1px solid var(--line);
         }
         
         /* Activity Table */
         .activity-table-container {
-            background: white;
+            background: var(--surface);
             border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            border: 1px solid #e5e7eb;
+            box-shadow: var(--shadow-1);
+            border: 1px solid var(--line);
             overflow: hidden;
         }
         
@@ -168,13 +164,13 @@
             justify-content: space-between;
             align-items: center;
             padding: 16px 20px;
-            border-bottom: 1px solid #e5e7eb;
-            background: #f9fafb;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-2);
         }
         
         .table-title {
             font-weight: 600;
-            color: #374151;
+            color: var(--ink-2);
         }
         
         .table-actions {
@@ -192,23 +188,23 @@
             padding: 12px 16px;
             font-size: 12px;
             font-weight: 600;
-            color: #6b7280;
+            color: var(--ink-2);
             text-transform: uppercase;
-            background: #f9fafb;
-            border-bottom: 1px solid #e5e7eb;
+            background: var(--surface-2);
+            border-bottom: 1px solid var(--line);
             white-space: nowrap;
         }
         
         .activity-table td {
             padding: 12px 16px;
             font-size: 13px;
-            color: #374151;
-            border-bottom: 1px solid #f3f4f6;
+            color: var(--ink-2);
+            border-bottom: 1px solid var(--surface-2);
             vertical-align: top;
         }
         
         .activity-table tr:hover {
-            background: #f9fafb;
+            background: var(--surface-2);
         }
         
         .activity-table tr.error-row {
@@ -273,24 +269,24 @@
         /* Device Icons */
         .device-icon {
             margin-right: 6px;
-            color: #6b7280;
+            color: var(--ink-2);
         }
         
         /* IP and Location Info */
         .location-info {
             font-size: 11px;
-            color: #9ca3af;
+            color: var(--ink-3);
             margin-top: 2px;
         }
         
         /* User Info */
         .user-email {
             font-weight: 500;
-            color: #1a1a2e;
+            color: var(--ink);
         }
         
         .user-anonymous {
-            color: #9ca3af;
+            color: var(--ink-3);
             font-style: italic;
         }
         
@@ -301,11 +297,11 @@
         }
         
         .timestamp-date {
-            color: #374151;
+            color: var(--ink-2);
         }
         
         .timestamp-time {
-            color: #9ca3af;
+            color: var(--ink-3);
         }
         
         /* Description */
@@ -322,13 +318,13 @@
             justify-content: space-between;
             align-items: center;
             padding: 16px 20px;
-            border-top: 1px solid #e5e7eb;
-            background: #f9fafb;
+            border-top: 1px solid var(--line);
+            background: var(--surface-2);
         }
         
         .pagination-info {
             font-size: 14px;
-            color: #6b7280;
+            color: var(--ink-2);
         }
         
         .pagination-controls {
@@ -349,21 +345,21 @@
             border-radius: 20px;
             font-size: 13px;
             cursor: pointer;
-            border: 1px solid #e5e7eb;
-            background: white;
-            color: #6b7280;
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--ink-2);
             transition: all 0.2s;
         }
         
         .quick-filter-pill:hover {
-            border-color: #6366f1;
-            color: #6366f1;
+            border-color: var(--accent);
+            color: var(--accent);
         }
         
         .quick-filter-pill.active {
-            background: #6366f1;
-            border-color: #6366f1;
-            color: white;
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--on-accent);
         }
         
         /* Loading State */
@@ -374,7 +370,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(255,255,255,0.8);
+            background: var(--glass);
             z-index: 1000;
             justify-content: center;
             align-items: center;
@@ -387,8 +383,8 @@
         .loading-spinner {
             width: 48px;
             height: 48px;
-            border: 4px solid #e5e7eb;
-            border-top-color: #6366f1;
+            border: 4px solid var(--line);
+            border-top-color: var(--accent);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -405,7 +401,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.5);
+            background: var(--scrim);
             z-index: 1000;
             justify-content: center;
             align-items: center;
@@ -416,7 +412,7 @@
         }
         
         .modal-content {
-            background: white;
+            background: var(--surface);
             border-radius: 16px;
             width: 90%;
             max-width: 700px;
@@ -426,7 +422,7 @@
         
         .modal-header {
             padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
+            border-bottom: 1px solid var(--line);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -441,7 +437,7 @@
             background: none;
             border: none;
             font-size: 24px;
-            color: #6b7280;
+            color: var(--ink-2);
             cursor: pointer;
         }
         
@@ -457,20 +453,20 @@
         
         .detail-item {
             padding: 12px;
-            background: #f9fafb;
+            background: var(--surface-2);
             border-radius: 8px;
         }
         
         .detail-label {
             font-size: 11px;
-            color: #6b7280;
+            color: var(--ink-2);
             text-transform: uppercase;
             margin-bottom: 4px;
         }
         
         .detail-value {
             font-size: 14px;
-            color: #1a1a2e;
+            color: var(--ink);
             word-break: break-word;
         }
         
@@ -506,13 +502,10 @@
             }
         }
     </style>
-    <link rel="stylesheet" href="/static/css/mobile.css">
-</head>
-<body>
-    {% from "_site_nav.html" import site_nav with context %}
-    {% call site_nav('admin', user) %}{% endcall %}
+{% endblock %}
 
-    <!-- Loading Overlay -->
+{% block content %}
+<!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
     </div>
@@ -647,7 +640,7 @@
         <div class="activity-table-container">
             <div class="table-header">
                 <span class="table-title">Activity Log</span>
-                <span id="resultCount" style="color: #6b7280; font-size: 14px;"></span>
+                <span id="resultCount" style="color: var(--ink-2); font-size: 14px;"></span>
             </div>
             <div style="overflow-x: auto;">
                 <table class="activity-table">
@@ -696,8 +689,10 @@
             </div>
         </div>
     </div>
+{% endblock %}
 
-    <script src="/static/js/navigation.js"></script>
+{% block extra_js %}
+
     <script>
         // State
         let currentFilters = {
@@ -875,7 +870,7 @@
             if (logs.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="8" style="text-align: center; padding: 40px; color: #6b7280;">
+                        <td colspan="8" style="text-align: center; padding: 40px; color: var(--ink-2);">
                             <i class="fas fa-inbox" style="font-size: 48px; margin-bottom: 16px; display: block; opacity: 0.3;"></i>
                             No activity logs found
                         </td>
@@ -1153,6 +1148,4 @@
             return icons[type] || '<i class="fas fa-question device-icon"></i>';
         }
     </script>
-    <script src="/static/js/mobile.js"></script>
-</body>
-</html>
+{% endblock %}

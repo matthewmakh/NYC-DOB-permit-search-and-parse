@@ -8699,7 +8699,7 @@ def admin_activity_page():
         description='Admin viewed activity logs',
         page_name='Admin Activity Logs'
     )
-    return render_template('admin_activity.html', user=g.user)
+    return render_template('admin_activity.html', user=g.user, active_page='admin_activity')
 
 
 @app.route('/api/admin/activity-logs')

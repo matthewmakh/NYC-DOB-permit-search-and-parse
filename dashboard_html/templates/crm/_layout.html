@@ -1,20 +1,6 @@
 {% extends "base.html" %}
 
 {% block extra_css %}
-<script>
-    // Appearance: 'auto' | 'light' | 'dark', applied before first paint.
-    (function () {
-        try {
-            // One preference for the whole app: the site nav's switcher and this
-            // toggle read and write the same key.
-            var pref = localStorage.getItem('theme') || localStorage.getItem('crm-theme') || 'auto';
-            var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-            if (dark) document.documentElement.setAttribute('data-crm-theme', 'dark');
-            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-            document.documentElement.setAttribute('data-crm-pref', pref);
-        } catch (e) { /* no storage: stay light */ }
-    })();
-</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/crm.css') }}">
 <link rel="manifest" href="{{ url_for('static', filename='crm/manifest.webmanifest') }}">
 <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='crm/apple-touch-icon.png') }}">

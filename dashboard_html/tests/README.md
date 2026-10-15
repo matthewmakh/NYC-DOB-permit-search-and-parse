@@ -8,6 +8,7 @@ or connect to PostgreSQL. Use only on localhost; this is not an alternate deploy
 uv run --with flask python dashboard_html/tests/mobile_preview.py
 playwright-cli -s=mobile open http://127.0.0.1:5099/properties
 playwright-cli -s=mobile run-code --filename=dashboard_html/tests/mobile_browser_checks.js
+playwright-cli -s=mobile run-code --filename=dashboard_html/tests/design_consistency_checks.js
 ```
 
 The browser checks cover page overflow at 320, 375, 768, and 1440 pixels, filter
@@ -34,3 +35,7 @@ node building_profile_permit_tests.js
 For release QA, also check a physical iPhone/Android device with the keyboard
 open, long production records, and authenticated flows. Browser viewport tests do
 not simulate the OS keyboard, actual safe-area insets, or production services.
+
+The design suite checks the shared palette and shell on 20 page types in light
+and dark mode, including entity research, account pages, administration and CRM.
+Both suites fail when an assertion fails. The preview reloads edited templates.

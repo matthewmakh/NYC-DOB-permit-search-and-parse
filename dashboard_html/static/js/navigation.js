@@ -46,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const root = document.documentElement;
         root.setAttribute('data-theme', dark ? 'dark' : 'light');
         root.setAttribute('data-theme-pref', pref);
+        root.setAttribute('data-crm-pref', pref);
         if (dark) root.setAttribute('data-crm-theme', 'dark');
         else root.removeAttribute('data-crm-theme');
         document.querySelectorAll('[data-theme-icon]').forEach(icon => {

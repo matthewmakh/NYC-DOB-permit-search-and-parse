@@ -1,0 +1,46 @@
+/* Shared presentation for discovery, search, dossiers and account entry points.
+   Page styles own their layouts; app.css owns the palette. */
+:root { --on-accent: #fff; --workspace-navy: #122c3d; }
+html[data-theme="dark"] { --on-accent: #123b36; --workspace-navy: #112a39; }
+.workspace-eyebrow { display: block; font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.explorer-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; }
+.explorer-heading h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.2; letter-spacing: -.045em; margin: 6px 0 12px; }
+.explorer-heading p { font-size: 13px; color: var(--ink-2); max-width: 76ch; }
+.explorer-heading .btn { min-height: 44px; }
+.dossier .dossier-head { background: var(--workspace-navy); color: #f6fafc; border: 0; }
+.dossier .dossier-head-inner, .dossier .dossier-body, .dossier .section-nav { max-width: 1440px; }
+.dossier .dossier-head-inner { padding: 32px; }
+.dossier .dossier-head h1 { font-size: clamp(25px, 2.6vw, 38px); letter-spacing: -.035em; color: inherit; }
+.dossier .dossier-crumbs, .dossier .dossier-crumbs a { color: #a8c3d2; }
+.dossier .dossier-head .entity-lede, .dossier .dossier-head .entity-subtitle { color: #c0d2dd; }
+.dossier .dossier-head .id-chip { background: #ffffff10; color: #d1e4ec; border: 1px solid #ffffff20; border-radius: 5px; }
+.dossier .dossier-head .btn { min-height: 44px; background: transparent; border: 1px solid #597080; color: #f6fafc; }
+.dossier .dossier-head .btn-primary { background: #a5eadb; border-color: #a5eadb; color: #123b36; }
+.dossier .dossier-body { padding: 24px 32px 0; }
+.dossier .dossier-card { border-radius: 12px; box-shadow: none; }
+.dossier .glance-strip { gap: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.dossier .glance-tile { border: 0; border-right: 1px solid var(--line); border-radius: 0; box-shadow: none; padding: 18px 20px; }
+.dossier .glance-tile:last-child { border-right: 0; }
+.dossier .glance-value { font-size: 24px; letter-spacing: -.035em; }
+.buyers-shell, .alerts-shell { max-width: 1440px; }
+.buyers-head h1, .alerts-head h1, .sr-head h1 { font-size: clamp(26px, 3vw, 36px); letter-spacing: -.045em; }
+.buyers-head p, .alerts-head p { font-size: 13px; color: var(--ink-2); }
+.buyer-actions .primary, .alert-actions .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.buyer-actions a, .alert-actions a { min-height: 44px; }
+.permit-page .profile-head { padding: 28px; border-radius: 12px; background: var(--workspace-navy); color: #f6fafc; }
+.permit-page .profile-head h1 { color: inherit; }
+.permit-page .profile-head .profile-meta { color: #c0d2dd; }
+.permit-page .profile-head .btn { background: transparent; color: #f6fafc; border-color: #597080; }
+.permit-page .profile-head .btn-primary { background: #a5eadb; color: #123b36; border-color: #a5eadb; }
+@media (max-width: 820px) {
+    .explorer-heading { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 640px) {
+    .dossier .dossier-head-inner { padding: 24px 16px; }
+    .dossier .dossier-body { padding: 16px 12px 0; }
+    .dossier .glance-tile { padding: 12px; border-bottom: 1px solid var(--line); }
+    .dossier .glance-value { font-size: 21px; }
+    .permit-page .profile-head { padding: 20px 16px; }
+}
+.dossier .dossier-head .entity-steps li, .dossier .dossier-head .step-count { color: #c0d2dd; }
+.permit-page .profile-head .mono-chip { background: #ffffff10; color: #d1e4ec; border-color: #ffffff20; }
