@@ -234,6 +234,11 @@ def init_db_pool():
         except Exception as e:
             print(f"⚠️  CRM schema init skipped: {e}", flush=True)
         try:
+            import contractor_directory
+            contractor_directory.start_worker(lambda: psycopg2.connect(**DB_CONFIG))
+        except Exception as e:
+            print(f'⚠️  Contractor directory worker skipped: {e}', flush=True)
+        try:
             import streetview
             streetview.init_geocode_table()
         except Exception as e:
@@ -6285,7 +6290,7 @@ def contractor_profile(contractor_name):
     )
 
 
-def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
+def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4, generation=None):
     """Fill in what kind of work each contractor on this page actually does.
 
     DOB spreads the answer over three columns and which one is populated
@@ -6297,6 +6302,7 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
 
     Runs as one extra query scoped to the names already on the page.
     """
+    import contractor_directory
     for contractor in contractors:
         contractor['work_mix'] = []
         contractor['job_types'] = None
@@ -6308,7 +6314,7 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
     scoped = list(where_parts) + [
         "COALESCE(pp.business_name, pp.person_name) = ANY(%s)"
     ]
-    cur.execute(f"""
+    query = f"""
         SELECT
             COALESCE(pp.business_name, pp.person_name) AS contractor_name,
             COALESCE(
@@ -6328,7 +6334,8 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
             NULLIF(UPPER(btrim(p.job_type)), '')
         ) IS NOT NULL
         ORDER BY 1, COUNT(DISTINCT p.id) DESC
-    """, where_params + [names])
+    """
+    cur.execute(contractor_directory.adapt_query(query, generation), where_params + [names])
 
     by_name = {}
     for row in cur.fetchall():
@@ -6350,7 +6357,6 @@ def _attach_work_mix(cur, contractors, where_parts, where_params, top_n=4):
 
 
 @app.route('/api/contractors/search')
-@cache.cached(timeout=300, query_string=True)
 def api_contractors_search():
     """
     Search contractors with aggregated stats.
@@ -6373,8 +6379,10 @@ def api_contractors_search():
     - sort_order: asc or desc, applied to every sort key
     - page, per_page
     """
+    import contractor_directory
     try:
         with DatabaseConnection() as cur:
+            generation = contractor_directory.prepare(cur)
             search = request.args.get('search', '').strip()
             sort_order = request.args.get('sort_order', 'desc').lower()
             page = max(1, request.args.get('page', 1, type=int))
@@ -6484,25 +6492,7 @@ def api_contractors_search():
 
             query = f"""
                 WITH contractor_stats AS (
-                    SELECT
-                        {participant_name} as contractor_name,
-                        pp.license_number as license,
-                        COUNT(DISTINCT p.id) as total_jobs,
-                        COUNT(DISTINCT CASE WHEN p.issue_date BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE THEN p.id END) as active_jobs,
-                        COALESCE(SUM(b.assessed_total_value), 0) as total_value,
-                        COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
-                        MAX(p.issue_date) FILTER (WHERE p.issue_date <= CURRENT_DATE) as most_recent_job,
-                        MIN(p.issue_date) as first_job,
-                        COUNT(DISTINCT p.bbl) as unique_properties,
-                        COUNT(DISTINCT NULLIF(btrim(pp.license_type), '')) as license_type_count,
-                        (array_agg(DISTINCT UPPER(btrim(pp.license_type)))
-                            FILTER (WHERE btrim(coalesce(pp.license_type, '')) <> ''))[1]
-                            as license_type,
-                        string_agg(DISTINCT pp.role, ', ' ORDER BY pp.role) AS participant_roles,
-                        MAX(pp.role_confidence) AS role_confidence,
-                        MAX(pp.contractor_confidence) AS contractor_confidence,
-                        BOOL_OR(pp.role IN ('permittee', 'permit_applicant')
-                                AND pp.contractor_confidence >= 0.85) AS probable_gc
+                    {contractor_directory.STATS_SELECT}
                     FROM permit_participants pp
                     JOIN permits p ON p.id = pp.permit_id
                     LEFT JOIN buildings b ON p.bbl = b.bbl
@@ -6516,18 +6506,27 @@ def api_contractors_search():
                 LIMIT %s OFFSET %s
             """
 
-            cur.execute(query, where_params + having_params + [per_page, offset])
+            summary = contractor_directory.summary_queries(request.args, order_by_sql, generation)
+            if summary:
+                query, summary_count, query_params = summary
+            else:
+                query = contractor_directory.adapt_query(query, generation)
+                query_params = where_params + having_params
+            cur.execute(query, query_params + [per_page, offset])
             contractors = [dict(c) for c in cur.fetchall()]
             total = contractors[0]['directory_total'] if contractors else None
             for contractor in contractors:
                 contractor.pop('directory_total', None)
+                contractor.pop('generation', None)
 
             # What kind of work each of these contractors actually does.
             # Done as a second pass over just the page's contractors so the
             # aggregate above stays cheap.
-            _attach_work_mix(cur, contractors, where_parts, where_params)
+            _attach_work_mix(cur, contractors, where_parts, where_params, generation=generation)
 
-            if total is None and having_parts:
+            if total is None and summary:
+                cur.execute(summary_count, query_params)
+            elif total is None and having_parts:
                 count_query = f"""
                     SELECT COUNT(*) AS count FROM (
                         SELECT 1
@@ -6539,7 +6538,7 @@ def api_contractors_search():
                         {having_clause}
                     ) matched
                 """
-                cur.execute(count_query, where_params + having_params)
+                cur.execute(contractor_directory.adapt_query(count_query, generation), where_params + having_params)
             elif total is None:
                 count_query = f"""
                     SELECT COUNT(*) AS count FROM (
@@ -6551,7 +6550,7 @@ def api_contractors_search():
                         GROUP BY {participant_name}, pp.license_number
                     ) matched
                 """
-                cur.execute(count_query, where_params)
+                cur.execute(contractor_directory.adapt_query(count_query, generation), where_params)
             if total is None:
                 total = cur.fetchone()['count']
 
