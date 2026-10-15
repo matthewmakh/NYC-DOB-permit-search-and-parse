@@ -30,15 +30,16 @@ Railway's deployment audit found three web service instances:
 
 The live custom domain was still serving the old application while the newer
 Railway URL served the redesign. The user confirmed that `permits.up.railway.app`
-is the canonical application and the old `leads.installersny.com` service will be
-removed separately. Leave that legacy service, domain and database untouched.
+was the initial canonical URL. The user subsequently requested moving
+`leads.installersny.com` to that same current application and retiring the old
+production web service after the custom domain is verified.
 `DOB-Dashboard` now follows `main`; `staging` is synchronized by fast-forward for
 the current preview and existing pipeline sources. Do not develop independent
 designs on the two branches or assume a successful GitHub merge proves a
-deployment is healthy. The phone-check cron
-also remained on `html-dashboard`; it is separate from the page reconciliation.
-The enrichment cron reported `CRASHED` before these changes and requires its own
-runtime diagnosis; this design reconciliation does not claim to repair it.
+deployment is healthy. The phone-check cron also remained on `html-dashboard`; it is separate from the page reconciliation.
+The enrichment cron reported `CRASHED` at the initial audit; its latest run was
+`SUCCESS` at the domain-transfer audit. The permit cron's latest run then reported
+`FAILED`; neither observation is a diagnosis of its runtime behavior.
 
 ## Current page map
 
@@ -113,3 +114,26 @@ checks and all 14 offline Python regression suites. The optional database-backed
 integration cases remained skipped. The existing deployment health endpoint was
 HTTP 200 with its database connected during the rollout; verify the new Railway
 deployment's commit and status separately before declaring that rollout complete.
+
+## Database dependency correction and domain transfer
+
+The initial comparison of database host settings suggested separate production
+databases. A full dependency check corrected that finding: the old application's
+public endpoint `maglev.proxy.rlwy.net:26571` belongs to the same production
+Postgres used by `DOB-Dashboard` at `postgres.railway.internal:5432`. Database,
+user and password equality were verified without exposing credential values.
+There is no separate obsolete production database to delete. Keep production
+Postgres service `36c7f698-67d4-4d31-a866-1807a4570b2a` in environment
+`b6e062af-d655-4f64-a83b-b094eafc7327`; the current app and pipeline services
+actively depend on it.
+
+The unused legacy production web instance is
+`b091d649-80bc-4ba4-a2d3-969497da3bc1` in that production environment. The same
+service ID has a separate, updated staging instance; deletion must target only
+the obsolete production instance.
+
+Railway attached `leads.installersny.com` to current service `DOB-Dashboard` on
+port 8080. GoDaddy DNS still needs its `leads` CNAME changed from
+`2ldtpjav.up.railway.app` to `d3hy1bc5.up.railway.app`; HTTPS ownership validation
+is pending. The existing app remains available at `permits.up.railway.app`.
+Do not delete the old web instance until custom-domain HTTPS and app health pass.
