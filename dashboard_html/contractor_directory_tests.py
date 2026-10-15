@@ -14,9 +14,13 @@ class ContractorDirectoryTests(PermitWorkflowTests):
         super().setUp()
         with self.connect() as connection:
             with connection.cursor() as cur:
-                cur.execute('ALTER TABLE permits ADD COLUMN permittee_license_type TEXT')
+                cur.execute('''ALTER TABLE permits ADD COLUMN permittee_license_type TEXT,
+                    ADD COLUMN stories TEXT, ADD COLUMN total_units INTEGER,
+                    ADD COLUMN use_type TEXT, ADD COLUMN link TEXT''')
                 cur.execute('''ALTER TABLE buildings ADD COLUMN total_units INTEGER,
-                    ADD COLUMN building_class TEXT, ADD COLUMN hpd_open_violations INTEGER''')
+                    ADD COLUMN building_class TEXT, ADD COLUMN hpd_open_violations INTEGER,
+                    ADD COLUMN id INTEGER, ADD COLUMN address TEXT, ADD COLUMN borough TEXT,
+                    ADD COLUMN current_owner_name TEXT''')
                 cur.execute("UPDATE permits SET permittee_license_type='GC'")
                 cur.execute("UPDATE buildings SET total_units=10,building_class='C1',hpd_open_violations=2")
                 # The same person can have several roles on the same permit:
@@ -29,12 +33,17 @@ class ContractorDirectoryTests(PermitWorkflowTests):
         self.refresh()
         source = ast.parse((Path(__file__).parent / 'app.py').read_text())
         helpers = {'_permit_predicates', '_permit_activity_settings', '_recent_permit_date_sql',
-                   '_older_permit_date_sql', '_append_building_only_filters', '_parse_boroughs_param'}
+                   '_older_permit_date_sql', '_append_building_only_filters', '_parse_boroughs_param',
+                   'api_contractor_profile'}
         nodes = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in helpers]
+        for node in nodes:
+            node.decorator_list = []
         self.env.update(_PROPERTY_TYPE_SQL={'residential': "b.building_class ~ '^[ABCDR]'",
                         'commercial': "b.building_class ~ '^[KOEFG]'", 'mixed': "b.building_class ~ '^S'"},
                         _PERMIT_ACTIVITY_MODES={'within', 'inactive'})
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'actual-directory-filters', 'exec'), self.env)
+        self.client.application.add_url_rule('/contractor/<path:contractor_name>',
+                                              view_func=self.env['api_contractor_profile'])
 
     def refresh(self, force=True):
         connection = self.connect()
@@ -68,6 +77,16 @@ class ContractorDirectoryTests(PermitWorkflowTests):
                 with patch.object(directory, 'prepare', return_value=None):
                     live = self.get('/contractors?' + query)
                 self.assertEqual(live, indexed)
+
+    def test_indexed_profile_matches_source_and_returns_missing_profiles(self):
+        for name in ('Alpha Construction', 'Beta Construction', 'Future Construction'):
+            indexed = self.get('/contractor/' + name)
+            with patch.object(directory, 'prepare', return_value=None):
+                live = self.get('/contractor/' + name)
+            self.assertEqual(live, indexed)
+        response = self.client.get('/contractor/No Such Contractor')
+        self.assertEqual(404, response.status_code)
+        self.assertFalse(response.json['success'])
 
     def test_source_changes_refresh_and_failures_preserve_previous_generation(self):
         before = self.get('/contractors?search=Alpha')

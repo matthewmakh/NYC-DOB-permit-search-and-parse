@@ -6574,15 +6574,16 @@ def api_contractors_search():
 
 
 @app.route('/api/contractor/<path:contractor_name>')
-@cache.cached(timeout=300)
 def api_contractor_profile(contractor_name):
     """
     Get detailed contractor profile with permits and buildings
     """
+    import contractor_directory
     try:
         with DatabaseConnection() as cur:
+            generation = contractor_directory.prepare(cur)
             # Get contractor stats
-            cur.execute("""
+            stats_query = """
             SELECT 
                 COALESCE(pp.business_name, pp.person_name) as contractor_name,
                 (array_agg(DISTINCT pp.license_number)
@@ -6608,15 +6609,18 @@ def api_contractor_profile(contractor_name):
             LEFT JOIN buildings b ON p.bbl = b.bbl
             WHERE COALESCE(pp.business_name, pp.person_name) = %s
             GROUP BY COALESCE(pp.business_name, pp.person_name)
-            """, (contractor_name,))
+            """
+            cur.execute(contractor_directory.adapt_query(stats_query, generation), [contractor_name])
             
             stats = cur.fetchone()
             
             if not stats:
                 return jsonify({'success': False, 'error': 'Permit participant not found'}), 404
             
-            # Get permits (most recent first)
-            cur.execute("""
+            # Get permits (most recent first). Resolve IDs from the same pinned
+            # generation, then fetch full records through their primary keys.
+            permit_source, permit_params = contractor_directory.profile_source(generation, contractor_name)
+            cur.execute(f"""
                 SELECT DISTINCT
                     p.id,
                     p.permit_no,
@@ -6630,18 +6634,17 @@ def api_contractor_profile(contractor_name):
                     p.link,
                     b.assessed_total_value,
                     b.current_owner_name
-                FROM permit_participants pp
-                JOIN permits p ON p.id = pp.permit_id
-                LEFT JOIN buildings b ON p.bbl = b.bbl
-                WHERE COALESCE(pp.business_name, pp.person_name) = %s
+                {permit_source}
                 ORDER BY p.issue_date DESC NULLS LAST
                 LIMIT 500
-            """, (contractor_name,))
+            """, permit_params)
             
             permits = cur.fetchall()
             
-            # Get unique buildings (most recent work first)
-            cur.execute("""
+            # Get unique buildings (most recent work first).
+            building_source, building_params = contractor_directory.profile_source(
+                generation, contractor_name, require_building=True)
+            cur.execute(f"""
                 SELECT 
                     b.id,
                     b.bbl,
@@ -6655,15 +6658,12 @@ def api_contractor_profile(contractor_name):
                     MAX(p.issue_date) as most_recent_work,
                     MIN(p.issue_date) as first_work,
                     string_agg(DISTINCT p.job_type, ', ') as job_types
-                FROM buildings b
-                INNER JOIN permits p ON p.bbl = b.bbl
-                INNER JOIN permit_participants pp ON pp.permit_id = p.id
-                WHERE COALESCE(pp.business_name, pp.person_name) = %s
+                {building_source}
                 GROUP BY b.id, b.bbl, b.address, b.borough, b.current_owner_name, 
                          b.assessed_total_value, b.total_units, b.building_class
                 ORDER BY most_recent_work DESC NULLS LAST
                 LIMIT 500
-            """, (contractor_name,))
+            """, building_params)
             
             buildings = cur.fetchall()
         
