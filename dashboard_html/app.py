@@ -2045,6 +2045,15 @@ def get_construction_stats():
                 ORDER BY count DESC
             """, params)
             boroughs = cur.fetchall()
+            timeline_unit = 'day' if days != 'all' and int(days) <= 90 else 'month'
+            cur.execute(f"""
+                SELECT DATE_TRUNC(%s, issue_date)::date AS date, COUNT(*) AS count
+                FROM permits
+                {where_clause} AND issue_date IS NOT NULL
+                GROUP BY 1 ORDER BY 1 DESC LIMIT 120
+            """, (timeline_unit, *params))
+            timeline = [dict(date=row['date'].isoformat(), count=row['count'])
+                        for row in reversed(cur.fetchall())]
         
         return jsonify({
             'success': True,
@@ -2054,7 +2063,9 @@ def get_construction_stats():
                 'hot_leads': hot_leads,
                 'total_value': float(total_value) if total_value else 0,
                 'job_types': [dict(row) for row in job_types],
-                'boroughs': [dict(row) for row in boroughs]
+                'boroughs': [dict(row) for row in boroughs],
+                'timeline': timeline,
+                'timeline_unit': timeline_unit
             }
         })
         

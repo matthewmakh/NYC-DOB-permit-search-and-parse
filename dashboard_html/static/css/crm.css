@@ -1354,6 +1354,7 @@ html[data-crm-theme="dark"] .crm-sv__empty { background: rgba(255, 255, 255, 0.0
 
 @media (max-width: 900px) {
     .crm-columns { flex-direction: column; }
+    .crm-col-main { width: 100%; }
     .crm-col-rail { min-width: 0; width: 100%; }
     .crm-alpha__index { display: none; }
     .crm-help-grid { grid-template-columns: 1fr; }

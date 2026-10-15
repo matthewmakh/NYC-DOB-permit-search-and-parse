@@ -41,7 +41,7 @@ Repairs from this audit:
   participants and identical page identities, reducing elapsed time from
   35.1 to 28.3 seconds. Uncached directory searches remain slow.
 
-Verification includes 124 account/CRM/permit/prospecting tests against disposable
+Verification includes 125 account/CRM/permit/prospecting tests against disposable
 local schemas, six navigation tests, the existing Node regression suites, all
 14 offline Python suites, 152 page/viewport checks, 42 page/theme checks, and
 synthetic browser checks for failure recovery and unlock billing. Prospecting
@@ -50,6 +50,19 @@ assignment, bulk actions, relationships, research review/approval and undo.
 Production record changes, real paid lookups and real card charges were not
 used as test fixtures. Browser viewport checks do not certify a physical phone's
 keyboard or safe-area behavior.
+
+Post-deployment verification loaded 35 live page types successfully with no
+uncaught script errors or failed same-origin requests. Real populated CRM Today
+queues revealed a 450-pixel content width on a 375-pixel screen; the stacked
+main column now takes the available width, matching the existing rail behavior.
+The mobile fixture now includes populated next-step and attention queues so the
+viewport regression catches this case.
+The same interaction pass found that the Permits Trends tab had no chart or data
+loader. It now uses bounded daily/monthly date aggregates, a themed chart, and an
+accessible data table that also serves as the fallback if Chart.js is unavailable.
+The live interaction pass verified 27 home/search/filter/sort/quick-look/profile
+actions using production reads. The final local failure/control suite covers 32
+checks, including responsive timeline rendering and its library-unavailable fallback.
 
 ## Canonical application and branch
 

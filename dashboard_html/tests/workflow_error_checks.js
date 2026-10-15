@@ -69,6 +69,21 @@ async page => {
                 assert(new URL((await sent).url()).searchParams.get('sort') === sort, 'Permit sort reaches server: ' + sort);
             }
             assert(await page.locator('#perPage option[value="500"],#perPage option[value="1000"]').count() === 0, 'Page sizes respect API capacity');
+            await page.getByRole('button', {name:/Trends/}).click();
+            await page.locator('#trendsRows tr').first().waitFor({state:'attached'});
+            assert((await page.locator('#trendsStatus').innerText()).includes('Permits issued per day'), 'Timeline displays actual activity');
+            assert(await page.locator('#trendsChart').evaluate(el => !!Chart.getChart(el)), 'Timeline initializes a real chart');
+            await page.getByText('View activity data', {exact:true}).click();
+            assert(await page.locator('#trendsRows tr').count() === 2, 'Timeline has accessible data table');
+            for (const width of [320,375,768]) {
+                await page.setViewportSize({width,height:844});
+                await page.waitForTimeout(100);
+                assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Timeline fits viewport at ' + width);
+            }
+            await page.setViewportSize({width:1440,height:950});
+            await page.evaluate(() => { window.Chart = undefined; displayPermitTrends(AppState.stats); });
+            assert((await page.locator('#trendsStatus').innerText()).includes('Chart unavailable'), 'Timeline falls back when chart library is unavailable');
+            assert(await page.locator('#trendsRows tr').first().isVisible(), 'Fallback activity data remains visible');
         } finally { await page.unroute(permitPattern); }
 
         let unlocked = false, failPayment = true;
@@ -109,6 +124,6 @@ async page => {
             await page.unroute(postPattern);
         }
         assert(errors.length === 0, 'Uncaught browser errors: ' + errors.join('; '));
-        return {passed:24, checks:'buyers/alerts failure, retry, response ordering; permit failure recovery, sort wiring and links; contact unlock cancellation, billing failure, retry, payload, refresh'};
+        return {passed:32, checks:'buyers/alerts failure, retry, response ordering; permit failure recovery, sort wiring, links, responsive timeline chart/table/fallback; contact unlock cancellation, billing failure, retry, payload, refresh'};
     } finally { page.off('pageerror', onError); }
 }
