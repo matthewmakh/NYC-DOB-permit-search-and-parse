@@ -35,11 +35,14 @@ FLASK_ENV=production
 
 ## Auto-Deployment
 
-`main` is the canonical source branch. At the October 15, 2026 branch audit,
-GitHub deployment records showed production and staging following `staging`.
-Until those Railway source settings are changed to `main`, keep `staging` at the
-same commit using a fast-forward from `main`. Verify deployment status after a
-push; a GitHub merge alone does not confirm a successful Railway rollout.
+`main` is the canonical source branch for production service `DOB-Dashboard`,
+served at **https://permits.up.railway.app**. Keep `staging` synchronized by
+fast-forward for the existing preview and pipeline sources. Verify deployment
+status after a push; a GitHub merge alone does not confirm a successful rollout.
+
+The user designated `leads.installersny.com` for separate removal. Its legacy
+service and separate database are not the current application and were left
+untouched during this reconciliation.
 
 The historical `html-dashboard` branch is obsolete. See
 [`NAVIGATION_AND_PAGE_AUDIT.md`](../NAVIGATION_AND_PAGE_AUDIT.md) for the branch

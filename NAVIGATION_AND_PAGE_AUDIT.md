@@ -29,10 +29,13 @@ Railway's deployment audit found three web service instances:
 | Staging / `NYC-DOB-permit-search-and-parse` | `nyc-dob-permit-search-and-parse-staging.up.railway.app` | October `staging`, `6940cc2` |
 
 The live custom domain was still serving the old application while the newer
-Railway URL served the redesign. All three web instances must follow the tested
-`main` commit. Keep `staging` synchronized by fast-forward for existing pipeline
-sources. Do not develop independent designs on the two branches or assume a
-successful GitHub merge proves a deployment is healthy. The phone-check cron
+Railway URL served the redesign. The user confirmed that `permits.up.railway.app`
+is the canonical application and the old `leads.installersny.com` service will be
+removed separately. Leave that legacy service, domain and database untouched.
+`DOB-Dashboard` now follows `main`; `staging` is synchronized by fast-forward for
+the current preview and existing pipeline sources. Do not develop independent
+designs on the two branches or assume a successful GitHub merge proves a
+deployment is healthy. The phone-check cron
 also remained on `html-dashboard`; it is separate from the page reconciliation.
 The enrichment cron reported `CRASHED` before these changes and requires its own
 runtime diagnosis; this design reconciliation does not claim to repair it.
@@ -95,3 +98,18 @@ vertical permit fields, appearance persistence and uncaught browser errors.
 
 Database-backed integration cases require an explicitly configured disposable
 test database. Skipped integration cases are not production validation.
+
+## Reconciliation result
+
+PR #11 merged the complete application and shared design into `main`, preserving
+all 87 previous staging commits. The checkout now tracks all remote branches and
+uses `main`. Remote `staging` was fast-forwarded to the same merge commit.
+Production `DOB-Dashboard` is configured to deploy `main` with its existing
+configuration and database. The canonical URL is https://permits.up.railway.app.
+
+Local verification passed 148 viewport page checks, 40 page/theme checks, all
+Node navigation/profile/owner-research regressions, six navigation/design-shell
+checks and all 14 offline Python regression suites. The optional database-backed
+integration cases remained skipped. The existing deployment health endpoint was
+HTTP 200 with its database connected during the rollout; verify the new Railway
+deployment's commit and status separately before declaring that rollout complete.

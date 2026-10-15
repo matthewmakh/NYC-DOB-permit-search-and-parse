@@ -10,7 +10,7 @@
 
 | Service | Type | Config File | Purpose |
 |---------|------|-------------|---------|
-| **NYC-DOB-permit-search-and-parse** | Web | `dashboard_html/railway.json` | Dashboard at leads.installersny.com |
+| **DOB-Dashboard** | Web | `dashboard_html/railway.json` | Dashboard at permits.up.railway.app |
 | **Postgres** | Database | - | PostgreSQL database |
 | **Building-Enrichment-Pipeline** | Cron | `railway.enrichment.json` | Runs all enrichment steps daily |
 
@@ -151,7 +151,7 @@ When you push to GitHub:
 
 ### Dashboard Service (NYC-DOB-permit-search-and-parse)
 - Runs Flask web app
-- Serves leads.installersny.com
+- Serves permits.up.railway.app
 - Always running
 - Auto-deploys from GitHub
 
@@ -180,7 +180,7 @@ After deploying enrichment pipeline:
 - [ ] Manual test run completed successfully
 - [ ] All 4 steps show ✅ in logs
 - [ ] "Next run" countdown visible
-- [ ] Dashboard shows enriched data at leads.installersny.com
+- [ ] Dashboard shows enriched data at permits.up.railway.app
 
 ---
 
