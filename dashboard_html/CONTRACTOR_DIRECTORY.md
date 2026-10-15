@@ -5,7 +5,9 @@ from the existing `permit_participants`, `permits`, and `buildings` sources.
 Default/name/contractor-scale searches read the totals; permit, role, and property
 filters aggregate the indexed facts. The same aggregate and existing filter
 helpers preserve directory semantics, including distinct jobs/properties and
-participant roles. Work categories are computed for the returned names only.
+participant roles. Contractor profiles read their aggregate from the same pinned
+facts and fetch full permit/building records through the indexed permit IDs.
+Work categories are computed for the returned names only.
 
 Each application worker starts a daemon that checks for changes every 10 seconds.
 A PostgreSQL advisory lock permits only one builder. Statement triggers invalidate

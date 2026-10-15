@@ -239,3 +239,16 @@ def summary_queries(args, order_by, generation):
     return (f'SELECT *, COUNT(*) OVER() AS directory_total {source} '
             f'ORDER BY {order_by} LIMIT %s OFFSET %s',
             f'SELECT COUNT(*) AS count {source}', params)
+
+
+def profile_source(generation, contractor_name, require_building=False):
+    """Read full permit/building records using the directory's indexed permit IDs."""
+    join = 'JOIN' if require_building else 'LEFT JOIN'
+    if generation is None:
+        return (f'FROM permit_participants pp JOIN permits p ON p.id=pp.permit_id '
+                f'{join} buildings b ON p.bbl=b.bbl '
+                'WHERE COALESCE(pp.business_name,pp.person_name)=%s', [contractor_name])
+    return (f'FROM permits p {join} buildings b ON p.bbl=b.bbl '
+            'WHERE p.id IN (SELECT permit_id FROM contractor_directory_facts '
+            'WHERE generation=%s AND COALESCE(business_name,person_name)=%s)',
+            [generation, contractor_name])
