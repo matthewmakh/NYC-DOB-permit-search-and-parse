@@ -22,6 +22,9 @@ class ContractorDirectoryTests(PermitWorkflowTests):
                 # The same person can have several roles on the same permit:
                 # job counts are distinct; property-value sums retain old semantics.
                 cur.execute("INSERT INTO permit_participants VALUES(1,'Alpha Construction',NULL,NULL,'GC','owner',1,.05)")
+                cur.execute("UPDATE permit_participants SET license_number='AB-123' WHERE business_name='Beta Construction'")
+                cur.execute("UPDATE permit_participants SET person_name=business_name,business_name=NULL WHERE business_name='Beta Construction'")
+                cur.execute("INSERT INTO permit_participants VALUES(2,'unknown participant',NULL,NULL,NULL,'owner',1,.05)")
                 directory.ensure_schema(cur)
         self.refresh()
         source = ast.parse((Path(__file__).parent / 'app.py').read_text())
@@ -47,7 +50,7 @@ class ContractorDirectoryTests(PermitWorkflowTests):
                 return cur.fetchone()
 
     def test_indexed_and_live_paths_match_all_filters_and_sorts(self):
-        queries = ['', 'search=Alpha', 'search=nonexistent', 'per_page=1&page=99',
+        queries = ['', 'search=AB-123', 'search=Alpha', 'search=nonexistent', 'per_page=1&page=99',
                    'min_jobs=10&max_jobs=12', 'min_active_jobs=12', 'min_properties=1&max_properties=1',
                    'role=permittee', 'role=owner', 'probable_gc=true', 'borough=3',
                    'borough=1', 'property_type=residential', 'property_type=commercial',
