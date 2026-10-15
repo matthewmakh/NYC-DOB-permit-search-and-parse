@@ -47,7 +47,7 @@
             </select>
         </div>
     </div>
-    <div id="buyersList" class="buyers-grid"><div class="buyers-empty">Loading repeat buyers…</div></div>
+    <div id="buyersList" class="buyers-grid" aria-live="polite"><div class="buyers-empty">Loading repeat buyers…</div></div>
     <div id="resolutionNote" class="buyers-note"></div>
 </main>
 {% endblock %}
@@ -58,33 +58,44 @@ const safe = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;'
 const money = value => new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits:0}).format(Number(value || 0));
 const buyerDate = value => value ? new Intl.DateTimeFormat('en-US', {timeZone:'UTC'}).format(new Date(value)) : 'unknown';
 let timer;
+let buyerRequest = 0;
 async function loadBuyers() {
+    const requestId = ++buyerRequest;
+    const list = document.getElementById('buyersList');
+    list.innerHTML = '<div class="buyers-empty">Loading repeat buyers…</div>';
+    document.getElementById('resolutionNote').textContent = '';
     const search = document.getElementById('buyerSearch').value.trim();
     const minProjects = document.getElementById('buyerMinProjects').value;
-    const response = await fetch(`/api/repeat-buyers?limit=150&min_projects=${minProjects}&search=${encodeURIComponent(search)}`);
-    const data = await response.json();
-    const list = document.getElementById('buyersList');
-    if (!data.success) { list.innerHTML = `<div class="buyers-empty">${safe(data.error || 'Could not load buyers')}</div>`; return; }
-    document.getElementById('resolutionNote').textContent = data.resolution_note || '';
-    if (!data.buyers.length) { list.innerHTML = '<div class="buyers-empty">No repeat buyers match this search.</div>'; return; }
-    list.innerHTML = data.buyers.map(buyer => `
-        <article class="buyer-card">
-            <div class="buyer-top"><div><h2 class="buyer-name">${safe(buyer.buyer_name)}</h2><div class="buyer-meta">Last activity ${buyerDate(buyer.latest_activity)} · ${safe(buyer.job_types || 'Work type not classified')}</div></div><span class="score">Score ${safe(buyer.account_score)}</span></div>
-            <div class="buyer-stats">
-                <div class="buyer-stat"><strong>${buyer.distinct_projects}</strong><span>projects</span></div>
-                <div class="buyer-stat"><strong>${buyer.recent_projects_12m}</strong><span>last 12 months</span></div>
-                <div class="buyer-stat"><strong>${buyer.distinct_properties}</strong><span>properties</span></div>
-                <div class="buyer-stat"><strong>${buyer.smart_fit_projects}</strong><span>Smart fit</span></div>
-                <div class="buyer-stat"><strong>${money(buyer.total_initial_cost)}</strong><span>stated project cost</span></div>
-            </div>
-            <div class="buyer-addresses">${(buyer.sample_addresses || []).map(safe).join(' · ') || 'Addresses not available'}</div>
-            <div class="buyer-actions">
-                <a class="primary" href="/properties?owner=${encodeURIComponent(buyer.buyer_name)}">View properties</a>
-                <a href="/permits?q=${encodeURIComponent(buyer.buyer_name)}">Search permits</a>
-                <a href="/alerts?q=${encodeURIComponent(buyer.buyer_name)}">Search project alerts</a>
-            </div>
-        </article>`).join('');
+    try {
+        const response = await fetch(`/api/repeat-buyers?limit=150&min_projects=${minProjects}&search=${encodeURIComponent(search)}`);
+        const data = await response.json();
+        if (requestId !== buyerRequest) return;
+        if (!response.ok || !data.success || !Array.isArray(data.buyers)) throw new Error('Buyer request failed');
+        document.getElementById('resolutionNote').textContent = data.resolution_note || '';
+        if (!data.buyers.length) { list.innerHTML = '<div class="buyers-empty">No repeat buyers match this search.</div>'; return; }
+        list.innerHTML = data.buyers.map(buyer => `
+            <article class="buyer-card">
+                <div class="buyer-top"><div><h2 class="buyer-name">${safe(buyer.buyer_name)}</h2><div class="buyer-meta">Last activity ${buyerDate(buyer.latest_activity)} · ${safe(buyer.job_types || 'Work type not classified')}</div></div><span class="score">Score ${safe(buyer.account_score)}</span></div>
+                <div class="buyer-stats">
+                    <div class="buyer-stat"><strong>${buyer.distinct_projects}</strong><span>projects</span></div>
+                    <div class="buyer-stat"><strong>${buyer.recent_projects_12m}</strong><span>last 12 months</span></div>
+                    <div class="buyer-stat"><strong>${buyer.distinct_properties}</strong><span>properties</span></div>
+                    <div class="buyer-stat"><strong>${buyer.smart_fit_projects}</strong><span>Smart fit</span></div>
+                    <div class="buyer-stat"><strong>${money(buyer.total_initial_cost)}</strong><span>stated project cost</span></div>
+                </div>
+                <div class="buyer-addresses">${(buyer.sample_addresses || []).map(safe).join(' · ') || 'Addresses not available'}</div>
+                <div class="buyer-actions">
+                    <a class="primary" href="/properties?owner=${encodeURIComponent(buyer.buyer_name)}">View properties</a>
+                    <a href="/permits?q=${encodeURIComponent(buyer.buyer_name)}">Search permits</a>
+                    <a href="/alerts?q=${encodeURIComponent(buyer.buyer_name)}">Search project alerts</a>
+                </div>
+            </article>`).join('');
+    } catch (error) {
+        if (requestId !== buyerRequest) return;
+        list.innerHTML = '<div class="buyers-empty" role="alert">Could not load repeat buyers. <button type="button" class="btn btn-secondary" data-retry-buyers>Retry</button></div>';
+    }
 }
+document.getElementById('buyersList').addEventListener('click', event => { if (event.target.closest('[data-retry-buyers]')) loadBuyers(); });
 document.getElementById('buyerSearch').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(loadBuyers, 250); });
 document.getElementById('buyerMinProjects').addEventListener('change', loadBuyers);
 loadBuyers();

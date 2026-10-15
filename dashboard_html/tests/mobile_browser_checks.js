@@ -9,7 +9,7 @@ async page => {
     const paths = ['/', '/properties', '/contractors', '/permits', '/buyers', '/alerts',
         '/search?q=West', '/entities', '/entity/1', '/auth/verify-email', '/property/1001230045', '/permit/1', '/crm', '/crm/buildings',
         '/crm/buildings?view=table', '/crm/buildings?view=board', '/crm/deals', '/crm/contacts',
-        '/crm/notifications', '/crm/focus', '/crm/building_detail', '/crm/contact_detail', '/crm/deal_detail', '/crm/deal_form', '/crm/building_add', '/crm/lists', '/crm/list_detail', '/crm/starred', '/crm/team', '/crm/history', '/crm/followups', '/contractor/example', '/auth/team-setup', '/auth/login', '/auth/signup', '/admin/team', '/admin/activity'];
+        '/crm/notifications', '/crm/focus', '/crm/building_detail', '/crm/contact_detail', '/crm/deal_detail', '/crm/deal_form', '/crm/building_add', '/crm/lists', '/crm/list_detail', '/crm/starred', '/crm/team', '/crm/history', '/crm/followups', '/contractor/example', '/auth/team-setup', '/auth/login', '/auth/signup', '/auth/forgot-password', '/admin/team', '/admin/activity'];
     let pageChecks = 0;
     for (const width of [320, 375, 768, 1440]) {
         await page.setViewportSize({ width, height: 844 });

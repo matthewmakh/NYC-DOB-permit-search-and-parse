@@ -4,6 +4,7 @@ Handles login, signup, logout, email verification, and Stripe integration
 """
 
 import os
+from urllib.parse import urlsplit
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, jsonify
 from auth_service import (
     create_user, authenticate_user, create_session, destroy_session,
@@ -22,13 +23,24 @@ stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
 
 
+def _login_destination(value):
+    """Keep the requested workspace while rejecting external redirect targets."""
+    value = value or '/'
+    if (not value.startswith('/') or value.startswith('//') or '\\' in value
+            or any(ord(char) < 32 for char in value)):
+        return '/'
+    parts = urlsplit(value)
+    return value if not parts.scheme and not parts.netloc else '/'
+
+
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page and handler"""
+    next_url = _login_destination(request.args.get('next'))
     # Check if already logged in
     session_token = session.get('session_token')
     if session_token and validate_session(session_token):
-        return redirect(url_for('index'))
+        return redirect(next_url)
     
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
@@ -55,7 +67,6 @@ def login():
             )
             
             # Redirect to intended page or home
-            next_url = request.args.get('next', '/')
             return redirect(next_url)
         
         elif message == 'subscription_required':
@@ -83,7 +94,7 @@ def login():
     
     # Log page view for login page
     log_page_view('Login Page')
-    return render_template('login.html')
+    return render_template('login.html', next_url=next_url)
 
 
 @auth_bp.route('/signup', methods=['GET', 'POST'])
@@ -266,29 +277,27 @@ def verify(token):
 
 @auth_bp.route('/resend-verification')
 def resend_verification():
-    """Resend verification email"""
-    # TODO: Implement email sending
-    flash('Verification email resent. Please check your inbox.', 'success')
+    """Accounts are auto-verified; no verification email is sent."""
+    flash('Accounts are verified automatically. You can sign in without a verification email.', 'info')
     return redirect(url_for('auth.login'))
 
 
 @auth_bp.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
-    """Password reset request"""
+    """Show the available recovery channel until email delivery is configured."""
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
         # Log password reset request
         log_auth_event(
             ActivityType.PASSWORD_RESET_REQUEST,
             user_email=email,
-            success=True
+            success=False,
+            error_message='Self-service password reset is unavailable'
         )
-        # TODO: Implement password reset
-        flash('If an account exists with that email, a reset link has been sent.', 'success')
-        return redirect(url_for('auth.login'))
+        flash('Automatic password reset is unavailable. Contact the account administrator for help.', 'warning')
     
     log_page_view('Forgot Password Page')
-    return render_template('forgot_password.html')
+    return render_template('forgot_password.html', support_email=os.getenv('ADMIN_EMAIL', 'matt@tyeny.com'))
 
 
 @auth_bp.route('/logout')

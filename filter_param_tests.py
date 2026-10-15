@@ -284,7 +284,7 @@ check('participant inactivity selects wholly older dated permit rows',
       ('filing_date IS NULL' in parts[0], 'issue_date IS NULL' in parts[0], prm),
       (True, True, ['365', '365']))
 check('unknown activity mode safely falls back to within',
-      '>=' in permit(MultiDict([
+      'BETWEEN' in permit(MultiDict([
           ('recent_permit_days', '30'),
           ('permit_activity_mode', 'something-else'),
       ]))[0][0], True)
@@ -354,9 +354,9 @@ check('permit-leads older mode uses a before-cutoff comparison',
       (True, ['180'], '180', 'inactive'))
 check('permit-leads default mode keeps the recent comparison',
       '>=' in A._construction_time_filter('30', 'within')[0], True)
-check('permit-leads all-time mode adds no date predicate',
+check('permit-leads all-time mode preserves undated records and excludes future dates',
       A._construction_time_filter('all', 'inactive'),
-      ('', [], 'all', 'inactive'))
+      ('(p.issue_date IS NULL OR p.issue_date <= CURRENT_DATE)', [], 'all', 'inactive'))
 check('permit-leads invalid days safely fall back to 30',
       A._construction_time_filter('bad', 'within')[2], '30')
 

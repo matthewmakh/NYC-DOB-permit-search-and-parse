@@ -9,6 +9,7 @@ uv run --with flask python dashboard_html/tests/mobile_preview.py
 playwright-cli -s=mobile open http://127.0.0.1:5099/properties
 playwright-cli -s=mobile run-code --filename=dashboard_html/tests/mobile_browser_checks.js
 playwright-cli -s=mobile run-code --filename=dashboard_html/tests/design_consistency_checks.js
+playwright-cli -s=mobile run-code --filename=dashboard_html/tests/workflow_error_checks.js
 ```
 
 The browser checks cover page overflow at 320, 375, 768, and 1440 pixels, filter
@@ -36,6 +37,24 @@ For release QA, also check a physical iPhone/Android device with the keyboard
 open, long production records, and authenticated flows. Browser viewport tests do
 not simulate the OS keyboard, actual safe-area insets, or production services.
 
-The design suite checks the shared palette and shell on 20 page types in light
-and dark mode, including entity research, account pages, administration and CRM.
+The design suite checks the shared palette and shell on 21 page types in light
+and dark mode, including account recovery, entity research, administration and CRM.
+It also checks the generated permit cards in dark mode. The workflow error suite
+checks failed requests and retries, out-of-order search responses, permit sort
+wiring, and contact unlock cancellation/failure/success with synthetic billing.
 Both suites fail when an assertion fails. The preview reloads edited templates.
+
+Database-backed account, CRM, prospecting and permit controls can be checked with
+an explicitly disposable localhost PostgreSQL instance:
+
+```sh
+PROSPECTING_TEST_DATABASE_URL=postgresql://127.0.0.1:55439/postgres \
+  PYTHON_DOTENV_DISABLED=1 DATABASE_URL=postgresql://127.0.0.1:1/unused \
+  uv run --with-requirements dashboard_html/requirements.txt \
+  python -m unittest discover -s dashboard_html -p '*tests.py'
+```
+
+The new CRM and permit suites each use a temporary schema and refuse remote
+database hosts. They test actual SQL and route round trips, including CRUD,
+follow-ups, exports, record privacy, all permit sort choices, score filtering
+before pagination, future-date exclusion and contractor pagination totals.

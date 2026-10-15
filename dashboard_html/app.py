@@ -553,11 +553,11 @@ def calculate_lead_score(permit):
     issue_date = permit.get('issue_date')
     if issue_date:
         days_old = (datetime.now().date() - issue_date).days
-        if days_old <= 30:
+        if 0 <= days_old <= 30:
             score += 25
-        elif days_old <= 90:
+        elif 0 <= days_old <= 90:
             score += 15
-        elif days_old <= 180:
+        elif 0 <= days_old <= 180:
             score += 10
     
     # Job type value
@@ -1720,18 +1720,41 @@ def _construction_time_filter(days_raw, mode_raw, alias='p'):
     """Validated issue-date predicate for permit-row views."""
     mode = 'inactive' if str(mode_raw or '').lower() == 'inactive' else 'within'
     if str(days_raw).lower() == 'all':
-        return '', [], 'all', mode
+        return f'({alias}.issue_date IS NULL OR {alias}.issue_date <= CURRENT_DATE)', [], 'all', mode
     try:
         days = max(1, min(3650, int(days_raw)))
     except (TypeError, ValueError):
         days = 30
     operator = '<' if mode == 'inactive' else '>='
     return (
-        f"{alias}.issue_date {operator} CURRENT_DATE - (%s || ' days')::interval",
+        f"({alias}.issue_date {operator} CURRENT_DATE - (%s || ' days')::interval"
+        f" AND {alias}.issue_date <= CURRENT_DATE)",
         [str(days)],
         str(days),
         mode,
     )
+
+
+def _construction_lead_score_sql(alias='p'):
+    """The permit list's score, evaluated before filtering and pagination."""
+    contacts = (
+        f"(CASE WHEN NULLIF({alias}.permittee_phone, '') IS NOT NULL THEN 1 ELSE 0 END"
+        f" + CASE WHEN NULLIF({alias}.owner_phone, '') IS NOT NULL THEN 1 ELSE 0 END)"
+    )
+    mobile = ' OR '.join(
+        f"regexp_replace(COALESCE({alias}.{field}, ''), '[- ()]', '', 'g') ~ '^(347|646|917|929|332)'"
+        for field in ('permittee_phone', 'owner_phone')
+    )
+    return f"""LEAST(100,
+        LEAST({contacts} * 15, 40)
+        + CASE WHEN {mobile} THEN 20 ELSE 0 END
+        + CASE WHEN {alias}.issue_date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE THEN 25
+               WHEN {alias}.issue_date BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE THEN 15
+               WHEN {alias}.issue_date BETWEEN CURRENT_DATE - 180 AND CURRENT_DATE THEN 10
+               ELSE 0 END
+        + CASE WHEN {alias}.job_type IN ('NB', 'A1', 'AL') THEN 15 ELSE 0 END)
+    """
+
 
 @app.route('/api/construction/permits')
 def get_construction_permits():
@@ -1748,8 +1771,8 @@ def get_construction_permits():
             has_contact = request.args.get('has_contact', type=str)  # 'true' or 'false'
             sort_by = request.args.get('sort', 'date')  # date, score, contacts, size
             limit = request.args.get('limit', 50, type=int)  # Reduced default from 200 to 50
-            limit = min(200, limit)  # Cap at 200
-            offset = request.args.get('offset', 0, type=int)  # For pagination
+            limit = max(1, min(200, limit))
+            offset = max(0, request.args.get('offset', 0, type=int))
             
             # Build dynamic query - optimized for performance
             # Only join buildings table if sorting by size or if needed
@@ -1830,18 +1853,27 @@ def get_construction_permits():
                 params.extend([term] * 6)
         
             if has_contact == 'true':
-                query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
+                query += " AND (NULLIF(p.permittee_phone, '') IS NOT NULL OR NULLIF(p.owner_phone, '') IS NOT NULL)"
+            score_sql = _construction_lead_score_sql('p')
+            if min_lead_score > 0:
+                query += f' AND {score_sql} >= %s'
+                params.append(min_lead_score)
         
             # Sorting - default to newest first
             if sort_by == 'score':
-                query += " ORDER BY contact_count DESC, p.issue_date DESC"
+                query += f" ORDER BY {score_sql} DESC, p.issue_date DESC NULLS LAST, p.id DESC"
             elif sort_by == 'contacts':
-                query += " ORDER BY contact_count DESC"
+                query += " ORDER BY contact_count DESC, p.issue_date DESC NULLS LAST, p.id DESC"
             elif sort_by == 'size':
-                query += " ORDER BY b.total_units DESC NULLS LAST, b.building_sqft DESC NULLS LAST"
+                query += " ORDER BY b.total_units DESC NULLS LAST, b.building_sqft DESC NULLS LAST, p.id DESC"
+            elif sort_by == 'date_asc':
+                query += " ORDER BY p.issue_date ASC NULLS LAST, p.id ASC"
+            elif sort_by in ('address', 'applicant', 'type'):
+                column = {'address': 'p.address', 'applicant': 'p.applicant', 'type': 'p.job_type'}[sort_by]
+                query += f" ORDER BY {column} ASC NULLS LAST, p.issue_date DESC NULLS LAST, p.id DESC"
             else:
                 # Default to date descending (newest first)
-                query += " ORDER BY p.issue_date DESC"
+                query += " ORDER BY p.issue_date DESC NULLS LAST, p.id DESC"
         
             query += " LIMIT %s OFFSET %s"
             params.extend([limit, offset])
@@ -1881,7 +1913,10 @@ def get_construction_permits():
                 count_params.extend([term] * 6)
         
             if has_contact == 'true':
-                count_query += " AND (p.permittee_phone IS NOT NULL OR p.owner_phone IS NOT NULL)"
+                count_query += " AND (NULLIF(p.permittee_phone, '') IS NOT NULL OR NULLIF(p.owner_phone, '') IS NOT NULL)"
+            if min_lead_score > 0:
+                count_query += f' AND {score_sql} >= %s'
+                count_params.append(min_lead_score)
         
             cur.execute(count_query, tuple(count_params))
             total_count = cur.fetchone()['count']
@@ -1896,10 +1931,6 @@ def get_construction_permits():
                     permit_dict = dict(permit)
                     permit_dict['lead_score'] = lead_score
                     results.append(permit_dict)
-        
-            # Sort by lead score if requested (after calculating scores)
-            if sort_by == 'score':
-                results.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
         
             return jsonify({
                 'success': True,
@@ -1971,7 +2002,7 @@ def get_construction_stats():
             # Hot leads (estimated with contact count > 0 and recent)
             if days == 'all':
                 hot_params = ()
-                hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
+                hot_where = "WHERE (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE"
             else:
                 hot_params = params
                 hot_where = f"{where_clause} AND (permittee_phone IS NOT NULL OR owner_phone IS NOT NULL) AND issue_date >= CURRENT_DATE - INTERVAL '7 days'"
@@ -3166,8 +3197,8 @@ def _build_search_explorer_cte(args):
     if recent_days is not None:
         params['recent_permit_days'] = str(recent_days)
         recent_named_sql = """(
-            {alias}.filing_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
-            OR {alias}.issue_date >= CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval
+            {alias}.filing_date BETWEEN CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval AND CURRENT_DATE
+            OR {alias}.issue_date BETWEEN CURRENT_DATE - (%(recent_permit_days)s || ' days')::interval AND CURRENT_DATE
         )"""
         if activity_mode == 'inactive':
             # Property inactivity must check every permit on the building, not
@@ -4010,8 +4041,8 @@ def _permit_activity_settings(args):
 def _recent_permit_date_sql(alias='p'):
     """Predicate for a filing or issue date inside a bound day window."""
     return (
-        f"({alias}.filing_date >= CURRENT_DATE - (%s || ' days')::interval"
-        f" OR {alias}.issue_date >= CURRENT_DATE - (%s || ' days')::interval)"
+        f"({alias}.filing_date BETWEEN CURRENT_DATE - (%s || ' days')::interval AND CURRENT_DATE"
+        f" OR {alias}.issue_date BETWEEN CURRENT_DATE - (%s || ' days')::interval AND CURRENT_DATE)"
     )
 
 
@@ -6414,7 +6445,7 @@ def api_contractors_search():
                 ('min_jobs', 'COUNT(DISTINCT p.id) >= %s'),
                 ('max_jobs', 'COUNT(DISTINCT p.id) <= %s'),
                 ('min_active_jobs',
-                 "COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days'"
+                 "COUNT(DISTINCT CASE WHEN p.issue_date BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE"
                  ' THEN p.id END) >= %s'),
                 ('min_properties', 'COUNT(DISTINCT p.bbl) >= %s'),
                 ('max_properties', 'COUNT(DISTINCT p.bbl) <= %s'),
@@ -6446,10 +6477,10 @@ def api_contractors_search():
                         {participant_name} as contractor_name,
                         pp.license_number as license,
                         COUNT(DISTINCT p.id) as total_jobs,
-                        COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN p.id END) as active_jobs,
+                        COUNT(DISTINCT CASE WHEN p.issue_date BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE THEN p.id END) as active_jobs,
                         COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                         COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
-                        MAX(p.issue_date) as most_recent_job,
+                        MAX(p.issue_date) FILTER (WHERE p.issue_date <= CURRENT_DATE) as most_recent_job,
                         MIN(p.issue_date) as first_job,
                         COUNT(DISTINCT p.bbl) as unique_properties,
                         COUNT(DISTINCT NULLIF(btrim(pp.license_type), '')) as license_type_count,
@@ -6468,7 +6499,7 @@ def api_contractors_search():
                     GROUP BY {participant_name}, pp.license_number
                     {having_clause}
                 )
-                SELECT *
+                SELECT *, COUNT(*) OVER () AS directory_total
                 FROM contractor_stats
                 ORDER BY {order_by_sql}
                 LIMIT %s OFFSET %s
@@ -6476,13 +6507,16 @@ def api_contractors_search():
 
             cur.execute(query, where_params + having_params + [per_page, offset])
             contractors = [dict(c) for c in cur.fetchall()]
+            total = contractors[0]['directory_total'] if contractors else None
+            for contractor in contractors:
+                contractor.pop('directory_total', None)
 
             # What kind of work each of these contractors actually does.
             # Done as a second pass over just the page's contractors so the
             # aggregate above stays cheap.
             _attach_work_mix(cur, contractors, where_parts, where_params)
 
-            if having_parts:
+            if total is None and having_parts:
                 count_query = f"""
                     SELECT COUNT(*) AS count FROM (
                         SELECT 1
@@ -6495,7 +6529,7 @@ def api_contractors_search():
                     ) matched
                 """
                 cur.execute(count_query, where_params + having_params)
-            else:
+            elif total is None:
                 count_query = f"""
                     SELECT COUNT(*) AS count FROM (
                         SELECT 1
@@ -6507,7 +6541,8 @@ def api_contractors_search():
                     ) matched
                 """
                 cur.execute(count_query, where_params)
-            total = cur.fetchone()['count']
+            if total is None:
+                total = cur.fetchone()['count']
 
         return jsonify({
             'success': True,
@@ -6548,8 +6583,8 @@ def api_contractor_profile(contractor_name):
                 MAX(pp.role_confidence) AS role_confidence,
                 MAX(pp.contractor_confidence) AS contractor_confidence,
                 COUNT(DISTINCT p.id) as total_jobs,
-                COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '90 days' THEN p.id END) as active_jobs,
-                COUNT(DISTINCT CASE WHEN p.issue_date >= CURRENT_DATE - INTERVAL '365 days' THEN p.id END) as jobs_last_year,
+                COUNT(DISTINCT CASE WHEN p.issue_date BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE THEN p.id END) as active_jobs,
+                COUNT(DISTINCT CASE WHEN p.issue_date BETWEEN CURRENT_DATE - INTERVAL '365 days' AND CURRENT_DATE THEN p.id END) as jobs_last_year,
                 COALESCE(SUM(b.assessed_total_value), 0) as total_value,
                 COALESCE(MAX(b.assessed_total_value), 0) as largest_project,
                 COALESCE(AVG(b.assessed_total_value), 0) as avg_project_value,

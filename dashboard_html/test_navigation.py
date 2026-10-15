@@ -37,10 +37,10 @@ PRIMARY_DESTINATIONS = {
 
 class NavigationTests(unittest.TestCase):
     def test_every_rendered_template_exists(self):
-        tree = ast.parse(APP_SOURCE)
         rendered = {
             node.args[0].value
-            for node in ast.walk(tree)
+            for source in ROOT.glob('*.py')
+            for node in ast.walk(ast.parse(source.read_text()))
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "render_template"
@@ -74,7 +74,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(1, base.count('/static/js/navigation.js'))
         self.assertEqual(1, base.count('/static/js/mobile.js'))
         self.assertLess(base.index('_theme_init.html'), base.index('/static/css/app.css'))
-        for name in ('login.html', 'signup.html', 'team_setup.html', 'verify_email_sent.html'):
+        for name in ('login.html', 'signup.html', 'team_setup.html', 'verify_email_sent.html', 'forgot_password.html'):
             source = (TEMPLATES / name).read_text()
             self.assertIn('_theme_init.html', source, name)
             self.assertIn('/static/css/app.css', source, name)

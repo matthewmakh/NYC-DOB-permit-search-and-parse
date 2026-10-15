@@ -1,5 +1,56 @@
 # Branch and page design audit — October 15, 2026
 
+## Authenticated live-site follow-up
+
+The follow-up audit signed in on `leads.installersny.com` and checked public,
+CRM and administrator pages, including existing property, contractor, entity,
+CRM building/contact and prospect-list details. Data requests succeeded for all
+five primary discovery lists. Desktop checks found no missing shared stylesheet,
+legacy page stylesheet, outer overflow, uncaught script error or failed page
+request on the checked CRM and administration routes.
+
+Repairs from this audit:
+
+- Account recovery referenced a missing template and returned HTTP 500. It now
+  has a matching account page with administrator contact. Production has no
+  email delivery configuration; automatic password reset remains unavailable.
+  Legacy reset/verification routes no longer falsely claim an email was sent.
+- Login dropped the intended destination on form submission. It now preserves
+  relative paths and filters, and rejects external redirect targets.
+- The property contact directory advertised an unfinished unlock action. It now
+  confirms the charge and uses the existing enrichment/billing endpoint, with
+  cancellation, failure and retry handling. Enriched contacts also load when
+  the original permit-contact list is empty.
+- Buyers and alerts could remain on Loading forever after network/HTML errors,
+  and older requests could overwrite newer searches. They now recover with a
+  Retry action and ignore superseded responses. Permit loading also has Retry.
+- Permit oldest/address/applicant/type options silently sorted newest-first.
+  Every advertised sort now reaches an actual server ordering. Lead-score and
+  contact filters apply before pagination; unsupported 500/1,000 page sizes
+  were removed to match the API's 200-record cap.
+- Imported permit issue dates included years 2103–2200 and were promoted as
+  current hot leads. Permit time predicates now exclude future issue dates;
+  scores and contractor recent-activity counts also reject them. Original
+  database source records were preserved. Date-only permit display uses UTC
+  to avoid appearing one day early in New York.
+- Generated permit cards and map popups retained hard-coded white surfaces.
+  They now use shared theme tokens; cards are real keyboard-accessible links.
+- Contractor pagination repeated an expensive aggregation for its count. The
+  normal page now obtains its count in the main query, with an explicit empty
+  page fallback. A read-only production comparison retained the same 151,709
+  participants and identical page identities, reducing elapsed time from
+  35.1 to 28.3 seconds. Uncached directory searches remain slow.
+
+Verification includes 124 account/CRM/permit/prospecting tests against disposable
+local schemas, six navigation tests, the existing Node regression suites, all
+14 offline Python suites, 152 page/viewport checks, 42 page/theme checks, and
+synthetic browser checks for failure recovery and unlock billing. Prospecting
+browser workflows cover import, mapping, editing, column manipulation,
+assignment, bulk actions, relationships, research review/approval and undo.
+Production record changes, real paid lookups and real card charges were not
+used as test fixtures. Browser viewport checks do not certify a physical phone's
+keyboard or safe-area behavior.
+
 ## Canonical application and branch
 
 `main` is the canonical branch for the complete Flask application in

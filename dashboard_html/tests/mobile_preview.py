@@ -186,7 +186,9 @@ def fixture_user():
 @app.route('/crm/api/<path:path>', methods=['GET', 'POST'])
 def api(path):
     data = dict(success=True, stats=dict(total_permits=24, total_value=12345678, total_properties=24, total_assessed_value=9876543,
-        total_buildings=24, top_borough='MANHATTAN', trending_type='A2', by_borough=[], by_job_type=[], trends=[]),
+        total_buildings=24, top_borough='MANHATTAN', trending_type='A2', with_contacts=12, hot_leads=8,
+        boroughs=[dict(borough='MANHATTAN',count=24)], job_types=[dict(job_type='A2',count=24)],
+        by_borough=[], by_job_type=[], trends=[]),
         contractor=CONTRACTOR, properties=[BUILDING]*3, contractors=[CONTRACTOR]*3, permits=[PERMIT]*3, buildings=[BUILDING],
         building=BUILDING, freshness={}, facts={}, source=dict(url='https://data.cityofnewyork.us'), transactions=[], violations=[], contacts=[], owners={}, parties=[], risk_assessment=dict(score=25, label='Low risk', color='green', factors=[]), activity_timeline=[], signals=[], locations=[],
         pagination=dict(total_count=24, page=1, pages=2, total_pages=2, total=24, per_page=20),
@@ -221,7 +223,7 @@ def page(path=''):
         'search':'search_results.html', 'search-results':'search_results.html', 'entities':'entities.html', 'entity/1':'entity_profile.html', 'property/1001230045':'building_profile.html',
         'permit/1':'permit_detail.html', 'contractor/example':'contractor_profile.html',
         'admin/team':'admin_team.html', 'admin/activity':'admin_activity.html',
-        'auth/verify-email':'verify_email_sent.html', 'auth/login':'login.html', 'auth/signup':'signup.html', 'auth/team-setup':'team_setup.html',
+        'auth/verify-email':'verify_email_sent.html', 'auth/forgot-password':'forgot_password.html', 'auth/login':'login.html', 'auth/signup':'signup.html', 'auth/team-setup':'team_setup.html',
         'crm':'crm/today.html'}
     template = routes.get(path, path + '.html' if path.startswith('crm/') else None)
     if not template: return 'Fixture route not found', 404
@@ -235,7 +237,7 @@ def page(path=''):
         buildings=[BUILDING]*3, board=dict(new=[BUILDING], contacted=[], qualified=[], won=[]),
         counts={}, deals=[DEAL]*3, today_ny=date(2026,9,23), ny_hour=10, counters={}, spark=[dict(n=n, day='Mon') for n in [1,2,3,2,5,2,3]],
         overdue=[], due_today=[], upcoming=[], feed=[], groups=[], lists=[], notifications=[], history=[],
-        csrf_token='fixture', dossier=dict(id=1, display_name='West 123rd Street Property Management Associates LLC', entity_kind='company'), email='jordan@example.test', query=request.args.get('q',''), q='', building=BUILDING, contact={}, record={}, stats={},
+        csrf_token='fixture', support_email='admin@example.test', dossier=dict(id=1, display_name='West 123rd Street Property Management Associates LLC', entity_kind='company'), email='jordan@example.test', query=request.args.get('q',''), q='', building=BUILDING, contact={}, record={}, stats={},
         b=BUILDING, c=dict(id=1,name='Jordan Davis',company=BUILDING['owner_name']), deal=DEAL,
         queue=[], source='today', focus_title='Today', sv={}, timeline=[], phones=[], emails=[],
         deal_funnel={}, report=dict(no_next_step=0, overdue=0), touches=[dict(n=1,day=date(2026,9,23))],
