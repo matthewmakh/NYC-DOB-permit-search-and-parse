@@ -295,7 +295,48 @@ function displayStats(stats) {
     setHtmlById('quickStats', quickStatsHTML);
     displayJobTypesChart(stats.job_types || []);
     displayBoroughsChart(stats.boroughs || []);
+    if (document.getElementById('trendsTab')?.classList.contains('active')) displayPermitTrends(stats);
 }
+
+let permitTrendChart = null;
+function displayPermitTrends(stats) {
+    const points = stats.timeline || [];
+    const status = document.getElementById('trendsStatus');
+    const canvas = document.getElementById('trendsChart');
+    if (!status || !canvas) return;
+    const monthly = stats.timeline_unit === 'month';
+    const label = value => new Date(`${value}T12:00:00Z`).toLocaleDateString('en-US',
+        monthly ? {month:'short', year:'numeric', timeZone:'UTC'} : {month:'short', day:'numeric', timeZone:'UTC'});
+    document.getElementById('trendsRows').innerHTML = points.map(point =>
+        `<tr><th scope="row">${escapeHtml(label(point.date))}</th><td>${Number(point.count).toLocaleString()}</td></tr>`).join('');
+    status.textContent = points.length
+        ? `Permits issued per ${monthly ? 'month' : 'day'} in the selected time window${points.length === 120 ? ' · latest 120 periods' : ''}.`
+        : 'No dated permit activity in the selected time window.';
+    if (permitTrendChart) { permitTrendChart.destroy(); permitTrendChart = null; }
+    canvas.parentElement.hidden = !points.length;
+    if (!points.length) return;
+    if (typeof Chart === 'undefined') {
+        canvas.parentElement.hidden = true;
+        document.getElementById('trendsData').open = true;
+        status.textContent += ' Chart unavailable; activity is listed in the table below.';
+        return;
+    }
+    const theme = getComputedStyle(document.documentElement);
+    permitTrendChart = new Chart(canvas, {
+        type: 'bar',
+        data: {labels: points.map(point => label(point.date)), datasets: [{
+            label: 'Permits issued', data: points.map(point => point.count),
+            backgroundColor: theme.getPropertyValue('--accent').trim(), borderRadius: 3
+        }]},
+        options: {responsive:true, maintainAspectRatio:false, animation:false,
+            plugins:{legend:{display:false}},
+            scales:{x:{ticks:{maxTicksLimit:8,color:theme.getPropertyValue('--ink-2').trim()},grid:{display:false}},
+                    y:{beginAtZero:true,ticks:{precision:0,color:theme.getPropertyValue('--ink-2').trim()},grid:{color:theme.getPropertyValue('--line').trim()}}}}
+    });
+}
+document.addEventListener('themechange', () => {
+    if (document.getElementById('trendsTab')?.classList.contains('active')) displayPermitTrends(AppState.stats);
+});
 
 function displayJobTypesChart(jobTypes) {
     if (!jobTypes.length) return;
@@ -647,6 +688,7 @@ function switchTab(tabName, trigger) {
     if (tabName === 'contractors') {
         loadContractors();
     }
+    if (tabName === 'trends') displayPermitTrends(AppState.stats);
 }
 
 function sortPermitsList() {

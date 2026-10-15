@@ -28,7 +28,7 @@ class PermitWorkflowTests(unittest.TestCase):
                     borough TEXT, issue_date DATE, filing_date DATE, bbl TEXT, bin TEXT, applicant TEXT,
                     permittee_business_name TEXT, owner_business_name TEXT, permittee_phone TEXT,
                     owner_phone TEXT, latitude NUMERIC, longitude NUMERIC, work_type TEXT, permit_type TEXT)''')
-                cursor.execute('CREATE TABLE buildings(bbl TEXT PRIMARY KEY, assessed_total_value NUMERIC)')
+                cursor.execute('CREATE TABLE buildings(bbl TEXT PRIMARY KEY, assessed_total_value NUMERIC, purchase_price NUMERIC)')
                 cursor.execute('''CREATE TABLE permit_participants(permit_id INTEGER, business_name TEXT,
                     person_name TEXT, license_number TEXT, license_type TEXT, role TEXT,
                     role_confidence NUMERIC, contractor_confidence NUMERIC)''')
@@ -44,7 +44,7 @@ class PermitWorkflowTests(unittest.TestCase):
                                    (index, 'Alpha Construction' if index % 2 else 'Beta Construction'))
                 cursor.execute("INSERT INTO permits(id,permit_no,issue_date,bbl) VALUES(100,'Future',%s,'3000010001'),(101,'Undated',NULL,'3000010001')", (today + timedelta(days=10000),))
                 cursor.execute("INSERT INTO permit_participants VALUES(100,'Future Construction',NULL,NULL,'GC','permittee',1,1)")
-                cursor.execute("INSERT INTO buildings VALUES('3000010001',100000)")
+                cursor.execute("INSERT INTO buildings VALUES('3000010001',100000,500000)")
 
         @contextmanager
         def database_cursor():
@@ -58,7 +58,7 @@ class PermitWorkflowTests(unittest.TestCase):
         # Execute the actual route/helper definitions without importing app.py,
         # loading its .env, or starting unrelated production initialization.
         names = {'calculate_lead_score', '_construction_time_filter', '_construction_lead_score_sql',
-                 'get_construction_permits', '_recent_permit_date_sql', '_order_by_sql', '_multi_param',
+                 'get_construction_permits', 'get_construction_stats', '_recent_permit_date_sql', '_order_by_sql', '_multi_param',
                  'api_contractors_search', '_attach_work_mix'}
         tree = ast.parse((Path(__file__).resolve().parent / 'app.py').read_text())
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
@@ -75,6 +75,7 @@ class PermitWorkflowTests(unittest.TestCase):
         app.config['TESTING'] = True
         app.add_url_rule('/permits', view_func=self.env['get_construction_permits'])
         app.add_url_rule('/contractors', view_func=self.env['api_contractors_search'])
+        app.add_url_rule('/stats', view_func=self.env['get_construction_stats'])
         self.client = app.test_client()
 
     def tearDown(self):
@@ -117,6 +118,18 @@ class PermitWorkflowTests(unittest.TestCase):
                 recent = self.env['_recent_permit_date_sql']('p')
                 cursor.execute(f'SELECT id FROM permits p WHERE {recent}', ['90', '90'])
                 self.assertNotIn(100, [row['id'] for row in cursor.fetchall()])
+
+    def test_timeline_aggregates_actual_dates_and_handles_empty_windows(self):
+        recent = self.get('/stats?days=90')['stats']
+        self.assertEqual('day', recent['timeline_unit'])
+        self.assertEqual(24, len(recent['timeline']))
+        self.assertEqual(recent['total_permits'], sum(point['count'] for point in recent['timeline']))
+        self.assertEqual(sorted(point['date'] for point in recent['timeline']), [point['date'] for point in recent['timeline']])
+        self.assertTrue(all(date.fromisoformat(point['date']) <= date.today() for point in recent['timeline']))
+        historical = self.get('/stats?days=all')['stats']
+        self.assertEqual('month', historical['timeline_unit'])
+        self.assertEqual(24, sum(point['count'] for point in historical['timeline']))
+        self.assertEqual([], self.get('/stats?days=90&permit_activity_mode=inactive')['stats']['timeline'])
 
     def test_contractor_total_survives_pagination_filters_and_empty_pages(self):
         first = self.get('/contractors?per_page=1')

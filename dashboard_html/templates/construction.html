@@ -163,7 +163,11 @@
                     <div id="trendsTab" class="tab-content">
                         <div class="chart-container">
                             <div class="chart-title">Permit Activity Timeline</div>
-                            <canvas id="trendsChart" height="80"></canvas>
+                            <p id="trendsStatus" role="status">Loading permit activity…</p>
+                            <div class="permit-trend-plot"><canvas id="trendsChart" aria-label="Permit activity timeline" role="img"></canvas></div>
+                            <details id="trendsData"><summary>View activity data</summary>
+                                <table><thead><tr><th scope="col">Period</th><th scope="col">Permits</th></tr></thead><tbody id="trendsRows"></tbody></table>
+                            </details>
                         </div>
                     </div>
                     

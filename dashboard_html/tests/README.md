@@ -42,7 +42,7 @@ and dark mode, including account recovery, entity research, administration and C
 It also checks the generated permit cards in dark mode. The workflow error suite
 checks failed requests and retries, out-of-order search responses, permit sort
 wiring, and contact unlock cancellation/failure/success with synthetic billing.
-Both suites fail when an assertion fails. The preview reloads edited templates.
+All suites fail when an assertion fails. The preview reloads edited templates.
 
 Database-backed account, CRM, prospecting and permit controls can be checked with
 an explicitly disposable localhost PostgreSQL instance:
