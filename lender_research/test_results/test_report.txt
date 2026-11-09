@@ -1,0 +1,62 @@
+Tag NYC mortgages with the curated DSCR/RTL lender list, then test the tags.
+
+Pre-registered expectations (written before looking at results):
+  E1 name-match precision: >= 98% of name matches carry the lender's known ZIP or a MERS ZIP.
+  E2 business purpose: >= 85% of loans from pure business-purpose lenders (no owner-occupied
+     product) go to entity borrowers; the citywide baseline is far lower.
+  E3 loan life: loans from RTL lenders are paid off within 24 months at >= 2x the rate of
+     loans from DSCR lenders (2021-07..2023-06 cohort, satisfactions linked by CRFN).
+  E4 purchase loans: RTL-only lenders have a higher share of purchase-money mortgages (a deed on the
+     same lot recorded within 5 days) than DSCR-only lenders.
+
+NYC mortgages >= $100k, 2024-10..2026-09: 74,165; entity-borrower share citywide 35.5%
+Tagged by the list: 12,736 (17.2%)
+
+E1 name-match precision (ZIP check)
+  12,409/13,045 matched rows carry a known lender ZIP or MERS ZIP = 95.1%  -> FAIL (threshold 98%)
+E1b off-ZIP rows classified by rule:
+      344  unresolved
+      197  same street as confirmed rows (ZIP typo)
+       50  shared processing address (3+ unrelated lenders)
+       45  alternate address verified on lender's own site
+  precision counting every unresolved row as a false match: 97.4% -> FAIL (threshold 98%)
+    unresolved: x161  IceCap Group (Ice Lender Holdings) ICE LENDER HOLDINGS LLC                  10001 31 WEST
+    unresolved: x34   Meadowbrook Financial Mortgage Ban MEADOWBROOK FINANCIAL MORTGAGE BANKERS C 11801 110 STEWART
+    unresolved: x25   Accolend                           ACCOLEND LLC                             07666 310 CEDAR
+    unresolved: x16   IceCap Group (Ice Lender Holdings) ICE LENDER HOLDINGS LLC                  10001 31 W
+    unresolved: x5    Emporium TPO                       EMPORIUM TPO LLC ISAOA ATIMA             48007 P O BOX 7050
+    unresolved: x4    Emigrant Funding                   EMIGRANT FUNDING CORPORATION             10523 7 WESTCHESTER
+    unresolved: x3    STG Mortgage                       STG MORTGAGE INC                         92806 2401 EAST
+    unresolved: x3    Nationwide Mortgage Bankers        NATIONWIDE MORTGAGE BANKERS INC          08833 310 A
+    unresolved: x2    Stormfield Capital                 STORMFIELD SPV I LLC                     11021 505 NORTHERN
+    unresolved: x2    States Capital / We Lend           STATES CAPITAL LLC                       11765 314 MILL
+    unresolved: x2    Roc360 platform (Roc Capital, Loan LOAN FUNDER LLC SERIES 133645            21704 4527 METROPOLITAN
+    unresolved: x2    Roc360 platform (Roc Capital, Loan LOAN FUNDER LLC SERIES 105897            11379 66 08
+
+Loan-level tags (24 months):
+   5,854  consumer lender, individual borrower (not tagged)
+   3,087  DSCR or RTL (lender makes both)
+   1,899  DSCR (entity borrower, lender also does consumer loans)
+   1,129  RTL
+     476  COMMERCIAL_BRIDGE
+     291  DSCR
+
+E2 entity-borrower share by lender group (citywide baseline 35.5%)
+  COMMERCIAL_BRIDGE                  loans    476  entity 99%  purchase-money 45%
+  CONSUMER+DSCR                      loans  7,753  entity 24%  purchase-money 59%
+  DSCR                               loans    291  entity 74%  purchase-money 39%
+  DSCR+RTL                           loans  3,087  entity 98%  purchase-money 58%
+  RTL                                loans  1,129  entity 100%  purchase-money 56%
+  pure business-purpose lenders entity share 97.1% -> PASS (threshold 85%)
+
+E4 purchase-money share: RTL-only 56% vs DSCR-only 39% -> PASS
+
+E3 loan life, mortgages recorded 2021-07..2023-06, status as of 2026-09
+  COMMERCIAL_BRIDGE                  n   484  paid off <=24mo 7%  paid off ever 19%  assigned 66%  consolidated/modified 53%
+  CONSUMER+DSCR                      n 6,681  paid off <=24mo 3%  paid off ever 8%  assigned 9%  consolidated/modified 6%
+  DSCR                               n   151  paid off <=24mo 2%  paid off ever 11%  assigned 14%  consolidated/modified 9%
+  DSCR+RTL                           n 1,989  paid off <=24mo 17%  paid off ever 27%  assigned 58%  consolidated/modified 26%
+  DSCR-proxy (DSCR lenders + entity loans of consumer/DSCR lenders) n   649  paid off <=24mo 5%  paid off ever 14%  assigned 19%  consolidated/modified 13%
+  RTL                                n   977  paid off <=24mo 29%  paid off ever 38%  assigned 80%  consolidated/modified 47%
+  RTL 29% vs DSCR 2% -> PASS (needs >= 2x)
+  RTL 29% vs DSCR-proxy (DSCR lenders + entity loans of consumer/DSCR lenders) 5% -> PASS (needs >= 2x)

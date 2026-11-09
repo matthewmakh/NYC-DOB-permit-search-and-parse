@@ -1,0 +1,501 @@
+[
+ {
+  "entities": [
+   "CITI REAL ESTATE FUNDING"
+  ],
+  "name_variants": [
+   "CITI REAL ESTATE FUNDING INC | CITI REAL ESTATE FUNDING LLC | CITI REAL ESTATE FUNDING"
+  ],
+  "acris_address": "388 390 GREENWICH STREET 4TH, ZIP 10013",
+  "state": "NY",
+  "nyc_loans_24mo": 95,
+  "entity_borrower_share": 1.0,
+  "median_loan": 5067059,
+  "one_to_four_share": "0.074",
+  "mers_share": "0.0",
+  "idx": 15,
+  "reason": "CMBS conduit (Citigroup)"
+ },
+ {
+  "entities": [
+   "EMPIRE STATE CERTIFIED DEVELOPMENT",
+   "NYBDC LOCAL DEVELOPMENT"
+  ],
+  "name_variants": [
+   "EMPIRE STATE CERTIFIED DEVELOPMENT CORPORATION | EMPIRE STATE CERTIFIED DEVELOPMENT CORP | EMPIRE STATE CERTIFIED DEVELOPMENT CORPORATION DBA",
+   "NYBDC LOCAL DEVELOPMENT CORPORATION | NYBDC LOCAL DEVELOPMENT CORP"
+  ],
+  "acris_address": "19 BRITISH AMERICAN BOULEVARD EAST, ZIP 12110",
+  "state": "NY",
+  "nyc_loans_24mo": 68,
+  "entity_borrower_share": 1.0,
+  "median_loan": 1077000,
+  "one_to_four_share": "0.194",
+  "mers_share": "0.0",
+  "idx": 30,
+  "reason": "SBA 504 / CDC lender"
+ },
+ {
+  "entities": [
+   "MANUFACTURERS AND TRADERS TRUST"
+  ],
+  "name_variants": [
+   "MANUFACTURERS AND TRADERS TRUST COMPANY"
+  ],
+  "acris_address": "ONE FOUNTAIN PLAZA 4TH, ZIP 14203",
+  "state": "NY",
+  "nyc_loans_24mo": 236,
+  "entity_borrower_share": 0.22,
+  "median_loan": 250000,
+  "one_to_four_share": "0.78",
+  "mers_share": "0.0",
+  "idx": 39,
+  "reason": "bank (M&T)"
+ },
+ {
+  "entities": [
+   "GERMAN AMERICAN CAPITAL",
+   "DBR INVESTMENTS LIMITED"
+  ],
+  "name_variants": [
+   "GERMAN AMERICAN CAPITAL CORPORATION",
+   "DBR INVESTMENTS CO LIMITED"
+  ],
+  "acris_address": "1 COLUMBUS CIRCLE 15TH, ZIP 10019",
+  "state": "NY",
+  "nyc_loans_24mo": 39,
+  "entity_borrower_share": 1.0,
+  "median_loan": 11500000,
+  "one_to_four_share": "0.05",
+  "mers_share": "0.0",
+  "idx": 49,
+  "reason": "CMBS conduit (Deutsche Bank)"
+ },
+ {
+  "entities": [
+   "GREYSTONE SERVICING"
+  ],
+  "name_variants": [
+   "GREYSTONE SERVICING COMPANY LLC"
+  ],
+  "acris_address": "419 BELLE AIR LANE, ZIP 20186",
+  "state": "VA",
+  "nyc_loans_24mo": 36,
+  "entity_borrower_share": 1.0,
+  "median_loan": 2129679,
+  "one_to_four_share": "0.056",
+  "mers_share": "0.0",
+  "idx": 53,
+  "reason": "agency multifamily servicer"
+ },
+ {
+  "entities": [
+   "ARBOR COMMERCIAL FUNDING I",
+   "ARBOR AGENCY LENDING"
+  ],
+  "name_variants": [
+   "ARBOR COMMERCIAL FUNDING I LLC",
+   "ARBOR AGENCY LENDING LLC"
+  ],
+  "acris_address": "500 COLVIN WOODS PARKWAY, ZIP 14150",
+  "state": "NY",
+  "nyc_loans_24mo": 35,
+  "entity_borrower_share": 1.0,
+  "median_loan": 674000,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 54,
+  "reason": "agency multifamily lender"
+ },
+ {
+  "entities": [
+   "LOCAL INITIATIVES SUPPORT"
+  ],
+  "name_variants": [
+   "LOCAL INITIATIVES SUPPORT CORPORATION"
+  ],
+  "acris_address": "28 LIBERTY STREET 34TH, ZIP 10005",
+  "state": "NY",
+  "nyc_loans_24mo": 31,
+  "entity_borrower_share": 1.0,
+  "median_loan": 2500000,
+  "one_to_four_share": "0.226",
+  "mers_share": "0.0",
+  "idx": 59,
+  "reason": "CDFI"
+ },
+ {
+  "entities": [
+   "BERKADIA COMMERCIAL MORTGAGE"
+  ],
+  "name_variants": [
+   "BERKADIA COMMERCIAL MORTGAGE LLC"
+  ],
+  "acris_address": "323 NORRISTOWN ROAD, ZIP 19002",
+  "state": "PA",
+  "nyc_loans_24mo": 29,
+  "entity_borrower_share": 1.0,
+  "median_loan": 2896665,
+  "one_to_four_share": "0.034",
+  "mers_share": "0.0",
+  "idx": 62,
+  "reason": "agency/commercial multifamily"
+ },
+ {
+  "entities": [
+   "JLL REAL ESTATE CAPITAL"
+  ],
+  "name_variants": [
+   "JLL REAL ESTATE CAPITAL LLC"
+  ],
+  "acris_address": "2177 YOUNGMAN AVENUE, ZIP 55116",
+  "state": "MN",
+  "nyc_loans_24mo": 29,
+  "entity_borrower_share": 1.0,
+  "median_loan": 5940577,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 63,
+  "reason": "agency/commercial multifamily"
+ },
+ {
+  "entities": [
+   "STARWOOD MORTGAGE CAPITAL"
+  ],
+  "name_variants": [
+   "STARWOOD MORTGAGE CAPITAL LLC"
+  ],
+  "acris_address": "4064 COLONY ROAD, ZIP 28211",
+  "state": "NC",
+  "nyc_loans_24mo": 25,
+  "entity_borrower_share": 1.0,
+  "median_loan": 2600000,
+  "one_to_four_share": "0.16",
+  "mers_share": "0.0",
+  "idx": 70,
+  "reason": "CMBS conduit"
+ },
+ {
+  "entities": [
+   "BUILD NYC RESOURCE"
+  ],
+  "name_variants": [
+   "BUILD NYC RESOURCE CORPORATION"
+  ],
+  "acris_address": "1 LIBERTY PLAZA, ZIP 10006",
+  "state": "NY",
+  "nyc_loans_24mo": 31,
+  "entity_borrower_share": 0.81,
+  "median_loan": 16000000,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 72,
+  "reason": "NYC economic development lender"
+ },
+ {
+  "entities": [
+   "MERCHANTS CAPITAL"
+  ],
+  "name_variants": [
+   "MERCHANTS CAPITAL CORP"
+  ],
+  "acris_address": "7900 INTERNATIONAL DRIVE, ZIP 55425",
+  "state": "MN",
+  "nyc_loans_24mo": 19,
+  "entity_borrower_share": 1.0,
+  "median_loan": 21567000,
+  "one_to_four_share": "0.053",
+  "mers_share": "0.0",
+  "idx": 86,
+  "reason": "agency multifamily"
+ },
+ {
+  "entities": [
+   "NEW YORK PROGRESSIVE CAPITAL LOCAL DEVELOPMENT COR"
+  ],
+  "name_variants": [
+   "NEW YORK PROGRESSIVE CAPITAL LOCAL DEVELOPMENT COR"
+  ],
+  "acris_address": "1441 PRESIDENT STREET, ZIP 11213",
+  "state": "NY",
+  "nyc_loans_24mo": 16,
+  "entity_borrower_share": 1.0,
+  "median_loan": 1331000,
+  "one_to_four_share": "0.062",
+  "mers_share": "0.0",
+  "idx": 96,
+  "reason": "local development corp"
+ },
+ {
+  "entities": [
+   "LUMENT REAL ESTATE CAPITAL"
+  ],
+  "name_variants": [
+   "LUMENT REAL ESTATE CAPITAL LLC"
+  ],
+  "acris_address": "10 W BROAD STREET 8TH, ZIP 43215",
+  "state": "OH",
+  "nyc_loans_24mo": 15,
+  "entity_borrower_share": 1.0,
+  "median_loan": 7292200,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 97,
+  "reason": "agency multifamily"
+ },
+ {
+  "entities": [
+   "ROSENTHAL & ROSENTHAL"
+  ],
+  "name_variants": [
+   "ROSENTHAL & ROSENTHAL INC"
+  ],
+  "acris_address": "1370 BROADWAY, ZIP 10018",
+  "state": "NY",
+  "nyc_loans_24mo": 15,
+  "entity_borrower_share": 1.0,
+  "median_loan": 1150000,
+  "one_to_four_share": "0.4",
+  "mers_share": "0.0",
+  "idx": 101,
+  "reason": "factoring/commercial finance"
+ },
+ {
+  "entities": [
+   "HEITMAN HDP III ACQUISITION I"
+  ],
+  "name_variants": [
+   "HEITMAN HDP III ACQUISITION I LLC"
+  ],
+  "acris_address": "110 NORTH WACKER DRIVE, ZIP 60606",
+  "state": "IL",
+  "nyc_loans_24mo": 15,
+  "entity_borrower_share": 1.0,
+  "median_loan": 53968000,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 104,
+  "reason": "institutional real estate fund"
+ },
+ {
+  "entities": [
+   "LIVE OAK BANKING"
+  ],
+  "name_variants": [
+   "LIVE OAK BANKING COMPANY"
+  ],
+  "acris_address": "1741 TIBURON DRIVE, ZIP 28403",
+  "state": "NC",
+  "nyc_loans_24mo": 22,
+  "entity_borrower_share": 0.64,
+  "median_loan": 1500000,
+  "one_to_four_share": "0.318",
+  "mers_share": "0.0",
+  "idx": 106,
+  "reason": "SBA bank"
+ },
+ {
+  "entities": [
+   "WALKER & DUNLOP"
+  ],
+  "name_variants": [
+   "WALKER & DUNLOP LLC | WALKER & DUNLOP"
+  ],
+  "acris_address": "7272 WISCONSIN AVENUE, ZIP 20814",
+  "state": "MD",
+  "nyc_loans_24mo": 14,
+  "entity_borrower_share": 1.0,
+  "median_loan": 1411545,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 112,
+  "reason": "agency multifamily"
+ },
+ {
+  "entities": [
+   "NEW YORK CITY ACQUISITION FUND"
+  ],
+  "name_variants": [
+   "NEW YORK CITY ACQUISITION FUND LLC"
+  ],
+  "acris_address": "11000 BROKEN LAND PARKWAY, ZIP 21044",
+  "state": "MD",
+  "nyc_loans_24mo": 13,
+  "entity_borrower_share": 1.0,
+  "median_loan": 3849375,
+  "one_to_four_share": "0.154",
+  "mers_share": "0.0",
+  "idx": 118,
+  "reason": "affordable housing acquisition fund"
+ },
+ {
+  "entities": [
+   "CBRE CAPITAL MARKETS"
+  ],
+  "name_variants": [
+   "CBRE CAPITAL MARKETS INC"
+  ],
+  "acris_address": "15377 MEMORIAL DRIVE, ZIP 77079",
+  "state": "TX",
+  "nyc_loans_24mo": 12,
+  "entity_borrower_share": 1.0,
+  "median_loan": 607571,
+  "one_to_four_share": "0.083",
+  "mers_share": "0.0",
+  "idx": 121,
+  "reason": "agency/commercial"
+ },
+ {
+  "entities": [
+   "LOW INCOME INVESTMENT FUND"
+  ],
+  "name_variants": [
+   "LOW INCOME INVESTMENT FUND"
+  ],
+  "acris_address": "49 STEVENSON STREET, ZIP 94105",
+  "state": "CA",
+  "nyc_loans_24mo": 11,
+  "entity_borrower_share": 1.0,
+  "median_loan": 2962534,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 128,
+  "reason": "CDFI"
+ },
+ {
+  "entities": [
+   "SOCIETE GENERALE FINANCIAL"
+  ],
+  "name_variants": [
+   "SOCIETE GENERALE FINANCIAL CORPORATION"
+  ],
+  "acris_address": "245 PARK AVENUE, ZIP 10167",
+  "state": "NY",
+  "nyc_loans_24mo": 11,
+  "entity_borrower_share": 1.0,
+  "median_loan": 4463744,
+  "one_to_four_share": "0.091",
+  "mers_share": "0.0",
+  "idx": 131,
+  "reason": "bank (Societe Generale)"
+ },
+ {
+  "entities": [
+   "M&T REALTY CAPITAL"
+  ],
+  "name_variants": [
+   "M&T REALTY CAPITAL CORPORATION"
+  ],
+  "acris_address": "14TH, ZIP 21202",
+  "state": "MD",
+  "nyc_loans_24mo": 14,
+  "entity_borrower_share": 0.79,
+  "median_loan": 2755313,
+  "one_to_four_share": "0.071",
+  "mers_share": "0.0",
+  "idx": 134,
+  "reason": "agency multifamily (M&T Realty)"
+ },
+ {
+  "entities": [
+   "ENTERPRISE COMMUNITY LOAN FUND"
+  ],
+  "name_variants": [
+   "ENTERPRISE COMMUNITY LOAN FUND INC"
+  ],
+  "acris_address": "70 CORPORATE CENTER, ZIP 21044",
+  "state": "MD",
+  "nyc_loans_24mo": 11,
+  "entity_borrower_share": 1.0,
+  "median_loan": 1282756,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 138,
+  "reason": "CDFI"
+ },
+ {
+  "entities": [
+   "HILTON RESORTS"
+  ],
+  "name_variants": [
+   "HILTON RESORTS CORPORATION"
+  ],
+  "acris_address": "6355 METROWEST BLVD, ZIP 32835",
+  "state": "FL",
+  "nyc_loans_24mo": 662,
+  "entity_borrower_share": 0.02,
+  "median_loan": 133195,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 142,
+  "reason": "timeshare lender (Hilton)"
+ },
+ {
+  "entities": [
+   "BARINGS"
+  ],
+  "name_variants": [
+   "BARINGS LLC"
+  ],
+  "acris_address": "300 S TRYON STREET, ZIP 28202",
+  "state": "NC",
+  "nyc_loans_24mo": 10,
+  "entity_borrower_share": 1.0,
+  "median_loan": 6986061,
+  "one_to_four_share": "0.0",
+  "mers_share": "0.0",
+  "idx": 147,
+  "reason": "institutional CRE debt"
+ },
+ {
+  "entities": [
+   "CITADEL SERVICING"
+  ],
+  "name_variants": [
+   "CITADEL SERVICING CORPORATION | CITADEL SERVICING CORPORATION DBA | CITADEL SERVICING CORP"
+  ],
+  "acris_address": "3 ADA PARKWAY, ZIP 92618",
+  "state": "CA",
+  "nyc_loans_24mo": 51,
+  "entity_borrower_share": 0.65,
+  "median_loan": 583700,
+  "one_to_four_share": "0.863",
+  "mers_share": "0.824",
+  "idx": 57,
+  "reason": "Acra Lending (formerly Citadel Servicing) - in national DSCR list"
+ },
+ {
+  "entities": [
+   "ABL RPC RESIDENTIAL CREDIT ACQUISITION"
+  ],
+  "name_variants": [
+   "ABL RPC RESIDENTIAL CREDIT ACQUISITION LLC"
+  ],
+  "acris_address": "30 MONTGOMERY ST, ZIP 07302",
+  "state": "NJ",
+  "nyc_loans_24mo": 20,
+  "entity_borrower_share": 1.0,
+  "median_loan": 819000,
+  "one_to_four_share": "0.8",
+  "mers_share": "0.0",
+  "idx": 82,
+  "reason": "Asset Based Lending (ABL) - in national RTL list"
+ },
+ {
+  "entities": [
+   "EMPOROIUM TPO"
+  ],
+  "name_variants": [
+   "EMPOROIUM TPO LLC"
+  ],
+  "acris_address": "3010 GAYLORD PARKWAY, ZIP 75034",
+  "state": "TX",
+  "nyc_loans_24mo": 19,
+  "entity_borrower_share": 1.0,
+  "median_loan": 177000,
+  "one_to_four_share": "0.895",
+  "mers_share": "1.0",
+  "idx": 87,
+  "reason": "Emporium TPO (typo variant) - in national DSCR list"
+ }
+]
