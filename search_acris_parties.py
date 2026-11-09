@@ -454,8 +454,10 @@ def get_transaction_details(document_ids: Set[str]) -> Dict[str, dict]:
                 transaction_map[doc_id] = {
                     'doc_type': record.get('doc_type', ''),
                     'doc_type_name': DOC_TYPE_NAMES.get(record.get('doc_type', ''), record.get('doc_type', '')),
-                    'doc_amount': record.get('doc_amount', ''),
-                    'doc_date': record.get('doc_date', '')[:10] if record.get('doc_date') else '',
+                    # Master (bnx9-e6tj) columns are document_amt / document_date;
+                    # our output keys stay doc_amount / doc_date for CSV/JSON consumers.
+                    'doc_amount': record.get('document_amt', ''),
+                    'doc_date': record.get('document_date', '')[:10] if record.get('document_date') else '',
                     'recorded_date': record.get('recorded_datetime', '')[:10] if record.get('recorded_datetime') else '',
                     'crfn': record.get('crfn', ''),
                 }
@@ -764,8 +766,9 @@ def find_linked_closings(
                     'document_id': txn.get('document_id', ''),
                     'doc_type': txn.get('doc_type', ''),
                     'doc_type_name': DOC_TYPE_NAMES.get(txn.get('doc_type', ''), txn.get('doc_type', '')),
-                    'doc_amount': txn.get('doc_amount', ''),
-                    'doc_date': txn.get('doc_date', '')[:10] if txn.get('doc_date') else '',
+                    # txn is a raw Master row here: columns are document_amt / document_date
+                    'doc_amount': txn.get('document_amt', ''),
+                    'doc_date': txn.get('document_date', '')[:10] if txn.get('document_date') else '',
                     'recorded_date': txn.get('recorded_datetime', '')[:10] if txn.get('recorded_datetime') else '',
                     'crfn': txn.get('crfn', ''),
                     'buyer': buyer,
