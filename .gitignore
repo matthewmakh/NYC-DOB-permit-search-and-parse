@@ -54,3 +54,6 @@ proxy_auth_plugin.zip
 # Local browser verification output
 .playwright-cli/
 .playwright-mcp/
+
+# Output of discover_investors.py (public ACRIS party names and addresses)
+investor_discovery_out/
