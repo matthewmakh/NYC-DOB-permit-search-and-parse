@@ -53,6 +53,9 @@ from collections import defaultdict
 import requests
 from dotenv import load_dotenv
 
+import _pipeline_path  # noqa: F401  (puts dashboard_html on sys.path)
+from socrata_client import load_party_roles, party_role
+
 # Load environment
 load_dotenv()
 
@@ -90,11 +93,31 @@ BOROUGH_NAMES = {
     '5': 'Staten Island',
 }
 
-# Party type mapping
+# Party type SLOT labels. The parties dataset only carries the slot number
+# (1/2/3); what a slot MEANS depends on the document type, per the ACRIS
+# Document Control Codes (NYC Open Data 7isb-wh4c):
+#   DEED:  1 = GRANTOR/SELLER,       2 = GRANTEE/BUYER
+#   MTGE:  1 = MORTGAGOR/BORROWER,   2 = MORTGAGEE/LENDER
+#   ASST:  1 = ASSIGNOR/OLD LENDER,  2 = ASSIGNEE/NEW LENDER
+#   CERT:  1 = "PARTY 1",            2 = "PARTY 2"   (no buyer/seller meaning)
+# Slot 1 is therefore the SELLER side and slot 2 the BUYER side - never the
+# reverse. This map is for describing a bare slot (CLI banner / --help); to
+# label a party on a known document use party_label(), which resolves the real
+# role from the control codes.
 PARTY_TYPES = {
-    '1': 'Buyer/Grantee/Lender',
-    '2': 'Seller/Grantor/Borrower',
+    '1': 'Party 1 (Grantor/Seller, Mortgagor/Borrower, Assignor)',
+    '2': 'Party 2 (Grantee/Buyer, Mortgagee/Lender, Assignee)',
     '3': 'Other (Title Co/Attorney/etc)',
+}
+
+# Display labels for the roles socrata_client.party_role() resolves.
+ROLE_LABELS = {
+    'seller': 'Seller/Grantor',
+    'buyer': 'Buyer/Grantee',
+    'borrower': 'Borrower/Mortgagor',
+    'lender': 'Lender/Mortgagee',
+    'assignor': 'Assignor',
+    'assignee': 'Assignee',
 }
 
 # Common document types
@@ -467,6 +490,34 @@ def format_address(prop: dict) -> str:
     return address.strip() or 'Unknown'
 
 
+def party_label(doc_type: str, party_type: str, roles: Optional[dict] = None) -> str:
+    """
+    Human label for a party row, e.g. 'Seller/Grantor' or 'Lender/Mortgagee'.
+
+    The role is resolved per document type from the ACRIS Document Control
+    Codes (a DEED's party 1 is the seller, a MTGE's party 1 is the borrower).
+    When the doc type is unknown (--no-details) or defines no real role for the
+    slot (a CERT's parties are literally "PARTY 1"/"PARTY 2"), this returns a
+    neutral 'Party N' instead of guessing buyer/seller.
+    """
+    slot = str(party_type or '').strip()
+    role = party_role(doc_type, slot, roles) if doc_type else 'other'
+    if role in ROLE_LABELS:
+        return ROLE_LABELS[role]
+    return {'1': 'Party 1', '2': 'Party 2'}.get(slot) or PARTY_TYPES.get(slot, slot)
+
+
+def parties_by_role(doc_type: str, parties: List[dict], roles: Optional[dict] = None) -> Dict[str, str]:
+    """First party name found for each role (buyer/seller/borrower/...) on a document."""
+    by_role: Dict[str, str] = {}
+    for p in parties:
+        role = party_role(doc_type, p.get('party_type'), roles)
+        name = p.get('name') or ''
+        if role != 'other' and name:
+            by_role.setdefault(role, name)
+    return by_role
+
+
 def build_results(
     party_records: List[dict],
     property_map: Dict[str, dict],
@@ -475,13 +526,19 @@ def build_results(
     borough: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    roles: Optional[dict] = None,
 ) -> List[dict]:
     """
     Combine party, property, and transaction data into final results.
     Apply any additional filters including date range.
+
+    `roles` is the per-doc-type party role map from load_party_roles(); it is
+    loaded (cached, with an offline fallback) when not supplied.
     """
     results = []
-    
+    if roles is None:
+        roles = load_party_roles()
+
     # Normalize borough filter
     borough_code = None
     if borough:
@@ -529,7 +586,7 @@ def build_results(
             
             # Party info
             'party_name': party.get('name', ''),
-            'party_type': PARTY_TYPES.get(party.get('party_type', ''), party.get('party_type', '')),
+            'party_type': party_label(txn.get('doc_type', ''), party.get('party_type', ''), roles),
             'party_address': party.get('address_1', ''),
             'party_city': party.get('city', ''),
             'party_state': party.get('state', ''),
@@ -570,13 +627,23 @@ def find_linked_closings(
     property_map: Dict[str, dict],
     transaction_map: Dict[str, dict],
     window_days: int = 30,
+    roles: Optional[dict] = None,
 ) -> List[dict]:
     """
     For CERT filings, find the actual DEED/MTGE closings on the same property.
-    
+
     Title companies file CERTs around the time of closing. This function
     searches for DEED/MTGE documents on the same BBL within the time window.
+
+    Buyer/seller are read per document type from the ACRIS control codes: they
+    are only populated for deeds (party 1 = seller, party 2 = buyer). Other
+    document types (MTGE, ASST) have no buyer/seller, so their two main parties
+    are reported under party_1/party_2 with their real role (borrower/lender,
+    assignor/assignee) instead.
     """
+    if roles is None:
+        roles = load_party_roles()
+
     # Filter to only CERT records that have BBL info
     cert_bbls = {}
     for r in cert_results:
@@ -668,9 +735,18 @@ def find_linked_closings(
                 }
                 parties = api_request(ACRIS_PARTIES_API, parties_params)
                 
-                buyer = next((p.get('name', '') for p in parties if p.get('party_type') == '1'), '')
-                seller = next((p.get('name', '') for p in parties if p.get('party_type') == '2'), '')
-                
+                # Roles come from the doc type's control codes, not hardcoded
+                # slot numbers: DEED party 1 = SELLER/grantor, party 2 = BUYER/grantee.
+                doc_type = txn.get('doc_type', '')
+                by_role = parties_by_role(doc_type, parties, roles)
+                buyer = by_role.get('buyer', '')
+                seller = by_role.get('seller', '')
+                slot_names = {}
+                for p in parties:
+                    slot = str(p.get('party_type') or '').strip()
+                    if slot in ('1', '2') and p.get('name'):
+                        slot_names.setdefault(slot, p['name'])
+
                 # Get address from legals
                 address_info = next((r for r in legal_results if r.get('document_id') == txn.get('document_id')), {})
                 address = format_address({
@@ -694,6 +770,10 @@ def find_linked_closings(
                     'crfn': txn.get('crfn', ''),
                     'buyer': buyer,
                     'seller': seller,
+                    'party_1': slot_names.get('1', ''),
+                    'party_1_role': party_label(doc_type, '1', roles),
+                    'party_2': slot_names.get('2', ''),
+                    'party_2_role': party_label(doc_type, '2', roles),
                     'title_company': cert_info_list[0]['party_name'],
                     'cert_date': cert_info_list[0]['cert_date'],
                     'linked_from': 'CERT',
@@ -759,10 +839,16 @@ def print_summary(results: List[dict], search_terms: List[str], linked_mode: boo
     for r in results[:5]:
         if linked_mode:
             amount = f"${int(float(r['doc_amount'])):,}" if r.get('doc_amount') else '$0'
-            buyer = r.get('buyer', '')[:30] or 'N/A'
-            seller = r.get('seller', '')[:30] or 'N/A'
             print(f"   • {r['address']} | {r['doc_type']} | {r['doc_date']} | {amount}")
-            print(f"     Buyer: {buyer} | Seller: {seller}")
+            if r.get('buyer') or r.get('seller'):
+                buyer = r.get('buyer', '')[:30] or 'N/A'
+                seller = r.get('seller', '')[:30] or 'N/A'
+                print(f"     Buyer: {buyer} | Seller: {seller}")
+            else:
+                # Not a deed (e.g. MTGE/ASST): show the parties under their real roles.
+                p1 = r.get('party_1', '')[:30] or 'N/A'
+                p2 = r.get('party_2', '')[:30] or 'N/A'
+                print(f"     {r.get('party_1_role', 'Party 1')}: {p1} | {r.get('party_2_role', 'Party 2')}: {p2}")
         else:
             print(f"   • {r['address']} | {r['doc_type']} | {r['doc_date']} | ${r['doc_amount'] or '0'}")
 
@@ -844,7 +930,10 @@ Link Closings (find actual DEED/MTGE for CERT filings):
         '--party-type', '-p',
         type=str,
         choices=['1', '2', '3'],
-        help='Filter by party type: 1=Buyer/Lender, 2=Seller/Borrower, 3=Other'
+        help=('Filter by party slot (its role depends on the document type): '
+              '1=Grantor/Seller, Mortgagor/Borrower or Assignor; '
+              '2=Grantee/Buyer, Mortgagee/Lender or Assignee; 3=Other. '
+              'E.g. buyers on deeds: -p 2 -d DEED')
     )
     
     parser.add_argument(
