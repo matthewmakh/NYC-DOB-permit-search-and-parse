@@ -90,10 +90,11 @@ BOROUGH_NAMES = {
     '5': 'Staten Island',
 }
 
-# Party type mapping
+# Party type mapping (ACRIS Parties: party1 = grantor/seller/borrower, party2 =
+# grantee/buyer/lender; verified against live DEED and MTGE documents)
 PARTY_TYPES = {
-    '1': 'Buyer/Grantee/Lender',
-    '2': 'Seller/Grantor/Borrower',
+    '1': 'Seller/Grantor/Borrower',
+    '2': 'Buyer/Grantee/Lender',
     '3': 'Other (Title Co/Attorney/etc)',
 }
 
@@ -173,24 +174,26 @@ def generate_fuzzy_variations(term: str, max_variations: int = 20) -> List[str]:
     - Plurals (EXCALIBUR vs EXCALIBURS)
     """
     term = term.upper().strip()
-    variations = {term}
+    # Ordered (dict keys), exact term first: build_fuzzy_where_clause only searches the
+    # first few variations, and set ordering would drop the exact term at random.
+    variations: Dict[str, None] = {term: None}
     
     # Normalize the term (strip suffixes)
     base_term = normalize_company_name(term)
-    variations.add(base_term)
+    variations.setdefault(base_term)
     
     # Add plural/singular variations
     if base_term.endswith('S'):
-        variations.add(base_term[:-1])  # Remove S
+        variations.setdefault(base_term[:-1])  # Remove S
     else:
-        variations.add(base_term + 'S')  # Add S
+        variations.setdefault(base_term + 'S')  # Add S
     
     # Generate letter substitution variations
     for old, new in FUZZY_SUBSTITUTIONS:
         if old in base_term:
             # Only generate a few substitution variations to avoid explosion
             variation = base_term.replace(old, new, 1)
-            variations.add(variation)
+            variations.setdefault(variation)
             if len(variations) >= max_variations:
                 break
     
@@ -198,7 +201,7 @@ def generate_fuzzy_variations(term: str, max_variations: int = 20) -> List[str]:
     for i, char in enumerate(base_term):
         if char.isalpha():
             doubled = base_term[:i] + char + base_term[i:]
-            variations.add(doubled)
+            variations.setdefault(doubled)
             if len(variations) >= max_variations:
                 break
     
@@ -207,33 +210,42 @@ def generate_fuzzy_variations(term: str, max_variations: int = 20) -> List[str]:
         if char.isalpha() and i > 0:
             missing = base_term[:i] + base_term[i+1:]
             if len(missing) >= 3:  # Don't make too short
-                variations.add(missing)
+                variations.setdefault(missing)
             if len(variations) >= max_variations:
                 break
     
     return list(variations)[:max_variations]
 
 
+def soql_escape(value: str) -> str:
+    """Escape a value for use inside a single-quoted SoQL string literal.
+
+    A bare apostrophe (O'BRIEN) makes Socrata reject the whole query with a 400,
+    which the CLI would otherwise report as "no matching party records".
+    """
+    return value.replace("'", "''")
+
+
 def build_fuzzy_where_clause(term: str, fuzzy: bool = False) -> str:
     """
     Build a WHERE clause for searching party names.
-    
+
     ACRIS data is typically uppercase, so we use upper() for case-insensitive matching.
     """
     term_upper = term.upper().strip()
-    
+
     if not fuzzy:
         # Simple case-insensitive search using upper()
-        return f"upper(name) LIKE '%{term_upper}%'"
-    
+        return f"upper(name) LIKE '%{soql_escape(term_upper)}%'"
+
     # Generate spelling variations for fuzzy matching
     variations = generate_fuzzy_variations(term)
-    
+
     # Limit variations to avoid slow queries
     limited_variations = [v.upper() for v in variations[:8]]
-    
+
     # Build OR clause
-    like_clauses = [f"upper(name) LIKE '%{v}%'" for v in limited_variations]
+    like_clauses = [f"upper(name) LIKE '%{soql_escape(v)}%'" for v in limited_variations]
     
     return f"({' OR '.join(like_clauses)})"
 
@@ -572,12 +584,17 @@ def find_linked_closings(
     property_map: Dict[str, dict],
     transaction_map: Dict[str, dict],
     window_days: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> List[dict]:
     """
     For CERT filings, find the actual DEED/MTGE closings on the same property.
-    
+
     Title companies file CERTs around the time of closing. This function
     searches for DEED/MTGE documents on the same BBL within the time window.
+
+    start_date / end_date (YYYY-MM-DD) restrict which CERT filings are considered,
+    matching the date range of the regular search.
     """
     # Filter to only CERT records that have BBL info
     cert_bbls = {}
@@ -593,7 +610,11 @@ def find_linked_closings(
         recorded_date = txn.get('recorded_date', '') or txn.get('doc_date', '')
         if not recorded_date:
             continue
-        
+        if start_date and recorded_date < start_date:
+            continue
+        if end_date and recorded_date > end_date:
+            continue
+
         if bbl not in cert_bbls:
             cert_bbls[bbl] = []
         cert_bbls[bbl].append({
@@ -670,8 +691,9 @@ def find_linked_closings(
                 }
                 parties = api_request(ACRIS_PARTIES_API, parties_params)
                 
-                buyer = next((p.get('name', '') for p in parties if p.get('party_type') == '1'), '')
-                seller = next((p.get('name', '') for p in parties if p.get('party_type') == '2'), '')
+                # party_type 1 = grantor/seller, 2 = grantee/buyer (see PARTY_TYPES)
+                buyer = next((p.get('name', '') for p in parties if p.get('party_type') == '2'), '')
+                seller = next((p.get('name', '') for p in parties if p.get('party_type') == '1'), '')
                 
                 # Get address from legals
                 address_info = next((r for r in legal_results if r.get('document_id') == txn.get('document_id')), {})
@@ -710,6 +732,14 @@ def find_linked_closings(
     
     print(f"   ✅ Found {len(linked_results):,} linked closings")
     return linked_results
+
+
+def format_amount(value) -> str:
+    """Format an ACRIS document amount (a string in the API) as $1,234,567."""
+    try:
+        return f"${int(float(value)):,}"
+    except (TypeError, ValueError):
+        return '$0'
 
 
 def print_summary(results: List[dict], search_terms: List[str], linked_mode: bool = False):
@@ -760,14 +790,14 @@ def print_summary(results: List[dict], search_terms: List[str], linked_mode: boo
     # Sample records
     print("\n📋 Sample Records (first 5):")
     for r in results[:5]:
+        amount = format_amount(r.get('doc_amount'))
         if linked_mode:
-            amount = f"${int(float(r['doc_amount'])):,}" if r.get('doc_amount') else '$0'
             buyer = r.get('buyer', '')[:30] or 'N/A'
             seller = r.get('seller', '')[:30] or 'N/A'
             print(f"   • {r['address']} | {r['doc_type']} | {r['doc_date']} | {amount}")
             print(f"     Buyer: {buyer} | Seller: {seller}")
         else:
-            print(f"   • {r['address']} | {r['doc_type']} | {r['doc_date']} | ${r['doc_amount'] or '0'}")
+            print(f"   • {r['address']} | {r['doc_type']} | {r['doc_date']} | {amount}")
 
 
 # =============================================================================
@@ -787,15 +817,15 @@ Examples:
   
 Fuzzy Matching:
   python search_acris_parties.py "EXCALIBUR" --fuzzy
-    # Catches: EXCELIBUR, EXCALIBUR LLC, EXCALIBURS, EXCALABER, etc.  python search_acris_parties.py "EXCALIBUR" --fuzzy --show-variations
+    # Catches: EXCELIBUR, EXCALIBUR LLC, EXCALIBURS, EXCALABER, etc.
+  python search_acris_parties.py "EXCALIBUR" --fuzzy --show-variations
     # Shows all spelling variations being searched
 
 Link Closings (find actual DEED/MTGE for CERT filings):
   python search_acris_parties.py "FIDELITY NATIONAL TITLE" --link-closings
     # Finds DEED/MTGE transactions on same property where title company filed a CERT
   python search_acris_parties.py "FIDELITY" --link-closings --link-window 60
-    # Searches 60 days before/after CERT for linked closings  python search_acris_parties.py "EXCALIBUR" --fuzzy --show-variations
-    # Shows all spelling variations being searched
+    # Searches 60 days before/after CERT for linked closings
         """
     )
     
@@ -847,7 +877,7 @@ Link Closings (find actual DEED/MTGE for CERT filings):
         '--party-type', '-p',
         type=str,
         choices=['1', '2', '3'],
-        help='Filter by party type: 1=Buyer/Lender, 2=Seller/Borrower, 3=Other'
+        help='Filter by party type: 1=Seller/Grantor/Borrower, 2=Buyer/Grantee/Lender, 3=Other'
     )
     
     parser.add_argument(
@@ -966,6 +996,8 @@ Link Closings (find actual DEED/MTGE for CERT filings):
             property_map=property_map,
             transaction_map=transaction_map,
             window_days=args.link_window,
+            start_date=start_date,
+            end_date=end_date,
         )
     
     # Step 5: Output results
@@ -973,6 +1005,10 @@ Link Closings (find actual DEED/MTGE for CERT filings):
         print_summary(linked_results, args.search_terms, linked_mode=True)
         final_results = linked_results
     else:
+        if args.link_closings and args.no_details:
+            print("\n⚠️ --link-closings needs property/transaction details; ignored because of --no-details")
+        elif args.link_closings:
+            print("\nℹ️ No linked closings found; showing the matching party records instead")
         print_summary(results, args.search_terms, linked_mode=False)
         final_results = results
     
