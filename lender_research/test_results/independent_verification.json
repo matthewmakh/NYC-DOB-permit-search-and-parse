@@ -1,0 +1,246 @@
+{
+ "evidence": [
+  {
+   "lender": "Plaza Home Mortgage",
+   "claimed_product": "dscr_rental",
+   "url": "https://news.plazahomemortgage.com/newsupdates/dscr-investor-solutions",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "News post 'Plaza's DSCR Investor Solutions program is now available!' - DSCR for investors 'based on their rental property income' (wholesale channel)."
+  },
+  {
+   "lender": "Newfi Wholesale (Nexera Holding)",
+   "claimed_product": "dscr_rental",
+   "url": "https://newfi.com/dscr-loans/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Page is newfi.com (footer: 'Nexera Holding LLC dba Newfi Lending', NMLS 1231327), the retail site, not newfiwholesale.com; DSCR clearly offered. Footer also says 'This website is not approved for use in the state of New York.'"
+  },
+  {
+   "lender": "Stratton Equities",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://www.strattonequities.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Homepage paragraph lists 'Fix and Flip Loans, Bridge Loans' and 'Commercial Bridge Loans'; nav has Fix and Flip and Bridge Loan pages."
+  },
+  {
+   "lender": "Axos Bank",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.axosbank.com/partners/wholesale-correspondent-portfolio-lending/programs-and-products/dscr",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Wholesale/correspondent 'DSCR Loan Program ... Help investor clients qualify' loans from $150k to $3mm (meta says over $30mm)."
+  },
+  {
+   "lender": "Bayport Funding",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.bayportfunding.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is a product-grid heading (DSCR 30 Year Fixed, SFR 1-4 units). Confirmed by https://bayportfunding.com/dscr/ : 'DSCR Loan 30-Year Fixed Rate Program for Rental Property Investors'."
+  },
+  {
+   "lender": "Truss Financial Group",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://trussfinancialgroup.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is only a nav-menu blurb under 'Bridge Loans' (weak evidence). Site has https://trussfinancialgroup.com/fix-flip-loans (H1 'Fix & Flip Loans') and https://trussfinancialgroup.com/bridge-loans (H1 'Bridge Loans'); body content JS-rendered. Truss is mainly a consumer/non-QM originator."
+  },
+  {
+   "lender": "Rehab Financial Group",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://rehabfinancial.com/how-it-works/who-does-rfg-lend-to",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Who-does-RFG-lend-to page states Fix-to-Flip and Fix-to-Rent loans for residential investment properties."
+  },
+  {
+   "lender": "Anchor Loans",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://www.anchorloans.com/solutions-for/renovators",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is a value in a terms table ('Terms 12 to 18 months'), not probative alone; page 'Solutions for Renovators ... buy, renovate, and sell properties', SFR 1-4 units, LTC up to 85%, max $20M."
+  },
+  {
+   "lender": "Spring Garden Lending",
+   "claimed_product": "ground_up_construction",
+   "url": "https://springgardencapital.com/spring-garden-lending",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "'Ground-up' never stated literally. Quote is a product name (construction-to-hold for rental housing). https://springgardencapital.com/loan-products/acquisition-construction/ : 'Acquisition / Construction (for sale housing) Single family homes, town home, and condo developments ... 85% LTC ... In-house construction mgmt team'. New York Metro office 58 S Service Rd, Melville NY."
+  },
+  {
+   "lender": "Deephaven Mortgage",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.deephavenmortgage.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Wholesale/correspondent 'DSCR Cash Flow loan' for originators serving investors. Site footer: 'This site is not authorized by the New York State Department of Financial Services' (site-level solicitation disclaimer)."
+  },
+  {
+   "lender": "Salman Capital Funding",
+   "claimed_product": "dscr_rental",
+   "url": "https://salmancapitalfunding.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote sits under '1-4 Units DSCR Rental Loans' heading; also 5-10 unit DSCR loans."
+  },
+  {
+   "lender": "ArchWest Capital",
+   "claimed_product": "ground_up_construction",
+   "url": "https://www.archwestcapital.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote under 'Ground Up Construction Loans' tab; recently funded ground-up deals listed (e.g. Melville NY)."
+  },
+  {
+   "lender": "Malve Capital",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://malvecapital.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Rendered text 'Acquisition, Refinance, Fix and Flip, and Ground Up Construction' (each term is a link; no trailing period) under 'Loan Purpose'; maturity 12-24 months. Automated text match missed it only because of link markup."
+  },
+  {
+   "lender": "Emporium TPO",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.emporiumtpo.com/products-and-programs/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Wholesale (broker-only) DSCR program: 'DSCR as low as .80 ... 700 FICO minimum for DSCR under 1.0'."
+  },
+  {
+   "lender": "Kiavi",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.kiavi.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "'DSCR / Rental Loans' section. Footer: 'All DSCR and Rental Loans are originated and funded by Figure Lending LLC dba Figure effective 9/1/2026' - Kiavi-branded DSCR loans after that date are Figure's."
+  },
+  {
+   "lender": "Arixa Capital",
+   "claimed_product": "ground_up_construction",
+   "url": "https://www.arixacapital.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Homepage says only 'Construction'. Ground-up confirmed at https://www.arixacapital.com/loan-programs : 'from one-off rehabs and ground-up builds to small subdivisions and urban infill developments'."
+  },
+  {
+   "lender": "Figure Lending (Kiavi DSCR from 2026-09; also consumer HELOCs)",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.kiavi.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "kiavi.com footer disclaimer; Figure Lending LLC dba Figure, 5200 77 Center Drive, Suite 400, Charlotte NC 28217, NMLS 1717824."
+  },
+  {
+   "lender": "Crosby Lending",
+   "claimed_product": "rtl_fix_flip_bridge",
+   "url": "https://crosbylending.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote under 'Fix & Flip / Rehab Loans' card; also 'Residential Investment Bridge Loans' and ground-up construction cards."
+  },
+  {
+   "lender": "Lendvent",
+   "claimed_product": "dscr_rental",
+   "url": "https://lendvent.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is only a nav/quick-link label (weak). https://lendvent.com/lending-programs/ shows 'Stabilized Rental Loan' columns with 'Min DSCR ... 1.00x' and '30-Year Term'. Office: 1160 Kane Concourse, Suite 305, Bal Harbour FL."
+  },
+  {
+   "lender": "CV3 Financial",
+   "claimed_product": "dscr_rental",
+   "url": "https://cv3financial.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Hero: 'premier lender for bridge, rehab or fix-and-flip properties, rental/DSCR and ground up construction loans'."
+  },
+  {
+   "lender": "Mega Capital Funding",
+   "claimed_product": "dscr_rental",
+   "url": "https://mcfunding.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is a webinar blurb (weak), but product grid shows 'DSCR Up to 80% LTV 660 Min. FICO 0.75 Min.Ratio'. Wholesale lender."
+  },
+  {
+   "lender": "Cake Mortgage",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.caketpo.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Wholesale non-QM lender; DSCR is a listed loan category."
+  },
+  {
+   "lender": "CIVIC Financial Services (Roc360)",
+   "claimed_product": "dscr_rental",
+   "url": "https://www.civicfs.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is a generic tagline under the 'Rental Loans' card; homepage also shows 'DSCR rates starting as low as 6.56%' and nav lists Rental Loan / Rental Portfolio Loan."
+  },
+  {
+   "lender": "Hakimian Capital",
+   "claimed_product": "commercial_bridge",
+   "url": "https://www.hakimiancapital.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "'Commercial Real Estate Bridge Loans' $2M-$50M; footer head office 825 Northern Boulevard, 1st Floor, Great Neck, NY 11021."
+  },
+  {
+   "lender": "Emerald Creek Capital",
+   "claimed_product": "commercial_bridge",
+   "url": "https://emeraldcreekcapital.com/",
+   "quote_found": "verbatim",
+   "product_supported": true,
+   "note": "Quote is headline plus parameter labels/values joined in page order (not one sentence). Collateral: multifamily, warehouse, retail, industrial, self storage. Bare-domain fetch failed (HTTP/2 error / empty reply); fetched via https://www.emeraldcreekcapital.com/ redirect."
+  }
+ ],
+ "addresses": [
+  {
+   "lender": "IceCap Group",
+   "address": "31 West 34th Street, New York, NY 10001",
+   "address_confirmed": true,
+   "url": "https://icecapgroup.com/wp-content/uploads/2025/08/Terms-of-service-Aug-3-2020.pdf",
+   "quote": "a company duly organized and validly existing, located at 31 W 34th St, Unit 1012, New York, New York 10001.",
+   "note": "FORMER address: in IceCap's Terms of Service PDF (linked from site footer, 'Last Updated: 08/03/2020'), entity 'IceCap Group, LLC'; repeated in copyright-agent and violations sections. Current footer on home/contact/about: 'Ice Lender Holdings LLC (\"IceCap Group\")/NMLS ID: 2109185. 70 West 36th Street, 13th FL, New York, NY 10018'."
+  },
+  {
+   "lender": "Meadowbrook Financial Mortgage Bankers",
+   "address": "110 Stewart Ave, Hicksville, NY 11801",
+   "address_confirmed": true,
+   "url": "https://mfmbankers.com/contact-us/",
+   "quote": "Location: 110 Stewart Ave., Hicksville, NY 11801 | Branch NMLS #177308",
+   "note": "CURRENT HQ. https://mfmbankers.com/branches/ : 'Corporate Headquarters Long Island, New York Location: 110 Stewart Ave., Hicksville, NY 11801'; same in footer/legal line. The previously confirmed '1600 Stewart Avenue, Westbury' does NOT appear on the home, contact, branches or legal-state-licensing pages."
+  },
+  {
+   "lender": "Accolend",
+   "address": "310 Cedar Ln, Teaneck, NJ 07666",
+   "address_confirmed": true,
+   "url": "https://accolend.com/blog",
+   "quote": "310 Cedar Lane, Suite 3A, Teaneck, NJ 07666",
+   "note": "Appears only in the footer of the blog page, so most likely a FORMER address. All other 37 sitemap pages plus contact/about/privacy/terms give 210 Route 4 East, Suite 103, Paramus, NJ 07652 (terms.html: 'Our office is located at 210 Route 4 East, Suite 103, Paramus, NJ 07652')."
+  },
+  {
+   "lender": "American Financial Network / Orion Lending",
+   "address": "3070 Bristol St, Suite 200, Costa Mesa, CA 92626",
+   "address_confirmed": true,
+   "url": "https://www.orionlending.com/privacy-policy",
+   "quote": "American Financial Network, Inc. DBA: Orion Lending 3070 Bristol St. Suite 200 Costa Mesa, CA 92626",
+   "note": "An Orion Lending address (orionlending.com footer: 'Orion Lending is a registered DBA of American Financial Network, Inc. NMLS ID: 237341'). Not on afncorp.com (home/about/licensing/license/locations/privacy), whose principal licensed office is '10 Pointe Drive, Suite 330, Brea, CA 92821'. Orion pages also say the site is not authorized by NYS DFS for NY solicitation."
+  },
+  {
+   "lender": "Stormfield Capital",
+   "address": "505 Northern Blvd, Great Neck, NY 11021",
+   "address_confirmed": false,
+   "url": "https://stormfieldcapital.com/contact/",
+   "quote": "200 Pequot Avenue Southport, CT 06890",
+   "note": "Not found. Curl got 403, so checked via WebFetch: homepage, /contact/, /about/, /team/, /privacy-policy/ show only 200 Pequot Avenue, Southport, CT 06890; About FAQ says 'headquartered in Southport, Connecticut'. No Great Neck, Northern Blvd or NY office anywhere. The previously confirmed 'Greenwich, CT' is NOT on the current site either: 'Greenwich' appears only as 'Greenwich Associates', a former employer in a bio. Wayback Machine unreachable, so former site versions unchecked; the Great Neck mortgage may involve a different entity, or an agent/servicer address."
+  }
+ ]
+}

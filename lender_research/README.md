@@ -60,22 +60,39 @@ Thresholds were written into `tag_and_test.py` before the first run. Full output
 | Test | Result |
 |---|---|
 | **E1** name-match precision: ≥98% of matched rows carry the lender's known ZIP | **FAIL, 95.1%** |
-| **E1b** same check after a rule-based review of every off-ZIP row, counting every unresolved row as a false match | **FAIL, 97.4%** (344 unresolved rows) |
+| **E1b** same check after a rule-based review of every off-ZIP row, counting every unresolved row as a false match | **PASS, 99.2%** (102 unresolved rows of 13,045). It was 97.4%, a fail, before the independent address check below. |
 | **E2** loans from pure investor lenders go to entity borrowers (≥85%; citywide baseline 35.5%) | **PASS, 97.1%** |
 | **E3** RTL loans paid off within 24 months at ≥2× the DSCR rate (2021-07..2023-06 cohort) | **PASS: RTL 29% vs DSCR 2%** (DSCR-proxy 5%) |
 | **E4** RTL loans more often recorded with a purchase deed on the same lot within 5 days | **PASS: RTL 56% vs DSCR 39%** |
 
-**About E1.** None of the off-ZIP rows reviewed so far is a different company with the same name. The breakdown:
+**About E1.** The raw ZIP check fails because each lender's ZIP list was incomplete, not because names matched the wrong company. No off-ZIP row reviewed turned out to be a different company with the same name. The breakdown of the 636 off-ZIP rows after the independent address check:
 - **Same street, mistyped ZIP:** 197 rows.
 - **Shared processing addresses:** 50 rows (an address used by 3+ unrelated lenders, e.g. First American's document centre in Idaho Falls).
-- **Alternate addresses confirmed on the lender's own site:** 45 rows.
+- **Alternate addresses confirmed on the lender's own site:** 287 rows.
+- **Unresolved:** 102 rows.
 
-The unresolved rows are mostly the same company names at an unconfirmed second address:
-- IceCap's *Ice Lender Holdings LLC* at 31 W 34th St: 177 rows.
-- Meadowbrook in Hicksville: 34 rows.
-- Accolend in Teaneck: 25 rows.
+The address check confirmed these alternates:
+- IceCap's former office at 31 W 34th St, from its Terms of Service PDF.
+- Meadowbrook's current headquarters, 110 Stewart Ave, Hicksville.
+- Accolend's Teaneck office, from its blog footer.
+- Orion Lending's Costa Mesa address, from its privacy policy.
 
-An independent check of those addresses is in progress. `test_results/unresolved_matches.csv` lists every unresolved row.
+The remaining unresolved rows are 2–5 rows each, mostly the same company at an unconfirmed office, or another party's address keyed into the lender fields. `test_results/unresolved_matches.csv` lists them all.
+
+## Independent verification
+
+A separate agent that had not seen the research re-fetched a **random sample of 25 product claims** (seeded, `test_results/independent_verification_sample.json`) and tried to disprove them:
+- **Quotes:** 25 of 25 were found verbatim on the cited page.
+- **Products:** 25 of 25 were supported, 0 contradicted.
+- **Weak quotes:** six quotes don't prove the product alone (a menu label, a terms-table value, a tagline). For those the agent confirmed the product from another page on the same site.
+
+Results: `test_results/independent_verification.json`.
+
+The same check found these problems:
+- **Stormfield Capital** is headquartered in Southport, CT (ZIP 06890, which matches the recorded address), not Greenwich, as an earlier brief said. Its 2 recorded rows at a Great Neck address are not confirmed and stay unresolved.
+- **Newfi's** DSCR evidence comes from newfi.com, whose footer says the site is not approved for use in New York. The program exists, but Newfi has no matched NYC loans.
+- **Deephaven's** and **Orion Lending's** sites say they are not authorized by NY DFS for New York solicitation. Business-purpose loans still close in NYC: Deephaven has 42 in 24 months. Keep this in mind before using the list for outreach.
+- **Kiavi** DSCR/rental mortgages recorded after 2026-09-01 name *Figure Lending LLC*. Figure also makes consumer HELOCs, so it is in `CONSUMER+DSCR` and only entity-borrower loans are tagged.
 
 **Loan behaviour by group.** "Assigned" includes both refinances (NY refinances usually assign and consolidate the old mortgage rather than satisfy it) and loan sales into securitisations.
 

@@ -15,15 +15,11 @@ Tagged by the list: 12,736 (17.2%)
 E1 name-match precision (ZIP check)
   12,409/13,045 matched rows carry a known lender ZIP or MERS ZIP = 95.1%  -> FAIL (threshold 98%)
 E1b off-ZIP rows classified by rule:
-      344  unresolved
+      287  alternate address verified on lender's own site
       197  same street as confirmed rows (ZIP typo)
+      102  unresolved
        50  shared processing address (3+ unrelated lenders)
-       45  alternate address verified on lender's own site
-  precision counting every unresolved row as a false match: 97.4% -> FAIL (threshold 98%)
-    unresolved: x161  IceCap Group (Ice Lender Holdings) ICE LENDER HOLDINGS LLC                  10001 31 WEST
-    unresolved: x34   Meadowbrook Financial Mortgage Ban MEADOWBROOK FINANCIAL MORTGAGE BANKERS C 11801 110 STEWART
-    unresolved: x25   Accolend                           ACCOLEND LLC                             07666 310 CEDAR
-    unresolved: x16   IceCap Group (Ice Lender Holdings) ICE LENDER HOLDINGS LLC                  10001 31 W
+  precision counting every unresolved row as a false match: 99.2% -> PASS (threshold 98%)
     unresolved: x5    Emporium TPO                       EMPORIUM TPO LLC ISAOA ATIMA             48007 P O BOX 7050
     unresolved: x4    Emigrant Funding                   EMIGRANT FUNDING CORPORATION             10523 7 WESTCHESTER
     unresolved: x3    STG Mortgage                       STG MORTGAGE INC                         92806 2401 EAST
@@ -32,6 +28,10 @@ E1b off-ZIP rows classified by rule:
     unresolved: x2    States Capital / We Lend           STATES CAPITAL LLC                       11765 314 MILL
     unresolved: x2    Roc360 platform (Roc Capital, Loan LOAN FUNDER LLC SERIES 133645            21704 4527 METROPOLITAN
     unresolved: x2    Roc360 platform (Roc Capital, Loan LOAN FUNDER LLC SERIES 105897            11379 66 08
+    unresolved: x2    Foundation Mortgage                FOUNDATION MORTGAGE CORPORATION          32207 1300 RIVER
+    unresolved: x2    Express Capital Financing (Express EXPRESS CAPITAL HOLDINGS LLC             08830 33 WOOD
+    unresolved: x2    Arc Home                           ARC HOME LLC                             15275 111 TECHNOLOGY
+    unresolved: x2    American Financial Network / Orion AMERICAN FINANCIAL NETWORK INC DBA ORION 92626 3070 BRISTON
 
 Loan-level tags (24 months):
    5,854  consumer lender, individual borrower (not tagged)
