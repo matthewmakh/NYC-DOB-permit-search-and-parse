@@ -1,4 +1,6 @@
 # Local ACRIS caches built by build_cache.py (tens of MB each)
 *.db
+# The repo root ignores *.csv; the lists and test outputs here are the deliverable
+!*.csv
 # Full lender ranking includes private individuals; regenerate locally with lender_universe.py
 nyc_lenders.csv

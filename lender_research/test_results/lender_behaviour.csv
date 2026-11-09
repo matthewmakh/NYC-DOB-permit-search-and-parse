@@ -1,0 +1,128 @@
+lender,group,loans_24mo,entity_share,purchase_money_share,cohort_n,paid_off_24mo,paid_off_ever,assigned,consolidated
+Angel Oak Mortgage Solutions,CONSUMER+DSCR,0,,,0,,,,
+Deephaven Mortgage,CONSUMER+DSCR,42,0.55,0.19,0,,,,
+Acra Lending (Citadel Servicing),CONSUMER+DSCR,115,0.57,0.27,13,0.08,0.08,0.0,0.08
+A&D Mortgage,CONSUMER+DSCR,423,0.34,0.55,357,0.06,0.16,0.07,0.05
+NQM Funding,CONSUMER+DSCR,0,,,0,,,,
+HomeXpress Mortgage,CONSUMER+DSCR,0,,,0,,,,
+Newfi Wholesale (Nexera Holding),CONSUMER+DSCR,0,,,0,,,,
+Defy Mortgage,CONSUMER+DSCR,0,,,0,,,,
+Change Lending (Change Wholesale),CONSUMER+DSCR,0,,,0,,,,
+Carrington Mortgage Services,CONSUMER+DSCR,126,0.08,0.47,135,0.02,0.04,0.05,0.26
+Champions Funding,CONSUMER+DSCR,334,0.57,0.51,0,,,,
+LoanStream (OCMBC),CONSUMER+DSCR,0,,,0,,,,
+Emporium TPO,CONSUMER+DSCR,200,0.77,0.34,3,0.0,0.0,0.0,0.33
+Arc Home,CONSUMER+DSCR,192,0.44,0.66,163,0.02,0.04,0.09,0.18
+Verus (Verus Residential Loanco),CONSUMER+DSCR,10,0.3,0.1,0,,,,
+Newrez,CONSUMER+DSCR,420,0.05,0.54,479,0.04,0.09,0.07,0.04
+Griffin Funding,CONSUMER+DSCR,2,0.0,0.0,0,,,,
+Truss Financial Group,DSCR+RTL,0,,,0,,,,
+Dominion Financial Services,DSCR+RTL,4,0.75,0.5,5,0.2,0.4,0.6,0.0
+LendSure Mortgage,DSCR+RTL,8,0.62,0.62,13,0.08,0.23,0.15,0.0
+CV3 Financial,DSCR+RTL,0,,,0,,,,
+Kind Lending,CONSUMER+DSCR,0,,,0,,,,
+Hometown Equity Mortgage (theLender),CONSUMER+DSCR,306,0.6,0.34,112,0.06,0.18,0.18,0.07
+Plaza Home Mortgage,CONSUMER+DSCR,152,0.03,0.74,187,0.04,0.07,0.1,0.04
+Velocity Commercial Capital,DSCR+RTL,215,0.86,0.27,262,0.08,0.23,0.87,0.06
+Visio Lending (Visio Financial Services / Investor Mortgage Finance),DSCR,59,0.98,0.29,27,0.04,0.11,0.59,0.0
+Kiavi,DSCR+RTL,35,1.0,0.74,11,0.73,0.73,0.09,0.09
+Figure Lending (Kiavi DSCR from 2026-09; also consumer HELOCs),CONSUMER+DSCR,98,0.0,0.0,0,,,,
+Asset Based Lending (ABL),DSCR+RTL,25,1.0,0.52,30,0.27,0.3,0.53,0.2
+Brick City Capital (Lev Cap),DSCR,0,,,6,0.17,0.33,0.67,0.33
+Lima One Capital,DSCR+RTL,3,1.0,0.67,34,0.12,0.24,0.56,0.47
+CoreVest Finance,DSCR+RTL,16,0.88,0.25,14,0.0,0.07,0.93,0.29
+RCN Capital,DSCR+RTL,8,1.0,0.5,22,0.09,0.09,0.23,0.05
+"Roc360 platform (Roc Capital, Loan Funder LLC series, lenders at 645 Madison Ave 19th Fl)",DSCR+RTL,1032,1.0,0.72,502,0.25,0.37,0.3,0.18
+Sharestates,DSCR+RTL,6,1.0,0.17,98,0.06,0.1,0.68,0.31
+LendingOne,DSCR+RTL,16,1.0,0.69,6,0.5,0.5,0.17,0.0
+Easy Street Capital,DSCR+RTL,2,1.0,0.0,0,,,,
+Axos Bank,CONSUMER+DSCR,93,0.92,0.2,98,0.02,0.15,0.13,0.17
+CIVIC Financial Services (Roc360),DSCR+RTL,0,,,0,,,,
+Northpointe Bank,CONSUMER+DSCR,6,0.0,0.83,22,0.05,0.09,0.05,0.0
+Mega Capital Funding,CONSUMER+DSCR,0,,,0,,,,
+Temple View Capital,DSCR+RTL,0,,,0,,,,
+5th Street Capital,DSCR,0,,,0,,,,
+Allied Mortgage Group,CONSUMER+DSCR,15,0.33,0.67,34,0.0,0.03,0.06,0.0
+Park Place Finance,CONSUMER+DSCR,2,1.0,0.5,4,0.25,0.5,1.0,0.0
+eLEND (American Financial Resources),CONSUMER+DSCR,0,,,1,0.0,0.0,0.0,0.0
+Lendz Financial,CONSUMER+DSCR,14,0.57,0.21,0,,,,
+Anchor Loans,DSCR+RTL,14,1.0,0.64,0,,,,
+Groundfloor,DSCR+RTL,0,,,0,,,,
+Upright (Fund That Flip),DSCR+RTL,0,,,0,,,,
+Builders Capital (Construction Loan Services II),RTL,6,1.0,0.67,1,0.0,0.0,1.0,1.0
+New Silver Lending,DSCR+RTL,4,1.0,1.0,7,0.43,0.43,1.0,0.0
+Genesis Capital,DSCR+RTL,74,1.0,0.46,22,0.23,0.36,0.32,0.5
+Toorak Capital Partners (loan buyer),DSCR+RTL,2,1.0,0.5,1,0.0,0.0,1.0,1.0
+Rehab Financial Group,DSCR+RTL,0,,,0,,,,
+Sachem Capital,RTL,3,1.0,0.0,16,0.12,0.31,0.5,0.38
+Kennedy Funding,RTL,0,,,0,,,,
+Constructive Capital (Constructive Loans / BPL Mortgage),DSCR+RTL,77,1.0,0.32,104,0.05,0.1,0.65,0.05
+Center Street Lending,RTL,2,0.5,0.0,7,0.14,0.43,0.86,1.0
+ArchWest Capital,RTL,11,1.0,0.18,0,,,,
+Noble Mortgage & Investments,CONSUMER+DSCR,0,,,0,,,,
+Express Capital Financing (Express Capital Holdings),DSCR+RTL,64,1.0,0.7,10,0.6,0.6,0.4,0.1
+Stratton Equities,DSCR+RTL,0,,,2,0.0,0.0,1.0,0.0
+Arixa Capital,RTL,0,,,0,,,,
+Churchill Real Estate (Churchill Finance),DSCR+RTL,12,1.0,0.33,4,0.25,0.25,0.5,0.0
+Ignite Funding,RTL,0,,,0,,,,
+Vaster,CONSUMER+DSCR,1,1.0,1.0,3,0.67,0.67,0.67,0.67
+Sherman Bridge,DSCR+RTL,0,,,0,,,,
+EquityMax,RTL,0,,,0,,,,
+Cogo Capital (Secured Investment Corp),DSCR+RTL,0,,,0,,,,
+Gelt Financial,RTL,0,,,6,0.0,0.0,0.0,0.0
+HouseMax Funding,DSCR+RTL,6,1.0,0.33,4,0.5,0.5,0.5,0.0
+IceCap Group (Ice Lender Holdings),DSCR+RTL,578,0.97,0.61,240,0.08,0.11,0.78,0.51
+S3 Capital,RTL,392,1.0,0.47,245,0.2,0.29,0.73,0.62
+Battalion Lending,DSCR+RTL,245,1.0,0.44,16,0.0,0.0,0.19,0.38
+Manhattan Bridge Capital,RTL,123,0.99,0.8,138,0.36,0.5,0.95,0.41
+FM Home Loans,CONSUMER+DSCR,397,0.43,0.54,545,0.03,0.09,0.12,0.08
+States Capital / We Lend,DSCR+RTL,134,1.0,0.71,36,0.58,0.67,0.33,0.22
+Washington Equity & Funding,RTL,133,1.0,0.87,231,0.58,0.68,0.79,0.19
+Bayport Funding,DSCR+RTL,125,1.0,0.55,235,0.08,0.2,0.74,0.42
+Logan Finance,CONSUMER+DSCR,222,0.59,0.55,73,0.04,0.1,0.32,0.18
+Emigrant Funding,DSCR,124,0.94,0.37,118,0.01,0.09,0.01,0.09
+BX Capital (Broad X Funding),RTL,111,1.0,0.52,92,0.01,0.05,1.0,0.77
+Cake Mortgage,CONSUMER+DSCR,138,0.66,0.32,0,,,,
+CrossCountry Mortgage,CONSUMER+DSCR,778,0.12,0.66,712,0.03,0.08,0.07,0.04
+American Financial Network / Orion Lending,CONSUMER+DSCR,222,0.29,0.61,153,0.01,0.08,0.12,0.03
+Derby Copeland Capital,COMMERCIAL_BRIDGE,165,1.0,0.62,0,,,,
+Conventus,DSCR+RTL,85,0.98,0.36,89,0.17,0.39,0.54,0.38
+Stormfield Capital,RTL,86,0.99,0.35,63,0.14,0.32,0.38,0.35
+Insula Capital Group,DSCR+RTL,11,1.0,0.45,17,0.47,0.71,0.35,0.12
+STG Mortgage,CONSUMER+DSCR,162,0.44,0.58,0,,,,
+Wisdom Capital,RTL,71,1.0,0.76,89,0.4,0.45,0.91,0.36
+Maxim Capital Group,COMMERCIAL_BRIDGE,70,1.0,0.21,57,0.02,0.28,0.7,0.68
+BridgeCity Capital,RTL,65,1.0,0.32,30,0.0,0.0,0.87,0.8
+Clout Capital,DSCR+RTL,16,1.0,0.56,6,0.83,0.83,0.67,0.0
+Cliffco Mortgage Bankers,CONSUMER+DSCR,272,0.16,0.63,166,0.04,0.11,0.08,0.01
+Community Preservation Corp (CPC),COMMERCIAL_BRIDGE,71,0.97,0.32,133,0.0,0.12,0.33,0.43
+Foundation Mortgage,CONSUMER+DSCR,72,0.81,0.39,0,,,,
+Essencap,DSCR+RTL,55,0.98,0.47,30,0.23,0.37,0.63,0.23
+Accolend,DSCR+RTL,55,0.96,0.35,41,0.27,0.34,0.9,0.59
+United Wholesale Mortgage,CONSUMER+DSCR,1822,0.03,0.76,2029,0.02,0.06,0.06,0.05
+Arion Fund,RTL,47,1.0,0.43,52,0.02,0.06,0.81,0.75
+Hakimian Capital,COMMERCIAL_BRIDGE,41,1.0,0.73,22,0.18,0.27,0.73,0.55
+Rosewood Lending,DSCR,108,0.37,0.46,0,,,,
+Nationwide Mortgage Bankers,CONSUMER+DSCR,593,0.06,0.61,692,0.03,0.07,0.1,0.03
+Ark Mortgage,CONSUMER+DSCR,115,0.33,0.47,155,0.01,0.06,0.1,0.08
+Meadowbrook Financial Mortgage Bankers,CONSUMER+DSCR,308,0.11,0.64,480,0.03,0.08,0.1,0.03
+Lendvent,DSCR+RTL,40,0.97,0.6,28,0.36,0.43,0.79,0.5
+Emerald Creek Capital,COMMERCIAL_BRIDGE,34,0.97,0.56,39,0.15,0.26,0.74,0.62
+Flatiron Realty Capital,DSCR+RTL,30,1.0,0.27,74,0.2,0.31,0.38,0.2
+YJV Capital (Yellow Jacket Ventures),RTL,27,0.96,0.74,7,0.14,0.14,0.86,0.71
+Salman Capital Funding,DSCR+RTL,26,1.0,0.5,8,0.38,0.38,0.5,0.25
+Malve Capital,RTL,26,1.0,0.96,0,,,,
+Golden Bridge Funding,COMMERCIAL_BRIDGE,29,1.0,0.1,164,0.14,0.23,0.8,0.54
+American Heritage Lending,CONSUMER+DSCR,39,0.54,0.41,4,0.0,0.25,0.0,0.0
+Fairbridge,COMMERCIAL_BRIDGE,19,1.0,0.58,3,0.33,0.67,1.0,0.33
+Nvestor Funding,DSCR+RTL,18,1.0,0.39,3,0.33,0.33,0.0,0.0
+RBI Private Lending,DSCR+RTL,18,1.0,0.22,0,,,,
+Luxury Mortgage,CONSUMER+DSCR,62,0.26,0.63,61,0.03,0.13,0.07,0.13
+Crosby Lending,RTL,16,1.0,0.12,0,,,,
+Planet Capital (Planet Management Group),DSCR+RTL,14,1.0,0.79,15,0.4,0.47,0.33,0.33
+Unitas Funding,DSCR+RTL,14,1.0,0.57,0,,,,
+Fortress Credit,COMMERCIAL_BRIDGE,12,1.0,0.17,37,0.03,0.16,0.86,0.62
+Smart Capital,COMMERCIAL_BRIDGE,12,1.0,0.42,1,0.0,0.0,1.0,0.0
+MF1 Capital,COMMERCIAL_BRIDGE,11,1.0,0.09,17,0.0,0.0,1.0,0.29
+JG Funding,COMMERCIAL_BRIDGE,12,0.92,0.08,11,0.0,0.0,0.64,0.55
+Spring Garden Lending,RTL,10,1.0,0.1,0,,,,
