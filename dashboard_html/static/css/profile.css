@@ -291,6 +291,10 @@
 .sos-detail-row:last-child, .txn-detail-row:last-child,
 .permit-detail-row:last-child, .lic-row:last-child { border-bottom: none; }
 
+/* Footnote row inside a financial card (e.g. how investor loans are read). */
+.fin-row.fin-note { color: var(--ink-3); font-size: 12px; }
+.txn-header .badge-investor-loan { margin-left: auto; margin-right: 8px; }
+
 .info-label, .detail-label, .metric-label, .sos-label { color: var(--ink-3); }
 .info-value, .detail-value, .metric-value, .sos-value {
     font-weight: 500;

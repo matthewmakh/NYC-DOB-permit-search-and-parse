@@ -46,6 +46,8 @@ const state = {
         financingMax: null,
         smartFilter: null,
         ownerKinds: [],      // sidebar "Owner type": person / llc / lender ... (OR'd)
+        loanPrograms: [],    // sidebar "Investor loan": rtl / dscr / dscr_or_rtl / commercial_bridge (OR'd)
+        loanProgramDays: null,
         play: null
     },
     // Borough, property type, building class, units, value, kind of work,
@@ -70,8 +72,26 @@ const state = {
 const PROPERTY_LIST_SNAPSHOT_KEY = 'properties:list-navigation:v1';
 const ALLOWED_SORT_KEYS = new Set([
     'sale_date', 'value', 'sale_price', 'address', 'owner', 'permits', 'units',
-    'unused_far', 'co_date', 'recent_permits'
+    'unused_far', 'co_date', 'recent_permits', 'investor_loan_date'
 ]);
+// Investor loan program filter (tags from lender_programs.py, pipeline step 3b).
+const LOAN_PROGRAM_SLUGS = new Set(['rtl', 'dscr', 'dscr_or_rtl', 'commercial_bridge']);
+const LOAN_PROGRAM_DAY_CHOICES = new Set(['90', '180', '365', '730']);
+const LOAN_PROGRAM_LABELS = {
+    RTL: 'Fix & flip / bridge loan',
+    DSCR: 'DSCR rental loan',
+    DSCR_OR_RTL: 'Investor loan (DSCR or fix & flip)',
+    COMMERCIAL_BRIDGE: 'Commercial bridge loan',
+};
+
+function appendLoanProgramParams(params, filters) {
+    appendMulti(params, 'loan_program', filters.loanPrograms || []);
+    // The window only means something with a program picked.
+    if ((filters.loanPrograms || []).length && filters.loanProgramDays) {
+        params.append('loan_program_days', filters.loanProgramDays);
+    }
+}
+
 let initialPlaysSettled = false;
 let initialPropertiesSettled = false;
 
@@ -129,6 +149,10 @@ function restoreStateFromUrl(params) {
     if (trueParam(params, 'has_enrichable_owner') && !state.filters.ownerKinds.includes('person')) {
         state.filters.ownerKinds.push('person');
     }
+    state.filters.loanPrograms = repeatedParamValues(params, 'loan_program')
+        .filter(slug => LOAN_PROGRAM_SLUGS.has(slug));
+    state.filters.loanProgramDays = LOAN_PROGRAM_DAY_CHOICES.has(params.get('loan_program_days'))
+        ? params.get('loan_program_days') : null;
     state.filters.play = params.get('play') || null;
     state.shared = SharedFilters.fromParams(params);
 
@@ -161,6 +185,8 @@ function applyStateToControls() {
     document.getElementById('hasPersonOwner').checked = state.filters.hasPersonOwner;
     document.getElementById('withPermits').checked = state.filters.withPermits;
     MultiSelect.set('ownerKind', state.filters.ownerKinds, { silent: true });
+    MultiSelect.set('loanProgram', state.filters.loanPrograms, { silent: true });
+    setValue('loanProgramDays', state.filters.loanProgramDays);
 
     state.sort.by.forEach(key => {
         const sortSelect = document.getElementById('sortBy');
@@ -195,6 +221,7 @@ function buildPropertiesParams() {
     if (f.financingMin !== null) params.append('financing_min', f.financingMin);
     if (f.financingMax !== null) params.append('financing_max', f.financingMax);
     appendMulti(params, 'owner_kind', f.ownerKinds);
+    appendLoanProgramParams(params, f);
     if (f.play) params.append('play', f.play);
     appendMulti(params, 'sort_by', state.sort.by);
     params.append('sort_order', state.sort.order);
@@ -453,6 +480,7 @@ const EXTRA_SORT_LABELS = {
     unused_far: 'Unused FAR',
     co_date: 'CO date',
     recent_permits: 'Recent permit activity',
+    investor_loan_date: 'Investor loan date',
 };
 
 function applyRecommendedSort(rec) {
@@ -1001,6 +1029,7 @@ function renderPeek(data) {
         ['Buyer', b.sale_buyer_primary || null],
         ['Seller', b.sale_seller_primary || null],
         ['Mortgage', b.mortgage_amount ? `${peekMoney(b.mortgage_amount)}${b.mortgage_lender_primary ? ` · ${escapeHtml(b.mortgage_lender_primary)}` : ''}` : (b.is_cash_purchase ? 'No purchase mortgage found' : null)],
+        ['Investor loan', b.investor_loan_program ? [escapeHtml(investorLoanSummary(b)), peekMoney(b.investor_loan_amount)].filter(Boolean).join(' · ') : null],
         ['Financing', b.financing_ratio != null && b.financing_ratio !== '' ? `${Math.round(Number(b.financing_ratio) * 100)}% financed` : null],
     ].filter(([, v]) => v);
 
@@ -1253,8 +1282,27 @@ function initQuickLook() {
 
 // Badges for the signal columns (only present in API responses once the
 // signals migration has run — each guard tolerates their absence).
+function investorLoanSummary(p) {
+    // "Fix & flip / bridge loan · Manhattan Bridge Capital · Mar 4, 2026"
+    if (!p.investor_loan_program) return '';
+    const label = LOAN_PROGRAM_LABELS[p.investor_loan_program] || p.investor_loan_program;
+    const parts = [label];
+    if (p.investor_loan_lender) parts.push(p.investor_loan_lender);
+    if (p.investor_loan_date) parts.push(formatDate(p.investor_loan_date));
+    return parts.join(' · ');
+}
+
 function signalBadges(p) {
     const badges = [];
+    if (p.investor_loan_program) {
+        const short = {
+            RTL: 'Fix & flip loan', DSCR: 'DSCR loan',
+            DSCR_OR_RTL: 'Investor loan', COMMERCIAL_BRIDGE: 'Bridge loan',
+        }[p.investor_loan_program] || 'Investor loan';
+        const when = p.investor_loan_date ? ` ${formatDate(p.investor_loan_date)}` : '';
+        badges.push(`<span class="badge badge-investor-loan" title="${escapeHtml(investorLoanSummary(p))}">`
+            + `${escapeHtml(short)}${escapeHtml(when)}</span>`);
+    }
     if (p.on_speculation_watch_list) {
         badges.push('<span class="badge badge-speculation">Speculation list</span>');
     }
@@ -1458,6 +1506,18 @@ function initializeEventListeners() {
         state.pagination.page = 1;
         loadProperties();
     });
+
+    // Investor loan program (multi-select, OR'd) and its recording window
+    document.getElementById('loanProgram').addEventListener('change', () => {
+        state.filters.loanPrograms = MultiSelect.values('loanProgram');
+        state.pagination.page = 1;
+        loadProperties();
+    });
+    document.getElementById('loanProgramDays').addEventListener('change', (e) => {
+        state.filters.loanProgramDays = e.target.value || null;
+        state.pagination.page = 1;
+        if (state.filters.loanPrograms.length) loadProperties();
+    });
     
     // Sort controls
     // Sort accepts several keys; later ones break ties in earlier ones.
@@ -1532,6 +1592,7 @@ async function downloadExport() {
     if (state.filters.financingMin) params.append('financing_min', state.filters.financingMin);
     if (state.filters.financingMax) params.append('financing_max', state.filters.financingMax);
     appendMulti(params, 'owner_kind', state.filters.ownerKinds);
+    appendLoanProgramParams(params, state.filters);
     if (state.filters.play) params.append('play', state.filters.play);
 
     // Add sort
@@ -1708,6 +1769,8 @@ function resetFilters() {
         financingMax: null,
         smartFilter: null,
         ownerKinds: [],
+        loanPrograms: [],
+        loanProgramDays: null,
         play: null
     };
 }
@@ -1735,6 +1798,7 @@ function clearFilters() {
     document.getElementById('cashOnly').checked = false;
     document.getElementById('hasPersonOwner').checked = false;
     document.getElementById('withPermits').checked = false;
+    document.getElementById('loanProgramDays').value = '';
     
     state.pagination.page = 1;
     loadProperties();
@@ -1807,6 +1871,10 @@ function buildBulkEnrichFiltersPayload() {
     if (f.financingMin) payload.financing_min = f.financingMin;
     if (f.financingMax) payload.financing_max = f.financingMax;
     if (f.ownerKinds.length) payload.owner_kind = f.ownerKinds;
+    if (f.loanPrograms.length) {
+        payload.loan_program = f.loanPrograms;
+        if (f.loanProgramDays) payload.loan_program_days = f.loanProgramDays;
+    }
     if (f.play) payload.play = f.play;
     return payload;
 }
@@ -2395,6 +2463,7 @@ const OWNER_KIND_SLUGS = new Set([
 
 const SS_OPTION_SOURCES = {
     owner_kind: 'ownerKind',
+    loan_program: 'loanProgram',
     borough: 'boroughFilter',
     property_type: 'propertyType',
     building_class: 'buildingClass',
@@ -2488,6 +2557,9 @@ function describeSearch(querystring) {
 
     if (params.get('min_permits')) add(`${params.get('min_permits')}+ permits`);
     if (params.get('recent_sale_days')) add(`Sold in ${params.get('recent_sale_days')}d`);
+    if (params.get('loan_program_days') && params.getAll('loan_program').length) {
+        add(`Investor loan in ${params.get('loan_program_days')}d`);
+    }
     const permitDays = params.get('recent_permit_days');
     if (permitDays) {
         add(params.get('permit_activity_mode') === 'inactive'

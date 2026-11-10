@@ -44,6 +44,8 @@ test2.py
 # Data files
 *.csv
 !dashboard_html/tests/fixtures/prospecting.csv
+# Curated DSCR/RTL lender list read by lender_programs.py (see lender_research/)
+!dashboard_html/data/dscr_rtl_lenders.csv
 phone_type_results.csv
 postgres_data.sql
 postgres_schema.sql

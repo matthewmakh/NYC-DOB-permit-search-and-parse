@@ -13,7 +13,7 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "dscr_rtl_lenders.csv")
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "dashboard_html", "data", "dscr_rtl_lenders.csv")
 
 
 def load(path, key):

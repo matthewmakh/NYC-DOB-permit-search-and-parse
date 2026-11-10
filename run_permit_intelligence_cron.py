@@ -36,5 +36,17 @@ def main():
         [sys.executable, "-u", "sync_contacts_from_permits.py"],
         check=True,
     )
+    # Re-tag investor loan programs (DSCR / fix & flip / bridge) for any
+    # building whose ACRIS rows changed since the last pass, e.g. properties
+    # added from the dashboard during the day. Database-only and incremental;
+    # the nightly enrichment pipeline runs the same step after ACRIS. A
+    # tagging problem must never fail the permit scrape.
+    tagging = subprocess.run(
+        [sys.executable, "-u", "step3b_tag_lender_programs.py"],
+        check=False,
+    )
+    if tagging.returncode != 0:
+        print(f"Lender program tagging exited with {tagging.returncode}; "
+              "the nightly enrichment pipeline will retry.", flush=True)
 if __name__ == "__main__":
     main()

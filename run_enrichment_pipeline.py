@@ -9,6 +9,7 @@ Execution order:
 2. Step 2: Enrich from PLUTO + RPAD + HPD (owners, assessed values, violations)
 3. Step 6: Refresh user-facing distress/compliance signals before long backfills
 4. Step 3: Enrich from ACRIS (transaction history)
+   Step 3b: Tag mortgages with the lender's DSCR / RTL program (no network)
 5. Step 4: Enrich from Tax/Lien data (delinquency, ECB liens, DOB violations)
 6. Step 5: Enrich owner entities from NY Secretary of State
 7. Geocode permits and recover queued property enrichment
@@ -138,6 +139,12 @@ def main():
         'migrate_enrichment_reliability.py', 'Create independent enrichment checkpoints')
     if not results['reliability_migration']:
         sys.exit(1)
+    results['lender_programs_migration'] = run_script(
+        'migrate_add_lender_programs.py',
+        'Create DSCR / RTL loan program columns on mortgages and buildings')
+    if not results['lender_programs_migration']:
+        print_error("Lender program migration failed - cannot safely continue")
+        sys.exit(1)
     results['safety'] = run_script('sync_dob_safety.py', 'Refresh daily DOB Safety totals citywide')
     # Recover interactive work before the longer periodic backfills.
     results['property_jobs'] = run_script('process_property_enrichment_jobs.py', 'Recover queued property lookups')
@@ -202,6 +209,18 @@ def main():
     
     if not results['step3']:
         print_warning("Step 3 failed - continuing to next steps")
+
+    # ===== STEP 3b: Tag investor loan programs =====
+    # Runs even if step 3 reported failures: it only reads what step 3 stored,
+    # and re-tags every building whose ACRIS rows changed or whose lender list
+    # version is stale.
+    print_step('3b', "Tag Investor Loan Programs (DSCR / RTL)")
+    results['step3b'] = run_script(
+        'step3b_tag_lender_programs.py',
+        'Tag mortgages from DSCR, fix & flip and bridge lenders from the curated lender list'
+    )
+    if not results['step3b']:
+        print_warning("Step 3b failed - continuing to next steps")
     
     # ===== STEP 4: Enrich from Tax/Lien Data =====
     print_step(4, "Enrich from Tax Delinquency & Liens")
@@ -262,11 +281,13 @@ def main():
         'migrations',
         'project_migration',
         'signals_migration',
-        'reliability_migration', 'safety', 'property_jobs', 'geocode', 'recent_sales',
+        'reliability_migration', 'lender_programs_migration',
+        'safety', 'property_jobs', 'geocode', 'recent_sales',
         'step1',
         'step2',
         'step6',
         'step3',
+        'step3b',
         'step4',
         'step5',
     ]  # Must succeed

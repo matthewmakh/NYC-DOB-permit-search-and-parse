@@ -14,7 +14,7 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, "research")
-listed = {s for row in csv.DictReader(open(os.path.join(HERE, "dscr_rtl_lenders.csv"))) for s in row["sources"].split("|")}
+listed = {s for row in csv.DictReader(open(os.path.join(HERE, "..", "dashboard_html", "data", "dscr_rtl_lenders.csv"))) for s in row["sources"].split("|")}
 
 rows = []
 for fname, tag in (("national_dscr.jsonl", "D"), ("national_rtl.jsonl", "R")):

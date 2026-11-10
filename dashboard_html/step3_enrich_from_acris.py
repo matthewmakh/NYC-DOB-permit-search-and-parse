@@ -31,6 +31,7 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+import lender_programs
 from socrata_client import (
     SocrataClient, SocrataError, bbl_parts, soql_quote,
     load_party_roles, party_role, is_deed, is_ownership_party,
@@ -718,6 +719,10 @@ def _apply_acris_observation(conn, building_id, bbl, revision):
             save_transactions_and_parties(cur, building_id, bbl, [])
             save_references(cur, building_id, bbl, [])
             update_buildings_table(cur, building_id, [], None, None, [])
+        # Tag the freshly stored mortgages with their lender's DSCR / RTL
+        # program in the same transaction. Isolated by a savepoint and never
+        # raises; pipeline step 3b re-tags anything this misses.
+        lender_programs.tag_building(cur, building_id)
         if table_has_column(cur, 'buildings', 'acris_last_attempted'):
             cur.execute("""
                 UPDATE buildings

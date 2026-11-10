@@ -116,6 +116,25 @@
             </div>
 
             <div class="filter-section">
+                <h3>Investor loan</h3>
+                <select id="loanProgram" class="filter-select" multiple
+                    data-multiselect data-placeholder="Any financing" aria-describedby="loanProgramHint">
+                    <option value="rtl">Fix &amp; flip / bridge lender</option>
+                    <option value="dscr">DSCR rental lender</option>
+                    <option value="dscr_or_rtl">Lender makes both (DSCR or fix &amp; flip)</option>
+                    <option value="commercial_bridge">Commercial bridge lender</option>
+                </select>
+                <select id="loanProgramDays" class="filter-select" aria-label="Investor loan recorded within">
+                    <option value="">Recorded any time</option>
+                    <option value="90">Recorded in the last 90 days</option>
+                    <option value="180">Recorded in the last 6 months</option>
+                    <option value="365">Recorded in the last 12 months</option>
+                    <option value="730">Recorded in the last 2 years</option>
+                </select>
+                <small class="filter-hint" id="loanProgramHint">A recorded mortgage from a lender on our verified list of investor lenders. ACRIS does not record loan type, so this reads the lender: DSCR lenders that also make home loans count only when the borrower is a company.</small>
+            </div>
+
+            <div class="filter-section">
                 <label class="checkbox-label">
                     <input type="checkbox" id="hasPersonOwner" aria-describedby="personOwnerHint">
                     Has a person listed as an owner
@@ -296,6 +315,10 @@
                             <label><input type="checkbox" name="export_field" value="sale_price" checked> Sale price</label>
                             <label><input type="checkbox" name="export_field" value="sale_date" checked> Sale date</label>
                             <label><input type="checkbox" name="export_field" value="is_cash_purchase"> Likely cash purchase</label>
+                            <label><input type="checkbox" name="export_field" value="investor_loan_program"> Investor loan program (DSCR / fix &amp; flip)</label>
+                            <label><input type="checkbox" name="export_field" value="investor_loan_lender"> Investor loan lender</label>
+                            <label><input type="checkbox" name="export_field" value="investor_loan_date"> Investor loan recorded date</label>
+                            <label><input type="checkbox" name="export_field" value="investor_loan_amount"> Investor loan amount</label>
                         </div>
                         <div class="field-group">
                             <h5>Activity</h5>

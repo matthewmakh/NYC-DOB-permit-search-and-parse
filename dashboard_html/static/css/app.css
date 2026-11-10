@@ -1143,6 +1143,7 @@ button { font-family: inherit; }
 .badge-speculation { background: var(--red-soft); color: var(--red); }
 .badge-upside { background: var(--accent-soft); color: var(--accent); }
 .badge-equity { background: var(--green-soft); color: var(--green); }
+.badge-investor-loan { background: var(--accent-soft); color: var(--accent); }
 
 /* ============================================================
    Prebuilt plays

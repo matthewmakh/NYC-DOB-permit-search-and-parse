@@ -2420,6 +2420,7 @@ def api_property_peek(bbl):
                        acris_total_transactions, sos_principal_name, sos_principal_title,
                        sos_entity_name, sos_entity_status, hpd_agent_name,
                        hpd_site_manager_name,
+                       {INVESTOR_LOAN_COLUMNS_SQL},
                        {_owner_kind_sql()} AS owner_kind
                 FROM buildings b WHERE bbl = %s
             """, (bbl,))
@@ -4174,6 +4175,41 @@ def _append_building_only_filters(args, where_clauses, params, alias='b'):
     elif wants_clean and not wants_open:
         where_clauses.append('(b.hpd_open_violations = 0 OR b.hpd_open_violations IS NULL)')
 
+    _append_loan_program_filter(args, where_clauses, params, alias=alias)
+
+
+_acris_transactions_columns_cache = {'cols': None, 'at': 0}
+
+
+def _append_loan_program_filter(args, where_clauses, params, alias='b'):
+    """Investor loan program of any recorded mortgage on the building.
+
+    loan_program is repeatable (rtl, dscr, dscr_or_rtl, commercial_bridge),
+    OR'd together; loan_program_days limits it to mortgages recorded in the
+    last N days. Tags come from lender_programs.py (pipeline step 3b).
+    """
+    from lender_programs import PROGRAM_SLUGS
+    slugs = {value.lower() for value in _multi_param(args, 'loan_program')}
+    programs = sorted(PROGRAM_SLUGS[s] for s in slugs if s in PROGRAM_SLUGS)
+    if not programs:
+        return
+    if 'loan_program' not in _table_columns('acris_transactions', _acris_transactions_columns_cache):
+        # Not migrated yet: nothing is tagged, so nothing can match.
+        where_clauses.append('FALSE')
+        return
+    clause = (f'EXISTS (SELECT 1 FROM acris_transactions lp WHERE lp.building_id = {alias}.id '
+              'AND lp.loan_program = ANY(%s)')
+    params.append(programs)
+    days = args.get('loan_program_days')
+    try:
+        days = int(days) if days not in (None, '') else None
+    except (TypeError, ValueError):
+        days = None
+    if days:
+        clause += " AND COALESCE(lp.recorded_date, lp.doc_date) >= CURRENT_DATE - %s * INTERVAL '1 day'"
+        params.append(max(1, min(days, 3650)))
+    where_clauses.append(clause + ')')
+
 
 def _append_category_filters(args, where_clauses, params):
     """Building filters plus the permit-attribute EXISTS.
@@ -4688,6 +4724,28 @@ def _resolve_play_where(play_id):
     return play['where'], None
 
 
+# Investor loan columns for exports and the Quick Look. Read through to_jsonb
+# so they still work before migrate_add_lender_programs.py has run (blank).
+INVESTOR_LOAN_COLUMNS_SQL = """
+                    to_jsonb(b)->>'investor_loan_program' AS investor_loan_program,
+                    to_jsonb(b)->>'investor_loan_lender' AS investor_loan_lender,
+                    to_jsonb(b)->>'investor_loan_date' AS investor_loan_date,
+                    to_jsonb(b)->>'investor_loan_amount' AS investor_loan_amount"""
+
+
+def _investor_loan_label(program):
+    from lender_programs import PROGRAM_LABELS
+    return PROGRAM_LABELS.get(program or '', program or '')
+
+
+INVESTOR_LOAN_EXPORT_FIELDS = {
+    'investor_loan_program': ('Investor Loan Program', lambda p: _investor_loan_label(p.get('investor_loan_program'))),
+    'investor_loan_lender': ('Investor Loan Lender', lambda p: p.get('investor_loan_lender') or ''),
+    'investor_loan_date': ('Investor Loan Recorded', lambda p: p.get('investor_loan_date') or ''),
+    'investor_loan_amount': ('Investor Loan Amount', lambda p: p.get('investor_loan_amount') or ''),
+}
+
+
 # Extra buildings columns returned to the list UI when the signals
 # migration has run (property cards render badges from whichever arrive).
 _SIGNAL_SELECT_COLUMNS = [
@@ -4698,6 +4756,9 @@ _SIGNAL_SELECT_COLUMNS = [
     'has_tax_delinquency', 'tax_delinquency_latest_date',
     'latest_co_date', 'latest_co_type', 'fisp_status',
     'll97_covered_estimated', 'energy_star_score',
+    # Investor loan programs (lender_programs.py, pipeline step 3b)
+    'investor_loan_program', 'investor_loan_lender', 'investor_loan_date',
+    'investor_loan_amount', 'rtl_loan_last_date', 'dscr_loan_last_date',
 ]
 
 
@@ -4867,6 +4928,9 @@ def api_properties():
     - property_type: residential/commercial/mixed, repeatable or comma-separated
     - min_units, max_units: Unit count range
     - has_violations: true and/or false; both (or neither) means no filter
+    - loan_program: investor loan program of any recorded mortgage, repeatable:
+      rtl, dscr, dscr_or_rtl, commercial_bridge (see lender_programs.py)
+    - loan_program_days: only mortgages recorded in the last N days (1-3650)
     - recent_sale_days: Sold within X days
     - financing_min, financing_max: Financing ratio range
     - sort_by: Field(s) to sort by, repeatable; later keys break ties
@@ -5052,6 +5116,8 @@ def api_properties():
                 valid_sort_columns['unused_far'] = 'b.unused_far'
             if 'latest_co_date' in available_cols:
                 valid_sort_columns['co_date'] = 'b.latest_co_date'
+            if 'investor_loan_date' in available_cols:
+                valid_sort_columns['investor_loan_date'] = 'b.investor_loan_date'
             # Sort is multi-select: later keys break ties in earlier ones.
             order_by_sql = _order_by_sql(
                 request.args, valid_sort_columns, 'sale_date', sort_order,
@@ -5399,6 +5465,8 @@ def api_properties_export():
                 'owner': ('COALESCE(b.sale_buyer_primary, b.current_owner_name, '
                           'b.owner_name_hpd, b.owner_name_rpad)'),
             }
+            if 'investor_loan_date' in _buildings_columns():
+                sort_columns['investor_loan_date'] = 'b.investor_loan_date'
             order_by_sql = _order_by_sql(
                 request.args, sort_columns, 'sale_date', sort_order)
             
@@ -5426,7 +5494,8 @@ def api_properties_export():
                     b.sale_date,
                     b.is_cash_purchase,
                     COALESCE(b.hpd_total_violations, 0) as violation_count,
-                    (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count
+                    (SELECT COUNT(*) FROM permits p WHERE p.bbl = b.bbl) as permit_count,
+                    {INVESTOR_LOAN_COLUMNS_SQL}
                 FROM buildings b
                 WHERE {where_sql}
                 ORDER BY {order_by_sql}
@@ -5589,6 +5658,7 @@ def api_properties_export():
                 'is_cash_purchase': ('Likely cash purchase', lambda p: 'Unknown' if p['is_cash_purchase'] is None else ('Yes' if p['is_cash_purchase'] else 'No')),
                 'permit_count': ('Permit Count', lambda p: p['permit_count'] or 0),
                 'violation_count': ('Violation Count', lambda p: p['violation_count'] or 0),
+                **INVESTOR_LOAN_EXPORT_FIELDS,
                 # NEW: Permit-based contacts (from Contacts tab)
                 'all_contacts': ('All Contacts', get_all_contacts),
                 'all_contact_phones': ('All Contact Phones', get_all_contact_phones),
@@ -5902,7 +5972,8 @@ def api_properties_export_with_enrichment():
                 SELECT b.id, b.bbl, b.address, LEFT(b.bbl, 1) AS borough_code, b.building_class,
                        b.year_built, b.residential_units as units,
                        {OWNER_EXPORT_COLUMNS_SQL},
-                       b.assessed_total_value, b.sale_price, b.sale_date
+                       b.assessed_total_value, b.sale_price, b.sale_date,
+                       {INVESTOR_LOAN_COLUMNS_SQL}
                 FROM buildings b
                 WHERE {where_clause}
                 ORDER BY b.sale_date DESC NULLS LAST
@@ -6060,6 +6131,7 @@ def api_properties_export_with_enrichment():
                 **OWNER_ADDRESS_FIELDS,
                 'sale_price': ('Sale Price', lambda p: p['sale_price'] or ''),
                 'sale_date': ('Sale Date', lambda p: str(p['sale_date']) if p['sale_date'] else ''),
+                **INVESTOR_LOAN_EXPORT_FIELDS,
                 'enriched_permit_contacts': ('Enriched Permit Contacts', get_enriched_contacts_str),
                 'enriched_permit_phones': ('Enriched Contact Phones', get_enriched_phones_str),
                 'enriched_permit_emails': ('Enriched Contact Emails', get_enriched_emails_str),
@@ -6945,6 +7017,15 @@ def api_building_profile(bbl):
                 mortgage_amount, mortgage_date, mortgage_lender_primary, mortgage_crfn,
                 -- Calculated intelligence
                 is_cash_purchase, financing_ratio, days_since_sale,
+                -- Investor loan programs (step 3b); read defensively for rolling deploys
+                to_jsonb(buildings)->>'investor_loan_program' AS investor_loan_program,
+                to_jsonb(buildings)->>'investor_loan_lender' AS investor_loan_lender,
+                to_jsonb(buildings)->>'investor_loan_confidence' AS investor_loan_confidence,
+                to_jsonb(buildings)->>'investor_loan_date' AS investor_loan_date,
+                to_jsonb(buildings)->>'investor_loan_amount' AS investor_loan_amount,
+                to_jsonb(buildings)->>'investor_loan_count' AS investor_loan_count,
+                to_jsonb(buildings)->>'rtl_loan_last_date' AS rtl_loan_last_date,
+                to_jsonb(buildings)->>'dscr_loan_last_date' AS dscr_loan_last_date,
                 -- Transaction counts
                 acris_total_transactions, acris_deed_count, acris_mortgage_count, acris_satisfaction_count,
                 acris_last_enriched,
@@ -7014,7 +7095,10 @@ def api_building_profile(bbl):
             cur.execute("""
                 SELECT 
                     document_id, doc_type, doc_amount, doc_date, recorded_date,
-                    percent_transferred, crfn, is_primary_deed, is_primary_mortgage
+                    percent_transferred, crfn, is_primary_deed, is_primary_mortgage,
+                    to_jsonb(acris_transactions)->>'loan_program' AS loan_program,
+                    to_jsonb(acris_transactions)->>'loan_program_lender' AS loan_program_lender,
+                    to_jsonb(acris_transactions)->>'loan_program_confidence' AS loan_program_confidence
                 FROM acris_transactions
                 WHERE building_id = %s
                 ORDER BY recorded_date DESC

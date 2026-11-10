@@ -132,6 +132,49 @@ PLAYS = [
         ],
     },
     {
+        'id': 'investor-rehab-loans',
+        'name': 'Investors who just borrowed to renovate',
+        'description': ('A fix-and-flip, bridge or construction lender recorded a mortgage here in the '
+                        'last 12 months. That money exists to be spent on the building, so the owner '
+                        'is hiring trades now or will be soon.'),
+        'audience': 'contractors',
+        'data_source': 'acris',
+        'where': "b.rtl_loan_last_date >= CURRENT_DATE - INTERVAL '365 days'",
+        'required_columns': ['rtl_loan_last_date', 'investor_loan_date'],
+        'coverage_where': "b.lender_programs_version IS NOT NULL",
+        'coverage_required_columns': ['lender_programs_version'],
+        'coverage_label': 'Mortgages checked against the investor-lender list',
+        'coverage_kind': 'pipeline',
+        'recommended_sort': {'by': 'investor_loan_date', 'order': 'desc'},
+        'how_to_use': [
+            'Newest loans first: the rehab budget was just funded and scopes are still being bid.',
+            'Open the building and check its permits; no permit yet means you can get in before the GC is picked.',
+            'Use the deed buyer and the NY SOS principal to reach the investor behind the LLC.',
+            'For a wider list, filter Investor loan by "DSCR or fix & flip"; those lenders make both.',
+        ],
+    },
+    {
+        'id': 'dscr-landlords',
+        'name': 'Landlords financing rentals with DSCR loans',
+        'description': ('A long-term investor rental (DSCR) lender recorded a mortgage here in the last '
+                        'two years. The owner holds rentals for income, so expect recurring maintenance, '
+                        'upgrades between tenants, and more buildings in the same portfolio.'),
+        'audience': 'both',
+        'data_source': 'acris',
+        'where': "b.dscr_loan_last_date >= CURRENT_DATE - INTERVAL '730 days'",
+        'required_columns': ['dscr_loan_last_date', 'investor_loan_date'],
+        'coverage_where': "b.lender_programs_version IS NOT NULL",
+        'coverage_required_columns': ['lender_programs_version'],
+        'coverage_label': 'Mortgages checked against the investor-lender list',
+        'coverage_kind': 'pipeline',
+        'recommended_sort': {'by': 'investor_loan_date', 'order': 'desc'},
+        'how_to_use': [
+            'Pitch service agreements and turnover work, not one-off jobs: these owners keep the building.',
+            'Search the borrower LLC and its mailing address to find the rest of the portfolio.',
+            'A DSCR refinance soon after a fix-and-flip loan marks a finished rehab now being rented out.',
+        ],
+    },
+    {
         'id': 'senior-owners',
         'name': 'Long-tenured senior owners',
         'description': ('Properties carrying a senior citizen homeowner exemption (SCHE) — '

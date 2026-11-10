@@ -125,6 +125,39 @@ vm.runInContext("restoreStateFromUrl(new URLSearchParams('has_person_owner=false
 assert.equal(vm.runInContext('state.filters.hasPersonOwner', context), false);
 console.log('person-owner URL, saved-search, bulk and reset checks passed');
 
+// The investor-loan filter survives links, bulk requests and saved searches,
+// and its recording window only goes on the wire with a program picked.
+const loanPrograms = () => JSON.parse(vm.runInContext('JSON.stringify(state.filters.loanPrograms)', context));
+vm.runInContext("restoreStateFromUrl(new URLSearchParams('loan_program=rtl&loan_program=bogus&loan_program_days=365'))", context);
+assert.deepEqual(loanPrograms(), ['rtl']);
+assert.equal(vm.runInContext("buildPropertiesParams().getAll('loan_program').join(',')", context), 'rtl');
+assert.equal(vm.runInContext("buildPropertiesParams().get('loan_program_days')", context), '365');
+const loanPayload = JSON.parse(vm.runInContext('JSON.stringify(buildBulkEnrichFiltersPayload())', context));
+assert.deepEqual(loanPayload.loan_program, ['rtl']);
+assert.equal(loanPayload.loan_program_days, '365');
+assert.match(vm.runInContext("describeSearch('loan_program=rtl&loan_program_days=365').join(', ')", context),
+    /Investor loan in 365d/);
+vm.runInContext("restoreStateFromUrl(new URLSearchParams('loan_program_days=365'))", context);
+assert.equal(vm.runInContext("buildPropertiesParams().has('loan_program_days')", context), false);
+vm.runInContext("restoreStateFromUrl(new URLSearchParams('loan_program=dscr&loan_program_days=7'))", context);
+assert.equal(vm.runInContext("buildPropertiesParams().has('loan_program_days')", context), false);
+vm.runInContext('resetFilters()', context);
+assert.equal(vm.runInContext("buildPropertiesParams().has('loan_program')", context), false);
+
+// Card badge: short label, lender and date in the tooltip, everything escaped.
+context.document.createElement = () => ({
+    set textContent(value) { this.html = String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;'); },
+    get innerHTML() { return this.html; },
+});
+const badge = vm.runInContext(`signalBadges({investor_loan_program: 'RTL',
+    investor_loan_lender: '<img src=x onerror=alert(1)>', investor_loan_date: '2026-03-04'})`, context);
+assert.match(badge, /class="badge badge-investor-loan"/);
+assert.match(badge, /Fix &amp; flip loan/);
+assert.doesNotMatch(badge, /<img/);
+assert.equal(vm.runInContext('signalBadges({})', context).includes('investor-loan'), false);
+console.log('investor-loan filter URL, saved-search, bulk, reset and badge checks passed');
+
 // Clear all must also work before plays load, or when none are available.
 const controls = new Map();
 context.document.getElementById = id => {

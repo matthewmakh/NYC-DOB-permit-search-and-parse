@@ -87,6 +87,13 @@ function formatFactNumber(value, maximumFractionDigits = 2) {
     return parsed.toLocaleString('en-US', { maximumFractionDigits });
 }
 
+const INVESTOR_LOAN_LABELS = {
+    RTL: 'Fix & flip / bridge loan',
+    DSCR: 'DSCR rental loan',
+    DSCR_OR_RTL: 'Investor loan (DSCR or fix & flip)',
+    COMMERCIAL_BRIDGE: 'Commercial bridge loan',
+};
+
 function escapeHtml(value) {
     return String(value == null ? '' : value)
         .replace(/&/g, '&amp;')
@@ -1687,6 +1694,28 @@ function renderFinancialsTab() {
         </div>`;
     }
     
+    // Investor loan programs: lender of a recorded mortgage is on the verified
+    // DSCR / fix & flip / bridge list (lender_programs.py, pipeline step 3b).
+    if (building.investor_loan_program) {
+        const row = (label, value) => value
+            ? `<div class="fin-row"><span>${label}</span><span>${escapeHtml(value)}</span></div>` : '';
+        const count = Number(building.investor_loan_count) || 0;
+        html += `
+        <div class="financial-card">
+            <h4>Investor Financing</h4>
+            <div class="financial-rows">
+                ${row('Latest loan:', INVESTOR_LOAN_LABELS[building.investor_loan_program] || building.investor_loan_program)}
+                ${row('Lender:', building.investor_loan_lender)}
+                ${row('Recorded:', building.investor_loan_date ? formatDate(building.investor_loan_date) : '')}
+                ${row('Amount:', Number(building.investor_loan_amount) > 0 ? formatCurrency(Number(building.investor_loan_amount)) : '')}
+                ${row('Last fix & flip / bridge loan:', building.rtl_loan_last_date ? formatDate(building.rtl_loan_last_date) : '')}
+                ${row('Last DSCR rental loan:', building.dscr_loan_last_date ? formatDate(building.dscr_loan_last_date) : '')}
+                ${count > 1 ? row('Investor loans on record:', String(count)) : ''}
+                <div class="fin-row fin-note"><span>Read from the lender on the recorded mortgage; ACRIS does not record loan type.</span></div>
+            </div>
+        </div>`;
+    }
+
     // Mortgage Information
     if (building.mortgage_amount && building.has_open_mortgage) {
         html += `
@@ -2008,6 +2037,7 @@ function renderTransactionsTab() {
         <div class="transaction-card" data-doc-type="${txn.doc_type}" data-amount="${txn.doc_amount || 0}">
             <div class="txn-header">
                 <span class="txn-type">${getDocTypeLabel(txn.doc_type)}</span>
+                ${txn.loan_program ? `<span class="badge badge-investor-loan" title="${escapeHtml(txn.loan_program_lender || '')}">${escapeHtml(INVESTOR_LOAN_LABELS[txn.loan_program] || txn.loan_program)}</span>` : ''}
                 <span class="txn-date">${formatDate(txn.recorded_date)}</span>
             </div>
             ${txn.doc_amount ? `<div class="txn-amount">${formatCurrency(txn.doc_amount)}</div>` : ''}
@@ -2102,6 +2132,7 @@ function filterTransactions() {
         <div class="transaction-card" data-doc-type="${txn.doc_type}" data-amount="${txn.doc_amount || 0}">
             <div class="txn-header">
                 <span class="txn-type">${getDocTypeLabel(txn.doc_type)}</span>
+                ${txn.loan_program ? `<span class="badge badge-investor-loan" title="${escapeHtml(txn.loan_program_lender || '')}">${escapeHtml(INVESTOR_LOAN_LABELS[txn.loan_program] || txn.loan_program)}</span>` : ''}
                 <span class="txn-date">${formatDate(txn.recorded_date)}</span>
             </div>
             ${txn.doc_amount ? `<div class="txn-amount">${formatCurrency(txn.doc_amount)}</div>` : ''}

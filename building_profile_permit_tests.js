@@ -286,6 +286,21 @@ assert.match(directory.innerHTML, /Direct violation list/);
 assert.match(directory.innerHTML, /ECBQueryByLocationServlet/);
 assert.match(directory.innerHTML, /ACRIS deeds &amp; mortgages/);
 
+// Investor Financing card: program label, escaped lender, nothing when untagged.
+const financials = fakeNode('financials-content', 'DIV');
+nodes.set('financials-content', financials);
+vm.runInContext(`buildingData = {building: {investor_loan_program: 'RTL',
+    investor_loan_lender: '<script>alert(1)</script>', investor_loan_date: '2026-03-04',
+    investor_loan_amount: '450000.00', investor_loan_count: '2', rtl_loan_last_date: '2026-03-04'},
+    permits: [], transactions: []}; renderFinancialsTab()`, context);
+assert.match(financials.innerHTML, /Investor Financing/);
+assert.match(financials.innerHTML, /Fix &amp; flip \/ bridge loan/);
+assert.match(financials.innerHTML, /\$450,000/);
+assert.match(financials.innerHTML, /Investor loans on record:/);
+assert.doesNotMatch(financials.innerHTML, /<script>/);
+vm.runInContext(`buildingData = {building: {}, permits: [], transactions: []}; renderFinancialsTab()`, context);
+assert.doesNotMatch(financials.innerHTML, /Investor Financing/);
+
 let copyClickHandler;
 context.document.addEventListener = (type, handler) => {
     if (type === 'click') copyClickHandler = handler;

@@ -79,6 +79,11 @@ signals until an evidence-backed project graph can connect them.
    ├─ Step 3: step3_enrich_from_acris.py
    │  └─ ACRIS: Sale dates, prices, mortgages
    │
+   ├─ Step 3b: step3b_tag_lender_programs.py
+   │  └─ Tags mortgages whose lender makes DSCR / fix & flip / bridge loans
+   │     (curated list: dashboard_html/data/dscr_rtl_lenders.csv, see lender_research/)
+   │  └─ Database-only; also runs after the daily permit scrape and inside every ACRIS refresh
+   │
    └─ Step 4: geocode_permits.py
       └─ NYC Geoclient API: Latitude/longitude
 

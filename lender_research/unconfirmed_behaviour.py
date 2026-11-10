@@ -13,7 +13,7 @@ for b in (1, 2, 3):
     for line in open(f"{HERE}/research/nyc_batch_{b}_results.jsonl"):
         r = json.loads(line)
         res[int(r["idx"])] = r
-curated = {s.split(":")[1] for row in csv.DictReader(open(f"{HERE}/dscr_rtl_lenders.csv"))
+curated = {s.split(":")[1] for row in csv.DictReader(open(f"{HERE}/../dashboard_html/data/dscr_rtl_lenders.csv"))
            for s in row["sources"].split("|") if s.startswith("N:")}
 EXCLUDE_CATS = {"consumer_mortgage", "commercial_permanent"}
 

@@ -12,14 +12,14 @@ product, plus the URL of that page.
 
 | File | What it is |
 |---|---|
-| `dscr_rtl_lenders.csv` | **The list: 127 lenders** (119 high confidence, 8 medium), with match rules and evidence |
+| `../dashboard_html/data/dscr_rtl_lenders.csv` | **The list: 127 lenders** (119 high confidence, 8 medium), with match rules and evidence. It lives in `dashboard_html/` because production reads it (see "In production" below) |
 | `excluded_lenders.csv` | 50 lenders researched and left off, with the reason (consumer-only, defunct, unverifiable, out of scope) |
 | `nyc_unconfirmed_lenders.csv` | 55 NYC lender groups with real volume whose products could not be confirmed; loan behaviour only, **not tagged** |
 | `research/*.jsonl` | Raw research records: every product claim with URL and verbatim quote, legal entities, HQ address, notes |
 | `test_results/` | Test report, per-lender behaviour, every name match with its ZIP check, tagged loans |
 | `*.py` | Scripts to rebuild the caches, the list and the tests (see "Re-running") |
 
-### Columns in `dscr_rtl_lenders.csv`
+### Columns in `dashboard_html/data/dscr_rtl_lenders.csv`
 
 - `group`
   - `RTL` (21): short-term investor lending only, including ground-up construction.
@@ -131,11 +131,37 @@ python3 build_cache.py nyc_mtge.db 2024-10-01 2026-09-30 100000 MTGE
 python3 build_cache.py nyc_deed.db 2024-09-01 2026-09-30 100000 DEED
 python3 build_cache.py nyc_cohort.db 2021-07-01 2023-06-30 100000 MTGE
 python3 link_payoffs.py nyc_cohort.db
-python3 build_list.py dscr_rtl_lenders.csv
+python3 build_list.py            # writes ../dashboard_html/data/dscr_rtl_lenders.csv
 python3 build_excluded.py
-python3 tag_and_test.py dscr_rtl_lenders.csv nyc_mtge.db nyc_deed.db nyc_cohort.db test_results
+python3 tag_and_test.py ../dashboard_html/data/dscr_rtl_lenders.csv nyc_mtge.db nyc_deed.db nyc_cohort.db test_results
 python3 unconfirmed_behaviour.py . nyc_unconfirmed_lenders.csv
 python3 lender_universe.py nyc_mtge.db nyc_lenders.csv
 ```
 
 Everything reads public NYC Open Data. Set `NYC_OPEN_DATA_APP_TOKEN` for higher rate limits.
+
+## In production
+
+The list is used by `dashboard_html/lender_programs.py`. That module runs in three places:
+
+- **Pipeline step 3b** (`step3b_tag_lender_programs.py`) runs nightly right after ACRIS enrichment, and again at the end of the daily permit-scraper cron.
+  - It reads only the rows step 3 stored, so it makes no network calls.
+  - It re-tags any building whose ACRIS rows changed since it was last tagged, and every building whenever this list or the tagging logic changes. Each run records a version stamp.
+- **Inside every ACRIS refresh** (`step3_enrich_from_acris.py`), including properties added from the dashboard, in the same transaction.
+  - It is isolated by a savepoint and never fails the refresh.
+- **The dashboard:**
+  - the "Investor loan" sidebar filter (`loan_program`, `loan_program_days`)
+  - badges on property cards
+  - a Quick Look row
+  - the "Investor Financing" card and per-mortgage tags on the property profile
+  - an investor-loan sort and four export fields
+  - two plays: "Investors who just borrowed to renovate" and "Landlords financing rentals with DSCR loans"
+
+The schema change is `migrate_add_lender_programs.py`. The pipeline runs it before step 1, and it is idempotent: after the first run it takes no locks.
+
+**Production matches this research exactly.** Loaded into PostgreSQL with step 3's table layout and tagged by the production code, the same 74,165 NYC mortgages gave the same program as `tag_and_test.py` on all 12,736 tagged mortgages, with no extra tags. Tagging all of them took about 7 seconds.
+
+Tests: `python3 lender_program_tests.py` from the repo root. Set `ENRICHMENT_TEST_DATABASE_URL` to also run the database suite.
+
+To change the list, edit `build_list.py` (or the research records) and re-run it. The next pipeline run re-tags everything automatically, because the list's version stamp changes.
+
